@@ -1,0 +1,107 @@
+# Test artifacts - only ignore executables without extensions
+tests/*_test
+tests/debug_*
+tests/test_*
+# But preserve source files
+!tests/*.c
+!tests/*.h
+
+# Build directories
+build/
+obj/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Debug symbols (macOS)
+*.dSYM
+*.dSYM/
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.claude
+
+# Compiler specific
+*.gch
+*.pch
+
+# Debug files
+*.pdb
+*.ilk
+*.map
+*.exp
+
+# Coverage reports
+*.gcov
+*.gcda
+*.gcno
+
+# Profiling
+*.prof
+
+# Backup files
+*.bak
+*.backup
+
+# Log files
+*.log
+
+# Test artifacts
+test_runner
+*_test
+debug_*
+
+# CMake (if used)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+
+# Autotools
+Makefile.in
+aclocal.m4
+autom4te.cache/
+config.h.in
+configure
+libtool
+stamp-h1
+
+# Package managers
+node_modules/
+vendor/
+
+# Documentation build
+docs/_build/
+docs/build/
+
+# Local configuration
+.env
+.env.local
+config.local.h
