@@ -18,9 +18,9 @@ exit_criteria_met: false
 
 ## Purpose
 
-GraphQLite exists to democratize graph database technology by providing an embeddable graph database that combines the reliability of SQLite with the power of ISO GQL (Graph Query Language). Our vision is to enable every application—from mobile apps to IoT devices to edge computing platforms—to harness sophisticated graph analytics without the complexity and infrastructure overhead of traditional graph database systems.
+GraphQLite exists to democratize graph database technology by providing an embeddable graph database that combines the reliability of SQLite with the power of OpenCypher graph query language. Our vision is to enable every application—from mobile apps to IoT devices to edge computing platforms—to harness sophisticated graph analytics without the complexity and infrastructure overhead of traditional graph database systems.
 
-We aim to solve the fundamental gap in the database ecosystem where developers need graph capabilities but cannot justify the operational complexity, resource requirements, or deployment constraints of existing graph databases. GraphQLite brings enterprise-grade graph database functionality to the embedded and edge computing world through a single-file, zero-configuration solution.
+We aim to solve the fundamental gap in the database ecosystem where developers need graph capabilities but cannot justify the operational complexity, resource requirements, or deployment constraints of existing graph databases. GraphQLite brings enterprise-grade graph database functionality to the embedded and edge computing world through a single-file, zero-configuration solution using the industry-standard OpenCypher query language.
 
 ## Current State
 

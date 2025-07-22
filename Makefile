@@ -1,94 +1,113 @@
-# GraphQLite Makefile
+# GraphQLite OpenCypher Implementation
+# BISON + FLEX based parser
 
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -fPIC -O2 -g
-LDFLAGS = -shared
-LIBS = -lsqlite3 -lpthread -lm
+CFLAGS = -Wall -Wextra -std=c99 -g -fPIC
+LIBS = -lsqlite3
 
-# Debug build support (similar to sqlite-vec approach)
+# Debug build support
 ifdef DEBUG
-CFLAGS += -DGRAPHQLITE_DEBUG
+CFLAGS += -DDEBUG -O0
 endif
 
 # Directories
-SRC_DIR = src/core
-GQL_DIR = src/gql
+SRC_DIR = src
+GRAMMAR_DIR = grammar
 BUILD_DIR = build
-OBJ_DIR = $(BUILD_DIR)/obj
-GQL_OBJ_DIR = $(BUILD_DIR)/gql_obj
+TEST_DIR = tests
+
+# BISON and FLEX
+BISON = bison
+FLEX = flex
+GRAMMAR_FILE = $(GRAMMAR_DIR)/cypher.y
+LEXER_FILE = $(GRAMMAR_DIR)/cypher.l
+PARSER_C = $(GRAMMAR_DIR)/cypher.tab.c
+PARSER_H = $(GRAMMAR_DIR)/cypher.tab.h
+LEXER_C = $(GRAMMAR_DIR)/lex.yy.c
 
 # Source files
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
-GQL_SOURCES = $(wildcard $(GQL_DIR)/*.c)
-OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
-GQL_OBJECTS = $(GQL_SOURCES:$(GQL_DIR)/%.c=$(GQL_OBJ_DIR)/%.o)
+OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 
-# Target library
-TARGET = $(BUILD_DIR)/libgraphqlite.so
+# Generated parser objects
+PARSER_OBJ = $(BUILD_DIR)/cypher.tab.o
+LEXER_OBJ = $(BUILD_DIR)/lex.yy.o
 
 # Test files
-TEST_DIR = tests
 TEST_RUNNER = $(TEST_DIR)/test_runner.c
 TEST_SOURCES = $(filter-out $(TEST_RUNNER),$(wildcard $(TEST_DIR)/test_*.c))
 TEST_TARGET = $(BUILD_DIR)/test_runner
 
-# Header files
-HEADERS = $(SRC_DIR)/graphqlite_internal.h
-GQL_HEADERS = $(GQL_DIR)/gql_lexer.h $(GQL_DIR)/gql_ast.h $(GQL_DIR)/gql_parser.h $(GQL_DIR)/gql_executor.h $(GQL_DIR)/gql_matcher.h
+# Target library and SQLite extension
+TARGET = $(BUILD_DIR)/libgraphqlite.a
+EXTENSION = $(BUILD_DIR)/graphqlite.so
 
-.PHONY: all clean test install
+.PHONY: all clean test test-unit test-sql parser extension
 
-all: $(TARGET)
+all: parser $(TARGET) $(EXTENSION)
 
-$(TARGET): $(OBJECTS) $(GQL_OBJECTS) | $(BUILD_DIR)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+# Generate parser files
+parser: $(PARSER_C) $(LEXER_C)
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(HEADERS) | $(OBJ_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(PARSER_C) $(PARSER_H): $(GRAMMAR_FILE)
+	cd $(GRAMMAR_DIR) && $(BISON) -d cypher.y
 
-$(GQL_OBJ_DIR)/%.o: $(GQL_DIR)/%.c $(GQL_HEADERS) | $(GQL_OBJ_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(LEXER_C): $(LEXER_FILE) $(PARSER_H)
+	cd $(GRAMMAR_DIR) && $(FLEX) cypher.l
+
+# Compile source files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(GRAMMAR_DIR) -c $< -o $@
+
+# Compile generated parser
+$(PARSER_OBJ): $(PARSER_C) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $(PARSER_C) -o $@
+
+# Compile generated lexer
+$(LEXER_OBJ): $(LEXER_C) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $(LEXER_C) -o $@
+
+# Build static library
+$(TARGET): $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
+	ar rcs $@ $^
+
+# Build SQLite extension (shared library)
+# Note: SQLite extensions must not link against libsqlite3
+# Use dynamic symbol resolution instead
+$(EXTENSION): $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
+ifeq ($(shell uname -s),Darwin)
+	$(CC) -shared -fPIC -o $@ $^ -undefined dynamic_lookup
+else
+	$(CC) -shared -fPIC -o $@ $^
+endif
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(OBJ_DIR):
-	mkdir -p $(OBJ_DIR)
+# Test suite with parser and SQL tests
+test: $(TEST_TARGET) $(EXTENSION)
+	$(TEST_TARGET)
+	./tests/run_sql_tests.sh
 
-$(GQL_OBJ_DIR):
-	mkdir -p $(GQL_OBJ_DIR)
+# Run only unit tests
+test-unit: $(TEST_TARGET)
+	$(TEST_TARGET)
+
+# Run only SQL tests
+test-sql: $(EXTENSION)
+	./tests/run_sql_tests.sh
+
+$(TEST_TARGET): $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) `pkg-config --cflags cunit` -I$(SRC_DIR) -I$(GRAMMAR_DIR) $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) -o $@ `pkg-config --libs cunit` $(LIBS)
 
 clean:
 	rm -rf $(BUILD_DIR)
-	# Clean up test binaries (portable approach)
-	@for file in $(TEST_DIR)/*; do \
-		if [ -f "$$file" ] && [ -x "$$file" ] && [ ! "$${file##*.}" = "c" ] && [ ! "$${file##*.}" = "h" ]; then \
-			echo "Removing executable: $$file"; \
-			rm -f "$$file"; \
-		fi; \
-	done
-	# Remove .dSYM files on macOS
-	rm -rf $(TEST_DIR)/*.dSYM
+	rm -f $(PARSER_C) $(PARSER_H) $(LEXER_C)
+	@echo "Cleaned build directory and generated files"
 
-# CUnit test suite
-test: $(TEST_TARGET)
-	$(TEST_TARGET)
-
-$(TEST_TARGET): $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(GQL_OBJECTS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) `pkg-config --cflags cunit` -I$(SRC_DIR) $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(GQL_OBJECTS) -o $@ `pkg-config --libs cunit` $(LIBS)
-
-install: $(TARGET)
-	cp $(TARGET) /usr/local/lib/
-	cp $(SRC_DIR)/graphqlite_internal.h /usr/local/include/
-
-# Debug build
-debug: CFLAGS += -DDEBUG -O0
-debug: $(TARGET)
-
-# Show build information
 info:
+	@echo "GraphQLite OpenCypher - BISON/FLEX Implementation"
+	@echo "Parser files: $(PARSER_C) $(PARSER_H) $(LEXER_C)"
 	@echo "Source files: $(SOURCES)"
-	@echo "Object files: $(OBJECTS)"
 	@echo "Target: $(TARGET)"
-
-.PHONY: all clean test install debug info
+	@echo "Available targets: all, clean, test, parser, info"
