@@ -407,6 +407,302 @@ static int insert_edge_property(sqlite3 *db, int64_t edge_id, int64_t key_id,
 }
 
 // ============================================================================
+// Expression Evaluation Engine
+// ============================================================================
+
+// Evaluation result type
+typedef struct {
+    graphqlite_value_type_t type;
+    union {
+        int64_t integer;
+        double float_val;
+        char *text;
+        int boolean;
+    } data;
+} eval_result_t;
+
+// Variable binding for expression evaluation
+typedef struct {
+    char *variable_name;    // e.g., "n", "r"
+    int64_t node_id;        // ID if it's a node
+    int64_t edge_id;        // ID if it's an edge
+    int is_edge;            // 1 if edge, 0 if node
+} variable_binding_t;
+
+// Create evaluation result
+static eval_result_t* create_eval_result(graphqlite_value_type_t type) {
+    eval_result_t *result = malloc(sizeof(eval_result_t));
+    if (!result) return NULL;
+    result->type = type;
+    return result;
+}
+
+// Free evaluation result
+static void free_eval_result(eval_result_t *result) {
+    if (!result) return;
+    if (result->type == GRAPHQLITE_TYPE_TEXT && result->data.text) {
+        free(result->data.text);
+    }
+    free(result);
+}
+
+// Look up property value for a variable
+static eval_result_t* lookup_property_value(sqlite3 *db, variable_binding_t *binding, const char *property) {
+    if (!binding || !property) return NULL;
+    
+    // Get property key ID
+    int64_t key_id = get_or_create_property_key_id(db, property);
+    if (key_id == -1) return NULL;
+    
+    // Try each type table
+    const char *table_prefixes[] = {"node_props", "edge_props"};
+    const char *table_types[] = {"int", "real", "text", "bool"};
+    const char *id_column = binding->is_edge ? "edge_id" : "node_id";
+    int64_t entity_id = binding->is_edge ? binding->edge_id : binding->node_id;
+    
+    for (int type_idx = 0; type_idx < 4; type_idx++) {
+        char table_name[64];
+        snprintf(table_name, sizeof(table_name), "%s_%s", 
+                binding->is_edge ? table_prefixes[1] : table_prefixes[0], 
+                table_types[type_idx]);
+        
+        char sql[256];
+        snprintf(sql, sizeof(sql), "SELECT value FROM %s WHERE %s = ? AND key_id = ?", 
+                table_name, id_column);
+        
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, entity_id);
+            sqlite3_bind_int64(stmt, 2, key_id);
+            
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                eval_result_t *result = create_eval_result(
+                    type_idx == 0 ? GRAPHQLITE_TYPE_INTEGER :
+                    type_idx == 1 ? GRAPHQLITE_TYPE_FLOAT :
+                    type_idx == 2 ? GRAPHQLITE_TYPE_TEXT :
+                    GRAPHQLITE_TYPE_BOOLEAN
+                );
+                
+                if (result) {
+                    switch (type_idx) {
+                        case 0: // int
+                            result->data.integer = sqlite3_column_int64(stmt, 0);
+                            break;
+                        case 1: // real
+                            result->data.float_val = sqlite3_column_double(stmt, 0);
+                            break;
+                        case 2: // text
+                            result->data.text = strdup((const char*)sqlite3_column_text(stmt, 0));
+                            break;
+                        case 3: // bool
+                            result->data.boolean = sqlite3_column_int(stmt, 0);
+                            break;
+                    }
+                }
+                
+                sqlite3_finalize(stmt);
+                return result;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+    
+    return NULL; // Property not found
+}
+
+// Compare two evaluation results
+static int compare_eval_results(eval_result_t *left, eval_result_t *right, ast_operator_t op) {
+    if (!left || !right) return 0;
+    
+    // Handle NULL comparisons
+    if (left->type == GRAPHQLITE_TYPE_NULL || right->type == GRAPHQLITE_TYPE_NULL) {
+        if (op == AST_OP_EQ) return (left->type == GRAPHQLITE_TYPE_NULL && right->type == GRAPHQLITE_TYPE_NULL);
+        if (op == AST_OP_NEQ) return !(left->type == GRAPHQLITE_TYPE_NULL && right->type == GRAPHQLITE_TYPE_NULL);
+        return 0; // Other comparisons with NULL return false
+    }
+    
+    // Type mismatch
+    if (left->type != right->type) return 0;
+    
+    switch (left->type) {
+        case GRAPHQLITE_TYPE_INTEGER: {
+            int64_t l = left->data.integer;
+            int64_t r = right->data.integer;
+            switch (op) {
+                case AST_OP_EQ: return l == r;
+                case AST_OP_NEQ: return l != r;
+                case AST_OP_LT: return l < r;
+                case AST_OP_GT: return l > r;
+                case AST_OP_LE: return l <= r;
+                case AST_OP_GE: return l >= r;
+                default: return 0;
+            }
+        }
+        
+        case GRAPHQLITE_TYPE_FLOAT: {
+            double l = left->data.float_val;
+            double r = right->data.float_val;
+            switch (op) {
+                case AST_OP_EQ: return l == r;
+                case AST_OP_NEQ: return l != r;
+                case AST_OP_LT: return l < r;
+                case AST_OP_GT: return l > r;
+                case AST_OP_LE: return l <= r;
+                case AST_OP_GE: return l >= r;
+                default: return 0;
+            }
+        }
+        
+        case GRAPHQLITE_TYPE_TEXT: {
+            const char *l = left->data.text ? left->data.text : "";
+            const char *r = right->data.text ? right->data.text : "";
+            int cmp = strcmp(l, r);
+            switch (op) {
+                case AST_OP_EQ: return cmp == 0;
+                case AST_OP_NEQ: return cmp != 0;
+                case AST_OP_LT: return cmp < 0;
+                case AST_OP_GT: return cmp > 0;
+                case AST_OP_LE: return cmp <= 0;
+                case AST_OP_GE: return cmp >= 0;
+                default: return 0;
+            }
+        }
+        
+        case GRAPHQLITE_TYPE_BOOLEAN: {
+            int l = left->data.boolean;
+            int r = right->data.boolean;
+            switch (op) {
+                case AST_OP_EQ: return l == r;
+                case AST_OP_NEQ: return l != r;
+                case AST_OP_LT: return l < r;  // false < true
+                case AST_OP_GT: return l > r;
+                case AST_OP_LE: return l <= r;
+                case AST_OP_GE: return l >= r;
+                default: return 0;
+            }
+        }
+        
+        default:
+            return 0;
+    }
+}
+
+// Forward declaration for recursive evaluation
+static eval_result_t* evaluate_expression(sqlite3 *db, cypher_ast_node_t *expr, variable_binding_t *bindings, int binding_count);
+
+// Evaluate expression recursively
+static eval_result_t* evaluate_expression(sqlite3 *db, cypher_ast_node_t *expr, variable_binding_t *bindings, int binding_count) {
+    if (!expr) return NULL;
+    
+    switch (expr->type) {
+        case AST_IDENTIFIER: {
+            // Look up variable in bindings - for now, just return a placeholder
+            // TODO: Implement variable resolution
+            return NULL;
+        }
+        
+        case AST_PROPERTY_ACCESS: {
+            // Find the variable in bindings
+            const char *var_name = expr->data.property_access.variable;
+            const char *prop_name = expr->data.property_access.property;
+            
+            for (int i = 0; i < binding_count; i++) {
+                if (strcmp(bindings[i].variable_name, var_name) == 0) {
+                    return lookup_property_value(db, &bindings[i], prop_name);
+                }
+            }
+            return NULL;
+        }
+        
+        case AST_STRING_LITERAL: {
+            eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_TEXT);
+            if (result) {
+                result->data.text = strdup(expr->data.string_literal.value);
+            }
+            return result;
+        }
+        
+        case AST_INTEGER_LITERAL: {
+            eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_INTEGER);
+            if (result) {
+                result->data.integer = expr->data.integer_literal.value;
+            }
+            return result;
+        }
+        
+        case AST_FLOAT_LITERAL: {
+            eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_FLOAT);
+            if (result) {
+                result->data.float_val = expr->data.float_literal.value;
+            }
+            return result;
+        }
+        
+        case AST_BOOLEAN_LITERAL: {
+            eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_BOOLEAN);
+            if (result) {
+                result->data.boolean = expr->data.boolean_literal.value;
+            }
+            return result;
+        }
+        
+        case AST_BINARY_EXPR: {
+            eval_result_t *left = evaluate_expression(db, expr->data.binary_expr.left, bindings, binding_count);
+            eval_result_t *right = evaluate_expression(db, expr->data.binary_expr.right, bindings, binding_count);
+            
+            eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_BOOLEAN);
+            if (result) {
+                switch (expr->data.binary_expr.op) {
+                    case AST_OP_AND:
+                        result->data.boolean = (left && left->type == GRAPHQLITE_TYPE_BOOLEAN && left->data.boolean) &&
+                                             (right && right->type == GRAPHQLITE_TYPE_BOOLEAN && right->data.boolean);
+                        break;
+                    case AST_OP_OR:
+                        result->data.boolean = (left && left->type == GRAPHQLITE_TYPE_BOOLEAN && left->data.boolean) ||
+                                             (right && right->type == GRAPHQLITE_TYPE_BOOLEAN && right->data.boolean);
+                        break;
+                    default:
+                        // Comparison operators
+                        result->data.boolean = compare_eval_results(left, right, expr->data.binary_expr.op);
+                        break;
+                }
+            }
+            
+            free_eval_result(left);
+            free_eval_result(right);
+            return result;
+        }
+        
+        case AST_UNARY_EXPR: {
+            if (expr->data.unary_expr.op == AST_OP_NOT) {
+                eval_result_t *operand = evaluate_expression(db, expr->data.unary_expr.operand, bindings, binding_count);
+                eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_BOOLEAN);
+                if (result) {
+                    result->data.boolean = !(operand && operand->type == GRAPHQLITE_TYPE_BOOLEAN && operand->data.boolean);
+                }
+                free_eval_result(operand);
+                return result;
+            }
+            return NULL;
+        }
+        
+        case AST_IS_NULL_EXPR: {
+            eval_result_t *operand = evaluate_expression(db, expr->data.is_null_expr.expression, bindings, binding_count);
+            eval_result_t *result = create_eval_result(GRAPHQLITE_TYPE_BOOLEAN);
+            if (result) {
+                int is_null = (operand == NULL || operand->type == GRAPHQLITE_TYPE_NULL);
+                result->data.boolean = expr->data.is_null_expr.is_null ? is_null : !is_null;
+            }
+            free_eval_result(operand);
+            return result;
+        }
+        
+        default:
+            return NULL;
+    }
+}
+
+// ============================================================================
 // Query Execution - Forward Declarations
 // ============================================================================
 
@@ -414,6 +710,8 @@ static graphqlite_result_t* execute_create_node(sqlite3 *db, cypher_ast_node_t *
 static graphqlite_result_t* execute_create_relationship(sqlite3 *db, cypher_ast_node_t *rel_pattern);
 static graphqlite_result_t* execute_match_node(sqlite3 *db, cypher_ast_node_t *node_pattern, cypher_ast_node_t *return_stmt);
 static graphqlite_result_t* execute_match_relationship(sqlite3 *db, cypher_ast_node_t *rel_pattern, cypher_ast_node_t *return_stmt);
+static graphqlite_result_t* execute_match_node_with_where(sqlite3 *db, cypher_ast_node_t *node_pattern, cypher_ast_node_t *where_clause, cypher_ast_node_t *return_stmt);
+static graphqlite_result_t* execute_match_relationship_with_where(sqlite3 *db, cypher_ast_node_t *rel_pattern, cypher_ast_node_t *where_clause, cypher_ast_node_t *return_stmt);
 static char* serialize_node_entity(sqlite3 *db, int64_t node_id);
 static char* serialize_relationship_entity(sqlite3 *db, int64_t edge_id);
 
@@ -715,19 +1013,26 @@ static graphqlite_result_t* execute_match_statement(sqlite3 *db, cypher_ast_node
     
     // Extract pattern from MATCH statement (can be node or relationship)
     cypher_ast_node_t *pattern = match_stmt->data.match_stmt.node_pattern;
+    cypher_ast_node_t *where_clause = match_stmt->data.match_stmt.where_clause;
+    
     if (!pattern) {
         graphqlite_result_set_error(result, "Missing pattern in MATCH statement");
         return result;
     }
     
+    graphqlite_result_free(result);  // Free the temporary result
+    
     if (pattern->type == AST_NODE_PATTERN) {
         // Handle node matching (existing logic)
-        return execute_match_node(db, pattern, return_stmt);
+        return execute_match_node_with_where(db, pattern, where_clause, return_stmt);
     } else if (pattern->type == AST_RELATIONSHIP_PATTERN) {
         // Handle relationship matching (new logic)
-        return execute_match_relationship(db, pattern, return_stmt);
+        return execute_match_relationship_with_where(db, pattern, where_clause, return_stmt);
     } else {
-        graphqlite_result_set_error(result, "Invalid pattern in MATCH statement");
+        result = graphqlite_result_create();
+        if (result) {
+            graphqlite_result_set_error(result, "Invalid pattern in MATCH statement");
+        }
         return result;
     }
 }
@@ -880,6 +1185,178 @@ static graphqlite_result_t* execute_match_node(sqlite3 *db, cypher_ast_node_t *n
     return result;
 }
 
+static graphqlite_result_t* execute_match_node_with_where(sqlite3 *db, cypher_ast_node_t *node_pattern, cypher_ast_node_t *where_clause, cypher_ast_node_t *return_stmt) {
+    // If no WHERE clause, fall back to original function
+    if (!where_clause) {
+        return execute_match_node(db, node_pattern, return_stmt);
+    }
+    
+    graphqlite_result_t *result = graphqlite_result_create();
+    if (!result) return NULL;
+    
+    // Build SELECT query based on pattern (same as original function)
+    const char *label = NULL;
+    const char *prop_key = NULL;
+    const char *prop_value_str = NULL;
+    double prop_value_num = 0.0;
+    int prop_value_int = 0;
+    graphqlite_value_type_t prop_type = GRAPHQLITE_TYPE_NULL;
+    
+    if (node_pattern->data.node_pattern.label && node_pattern->data.node_pattern.label->type == AST_LABEL) {
+        label = node_pattern->data.node_pattern.label->data.label.name;
+    }
+    
+    if (node_pattern->data.node_pattern.properties) {
+        cypher_ast_node_t *props = node_pattern->data.node_pattern.properties;
+        
+        if (props->type == AST_PROPERTY_LIST && props->data.property_list.count > 0) {
+            cypher_ast_node_t *prop = props->data.property_list.properties[0];
+            prop_key = prop->data.property.key;
+            extract_property_from_ast(prop->data.property.value, 
+                                     &prop_value_str, &prop_value_num, 
+                                     &prop_value_int, &prop_type);
+        }
+    }
+    
+    // Build query using same logic as original function
+    char query[1024];
+    const char *prop_table = NULL;
+    
+    switch (prop_type) {
+        case GRAPHQLITE_TYPE_TEXT:
+            prop_table = "node_props_text";
+            break;
+        case GRAPHQLITE_TYPE_INTEGER:
+            prop_table = "node_props_int";
+            break;
+        case GRAPHQLITE_TYPE_FLOAT:
+            prop_table = "node_props_real";
+            break;
+        case GRAPHQLITE_TYPE_BOOLEAN:
+            prop_table = "node_props_bool";
+            break;
+        default:
+            prop_table = NULL;
+            break;
+    }
+    
+    if (prop_key && prop_type != GRAPHQLITE_TYPE_NULL && prop_table) {
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT n.id, nl.label, pk.key, %s.value "
+            "FROM nodes n "
+            "JOIN node_labels nl ON n.id = nl.node_id "
+            "JOIN %s ON n.id = %s.node_id "
+            "JOIN property_keys pk ON %s.key_id = pk.id "
+            "WHERE nl.label = ? AND pk.key = ? AND %s.value = ?",
+            prop_table, prop_table, prop_table, prop_table, prop_table);
+    } else if (label) {
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT n.id, nl.label, 'NULL' as key, 'NULL' as value "
+            "FROM nodes n "
+            "JOIN node_labels nl ON n.id = nl.node_id "
+            "WHERE nl.label = ?");
+    } else {
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT n.id, nl.label, 'NULL' as key, 'NULL' as value "
+            "FROM nodes n "
+            "JOIN node_labels nl ON n.id = nl.node_id");
+    }
+    
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        graphqlite_result_set_error(result, "Failed to prepare SELECT statement");
+        return result;
+    }
+    
+    // Bind parameters (same as original function)
+    int param_idx = 1;
+    if (label) {
+        sqlite3_bind_text(stmt, param_idx++, label, -1, SQLITE_STATIC);
+    }
+    if (prop_key && prop_type != GRAPHQLITE_TYPE_NULL && prop_table) {
+        sqlite3_bind_text(stmt, param_idx++, prop_key, -1, SQLITE_STATIC);
+        
+        switch (prop_type) {
+            case GRAPHQLITE_TYPE_TEXT:
+                sqlite3_bind_text(stmt, param_idx++, prop_value_str, -1, SQLITE_STATIC);
+                break;
+            case GRAPHQLITE_TYPE_INTEGER:
+            case GRAPHQLITE_TYPE_BOOLEAN:
+                sqlite3_bind_int(stmt, param_idx++, prop_value_int);
+                break;
+            case GRAPHQLITE_TYPE_FLOAT:
+                sqlite3_bind_double(stmt, param_idx++, prop_value_num);
+                break;
+            default:
+                break;
+        }
+    }
+    
+    // Parse return variable
+    const char *return_variable = "node"; // default
+    const char *node_variable = "n"; // default node variable
+    if (return_stmt && return_stmt->type == AST_RETURN_STATEMENT) {
+        cypher_ast_node_t *var = return_stmt->data.return_stmt.variable;
+        if (var && var->type == AST_VARIABLE) {
+            return_variable = var->data.variable.name;
+        }
+    }
+    
+    // Extract node variable from pattern for binding
+    if (node_pattern->data.node_pattern.variable && node_pattern->data.node_pattern.variable->type == AST_VARIABLE) {
+        node_variable = node_pattern->data.node_pattern.variable->data.variable.name;
+    }
+    
+    // Set up result column
+    graphqlite_result_add_column(result, return_variable, GRAPHQLITE_TYPE_TEXT);
+    
+    // Fetch and filter results with WHERE clause
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int64_t node_id = sqlite3_column_int64(stmt, 0);
+        
+        // Create variable binding for WHERE evaluation
+        variable_binding_t binding;
+        binding.variable_name = (char*)node_variable;
+        binding.node_id = node_id;
+        binding.edge_id = -1;
+        binding.is_edge = 0;
+        
+        // Evaluate WHERE clause
+        eval_result_t *where_result = evaluate_expression(db, where_clause->data.where_clause.expression, &binding, 1);
+        
+        // Check if WHERE condition is satisfied
+        int include_result = 0;
+        if (where_result && where_result->type == GRAPHQLITE_TYPE_BOOLEAN && where_result->data.boolean) {
+            include_result = 1;
+        }
+        
+        free_eval_result(where_result);
+        
+        if (include_result) {
+            graphqlite_result_add_row(result);
+            size_t row_idx = result->row_count - 1;
+            
+            // Serialize complete node entity
+            graphqlite_value_t value;
+            value.type = GRAPHQLITE_TYPE_TEXT;
+            value.data.text = serialize_node_entity(db, node_id);
+            
+            graphqlite_result_set_value(result, row_idx, 0, &value);
+        }
+    }
+    
+    sqlite3_finalize(stmt);
+    
+    if (rc != SQLITE_DONE) {
+        graphqlite_result_set_error(result, "Failed to execute SELECT statement");
+        return result;
+    }
+    
+    result->result_code = GRAPHQLITE_OK;
+    return result;
+}
+
 // Helper function to serialize a complete node entity
 static char* serialize_node_entity(sqlite3 *db, int64_t node_id) {
     char *result = malloc(4096);
@@ -911,8 +1388,8 @@ static char* serialize_node_entity(sqlite3 *db, int64_t node_id) {
     int first_prop = 1;
     
     // Text properties
-    const char *text_query = "SELECT pk.name, npt.value FROM node_props_text npt "
-                             "JOIN property_keys pk ON npt.property_key_id = pk.id "
+    const char *text_query = "SELECT pk.key, npt.value FROM node_props_text npt "
+                             "JOIN property_keys pk ON npt.key_id = pk.id "
                              "WHERE npt.node_id = ?";
     sqlite3_stmt *text_stmt;
     if (sqlite3_prepare_v2(db, text_query, -1, &text_stmt, NULL) == SQLITE_OK) {
@@ -930,8 +1407,8 @@ static char* serialize_node_entity(sqlite3 *db, int64_t node_id) {
     }
     
     // Integer properties
-    const char *int_query = "SELECT pk.name, npi.value FROM node_props_int npi "
-                            "JOIN property_keys pk ON npi.property_key_id = pk.id "
+    const char *int_query = "SELECT pk.key, npi.value FROM node_props_int npi "
+                            "JOIN property_keys pk ON npi.key_id = pk.id "
                             "WHERE npi.node_id = ?";
     sqlite3_stmt *int_stmt;
     if (sqlite3_prepare_v2(db, int_query, -1, &int_stmt, NULL) == SQLITE_OK) {
@@ -946,6 +1423,44 @@ static char* serialize_node_entity(sqlite3 *db, int64_t node_id) {
             first_prop = 0;
         }
         sqlite3_finalize(int_stmt);
+    }
+    
+    // Float properties
+    const char *float_query = "SELECT pk.key, npr.value FROM node_props_real npr "
+                              "JOIN property_keys pk ON npr.key_id = pk.id "
+                              "WHERE npr.node_id = ?";
+    sqlite3_stmt *float_stmt;
+    if (sqlite3_prepare_v2(db, float_query, -1, &float_stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(float_stmt, 1, node_id);
+        while (sqlite3_step(float_stmt) == SQLITE_ROW) {
+            if (!first_prop) strcat(properties_str, ", ");
+            char prop_str[256];
+            snprintf(prop_str, sizeof(prop_str), "\"%s\": %g", 
+                    (char*)sqlite3_column_text(float_stmt, 0),
+                    sqlite3_column_double(float_stmt, 1));
+            strcat(properties_str, prop_str);
+            first_prop = 0;
+        }
+        sqlite3_finalize(float_stmt);
+    }
+    
+    // Boolean properties
+    const char *bool_query = "SELECT pk.key, npb.value FROM node_props_bool npb "
+                             "JOIN property_keys pk ON npb.key_id = pk.id "
+                             "WHERE npb.node_id = ?";
+    sqlite3_stmt *bool_stmt;
+    if (sqlite3_prepare_v2(db, bool_query, -1, &bool_stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(bool_stmt, 1, node_id);
+        while (sqlite3_step(bool_stmt) == SQLITE_ROW) {
+            if (!first_prop) strcat(properties_str, ", ");
+            char prop_str[256];
+            snprintf(prop_str, sizeof(prop_str), "\"%s\": %s", 
+                    (char*)sqlite3_column_text(bool_stmt, 0),
+                    sqlite3_column_int(bool_stmt, 1) ? "true" : "false");
+            strcat(properties_str, prop_str);
+            first_prop = 0;
+        }
+        sqlite3_finalize(bool_stmt);
     }
     
     strcat(properties_str, "}");
@@ -984,8 +1499,8 @@ static char* serialize_relationship_entity(sqlite3 *db, int64_t edge_id) {
     
     // Get edge properties (simplified for now - just text properties)
     char properties_str[1024] = "{";
-    const char *prop_query = "SELECT pk.name, ept.value FROM edge_props_text ept "
-                             "JOIN property_keys pk ON ept.property_key_id = pk.id "
+    const char *prop_query = "SELECT pk.key, ept.value FROM edge_props_text ept "
+                             "JOIN property_keys pk ON ept.key_id = pk.id "
                              "WHERE ept.edge_id = ?";
     sqlite3_stmt *prop_stmt;
     int first_prop = 1;
@@ -1172,6 +1687,222 @@ static graphqlite_result_t* execute_match_relationship(sqlite3 *db, cypher_ast_n
         }
         
         graphqlite_result_set_value(result, row_idx, 0, &value);
+    }
+    
+    sqlite3_finalize(stmt);
+    
+    if (rc != SQLITE_DONE) {
+        graphqlite_result_set_error(result, "Failed to execute relationship SELECT statement");
+        return result;
+    }
+    
+    result->result_code = GRAPHQLITE_OK;
+    return result;
+}
+
+static graphqlite_result_t* execute_match_relationship_with_where(sqlite3 *db, cypher_ast_node_t *rel_pattern, cypher_ast_node_t *where_clause, cypher_ast_node_t *return_stmt) {
+    // If no WHERE clause, fall back to original function
+    if (!where_clause) {
+        return execute_match_relationship(db, rel_pattern, return_stmt);
+    }
+    
+    graphqlite_result_t *result = graphqlite_result_create();
+    if (!result) return NULL;
+    
+    // Extract nodes and edge from relationship pattern (same as original)
+    cypher_ast_node_t *left_node = rel_pattern->data.relationship_pattern.left_node;
+    cypher_ast_node_t *edge = rel_pattern->data.relationship_pattern.edge;
+    cypher_ast_node_t *right_node = rel_pattern->data.relationship_pattern.right_node;
+    int direction = rel_pattern->data.relationship_pattern.direction;
+    
+    if (!left_node || !edge || !right_node) {
+        graphqlite_result_set_error(result, "Invalid relationship pattern");
+        return result;
+    }
+    
+    // Extract patterns for matching (same as original)
+    const char *left_label = NULL;
+    const char *right_label = NULL;
+    const char *edge_type = NULL;
+    
+    if (left_node->data.node_pattern.label && left_node->data.node_pattern.label->type == AST_LABEL) {
+        left_label = left_node->data.node_pattern.label->data.label.name;
+    }
+    
+    if (right_node->data.node_pattern.label && right_node->data.node_pattern.label->type == AST_LABEL) {
+        right_label = right_node->data.node_pattern.label->data.label.name;
+    }
+    
+    if (edge->data.edge_pattern.label && edge->data.edge_pattern.label->type == AST_LABEL) {
+        edge_type = edge->data.edge_pattern.label->data.label.name;
+    }
+    
+    // Build query to match relationships (same as original)
+    char query[2048];
+    if (direction == 1) {  // Right direction ->
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT "
+            "  ln.id as left_id, ll.label as left_label, "
+            "  e.id as edge_id, e.type as edge_type, "
+            "  rn.id as right_id, rl.label as right_label "
+            "FROM edges e "
+            "JOIN nodes ln ON e.source_id = ln.id "
+            "JOIN nodes rn ON e.target_id = rn.id "
+            "JOIN node_labels ll ON ln.id = ll.node_id "
+            "JOIN node_labels rl ON rn.id = rl.node_id "
+            "WHERE 1=1 %s %s %s",
+            left_label ? "AND ll.label = ?" : "",
+            edge_type ? "AND e.type = ?" : "",
+            right_label ? "AND rl.label = ?" : "");
+    } else if (direction == -1) {  // Left direction <-
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT "
+            "  ln.id as left_id, ll.label as left_label, "
+            "  e.id as edge_id, e.type as edge_type, "
+            "  rn.id as right_id, rl.label as right_label "
+            "FROM edges e "
+            "JOIN nodes ln ON e.target_id = ln.id "  // Reversed
+            "JOIN nodes rn ON e.source_id = rn.id "  // Reversed
+            "JOIN node_labels ll ON ln.id = ll.node_id "
+            "JOIN node_labels rl ON rn.id = rl.node_id "
+            "WHERE 1=1 %s %s %s",
+            left_label ? "AND ll.label = ?" : "",
+            edge_type ? "AND e.type = ?" : "",
+            right_label ? "AND rl.label = ?" : "");
+    } else {  // Undirected
+        graphqlite_result_set_error(result, "Undirected edges not yet supported");
+        return result;
+    }
+    
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        graphqlite_result_set_error(result, "Failed to prepare relationship SELECT statement");
+        return result;
+    }
+    
+    // Bind parameters (same as original)
+    int param_idx = 1;
+    if (left_label) {
+        sqlite3_bind_text(stmt, param_idx++, left_label, -1, SQLITE_STATIC);
+    }
+    if (edge_type) {
+        sqlite3_bind_text(stmt, param_idx++, edge_type, -1, SQLITE_STATIC);
+    }
+    if (right_label) {
+        sqlite3_bind_text(stmt, param_idx++, right_label, -1, SQLITE_STATIC);
+    }
+    
+    // Parse which variable to return
+    const char *return_variable = NULL;
+    if (return_stmt && return_stmt->type == AST_RETURN_STATEMENT) {
+        cypher_ast_node_t *var = return_stmt->data.return_stmt.variable;
+        if (var && var->type == AST_VARIABLE) {
+            return_variable = var->data.variable.name;
+        }
+    }
+    
+    if (!return_variable) {
+        graphqlite_result_set_error(result, "Cannot determine which variable to return");
+        sqlite3_finalize(stmt);
+        return result;
+    }
+    
+    // Extract variable names from relationship pattern
+    const char *left_var = NULL, *edge_var = NULL, *right_var = NULL;
+    
+    if (left_node && left_node->data.node_pattern.variable) {
+        left_var = left_node->data.node_pattern.variable->data.variable.name;
+    }
+    if (edge && edge->data.edge_pattern.variable) {
+        edge_var = edge->data.edge_pattern.variable->data.variable.name;
+    }
+    if (right_node && right_node->data.node_pattern.variable) {
+        right_var = right_node->data.node_pattern.variable->data.variable.name;
+    }
+    
+    // Determine which part of the pattern to return
+    enum return_type { RETURN_LEFT_NODE, RETURN_EDGE, RETURN_RIGHT_NODE } return_type;
+    if (left_var && strcmp(return_variable, left_var) == 0) {
+        return_type = RETURN_LEFT_NODE;
+    } else if (edge_var && strcmp(return_variable, edge_var) == 0) {
+        return_type = RETURN_EDGE;
+    } else if (right_var && strcmp(return_variable, right_var) == 0) {
+        return_type = RETURN_RIGHT_NODE;
+    } else {
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "Variable '%s' not found in pattern", return_variable);
+        graphqlite_result_set_error(result, error_msg);
+        sqlite3_finalize(stmt);
+        return result;
+    }
+    
+    // Set up result column
+    graphqlite_result_add_column(result, return_variable, GRAPHQLITE_TYPE_TEXT);
+    
+    // Fetch and filter results with WHERE clause
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int64_t left_id = sqlite3_column_int64(stmt, 0);
+        int64_t edge_id = sqlite3_column_int64(stmt, 2);
+        int64_t right_id = sqlite3_column_int64(stmt, 4);
+        
+        // Create variable bindings for WHERE evaluation
+        variable_binding_t bindings[3];
+        int binding_count = 0;
+        
+        if (left_var) {
+            bindings[binding_count].variable_name = (char*)left_var;
+            bindings[binding_count].node_id = left_id;
+            bindings[binding_count].edge_id = -1;
+            bindings[binding_count].is_edge = 0;
+            binding_count++;
+        }
+        
+        if (edge_var) {
+            bindings[binding_count].variable_name = (char*)edge_var;
+            bindings[binding_count].node_id = -1;
+            bindings[binding_count].edge_id = edge_id;
+            bindings[binding_count].is_edge = 1;
+            binding_count++;
+        }
+        
+        if (right_var) {
+            bindings[binding_count].variable_name = (char*)right_var;
+            bindings[binding_count].node_id = right_id;
+            bindings[binding_count].edge_id = -1;
+            bindings[binding_count].is_edge = 0;
+            binding_count++;
+        }
+        
+        // Evaluate WHERE clause
+        eval_result_t *where_result = evaluate_expression(db, where_clause->data.where_clause.expression, bindings, binding_count);
+        
+        // Check if WHERE condition is satisfied
+        int include_result = 0;
+        if (where_result && where_result->type == GRAPHQLITE_TYPE_BOOLEAN && where_result->data.boolean) {
+            include_result = 1;
+        }
+        
+        free_eval_result(where_result);
+        
+        if (include_result) {
+            graphqlite_result_add_row(result);
+            size_t row_idx = result->row_count - 1;
+            
+            // Get entity ID based on what we're returning and serialize complete entity
+            graphqlite_value_t value;
+            value.type = GRAPHQLITE_TYPE_TEXT;
+            
+            if (return_type == RETURN_LEFT_NODE) {
+                value.data.text = serialize_node_entity(db, left_id);
+            } else if (return_type == RETURN_EDGE) {
+                value.data.text = serialize_relationship_entity(db, edge_id);
+            } else { // RETURN_RIGHT_NODE
+                value.data.text = serialize_node_entity(db, right_id);
+            }
+            
+            graphqlite_result_set_value(result, row_idx, 0, &value);
+        }
     }
     
     sqlite3_finalize(stmt);

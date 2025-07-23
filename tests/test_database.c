@@ -609,7 +609,7 @@ void test_match_nodes_by_label(void) {
 }
 
 void test_match_nodes_with_property_filter(void) {
-    // Test with existing test data
+    // Test with existing test data - Alice
     char *result = execute_cypher_query("MATCH (n:Person {name: \"Alice\"}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
@@ -618,10 +618,15 @@ void test_match_nodes_with_property_filter(void) {
         CU_ASSERT(strstr(result, "\"labels\":") != NULL);
         CU_ASSERT(strstr(result, "\"Person\"") != NULL);
         CU_ASSERT(strstr(result, "\"properties\":") != NULL);
+        
+        // Validate actual property values for Alice
+        CU_ASSERT(strstr(result, "\"name\": \"Alice\"") != NULL);
+        // Alice should not have Bob's name
+        CU_ASSERT(strstr(result, "\"Bob\"") == NULL);
         free(result);
     }
     
-    // Test with Company property
+    // Test with Company property - TechCorp
     result = execute_cypher_query("MATCH (n:Company {name: \"TechCorp\"}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
@@ -630,6 +635,12 @@ void test_match_nodes_with_property_filter(void) {
         CU_ASSERT(strstr(result, "\"labels\":") != NULL);
         CU_ASSERT(strstr(result, "\"Company\"") != NULL);
         CU_ASSERT(strstr(result, "\"properties\":") != NULL);
+        
+        // Validate actual property values for TechCorp
+        CU_ASSERT(strstr(result, "\"name\": \"TechCorp\"") != NULL);
+        // Should not contain Person or Product labels
+        CU_ASSERT(strstr(result, "\"Person\"") == NULL);
+        CU_ASSERT(strstr(result, "\"Product\"") == NULL);
         free(result);
     }
 }
@@ -645,7 +656,7 @@ void test_match_nonexistent_nodes(void) {
 }
 
 void test_match_by_integer_property(void) {
-    // Test with existing integer property in test data
+    // Test with existing integer property in test data - Product with price 100
     char *result = execute_cypher_query("MATCH (n:Product {price: 100}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
@@ -654,10 +665,16 @@ void test_match_by_integer_property(void) {
         CU_ASSERT(strstr(result, "\"labels\":") != NULL);
         CU_ASSERT(strstr(result, "\"Product\"") != NULL);
         CU_ASSERT(strstr(result, "\"properties\":") != NULL);
+        
+        // Validate actual integer property value
+        CU_ASSERT(strstr(result, "\"price\": 100") != NULL);
+        // Should not contain other price values from test data
+        CU_ASSERT(strstr(result, "\"price\": 200") == NULL);
+        CU_ASSERT(strstr(result, "\"price\": 75") == NULL);
         free(result);
     }
     
-    // Test with Company employees property
+    // Test with Company employees property - 500 employees
     result = execute_cypher_query("MATCH (n:Company {employees: 500}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
@@ -666,6 +683,12 @@ void test_match_by_integer_property(void) {
         CU_ASSERT(strstr(result, "\"labels\":") != NULL);
         CU_ASSERT(strstr(result, "\"Company\"") != NULL);
         CU_ASSERT(strstr(result, "\"properties\":") != NULL);
+        
+        // Validate actual integer property value
+        CU_ASSERT(strstr(result, "\"employees\": 500") != NULL);
+        // Should not be a Product or Person
+        CU_ASSERT(strstr(result, "\"Product\"") == NULL);
+        CU_ASSERT(strstr(result, "\"Person\"") == NULL);
         free(result);
     }
 }
