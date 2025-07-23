@@ -119,38 +119,54 @@ enum yysymbol_kind_t
   YYSYMBOL_CREATE = 7,                     /* CREATE  */
   YYSYMBOL_MATCH = 8,                      /* MATCH  */
   YYSYMBOL_RETURN = 9,                     /* RETURN  */
-  YYSYMBOL_TRUE = 10,                      /* TRUE  */
-  YYSYMBOL_FALSE = 11,                     /* FALSE  */
-  YYSYMBOL_LPAREN = 12,                    /* LPAREN  */
-  YYSYMBOL_RPAREN = 13,                    /* RPAREN  */
-  YYSYMBOL_LBRACE = 14,                    /* LBRACE  */
-  YYSYMBOL_RBRACE = 15,                    /* RBRACE  */
-  YYSYMBOL_LBRACKET = 16,                  /* LBRACKET  */
-  YYSYMBOL_RBRACKET = 17,                  /* RBRACKET  */
-  YYSYMBOL_DOT = 18,                       /* DOT  */
-  YYSYMBOL_COMMA = 19,                     /* COMMA  */
-  YYSYMBOL_COLON = 20,                     /* COLON  */
-  YYSYMBOL_SEMICOLON = 21,                 /* SEMICOLON  */
-  YYSYMBOL_ARROW_RIGHT = 22,               /* ARROW_RIGHT  */
-  YYSYMBOL_ARROW_LEFT = 23,                /* ARROW_LEFT  */
-  YYSYMBOL_DASH = 24,                      /* DASH  */
-  YYSYMBOL_YYACCEPT = 25,                  /* $accept  */
-  YYSYMBOL_program = 26,                   /* program  */
-  YYSYMBOL_statement = 27,                 /* statement  */
-  YYSYMBOL_create_statement = 28,          /* create_statement  */
-  YYSYMBOL_match_statement = 29,           /* match_statement  */
-  YYSYMBOL_return_statement = 30,          /* return_statement  */
-  YYSYMBOL_node_pattern = 31,              /* node_pattern  */
-  YYSYMBOL_relationship_pattern = 32,      /* relationship_pattern  */
-  YYSYMBOL_property_list = 33,             /* property_list  */
-  YYSYMBOL_variable = 34,                  /* variable  */
-  YYSYMBOL_label = 35,                     /* label  */
-  YYSYMBOL_property = 36,                  /* property  */
-  YYSYMBOL_literal = 37,                   /* literal  */
-  YYSYMBOL_string_literal = 38,            /* string_literal  */
-  YYSYMBOL_integer_literal = 39,           /* integer_literal  */
-  YYSYMBOL_float_literal = 40,             /* float_literal  */
-  YYSYMBOL_boolean_literal = 41            /* boolean_literal  */
+  YYSYMBOL_WHERE = 10,                     /* WHERE  */
+  YYSYMBOL_TRUE = 11,                      /* TRUE  */
+  YYSYMBOL_FALSE = 12,                     /* FALSE  */
+  YYSYMBOL_AND = 13,                       /* AND  */
+  YYSYMBOL_OR = 14,                        /* OR  */
+  YYSYMBOL_NOT = 15,                       /* NOT  */
+  YYSYMBOL_IS = 16,                        /* IS  */
+  YYSYMBOL_NULL_TOKEN = 17,                /* NULL_TOKEN  */
+  YYSYMBOL_LPAREN = 18,                    /* LPAREN  */
+  YYSYMBOL_RPAREN = 19,                    /* RPAREN  */
+  YYSYMBOL_LBRACE = 20,                    /* LBRACE  */
+  YYSYMBOL_RBRACE = 21,                    /* RBRACE  */
+  YYSYMBOL_LBRACKET = 22,                  /* LBRACKET  */
+  YYSYMBOL_RBRACKET = 23,                  /* RBRACKET  */
+  YYSYMBOL_DOT = 24,                       /* DOT  */
+  YYSYMBOL_COMMA = 25,                     /* COMMA  */
+  YYSYMBOL_COLON = 26,                     /* COLON  */
+  YYSYMBOL_SEMICOLON = 27,                 /* SEMICOLON  */
+  YYSYMBOL_ARROW_RIGHT = 28,               /* ARROW_RIGHT  */
+  YYSYMBOL_ARROW_LEFT = 29,                /* ARROW_LEFT  */
+  YYSYMBOL_DASH = 30,                      /* DASH  */
+  YYSYMBOL_EQ = 31,                        /* EQ  */
+  YYSYMBOL_NEQ = 32,                       /* NEQ  */
+  YYSYMBOL_LT = 33,                        /* LT  */
+  YYSYMBOL_GT = 34,                        /* GT  */
+  YYSYMBOL_LE = 35,                        /* LE  */
+  YYSYMBOL_GE = 36,                        /* GE  */
+  YYSYMBOL_YYACCEPT = 37,                  /* $accept  */
+  YYSYMBOL_program = 38,                   /* program  */
+  YYSYMBOL_statement = 39,                 /* statement  */
+  YYSYMBOL_create_statement = 40,          /* create_statement  */
+  YYSYMBOL_match_statement = 41,           /* match_statement  */
+  YYSYMBOL_return_statement = 42,          /* return_statement  */
+  YYSYMBOL_node_pattern = 43,              /* node_pattern  */
+  YYSYMBOL_relationship_pattern = 44,      /* relationship_pattern  */
+  YYSYMBOL_property_list = 45,             /* property_list  */
+  YYSYMBOL_variable = 46,                  /* variable  */
+  YYSYMBOL_label = 47,                     /* label  */
+  YYSYMBOL_property = 48,                  /* property  */
+  YYSYMBOL_literal = 49,                   /* literal  */
+  YYSYMBOL_string_literal = 50,            /* string_literal  */
+  YYSYMBOL_integer_literal = 51,           /* integer_literal  */
+  YYSYMBOL_float_literal = 52,             /* float_literal  */
+  YYSYMBOL_boolean_literal = 53,           /* boolean_literal  */
+  YYSYMBOL_where_clause = 54,              /* where_clause  */
+  YYSYMBOL_expression = 55,                /* expression  */
+  YYSYMBOL_comparison_expression = 56,     /* comparison_expression  */
+  YYSYMBOL_property_expression = 57        /* property_expression  */
 };
 typedef enum yysymbol_kind_t yysymbol_kind_t;
 
@@ -267,7 +283,7 @@ typedef int yytype_uint16;
 
 
 /* Stored state numbers (used for stacks). */
-typedef yytype_int8 yy_state_t;
+typedef yytype_uint8 yy_state_t;
 
 /* State numbers in computations.  */
 typedef int yy_state_fast_t;
@@ -478,19 +494,19 @@ union yyalloc
 /* YYFINAL -- State number of the termination state.  */
 #define YYFINAL  12
 /* YYLAST -- Last index in YYTABLE.  */
-#define YYLAST   74
+#define YYLAST   161
 
 /* YYNTOKENS -- Number of terminals.  */
-#define YYNTOKENS  25
+#define YYNTOKENS  37
 /* YYNNTS -- Number of nonterminals.  */
-#define YYNNTS  17
+#define YYNNTS  21
 /* YYNRULES -- Number of rules.  */
-#define YYNRULES  31
+#define YYNRULES  62
 /* YYNSTATES -- Number of states.  */
-#define YYNSTATES  79
+#define YYNSTATES  160
 
 /* YYMAXUTOK -- Last valid token kind.  */
-#define YYMAXUTOK   279
+#define YYMAXUTOK   291
 
 
 /* YYTRANSLATE(TOKEN-NUM) -- Symbol number corresponding to TOKEN-NUM
@@ -531,17 +547,22 @@ static const yytype_int8 yytranslate[] =
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     1,     2,     3,     4,
        5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
-      15,    16,    17,    18,    19,    20,    21,    22,    23,    24
+      15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
+      25,    26,    27,    28,    29,    30,    31,    32,    33,    34,
+      35,    36
 };
 
 #if YYDEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
-static const yytype_uint8 yyrline[] =
+static const yytype_int16 yyrline[] =
 {
-       0,    48,    48,    52,    53,    61,    64,    71,    74,    81,
-      88,    91,    98,   102,   106,   110,   114,   118,   139,   143,
-     150,   158,   166,   174,   175,   176,   177,   182,   189,   196,
-     203,   206
+       0,    54,    54,    58,    59,    63,    67,    76,    79,    86,
+      89,    96,   103,   106,   109,   112,   119,   123,   127,   131,
+     135,   139,   143,   147,   151,   155,   159,   163,   167,   171,
+     175,   179,   200,   204,   211,   219,   227,   235,   236,   237,
+     238,   243,   250,   257,   264,   267,   274,   281,   282,   285,
+     288,   291,   298,   301,   304,   307,   310,   313,   316,   319,
+     326,   330,   335
 };
 #endif
 
@@ -559,20 +580,22 @@ yysymbol_name (yysymbol_kind_t yysymbol)
   static const char *const yy_sname[] =
   {
   "end of file", "error", "invalid token", "IDENTIFIER", "STRING_LITERAL",
-  "INTEGER_LITERAL", "FLOAT_LITERAL", "CREATE", "MATCH", "RETURN", "TRUE",
-  "FALSE", "LPAREN", "RPAREN", "LBRACE", "RBRACE", "LBRACKET", "RBRACKET",
-  "DOT", "COMMA", "COLON", "SEMICOLON", "ARROW_RIGHT", "ARROW_LEFT",
-  "DASH", "$accept", "program", "statement", "create_statement",
-  "match_statement", "return_statement", "node_pattern",
-  "relationship_pattern", "property_list", "variable", "label", "property",
-  "literal", "string_literal", "integer_literal", "float_literal",
-  "boolean_literal", YY_NULLPTR
+  "INTEGER_LITERAL", "FLOAT_LITERAL", "CREATE", "MATCH", "RETURN", "WHERE",
+  "TRUE", "FALSE", "AND", "OR", "NOT", "IS", "NULL_TOKEN", "LPAREN",
+  "RPAREN", "LBRACE", "RBRACE", "LBRACKET", "RBRACKET", "DOT", "COMMA",
+  "COLON", "SEMICOLON", "ARROW_RIGHT", "ARROW_LEFT", "DASH", "EQ", "NEQ",
+  "LT", "GT", "LE", "GE", "$accept", "program", "statement",
+  "create_statement", "match_statement", "return_statement",
+  "node_pattern", "relationship_pattern", "property_list", "variable",
+  "label", "property", "literal", "string_literal", "integer_literal",
+  "float_literal", "boolean_literal", "where_clause", "expression",
+  "comparison_expression", "property_expression", YY_NULLPTR
   };
   return yy_sname[yysymbol];
 }
 #endif
 
-#define YYPACT_NINF (-22)
+#define YYPACT_NINF (-88)
 
 #define yypact_value_is_default(Yyn) \
   ((Yyn) == YYPACT_NINF)
@@ -584,16 +607,24 @@ yysymbol_name (yysymbol_kind_t yysymbol)
 
 /* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
    STATE-NUM.  */
-static const yytype_int8 yypact[] =
+static const yytype_int16 yypact[] =
 {
-      28,    -5,    -5,     5,   -22,   -22,    23,    15,    14,   -22,
-      14,   -22,   -22,    15,   -22,   -22,    -6,    25,    29,   -22,
-      22,    -1,     0,   -22,    26,    22,    24,    22,    27,   -22,
-      39,    31,    22,    32,    22,    30,    -7,   -22,    33,    12,
-      34,    16,    11,    38,    39,    -5,    39,    35,    -5,    39,
-      36,   -22,   -22,   -22,   -22,   -22,   -22,   -22,   -22,   -22,
-     -22,   -22,   -22,   -22,     8,    -5,   -22,     9,    -5,    37,
-     -22,    43,   -22,    40,    45,    -5,    -5,   -22,   -22
+      67,   -10,   -10,    29,   -88,     8,    81,    33,    94,   -88,
+      94,   -88,   -88,    33,   -88,    51,   -88,     8,   -88,    39,
+      16,    19,   -88,    36,   -88,   -88,   -88,   -88,   -88,    51,
+      51,   -88,   -88,   -88,   -88,   -88,   112,   -88,    17,   -88,
+     -88,    99,   105,     0,   -10,     2,   -10,   116,   112,    54,
+      51,    51,    28,     9,     9,     9,     9,     9,     9,    55,
+      63,   -88,   -88,   108,    91,   105,    56,   -88,   101,   105,
+      60,   -88,   -88,   -88,   112,   112,   113,   -88,   -88,   -88,
+     -88,   -88,   -88,   -88,    66,   114,    99,   -88,    99,   -10,
+      -1,    99,   104,   105,   -10,    41,    99,   103,   105,   -88,
+     -88,   -88,   -88,    64,   -88,    99,   106,    78,   -10,    95,
+     -88,    99,   107,    79,   -10,    97,   119,    80,   -10,   117,
+     -88,    99,   111,    86,   -10,   121,   -88,    99,   120,   -88,
+     122,   -88,   124,    88,   -10,   127,   -88,   123,    89,   -10,
+     126,   -10,   129,   -88,   130,   -10,   134,   -88,   -10,   -88,
+     131,   -10,   -88,   132,   -88,   -10,   -88,   -10,   -88,   -88
 };
 
 /* YYDEFACT[STATE-NUM] -- Default reduction number in state STATE-NUM.
@@ -601,87 +632,129 @@ static const yytype_int8 yypact[] =
    means the default is an error.  */
 static const yytype_int8 yydefact[] =
 {
-       0,     0,     0,     0,     2,     3,     0,     0,     5,     6,
-       7,     8,     1,     0,     4,    20,     0,     0,     0,     9,
-       0,     0,     0,    21,     0,     0,     0,     0,     0,    10,
-       0,     0,     0,     0,     0,     0,     0,    18,     0,     0,
+       0,     0,     0,     0,     2,     3,     0,     0,     7,     8,
+       9,    10,     1,     0,     4,     0,     5,     0,    34,     0,
+       0,     0,    11,    60,    41,    42,    43,    44,    45,     0,
+       0,    62,    37,    38,    39,    40,    46,    47,     0,     6,
+      14,     0,     0,     0,     0,     0,     0,     0,    50,     0,
        0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
-       0,    27,    28,    29,    30,    31,    22,    23,    24,    25,
-      26,    11,    19,    15,     0,     0,    12,     0,     0,     0,
-      16,     0,    13,     0,     0,     0,     0,    17,    14
+       0,    32,    35,     0,     0,     0,     0,    31,     0,     0,
+       0,    23,    61,    51,    48,    49,     0,    58,    52,    53,
+      54,    55,    56,    57,     0,     0,     0,    12,     0,     0,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,    59,
+      36,    15,    33,     0,    30,     0,     0,     0,     0,     0,
+      22,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+      28,     0,     0,     0,     0,     0,    20,     0,     0,    13,
+       0,    24,     0,     0,     0,     0,    16,     0,     0,     0,
+       0,     0,     0,    26,     0,     0,     0,    18,     0,    29,
+       0,     0,    21,     0,    25,     0,    17,     0,    27,    19
 };
 
 /* YYPGOTO[NTERM-NUM].  */
-static const yytype_int8 yypgoto[] =
+static const yytype_int16 yypgoto[] =
 {
-     -22,   -22,   -22,   -22,   -22,   -22,    -2,    50,   -15,   -12,
-     -21,    17,   -22,   -22,   -22,   -22,   -22
+     -88,   -88,   -88,   -88,   -88,    10,    -2,   140,   -87,    -6,
+     -63,    61,    75,   -88,   -88,   -88,   -88,   -88,   -19,   -88,
+      40
 };
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_int8 yydefgoto[] =
 {
-       0,     3,     4,     5,     6,    14,     8,     9,    36,    16,
-      24,    37,    56,    57,    58,    59,    60
+       0,     3,     4,     5,     6,    14,     8,     9,    60,    19,
+      63,    61,    31,    32,    33,    34,    35,    17,    36,    37,
+      38
 };
 
 /* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
    positive, shift that token.  If negative, reduce the rule whose
    number is the opposite.  If YYTABLE_NINF, syntax error.  */
-static const yytype_int8 yytable[] =
+static const yytype_uint8 yytable[] =
 {
-      10,    19,    15,    15,    31,    12,    33,     7,    43,    26,
-      28,    39,    44,    41,    20,    51,    52,    53,    15,    25,
-      27,    54,    55,    69,    71,    23,    46,    44,    44,    47,
-      49,    64,    13,    50,    67,     1,     2,    17,    18,    29,
-      30,    21,    35,    63,    32,    22,    66,    34,    38,    40,
-      42,    61,    11,     0,    73,     0,    48,    45,    68,    65,
-      74,    62,     0,    70,    75,     0,    72,    76,     0,     0,
-       0,     0,     0,    77,    78
+      10,   103,    90,    18,   107,    18,    95,    22,     7,   113,
+      48,    49,    23,    24,    25,    26,    16,    13,   117,   105,
+      27,    28,   106,    64,   123,    68,    65,    39,    69,    12,
+     109,    74,    75,    52,   133,   115,    18,    66,    43,    70,
+     138,    45,    67,    76,    71,    77,    44,    46,    53,    54,
+      55,    56,    57,    58,    23,    24,    25,    26,    40,    41,
+      47,   111,    27,    28,   112,    42,    29,    50,    51,    30,
+      24,    25,    26,    73,     1,     2,    91,    27,    28,    92,
+      96,    84,    93,    97,    85,   116,    98,   104,    86,    86,
+      13,    15,   110,    78,    79,    80,    81,    82,    83,   119,
+     125,   130,    59,    86,    86,    86,   120,   135,    62,   142,
+     146,    86,   126,    86,    86,   121,   131,   127,   122,    72,
+     128,    89,   136,    20,    21,    50,    51,    87,    88,    94,
+      99,   114,   143,   101,   108,   124,   118,   147,   129,   149,
+     132,   134,    11,   152,   137,   140,   154,   102,   139,   156,
+     144,   145,   150,   158,   141,   159,   148,   153,   151,   100,
+     157,   155
 };
 
-static const yytype_int8 yycheck[] =
+static const yytype_uint8 yycheck[] =
 {
-       2,    13,     3,     3,    25,     0,    27,    12,    15,    21,
-      22,    32,    19,    34,    20,     4,     5,     6,     3,    20,
-      20,    10,    11,    15,    15,     3,    14,    19,    19,    17,
-      14,    46,     9,    17,    49,     7,     8,    23,    24,    13,
-      14,    16,     3,    45,    20,    16,    48,    20,    17,    17,
-      20,    13,     2,    -1,    17,    -1,    22,    24,    22,    24,
-      17,    44,    -1,    65,    24,    -1,    68,    22,    -1,    -1,
-      -1,    -1,    -1,    75,    76
+       2,    88,    65,     3,    91,     3,    69,    13,    18,    96,
+      29,    30,     3,     4,     5,     6,     6,     9,   105,    20,
+      11,    12,    23,    23,   111,    23,    26,    17,    26,     0,
+      93,    50,    51,    16,   121,    98,     3,    43,    22,    45,
+     127,    22,    44,    15,    46,    17,    30,    28,    31,    32,
+      33,    34,    35,    36,     3,     4,     5,     6,    19,    20,
+      24,    20,    11,    12,    23,    26,    15,    13,    14,    18,
+       4,     5,     6,    19,     7,     8,    20,    11,    12,    23,
+      20,    26,    26,    23,    21,    21,    26,    89,    25,    25,
+       9,    10,    94,    53,    54,    55,    56,    57,    58,    21,
+      21,    21,     3,    25,    25,    25,   108,    21,     3,    21,
+      21,    25,   114,    25,    25,    20,   118,    20,    23,     3,
+      23,    30,   124,    29,    30,    13,    14,    19,    20,    28,
+      17,    28,   134,    19,    30,    28,    30,   139,    19,   141,
+      23,    30,     2,   145,    23,    23,   148,    86,    28,   151,
+      23,    28,    23,   155,    30,   157,    30,    23,    28,    84,
+      28,    30
 };
 
 /* YYSTOS[STATE-NUM] -- The symbol kind of the accessing symbol of
    state STATE-NUM.  */
 static const yytype_int8 yystos[] =
 {
-       0,     7,     8,    26,    27,    28,    29,    12,    31,    32,
-      31,    32,     0,     9,    30,     3,    34,    23,    24,    34,
-      20,    16,    16,     3,    35,    20,    34,    20,    34,    13,
-      14,    35,    20,    35,    20,     3,    33,    36,    17,    35,
-      17,    35,    20,    15,    19,    24,    14,    17,    22,    14,
-      17,     4,     5,     6,    10,    11,    37,    38,    39,    40,
-      41,    13,    36,    31,    33,    24,    31,    33,    22,    15,
-      31,    15,    31,    17,    17,    24,    22,    31,    31
+       0,     7,     8,    38,    39,    40,    41,    18,    43,    44,
+      43,    44,     0,     9,    42,    10,    42,    54,     3,    46,
+      29,    30,    46,     3,     4,     5,     6,    11,    12,    15,
+      18,    49,    50,    51,    52,    53,    55,    56,    57,    42,
+      19,    20,    26,    22,    30,    22,    28,    24,    55,    55,
+      13,    14,    16,    31,    32,    33,    34,    35,    36,     3,
+      45,    48,     3,    47,    23,    26,    46,    43,    23,    26,
+      46,    43,     3,    19,    55,    55,    15,    17,    57,    57,
+      57,    57,    57,    57,    26,    21,    25,    19,    20,    30,
+      47,    20,    23,    26,    28,    47,    20,    23,    26,    17,
+      49,    19,    48,    45,    43,    20,    23,    45,    30,    47,
+      43,    20,    23,    45,    28,    47,    21,    45,    30,    21,
+      43,    20,    23,    45,    28,    21,    43,    20,    23,    19,
+      21,    43,    23,    45,    30,    21,    43,    23,    45,    28,
+      23,    30,    21,    43,    23,    28,    21,    43,    30,    43,
+      23,    28,    43,    23,    43,    30,    43,    28,    43,    43
 };
 
 /* YYR1[RULE-NUM] -- Symbol kind of the left-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr1[] =
 {
-       0,    25,    26,    27,    27,    28,    28,    29,    29,    30,
-      31,    31,    32,    32,    32,    32,    32,    32,    33,    33,
-      34,    35,    36,    37,    37,    37,    37,    38,    39,    40,
-      41,    41
+       0,    37,    38,    39,    39,    39,    39,    40,    40,    41,
+      41,    42,    43,    43,    43,    43,    44,    44,    44,    44,
+      44,    44,    44,    44,    44,    44,    44,    44,    44,    44,
+      44,    44,    45,    45,    46,    47,    48,    49,    49,    49,
+      49,    50,    51,    52,    53,    53,    54,    55,    55,    55,
+      55,    55,    56,    56,    56,    56,    56,    56,    56,    56,
+      57,    57,    57
 };
 
 /* YYR2[RULE-NUM] -- Number of symbols on the right-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr2[] =
 {
-       0,     2,     1,     1,     2,     2,     2,     2,     2,     2,
-       5,     8,     8,     9,    12,     8,     9,    12,     1,     3,
-       1,     1,     3,     1,     1,     1,     1,     1,     1,     1,
-       1,     1
+       0,     2,     1,     1,     2,     2,     3,     2,     2,     2,
+       2,     2,     5,     8,     3,     6,     8,    11,     9,    12,
+       7,    10,     6,     4,     8,    11,     9,    12,     7,    10,
+       6,     4,     1,     3,     1,     1,     3,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     2,     1,     3,     3,
+       2,     3,     3,     3,     3,     3,     3,     3,     3,     4,
+       1,     3,     1
 };
 
 
@@ -1366,249 +1439,509 @@ yyreduce:
   switch (yyn)
     {
   case 2: /* program: statement  */
-#line 48 "cypher.y"
+#line 54 "cypher.y"
               { parse_result = (yyvsp[0].statement); }
-#line 1372 "cypher.tab.c"
+#line 1445 "cypher.tab.c"
     break;
 
   case 3: /* statement: create_statement  */
-#line 52 "cypher.y"
+#line 58 "cypher.y"
                      { (yyval.statement) = (yyvsp[0].create_statement); }
-#line 1378 "cypher.tab.c"
+#line 1451 "cypher.tab.c"
     break;
 
-  case 4: /* statement: match_statement return_statement  */
-#line 53 "cypher.y"
+  case 4: /* statement: create_statement return_statement  */
+#line 59 "cypher.y"
+                                        { 
+        // Create a compound statement with CREATE and RETURN
+        (yyval.statement) = ast_create_compound_statement((yyvsp[-1].create_statement), (yyvsp[0].return_statement));
+    }
+#line 1460 "cypher.tab.c"
+    break;
+
+  case 5: /* statement: match_statement return_statement  */
+#line 63 "cypher.y"
                                        { 
         // Create a compound statement with MATCH and RETURN
         (yyval.statement) = ast_create_compound_statement((yyvsp[-1].match_statement), (yyvsp[0].return_statement));
     }
-#line 1387 "cypher.tab.c"
+#line 1469 "cypher.tab.c"
     break;
 
-  case 5: /* create_statement: CREATE node_pattern  */
-#line 61 "cypher.y"
-                        {
-        (yyval.create_statement) = ast_create_create_statement((yyvsp[0].node_pattern));
-    }
-#line 1395 "cypher.tab.c"
-    break;
-
-  case 6: /* create_statement: CREATE relationship_pattern  */
-#line 64 "cypher.y"
-                                  {
-        (yyval.create_statement) = ast_create_create_statement((yyvsp[0].relationship_pattern));
-    }
-#line 1403 "cypher.tab.c"
-    break;
-
-  case 7: /* match_statement: MATCH node_pattern  */
-#line 71 "cypher.y"
-                       {
-        (yyval.match_statement) = ast_create_match_statement((yyvsp[0].node_pattern));
-    }
-#line 1411 "cypher.tab.c"
-    break;
-
-  case 8: /* match_statement: MATCH relationship_pattern  */
-#line 74 "cypher.y"
-                                 {
-        (yyval.match_statement) = ast_create_match_statement((yyvsp[0].relationship_pattern));
-    }
-#line 1419 "cypher.tab.c"
-    break;
-
-  case 9: /* return_statement: RETURN variable  */
-#line 81 "cypher.y"
-                    {
-        (yyval.return_statement) = ast_create_return_statement((yyvsp[0].variable));
-    }
-#line 1427 "cypher.tab.c"
-    break;
-
-  case 10: /* node_pattern: LPAREN variable COLON label RPAREN  */
-#line 88 "cypher.y"
-                                       {
-        (yyval.node_pattern) = ast_create_node_pattern((yyvsp[-3].variable), (yyvsp[-1].label), NULL);
-    }
-#line 1435 "cypher.tab.c"
-    break;
-
-  case 11: /* node_pattern: LPAREN variable COLON label LBRACE property_list RBRACE RPAREN  */
-#line 91 "cypher.y"
-                                                                     {
-        (yyval.node_pattern) = ast_create_node_pattern((yyvsp[-6].variable), (yyvsp[-4].label), (yyvsp[-2].property_list));
-    }
-#line 1443 "cypher.tab.c"
-    break;
-
-  case 12: /* relationship_pattern: node_pattern DASH LBRACKET COLON label RBRACKET ARROW_RIGHT node_pattern  */
-#line 98 "cypher.y"
-                                                                             {
-        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, (yyvsp[-3].label), NULL);
-        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-7].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction
-    }
-#line 1452 "cypher.tab.c"
-    break;
-
-  case 13: /* relationship_pattern: node_pattern DASH LBRACKET variable COLON label RBRACKET ARROW_RIGHT node_pattern  */
-#line 102 "cypher.y"
-                                                                                        {
-        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-5].variable), (yyvsp[-3].label), NULL);
-        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-8].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction
-    }
-#line 1461 "cypher.tab.c"
-    break;
-
-  case 14: /* relationship_pattern: node_pattern DASH LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET ARROW_RIGHT node_pattern  */
-#line 106 "cypher.y"
-                                                                                                                    {
-        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-8].variable), (yyvsp[-6].label), (yyvsp[-4].property_list));
-        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-11].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction
-    }
-#line 1470 "cypher.tab.c"
-    break;
-
-  case 15: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET COLON label RBRACKET DASH node_pattern  */
-#line 110 "cypher.y"
-                                                                              {
-        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, (yyvsp[-3].label), NULL);
-        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-7].node_pattern), -1);  // -1 = left direction
+  case 6: /* statement: match_statement where_clause return_statement  */
+#line 67 "cypher.y"
+                                                    {
+        // Create a compound statement with MATCH, WHERE and RETURN
+        cypher_ast_node_t *match_with_where = ast_attach_where_clause((yyvsp[-2].match_statement), (yyvsp[-1].where_clause));
+        (yyval.statement) = ast_create_compound_statement(match_with_where, (yyvsp[0].return_statement));
     }
 #line 1479 "cypher.tab.c"
     break;
 
-  case 16: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET variable COLON label RBRACKET DASH node_pattern  */
-#line 114 "cypher.y"
+  case 7: /* create_statement: CREATE node_pattern  */
+#line 76 "cypher.y"
+                        {
+        (yyval.create_statement) = ast_create_create_statement((yyvsp[0].node_pattern));
+    }
+#line 1487 "cypher.tab.c"
+    break;
+
+  case 8: /* create_statement: CREATE relationship_pattern  */
+#line 79 "cypher.y"
+                                  {
+        (yyval.create_statement) = ast_create_create_statement((yyvsp[0].relationship_pattern));
+    }
+#line 1495 "cypher.tab.c"
+    break;
+
+  case 9: /* match_statement: MATCH node_pattern  */
+#line 86 "cypher.y"
+                       {
+        (yyval.match_statement) = ast_create_match_statement((yyvsp[0].node_pattern));
+    }
+#line 1503 "cypher.tab.c"
+    break;
+
+  case 10: /* match_statement: MATCH relationship_pattern  */
+#line 89 "cypher.y"
+                                 {
+        (yyval.match_statement) = ast_create_match_statement((yyvsp[0].relationship_pattern));
+    }
+#line 1511 "cypher.tab.c"
+    break;
+
+  case 11: /* return_statement: RETURN variable  */
+#line 96 "cypher.y"
+                    {
+        (yyval.return_statement) = ast_create_return_statement((yyvsp[0].variable));
+    }
+#line 1519 "cypher.tab.c"
+    break;
+
+  case 12: /* node_pattern: LPAREN variable COLON label RPAREN  */
+#line 103 "cypher.y"
+                                       {
+        (yyval.node_pattern) = ast_create_node_pattern((yyvsp[-3].variable), (yyvsp[-1].label), NULL);
+    }
+#line 1527 "cypher.tab.c"
+    break;
+
+  case 13: /* node_pattern: LPAREN variable COLON label LBRACE property_list RBRACE RPAREN  */
+#line 106 "cypher.y"
+                                                                     {
+        (yyval.node_pattern) = ast_create_node_pattern((yyvsp[-6].variable), (yyvsp[-4].label), (yyvsp[-2].property_list));
+    }
+#line 1535 "cypher.tab.c"
+    break;
+
+  case 14: /* node_pattern: LPAREN variable RPAREN  */
+#line 109 "cypher.y"
+                             {
+        (yyval.node_pattern) = ast_create_node_pattern((yyvsp[-1].variable), NULL, NULL);
+    }
+#line 1543 "cypher.tab.c"
+    break;
+
+  case 15: /* node_pattern: LPAREN variable LBRACE property_list RBRACE RPAREN  */
+#line 112 "cypher.y"
+                                                         {
+        (yyval.node_pattern) = ast_create_node_pattern((yyvsp[-4].variable), NULL, (yyvsp[-2].property_list));
+    }
+#line 1551 "cypher.tab.c"
+    break;
+
+  case 16: /* relationship_pattern: node_pattern DASH LBRACKET COLON label RBRACKET ARROW_RIGHT node_pattern  */
+#line 119 "cypher.y"
+                                                                             {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, (yyvsp[-3].label), NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-7].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction
+    }
+#line 1560 "cypher.tab.c"
+    break;
+
+  case 17: /* relationship_pattern: node_pattern DASH LBRACKET COLON label LBRACE property_list RBRACE RBRACKET ARROW_RIGHT node_pattern  */
+#line 123 "cypher.y"
+                                                                                                           {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, (yyvsp[-6].label), (yyvsp[-4].property_list));
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-10].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction, type with properties
+    }
+#line 1569 "cypher.tab.c"
+    break;
+
+  case 18: /* relationship_pattern: node_pattern DASH LBRACKET variable COLON label RBRACKET ARROW_RIGHT node_pattern  */
+#line 127 "cypher.y"
+                                                                                        {
+        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-5].variable), (yyvsp[-3].label), NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-8].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction
+    }
+#line 1578 "cypher.tab.c"
+    break;
+
+  case 19: /* relationship_pattern: node_pattern DASH LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET ARROW_RIGHT node_pattern  */
+#line 131 "cypher.y"
+                                                                                                                    {
+        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-8].variable), (yyvsp[-6].label), (yyvsp[-4].property_list));
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-11].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction
+    }
+#line 1587 "cypher.tab.c"
+    break;
+
+  case 20: /* relationship_pattern: node_pattern DASH LBRACKET variable RBRACKET ARROW_RIGHT node_pattern  */
+#line 135 "cypher.y"
+                                                                            {
+        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-3].variable), NULL, NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-6].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction, no type
+    }
+#line 1596 "cypher.tab.c"
+    break;
+
+  case 21: /* relationship_pattern: node_pattern DASH LBRACKET variable LBRACE property_list RBRACE RBRACKET ARROW_RIGHT node_pattern  */
+#line 139 "cypher.y"
+                                                                                                        {
+        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-6].variable), NULL, (yyvsp[-4].property_list));
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-9].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction, no type but with properties
+    }
+#line 1605 "cypher.tab.c"
+    break;
+
+  case 22: /* relationship_pattern: node_pattern DASH LBRACKET RBRACKET ARROW_RIGHT node_pattern  */
+#line 143 "cypher.y"
+                                                                   {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, NULL, NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-5].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction, no variable or type
+    }
+#line 1614 "cypher.tab.c"
+    break;
+
+  case 23: /* relationship_pattern: node_pattern DASH ARROW_RIGHT node_pattern  */
+#line 147 "cypher.y"
+                                                 {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, NULL, NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[-3].node_pattern), edge, (yyvsp[0].node_pattern), 1);  // 1 = right direction, no brackets
+    }
+#line 1623 "cypher.tab.c"
+    break;
+
+  case 24: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET COLON label RBRACKET DASH node_pattern  */
+#line 151 "cypher.y"
+                                                                              {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, (yyvsp[-3].label), NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-7].node_pattern), -1);  // -1 = left direction
+    }
+#line 1632 "cypher.tab.c"
+    break;
+
+  case 25: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET COLON label LBRACE property_list RBRACE RBRACKET DASH node_pattern  */
+#line 155 "cypher.y"
+                                                                                                          {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, (yyvsp[-6].label), (yyvsp[-4].property_list));
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-10].node_pattern), -1);  // -1 = left direction, type with properties
+    }
+#line 1641 "cypher.tab.c"
+    break;
+
+  case 26: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET variable COLON label RBRACKET DASH node_pattern  */
+#line 159 "cypher.y"
                                                                                        {
         cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-5].variable), (yyvsp[-3].label), NULL);
         (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-8].node_pattern), -1);  // -1 = left direction  
     }
-#line 1488 "cypher.tab.c"
+#line 1650 "cypher.tab.c"
     break;
 
-  case 17: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET DASH node_pattern  */
-#line 118 "cypher.y"
+  case 27: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET DASH node_pattern  */
+#line 163 "cypher.y"
                                                                                                                    {
         cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-8].variable), (yyvsp[-6].label), (yyvsp[-4].property_list));
         (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-11].node_pattern), -1);  // -1 = left direction
     }
-#line 1497 "cypher.tab.c"
+#line 1659 "cypher.tab.c"
     break;
 
-  case 18: /* property_list: property  */
-#line 139 "cypher.y"
+  case 28: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET variable RBRACKET DASH node_pattern  */
+#line 167 "cypher.y"
+                                                                           {
+        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-3].variable), NULL, NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-6].node_pattern), -1);  // -1 = left direction, no type
+    }
+#line 1668 "cypher.tab.c"
+    break;
+
+  case 29: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET variable LBRACE property_list RBRACE RBRACKET DASH node_pattern  */
+#line 171 "cypher.y"
+                                                                                                       {
+        cypher_ast_node_t *edge = ast_create_edge_pattern((yyvsp[-6].variable), NULL, (yyvsp[-4].property_list));
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-9].node_pattern), -1);  // -1 = left direction, no type but with properties
+    }
+#line 1677 "cypher.tab.c"
+    break;
+
+  case 30: /* relationship_pattern: node_pattern ARROW_LEFT LBRACKET RBRACKET DASH node_pattern  */
+#line 175 "cypher.y"
+                                                                  {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, NULL, NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-5].node_pattern), -1);  // -1 = left direction, no variable or type
+    }
+#line 1686 "cypher.tab.c"
+    break;
+
+  case 31: /* relationship_pattern: node_pattern ARROW_LEFT DASH node_pattern  */
+#line 179 "cypher.y"
+                                                {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, NULL, NULL);
+        (yyval.relationship_pattern) = ast_create_relationship_pattern((yyvsp[0].node_pattern), edge, (yyvsp[-3].node_pattern), -1);  // -1 = left direction, no brackets
+    }
+#line 1695 "cypher.tab.c"
+    break;
+
+  case 32: /* property_list: property  */
+#line 200 "cypher.y"
              {
         cypher_ast_node_t *list = ast_create_property_list();
         (yyval.property_list) = ast_add_property_to_list(list, (yyvsp[0].property));
     }
-#line 1506 "cypher.tab.c"
+#line 1704 "cypher.tab.c"
     break;
 
-  case 19: /* property_list: property_list COMMA property  */
-#line 143 "cypher.y"
+  case 33: /* property_list: property_list COMMA property  */
+#line 204 "cypher.y"
                                    {
         (yyval.property_list) = ast_add_property_to_list((yyvsp[-2].property_list), (yyvsp[0].property));
     }
-#line 1514 "cypher.tab.c"
+#line 1712 "cypher.tab.c"
     break;
 
-  case 20: /* variable: IDENTIFIER  */
-#line 150 "cypher.y"
+  case 34: /* variable: IDENTIFIER  */
+#line 211 "cypher.y"
                {
         (yyval.variable) = ast_create_variable((yyvsp[0].IDENTIFIER));
         free((yyvsp[0].IDENTIFIER));  // Free the token string
     }
-#line 1523 "cypher.tab.c"
+#line 1721 "cypher.tab.c"
     break;
 
-  case 21: /* label: IDENTIFIER  */
-#line 158 "cypher.y"
+  case 35: /* label: IDENTIFIER  */
+#line 219 "cypher.y"
                {
         (yyval.label) = ast_create_label((yyvsp[0].IDENTIFIER));
         free((yyvsp[0].IDENTIFIER));  // Free the token string
     }
-#line 1532 "cypher.tab.c"
+#line 1730 "cypher.tab.c"
     break;
 
-  case 22: /* property: IDENTIFIER COLON literal  */
-#line 166 "cypher.y"
+  case 36: /* property: IDENTIFIER COLON literal  */
+#line 227 "cypher.y"
                              {
         (yyval.property) = ast_create_property((yyvsp[-2].IDENTIFIER), (yyvsp[0].literal));
         free((yyvsp[-2].IDENTIFIER));  // Free the key string
     }
-#line 1541 "cypher.tab.c"
+#line 1739 "cypher.tab.c"
     break;
 
-  case 23: /* literal: string_literal  */
-#line 174 "cypher.y"
+  case 37: /* literal: string_literal  */
+#line 235 "cypher.y"
                    { (yyval.literal) = (yyvsp[0].string_literal); }
-#line 1547 "cypher.tab.c"
+#line 1745 "cypher.tab.c"
     break;
 
-  case 24: /* literal: integer_literal  */
-#line 175 "cypher.y"
+  case 38: /* literal: integer_literal  */
+#line 236 "cypher.y"
                       { (yyval.literal) = (yyvsp[0].integer_literal); }
-#line 1553 "cypher.tab.c"
+#line 1751 "cypher.tab.c"
     break;
 
-  case 25: /* literal: float_literal  */
-#line 176 "cypher.y"
+  case 39: /* literal: float_literal  */
+#line 237 "cypher.y"
                     { (yyval.literal) = (yyvsp[0].float_literal); }
-#line 1559 "cypher.tab.c"
+#line 1757 "cypher.tab.c"
     break;
 
-  case 26: /* literal: boolean_literal  */
-#line 177 "cypher.y"
+  case 40: /* literal: boolean_literal  */
+#line 238 "cypher.y"
                       { (yyval.literal) = (yyvsp[0].boolean_literal); }
-#line 1565 "cypher.tab.c"
+#line 1763 "cypher.tab.c"
     break;
 
-  case 27: /* string_literal: STRING_LITERAL  */
-#line 182 "cypher.y"
+  case 41: /* string_literal: STRING_LITERAL  */
+#line 243 "cypher.y"
                    {
         (yyval.string_literal) = ast_create_string_literal((yyvsp[0].STRING_LITERAL));
         free((yyvsp[0].STRING_LITERAL));  // Free the token string
     }
-#line 1574 "cypher.tab.c"
+#line 1772 "cypher.tab.c"
     break;
 
-  case 28: /* integer_literal: INTEGER_LITERAL  */
-#line 189 "cypher.y"
+  case 42: /* integer_literal: INTEGER_LITERAL  */
+#line 250 "cypher.y"
                     {
         (yyval.integer_literal) = ast_create_integer_literal((yyvsp[0].INTEGER_LITERAL));
         free((yyvsp[0].INTEGER_LITERAL));  // Free the token string
     }
-#line 1583 "cypher.tab.c"
+#line 1781 "cypher.tab.c"
     break;
 
-  case 29: /* float_literal: FLOAT_LITERAL  */
-#line 196 "cypher.y"
+  case 43: /* float_literal: FLOAT_LITERAL  */
+#line 257 "cypher.y"
                   {
         (yyval.float_literal) = ast_create_float_literal((yyvsp[0].FLOAT_LITERAL));
         free((yyvsp[0].FLOAT_LITERAL));  // Free the token string
     }
-#line 1592 "cypher.tab.c"
+#line 1790 "cypher.tab.c"
     break;
 
-  case 30: /* boolean_literal: TRUE  */
-#line 203 "cypher.y"
+  case 44: /* boolean_literal: TRUE  */
+#line 264 "cypher.y"
          {
         (yyval.boolean_literal) = ast_create_boolean_literal(1);
     }
-#line 1600 "cypher.tab.c"
+#line 1798 "cypher.tab.c"
     break;
 
-  case 31: /* boolean_literal: FALSE  */
-#line 206 "cypher.y"
+  case 45: /* boolean_literal: FALSE  */
+#line 267 "cypher.y"
             {
         (yyval.boolean_literal) = ast_create_boolean_literal(0);
     }
-#line 1608 "cypher.tab.c"
+#line 1806 "cypher.tab.c"
+    break;
+
+  case 46: /* where_clause: WHERE expression  */
+#line 274 "cypher.y"
+                     {
+        (yyval.where_clause) = ast_create_where_clause((yyvsp[0].expression));
+    }
+#line 1814 "cypher.tab.c"
+    break;
+
+  case 47: /* expression: comparison_expression  */
+#line 281 "cypher.y"
+                          { (yyval.expression) = (yyvsp[0].comparison_expression); }
+#line 1820 "cypher.tab.c"
+    break;
+
+  case 48: /* expression: expression AND expression  */
+#line 282 "cypher.y"
+                                {
+        (yyval.expression) = ast_create_binary_expr((yyvsp[-2].expression), AST_OP_AND, (yyvsp[0].expression));
+    }
+#line 1828 "cypher.tab.c"
+    break;
+
+  case 49: /* expression: expression OR expression  */
+#line 285 "cypher.y"
+                               {
+        (yyval.expression) = ast_create_binary_expr((yyvsp[-2].expression), AST_OP_OR, (yyvsp[0].expression));
+    }
+#line 1836 "cypher.tab.c"
+    break;
+
+  case 50: /* expression: NOT expression  */
+#line 288 "cypher.y"
+                     {
+        (yyval.expression) = ast_create_unary_expr(AST_OP_NOT, (yyvsp[0].expression));
+    }
+#line 1844 "cypher.tab.c"
+    break;
+
+  case 51: /* expression: LPAREN expression RPAREN  */
+#line 291 "cypher.y"
+                               {
+        (yyval.expression) = (yyvsp[-1].expression);  // Parentheses just return the inner expression
+    }
+#line 1852 "cypher.tab.c"
+    break;
+
+  case 52: /* comparison_expression: property_expression EQ property_expression  */
+#line 298 "cypher.y"
+                                               {
+        (yyval.comparison_expression) = ast_create_binary_expr((yyvsp[-2].property_expression), AST_OP_EQ, (yyvsp[0].property_expression));
+    }
+#line 1860 "cypher.tab.c"
+    break;
+
+  case 53: /* comparison_expression: property_expression NEQ property_expression  */
+#line 301 "cypher.y"
+                                                  {
+        (yyval.comparison_expression) = ast_create_binary_expr((yyvsp[-2].property_expression), AST_OP_NEQ, (yyvsp[0].property_expression));
+    }
+#line 1868 "cypher.tab.c"
+    break;
+
+  case 54: /* comparison_expression: property_expression LT property_expression  */
+#line 304 "cypher.y"
+                                                 {
+        (yyval.comparison_expression) = ast_create_binary_expr((yyvsp[-2].property_expression), AST_OP_LT, (yyvsp[0].property_expression));
+    }
+#line 1876 "cypher.tab.c"
+    break;
+
+  case 55: /* comparison_expression: property_expression GT property_expression  */
+#line 307 "cypher.y"
+                                                 {
+        (yyval.comparison_expression) = ast_create_binary_expr((yyvsp[-2].property_expression), AST_OP_GT, (yyvsp[0].property_expression));
+    }
+#line 1884 "cypher.tab.c"
+    break;
+
+  case 56: /* comparison_expression: property_expression LE property_expression  */
+#line 310 "cypher.y"
+                                                 {
+        (yyval.comparison_expression) = ast_create_binary_expr((yyvsp[-2].property_expression), AST_OP_LE, (yyvsp[0].property_expression));
+    }
+#line 1892 "cypher.tab.c"
+    break;
+
+  case 57: /* comparison_expression: property_expression GE property_expression  */
+#line 313 "cypher.y"
+                                                 {
+        (yyval.comparison_expression) = ast_create_binary_expr((yyvsp[-2].property_expression), AST_OP_GE, (yyvsp[0].property_expression));
+    }
+#line 1900 "cypher.tab.c"
+    break;
+
+  case 58: /* comparison_expression: property_expression IS NULL_TOKEN  */
+#line 316 "cypher.y"
+                                        {
+        (yyval.comparison_expression) = ast_create_is_null_expr((yyvsp[-2].property_expression), 1);  // IS NULL
+    }
+#line 1908 "cypher.tab.c"
+    break;
+
+  case 59: /* comparison_expression: property_expression IS NOT NULL_TOKEN  */
+#line 319 "cypher.y"
+                                            {
+        (yyval.comparison_expression) = ast_create_is_null_expr((yyvsp[-3].property_expression), 0);  // IS NOT NULL
+    }
+#line 1916 "cypher.tab.c"
+    break;
+
+  case 60: /* property_expression: IDENTIFIER  */
+#line 326 "cypher.y"
+               {
+        (yyval.property_expression) = ast_create_identifier((yyvsp[0].IDENTIFIER));
+        free((yyvsp[0].IDENTIFIER));
+    }
+#line 1925 "cypher.tab.c"
+    break;
+
+  case 61: /* property_expression: IDENTIFIER DOT IDENTIFIER  */
+#line 330 "cypher.y"
+                                {
+        (yyval.property_expression) = ast_create_property_access((yyvsp[-2].IDENTIFIER), (yyvsp[0].IDENTIFIER));
+        free((yyvsp[-2].IDENTIFIER));
+        free((yyvsp[0].IDENTIFIER));
+    }
+#line 1935 "cypher.tab.c"
+    break;
+
+  case 62: /* property_expression: literal  */
+#line 335 "cypher.y"
+              { (yyval.property_expression) = (yyvsp[0].literal); }
+#line 1941 "cypher.tab.c"
     break;
 
 
-#line 1612 "cypher.tab.c"
+#line 1945 "cypher.tab.c"
 
       default: break;
     }
@@ -1832,7 +2165,7 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 211 "cypher.y"
+#line 338 "cypher.y"
 
 
 void yyerror(const char *s) {

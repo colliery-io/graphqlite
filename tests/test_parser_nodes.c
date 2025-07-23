@@ -158,13 +158,12 @@ void test_parser_invalid_node_query(void) {
     // Test various invalid queries
     const char *invalid_queries[] = {
         "CREATE (:Person)",     // Missing variable
-        "CREATE (n)",           // Missing label
         "CREATE (n:)",          // Empty label
         "MATCH (n:Person",      // Missing closing paren
         "CREATE (n:Person {name})", // Invalid property syntax
     };
     
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {  // Reduced to 4 since "CREATE (n)" is now valid
         cypher_ast_node_t *ast = parse_query(invalid_queries[i]);
         CU_ASSERT_PTR_NULL(ast);  // Should fail to parse
     }

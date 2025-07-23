@@ -158,6 +158,93 @@ void test_parser_match_relationship(void) {
     ast_free(ast);
 }
 
+void test_parser_flexible_edge_patterns(void) {
+    // Test new flexible edge patterns without types
+    const char *query1 = "MATCH (a)-[r]->(b) RETURN a";
+    cypher_ast_node_t *ast1 = parse_query(query1);
+    
+    CU_ASSERT_PTR_NOT_NULL(ast1);
+    if (ast1) {
+        CU_ASSERT_EQUAL(ast1->type, AST_COMPOUND_STATEMENT);
+        cypher_ast_node_t *match = ast1->data.compound_stmt.match_stmt;
+        cypher_ast_node_t *pattern = match->data.match_stmt.node_pattern;
+        CU_ASSERT_EQUAL(pattern->type, AST_RELATIONSHIP_PATTERN);
+        
+        // Check edge has variable but no type
+        cypher_ast_node_t *edge = pattern->data.relationship_pattern.edge;
+        CU_ASSERT_PTR_NOT_NULL(edge->data.edge_pattern.variable);
+        CU_ASSERT_STRING_EQUAL(edge->data.edge_pattern.variable->data.variable.name, "r");
+        CU_ASSERT_PTR_NULL(edge->data.edge_pattern.label); // No type
+        
+        ast_free(ast1);
+    }
+    
+    // Test empty brackets
+    const char *query2 = "MATCH (a)-[]->(b) RETURN a";
+    cypher_ast_node_t *ast2 = parse_query(query2);
+    
+    CU_ASSERT_PTR_NOT_NULL(ast2);
+    if (ast2) {
+        cypher_ast_node_t *match = ast2->data.compound_stmt.match_stmt;
+        cypher_ast_node_t *pattern = match->data.match_stmt.node_pattern;
+        cypher_ast_node_t *edge = pattern->data.relationship_pattern.edge;
+        CU_ASSERT_PTR_NULL(edge->data.edge_pattern.variable); // No variable
+        CU_ASSERT_PTR_NULL(edge->data.edge_pattern.label); // No type
+        
+        ast_free(ast2);
+    }
+    
+    // Test no brackets
+    const char *query3 = "MATCH (a)-->(b) RETURN a";
+    cypher_ast_node_t *ast3 = parse_query(query3);
+    
+    CU_ASSERT_PTR_NOT_NULL(ast3);
+    if (ast3) {
+        cypher_ast_node_t *match = ast3->data.compound_stmt.match_stmt;
+        cypher_ast_node_t *pattern = match->data.match_stmt.node_pattern;
+        CU_ASSERT_EQUAL(pattern->type, AST_RELATIONSHIP_PATTERN);
+        
+        ast_free(ast3);
+    }
+}
+
+void test_parser_nodes_without_labels(void) {
+    // Test nodes without labels
+    const char *query1 = "CREATE (a) RETURN a";
+    cypher_ast_node_t *ast1 = parse_query(query1);
+    
+    CU_ASSERT_PTR_NOT_NULL(ast1);
+    if (ast1) {
+        CU_ASSERT_EQUAL(ast1->type, AST_COMPOUND_STATEMENT);
+        cypher_ast_node_t *create = ast1->data.compound_stmt.match_stmt; // CREATE is stored in match_stmt position
+        cypher_ast_node_t *pattern = create->data.create_stmt.node_pattern;
+        CU_ASSERT_EQUAL(pattern->type, AST_NODE_PATTERN);
+        
+        // Check node has variable but no label
+        CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.variable);
+        CU_ASSERT_STRING_EQUAL(pattern->data.node_pattern.variable->data.variable.name, "a");
+        CU_ASSERT_PTR_NULL(pattern->data.node_pattern.label); // No label
+        
+        ast_free(ast1);
+    }
+    
+    // Test node without label but with properties
+    const char *query2 = "CREATE (a {name: \"test\"}) RETURN a";
+    cypher_ast_node_t *ast2 = parse_query(query2);
+    
+    CU_ASSERT_PTR_NOT_NULL(ast2);
+    if (ast2) {
+        cypher_ast_node_t *create = ast2->data.compound_stmt.match_stmt;
+        cypher_ast_node_t *pattern = create->data.create_stmt.node_pattern;
+        
+        CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.variable);
+        CU_ASSERT_PTR_NULL(pattern->data.node_pattern.label); // No label
+        CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.properties); // Has properties
+        
+        ast_free(ast2);
+    }
+}
+
 void test_parser_edge_memory_management(void) {
     // Test that edge parsing doesn't leak memory
     const char *queries[] = {
@@ -165,11 +252,15 @@ void test_parser_edge_memory_management(void) {
         "CREATE (a:Person)-[r:KNOWS]->(b:Person)",
         "CREATE (a:Person)-[r:KNOWS {since: \"2020\"}]->(b:Person)",
         "CREATE (a:Person)<-[:KNOWS]-(b:Person)",
-        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a"
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a",
+        "MATCH (a)-[r]->(b) RETURN a",
+        "MATCH (a)-[]->(b) RETURN a",
+        "MATCH (a)-->(b) RETURN a",
+        "CREATE (a) RETURN a"
     };
     
     for (int i = 0; i < 5; i++) {
-        for (int j = 0; j < 5; j++) {  // Parse each query multiple times
+        for (int j = 0; j < 9; j++) {  // Parse each query multiple times
             cypher_ast_node_t *ast = parse_query(queries[j]);
             CU_ASSERT_PTR_NOT_NULL(ast);
             if (ast) {
@@ -197,6 +288,8 @@ int add_edge_parser_tests(void) {
         !CU_add_test(edge_suite, "CREATE relationship with properties", test_parser_create_relationship_with_properties) ||
         !CU_add_test(edge_suite, "CREATE relationship left direction", test_parser_create_relationship_left_direction) ||
         !CU_add_test(edge_suite, "MATCH relationship", test_parser_match_relationship) ||
+        !CU_add_test(edge_suite, "Flexible edge patterns", test_parser_flexible_edge_patterns) ||
+        !CU_add_test(edge_suite, "Nodes without labels", test_parser_nodes_without_labels) ||
         !CU_add_test(edge_suite, "Edge memory management", test_parser_edge_memory_management)) {
         return 0;
     }

@@ -25,8 +25,27 @@ typedef enum {
     AST_STRING_LITERAL,
     AST_INTEGER_LITERAL,
     AST_FLOAT_LITERAL,
-    AST_BOOLEAN_LITERAL
+    AST_BOOLEAN_LITERAL,
+    AST_WHERE_CLAUSE,
+    AST_BINARY_EXPR,
+    AST_UNARY_EXPR,
+    AST_PROPERTY_ACCESS,
+    AST_IS_NULL_EXPR,
+    AST_IDENTIFIER
 } ast_node_type_t;
+
+// Operator types for expressions
+typedef enum {
+    AST_OP_EQ,    // =
+    AST_OP_NEQ,   // <>
+    AST_OP_LT,    // <
+    AST_OP_GT,    // >
+    AST_OP_LE,    // <=
+    AST_OP_GE,    // >=
+    AST_OP_AND,
+    AST_OP_OR,
+    AST_OP_NOT
+} ast_operator_t;
 
 // AST node structure
 struct cypher_ast_node {
@@ -38,6 +57,7 @@ struct cypher_ast_node {
         
         struct {
             cypher_ast_node_t *node_pattern;
+            cypher_ast_node_t *where_clause;  // Optional WHERE clause
         } match_stmt;
         
         struct {
@@ -106,6 +126,35 @@ struct cypher_ast_node {
         struct {
             int value;  // 0 = false, 1 = true
         } boolean_literal;
+        
+        struct {
+            cypher_ast_node_t *expression;
+        } where_clause;
+        
+        struct {
+            cypher_ast_node_t *left;
+            cypher_ast_node_t *right;
+            ast_operator_t op;
+        } binary_expr;
+        
+        struct {
+            cypher_ast_node_t *operand;
+            ast_operator_t op;
+        } unary_expr;
+        
+        struct {
+            char *variable;  // e.g., "n"
+            char *property;  // e.g., "age"
+        } property_access;
+        
+        struct {
+            cypher_ast_node_t *expression;
+            int is_null;  // 1 for IS NULL, 0 for IS NOT NULL
+        } is_null_expr;
+        
+        struct {
+            char *name;
+        } identifier;
     } data;
 };
 
@@ -128,6 +177,15 @@ cypher_ast_node_t* ast_create_string_literal(const char *value);
 cypher_ast_node_t* ast_create_integer_literal(const char *value);
 cypher_ast_node_t* ast_create_float_literal(const char *value);
 cypher_ast_node_t* ast_create_boolean_literal(int value);
+
+// WHERE and expression creation functions
+cypher_ast_node_t* ast_create_where_clause(cypher_ast_node_t *expression);
+cypher_ast_node_t* ast_create_binary_expr(cypher_ast_node_t *left, ast_operator_t op, cypher_ast_node_t *right);
+cypher_ast_node_t* ast_create_unary_expr(ast_operator_t op, cypher_ast_node_t *operand);
+cypher_ast_node_t* ast_create_property_access(const char *variable, const char *property);
+cypher_ast_node_t* ast_create_is_null_expr(cypher_ast_node_t *expression, int is_null);
+cypher_ast_node_t* ast_create_identifier(const char *name);
+cypher_ast_node_t* ast_attach_where_clause(cypher_ast_node_t *match_stmt, cypher_ast_node_t *where_clause);
 
 // AST utility functions
 void ast_free(cypher_ast_node_t *node);

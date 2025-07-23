@@ -30,6 +30,12 @@ NEWLINE     \n
 "CREATE"        { yycolumn += yyleng; return CREATE; }
 "MATCH"         { yycolumn += yyleng; return MATCH; }
 "RETURN"        { yycolumn += yyleng; return RETURN; }
+"WHERE"         { yycolumn += yyleng; return WHERE; }
+"AND"           { yycolumn += yyleng; return AND; }
+"OR"            { yycolumn += yyleng; return OR; }
+"NOT"           { yycolumn += yyleng; return NOT; }
+"IS"            { yycolumn += yyleng; return IS; }
+"NULL"          { yycolumn += yyleng; return NULL_TOKEN; }
 "true"          { yycolumn += yyleng; return TRUE; }
 "false"         { yycolumn += yyleng; return FALSE; }
 
@@ -47,6 +53,12 @@ NEWLINE     \n
 "->"            { yycolumn += yyleng; return ARROW_RIGHT; }
 "<-"            { yycolumn += yyleng; return ARROW_LEFT; }
 "-"             { yycolumn += yyleng; return DASH; }
+"="             { yycolumn += yyleng; return EQ; }
+"<>"            { yycolumn += yyleng; return NEQ; }
+"<="            { yycolumn += yyleng; return LE; }
+">="            { yycolumn += yyleng; return GE; }
+"<"             { yycolumn += yyleng; return LT; }
+">"             { yycolumn += yyleng; return GT; }
 
     /* Identifiers */
 {IDENTIFIER}    { 

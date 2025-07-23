@@ -1,5 +1,5 @@
 -- Test 01: Basic CREATE operations
-.load ./build/graphqlite.so
+.load ../build/graphqlite.so
 
 -- Test simple node creation
 SELECT cypher('CREATE (n:Person)');

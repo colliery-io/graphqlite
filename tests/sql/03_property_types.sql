@@ -1,5 +1,5 @@
 -- Test 03: Property type handling
-.load ./build/graphqlite.so
+.load ../build/graphqlite.so
 
 -- Test all property types
 SELECT cypher('CREATE (n:TestNode {

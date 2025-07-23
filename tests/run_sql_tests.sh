@@ -12,7 +12,7 @@ PASSED=0
 FAILED=0
 
 # Run each SQL test file
-for test_file in tests/sql/*.sql; do
+for test_file in sql/*.sql; do
     if [ -f "$test_file" ]; then
         TOTAL=$((TOTAL + 1))
         TEST_NAME=$(basename "$test_file")

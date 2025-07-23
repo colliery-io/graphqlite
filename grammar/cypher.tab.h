@@ -61,21 +61,33 @@ extern int yydebug;
     CREATE = 262,                  /* CREATE  */
     MATCH = 263,                   /* MATCH  */
     RETURN = 264,                  /* RETURN  */
-    TRUE = 265,                    /* TRUE  */
-    FALSE = 266,                   /* FALSE  */
-    LPAREN = 267,                  /* LPAREN  */
-    RPAREN = 268,                  /* RPAREN  */
-    LBRACE = 269,                  /* LBRACE  */
-    RBRACE = 270,                  /* RBRACE  */
-    LBRACKET = 271,                /* LBRACKET  */
-    RBRACKET = 272,                /* RBRACKET  */
-    DOT = 273,                     /* DOT  */
-    COMMA = 274,                   /* COMMA  */
-    COLON = 275,                   /* COLON  */
-    SEMICOLON = 276,               /* SEMICOLON  */
-    ARROW_RIGHT = 277,             /* ARROW_RIGHT  */
-    ARROW_LEFT = 278,              /* ARROW_LEFT  */
-    DASH = 279                     /* DASH  */
+    WHERE = 265,                   /* WHERE  */
+    TRUE = 266,                    /* TRUE  */
+    FALSE = 267,                   /* FALSE  */
+    AND = 268,                     /* AND  */
+    OR = 269,                      /* OR  */
+    NOT = 270,                     /* NOT  */
+    IS = 271,                      /* IS  */
+    NULL_TOKEN = 272,              /* NULL_TOKEN  */
+    LPAREN = 273,                  /* LPAREN  */
+    RPAREN = 274,                  /* RPAREN  */
+    LBRACE = 275,                  /* LBRACE  */
+    RBRACE = 276,                  /* RBRACE  */
+    LBRACKET = 277,                /* LBRACKET  */
+    RBRACKET = 278,                /* RBRACKET  */
+    DOT = 279,                     /* DOT  */
+    COMMA = 280,                   /* COMMA  */
+    COLON = 281,                   /* COLON  */
+    SEMICOLON = 282,               /* SEMICOLON  */
+    ARROW_RIGHT = 283,             /* ARROW_RIGHT  */
+    ARROW_LEFT = 284,              /* ARROW_LEFT  */
+    DASH = 285,                    /* DASH  */
+    EQ = 286,                      /* EQ  */
+    NEQ = 287,                     /* NEQ  */
+    LT = 288,                      /* LT  */
+    GT = 289,                      /* GT  */
+    LE = 290,                      /* LE  */
+    GE = 291                       /* GE  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -103,8 +115,12 @@ union YYSTYPE
   cypher_ast_node_t* integer_literal;      /* integer_literal  */
   cypher_ast_node_t* float_literal;        /* float_literal  */
   cypher_ast_node_t* boolean_literal;      /* boolean_literal  */
+  cypher_ast_node_t* where_clause;         /* where_clause  */
+  cypher_ast_node_t* expression;           /* expression  */
+  cypher_ast_node_t* comparison_expression; /* comparison_expression  */
+  cypher_ast_node_t* property_expression;  /* property_expression  */
 
-#line 108 "cypher.tab.h"
+#line 124 "cypher.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

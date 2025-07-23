@@ -1,5 +1,5 @@
 -- Test 02: MATCH queries
-.load ./build/graphqlite.so
+.load ../build/graphqlite.so
 
 -- Create test data
 SELECT cypher('CREATE (n:Person {name: "Alice", age: 30})');

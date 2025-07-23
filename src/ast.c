@@ -29,6 +29,7 @@ cypher_ast_node_t* ast_create_match_statement(cypher_ast_node_t *node_pattern) {
     if (!node) return NULL;
     
     node->data.match_stmt.node_pattern = node_pattern;
+    node->data.match_stmt.where_clause = NULL;  // Initialize to NULL
     return node;
 }
 
@@ -140,6 +141,70 @@ cypher_ast_node_t* ast_create_boolean_literal(int value) {
     return node;
 }
 
+// WHERE and expression creation functions
+cypher_ast_node_t* ast_create_where_clause(cypher_ast_node_t *expression) {
+    cypher_ast_node_t *node = ast_create_node(AST_WHERE_CLAUSE);
+    if (!node) return NULL;
+    
+    node->data.where_clause.expression = expression;
+    return node;
+}
+
+cypher_ast_node_t* ast_create_binary_expr(cypher_ast_node_t *left, ast_operator_t op, cypher_ast_node_t *right) {
+    cypher_ast_node_t *node = ast_create_node(AST_BINARY_EXPR);
+    if (!node) return NULL;
+    
+    node->data.binary_expr.left = left;
+    node->data.binary_expr.right = right;
+    node->data.binary_expr.op = op;
+    return node;
+}
+
+cypher_ast_node_t* ast_create_unary_expr(ast_operator_t op, cypher_ast_node_t *operand) {
+    cypher_ast_node_t *node = ast_create_node(AST_UNARY_EXPR);
+    if (!node) return NULL;
+    
+    node->data.unary_expr.op = op;
+    node->data.unary_expr.operand = operand;
+    return node;
+}
+
+cypher_ast_node_t* ast_create_property_access(const char *variable, const char *property) {
+    cypher_ast_node_t *node = ast_create_node(AST_PROPERTY_ACCESS);
+    if (!node) return NULL;
+    
+    node->data.property_access.variable = strdup(variable);
+    node->data.property_access.property = strdup(property);
+    return node;
+}
+
+cypher_ast_node_t* ast_create_is_null_expr(cypher_ast_node_t *expression, int is_null) {
+    cypher_ast_node_t *node = ast_create_node(AST_IS_NULL_EXPR);
+    if (!node) return NULL;
+    
+    node->data.is_null_expr.expression = expression;
+    node->data.is_null_expr.is_null = is_null;
+    return node;
+}
+
+cypher_ast_node_t* ast_create_identifier(const char *name) {
+    cypher_ast_node_t *node = ast_create_node(AST_IDENTIFIER);
+    if (!node) return NULL;
+    
+    node->data.identifier.name = strdup(name);
+    return node;
+}
+
+cypher_ast_node_t* ast_attach_where_clause(cypher_ast_node_t *match_stmt, cypher_ast_node_t *where_clause) {
+    if (!match_stmt || match_stmt->type != AST_MATCH_STATEMENT) {
+        return match_stmt;  // Return as-is if not a MATCH statement
+    }
+    
+    // Attach the WHERE clause to the MATCH statement
+    match_stmt->data.match_stmt.where_clause = where_clause;
+    return match_stmt;
+}
+
 cypher_ast_node_t* ast_create_relationship_pattern(cypher_ast_node_t *left_node, cypher_ast_node_t *edge, cypher_ast_node_t *right_node, int direction) {
     cypher_ast_node_t *node = ast_create_node(AST_RELATIONSHIP_PATTERN);
     if (!node) return NULL;
@@ -199,6 +264,7 @@ void ast_free(cypher_ast_node_t *node) {
             
         case AST_MATCH_STATEMENT:
             ast_free(node->data.match_stmt.node_pattern);
+            ast_free(node->data.match_stmt.where_clause);  // Free WHERE clause if present
             break;
             
         case AST_RETURN_STATEMENT:
@@ -264,6 +330,32 @@ void ast_free(cypher_ast_node_t *node) {
         case AST_BOOLEAN_LITERAL:
             // No dynamic memory to free for numeric/boolean literals
             break;
+            
+        case AST_WHERE_CLAUSE:
+            ast_free(node->data.where_clause.expression);
+            break;
+            
+        case AST_BINARY_EXPR:
+            ast_free(node->data.binary_expr.left);
+            ast_free(node->data.binary_expr.right);
+            break;
+            
+        case AST_UNARY_EXPR:
+            ast_free(node->data.unary_expr.operand);
+            break;
+            
+        case AST_PROPERTY_ACCESS:
+            free(node->data.property_access.variable);
+            free(node->data.property_access.property);
+            break;
+            
+        case AST_IS_NULL_EXPR:
+            ast_free(node->data.is_null_expr.expression);
+            break;
+            
+        case AST_IDENTIFIER:
+            free(node->data.identifier.name);
+            break;
     }
     
     free(node);
@@ -291,6 +383,12 @@ const char* ast_node_type_name(ast_node_type_t type) {
         case AST_INTEGER_LITERAL: return "INTEGER_LITERAL";
         case AST_FLOAT_LITERAL: return "FLOAT_LITERAL";
         case AST_BOOLEAN_LITERAL: return "BOOLEAN_LITERAL";
+        case AST_WHERE_CLAUSE: return "WHERE_CLAUSE";
+        case AST_BINARY_EXPR: return "BINARY_EXPR";
+        case AST_UNARY_EXPR: return "UNARY_EXPR";
+        case AST_PROPERTY_ACCESS: return "PROPERTY_ACCESS";
+        case AST_IS_NULL_EXPR: return "IS_NULL_EXPR";
+        case AST_IDENTIFIER: return "IDENTIFIER";
         default: return "UNKNOWN";
     }
 }
@@ -340,6 +438,9 @@ void ast_print(cypher_ast_node_t *node, int indent) {
             
         case AST_MATCH_STATEMENT:
             ast_print(node->data.match_stmt.node_pattern, indent + 2);
+            if (node->data.match_stmt.where_clause) {
+                ast_print(node->data.match_stmt.where_clause, indent + 2);
+            }
             break;
             
         case AST_RETURN_STATEMENT:
@@ -386,6 +487,35 @@ void ast_print(cypher_ast_node_t *node, int indent) {
             for (int i = 0; i < node->data.property_list.count; i++) {
                 ast_print(node->data.property_list.properties[i], indent + 2);
             }
+            break;
+            
+        case AST_IDENTIFIER:
+            printf(": %s", node->data.identifier.name);
+            break;
+            
+        case AST_PROPERTY_ACCESS:
+            printf(": %s.%s", node->data.property_access.variable, node->data.property_access.property);
+            break;
+            
+        case AST_WHERE_CLAUSE:
+            printf("\n");
+            ast_print(node->data.where_clause.expression, indent + 2);
+            break;
+            
+        case AST_BINARY_EXPR:
+            printf(": operator=%d\n", node->data.binary_expr.op);
+            ast_print(node->data.binary_expr.left, indent + 2);
+            ast_print(node->data.binary_expr.right, indent + 2);
+            break;
+            
+        case AST_UNARY_EXPR:
+            printf(": operator=%d\n", node->data.unary_expr.op);
+            ast_print(node->data.unary_expr.operand, indent + 2);
+            break;
+            
+        case AST_IS_NULL_EXPR:
+            printf(": %s\n", node->data.is_null_expr.is_null ? "IS NULL" : "IS NOT NULL");
+            ast_print(node->data.is_null_expr.expression, indent + 2);
             break;
             
         default:

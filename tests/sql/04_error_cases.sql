@@ -1,6 +1,6 @@
 -- Test 04: Error handling verification
 -- Note: Parse errors cause SQLite runtime errors, so we test them separately
-.load ./build/graphqlite.so
+.load ../build/graphqlite.so
 
 -- First, let's verify valid queries work
 SELECT '=== Valid queries should succeed ===';

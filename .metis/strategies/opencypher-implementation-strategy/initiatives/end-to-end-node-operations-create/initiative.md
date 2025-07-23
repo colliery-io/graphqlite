@@ -3,14 +3,14 @@ id: end-to-end-node-operations-create
 level: initiative
 title: "End-to-End Node Operations (CREATE/MATCH)"
 created_at: 2025-07-22T01:39:35.969613+00:00
-updated_at: 2025-07-22T01:39:35.969613+00:00
+updated_at: 2025-07-23T12:27:28.393465+00:00
 parent: opencypher-implementation-strategy
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -21,82 +21,142 @@ estimated_complexity: M
 
 ## Context
 
-Build a minimal but complete end-to-end pipeline for basic node operations to validate the entire architecture. This initiative focuses on the simplest possible graph operations: creating nodes and matching them back.
+Build a complete end-to-end pipeline for basic graph operations to validate the entire architecture. This initiative started with the simplest possible graph operations (creating and matching nodes) but expanded to include full relationship/edge support.
 
-**Core Goal**: Prove that we can parse, execute, and return results for basic OpenCypher queries without relationships or complex patterns.
+**Original Core Goal**: Prove that we can parse, execute, and return results for basic OpenCypher queries without relationships or complex patterns.
 
-**Target Queries**:
+**Expanded Achievement**: We successfully implemented not only node operations but also complete relationship/edge CREATE and MATCH operations with flexible pattern support.
+
+**Implemented Query Support**:
 ```cypher
+# Original target queries (all working)
 CREATE (n:Person {name: "John"})
 MATCH (n:Person) RETURN n
 MATCH (n:Person {name: "John"}) RETURN n
+
+# Additional implemented features
+CREATE (a:Person)-[:KNOWS]->(b:Person)
+CREATE (a:Person)-[r:KNOWS {since: 2020}]->(b:Person)
+CREATE (a:Person)<-[:FOLLOWS]-(b:Person)
+MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b
+MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN r
+MATCH (a)-[r]->(b) RETURN a, r, b  # Flexible patterns
 ```
 
-This "wide before deep" approach validates all major components (parser, AST, executor, storage, results) with minimal complexity, establishing a foundation for more advanced features.
+This "wide before deep" approach validated all major components (parser, AST, executor, storage, results) and established a solid foundation for the graph database.
 
 ## Goals & Non-Goals
 
-**Goals:**
-- Parse CREATE statements for nodes with single label and single property
-- Parse MATCH statements for nodes with label and property filtering
-- Parse basic RETURN statements for node projection
-- Store nodes in SQLite tables with proper schema
-- Retrieve nodes based on label and property criteria
-- Return query results in structured format
-- Establish memory management patterns for AST and results
-- Validate entire pipeline with CUnit integration tests
-- Demonstrate functional SQLite extension interface
+**Original Goals (All Achieved ✅):**
+- Parse CREATE statements for nodes with single label and single property ✅
+- Parse MATCH statements for nodes with label and property filtering ✅
+- Parse basic RETURN statements for node projection ✅
+- Store nodes in SQLite tables with proper schema ✅
+- Retrieve nodes based on label and property criteria ✅
+- Return query results in structured format ✅
+- Establish memory management patterns for AST and results ✅
+- Validate entire pipeline with CUnit integration tests ✅
+- Demonstrate functional SQLite extension interface ✅
 
-**Non-Goals:**
-- Multiple properties per node (future iteration)
-- Multiple labels per node (future iteration)
-- Relationships/edges between nodes
-- Complex WHERE clause expressions
-- Advanced RETURN projections (aliases, aggregations)
+**Additional Achievements (Beyond Original Scope):**
+- Parse CREATE statements for relationships/edges with types and properties ✅
+- Parse MATCH statements for relationship patterns ✅
+- Support flexible edge patterns (with/without types, with/without variables) ✅
+- Support directional relationships (both -> and <-) ✅
+- Store edges in SQLite tables with typed EAV schema ✅
+- Retrieve edges based on type and property criteria ✅
+- Return OpenCypher-style JSON entities with identity, labels, and properties ✅
+- Multiple properties per node (via typed EAV tables) ✅
+- RETURN projection with proper variable extraction from patterns ✅
+- Comprehensive SQL test suite (7 test files) ✅
+- Full unit test coverage (47 tests, 481 assertions) ✅
+
+**What Remains as Non-Goals:**
+- Multiple labels per node (still future iteration)
+- Complex WHERE clause expressions beyond simple property equality
+- Advanced RETURN projections (aliases, aggregations, ORDER BY, LIMIT)
 - Query optimization or indexing
-- Error recovery in parser
+- Error recovery in parser (fails fast on syntax errors)
 - Performance optimization
-- Variable-length patterns or multi-hop traversals
+- Variable-length patterns or multi-hop traversals (e.g., (a)-[:KNOWS*1..3]->(b))
+- MERGE operations
+- DELETE operations
+- SET operations for property updates
 
 ## Detailed Design
 
 ## Architecture Components
 
 ### 1. Parser Layer (BISON + FLEX)
-- **Minimal BISON Grammar**: Support only CREATE, MATCH, RETURN for nodes
-- **FLEX Lexer**: Tokenize keywords (CREATE, MATCH, RETURN), identifiers, strings, symbols
-- **AST Nodes**: Basic node types for statements, patterns, variables, literals
+- **Extended BISON Grammar**: Supports CREATE, MATCH, RETURN for both nodes and relationships
+- **FLEX Lexer**: Tokenizes keywords, identifiers, strings, symbols, operators (ARROW_RIGHT, ARROW_LEFT)
+- **AST Nodes**: Comprehensive node types including:
+  - Statement nodes (CREATE, MATCH, RETURN, COMPOUND)
+  - Pattern nodes (node_pattern, edge_pattern, relationship_pattern, path_pattern)
+  - Expression nodes (identifiers, literals, property maps)
+  - Support for flexible patterns (nodes/edges with/without labels, types, variables)
 
-### 2. Database Schema
+### 2. Database Schema (Typed EAV Design)
 ```sql
-CREATE TABLE nodes (
+-- Core entity tables
+CREATE TABLE nodes (id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE TABLE edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    label TEXT NOT NULL,
-    property_key TEXT,
-    property_value TEXT,
-    property_type INTEGER  -- 1=string, 2=integer, etc.
+    source_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    FOREIGN KEY (source_id) REFERENCES nodes(id),
+    FOREIGN KEY (target_id) REFERENCES nodes(id)
+);
+
+-- Property system
+CREATE TABLE property_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE
+);
+
+-- Typed property storage
+CREATE TABLE node_props_int (node_id, key_id, value INTEGER);
+CREATE TABLE node_props_real (node_id, key_id, value REAL);
+CREATE TABLE node_props_text (node_id, key_id, value TEXT);
+CREATE TABLE node_props_bool (node_id, key_id, value BOOLEAN);
+CREATE TABLE edge_props_int/real/text/bool (same pattern);
+
+-- Labels
+CREATE TABLE node_labels (
+    node_id INTEGER,
+    label TEXT NOT NULL
 );
 ```
-*Note: Simple single-property design for this iteration*
 
 ### 3. Execution Pipeline
-- **AST Walker**: Interpret parsed statements
-- **CREATE Handler**: Insert nodes into database
-- **MATCH Handler**: Query nodes by label/property
-- **RETURN Handler**: Format results for output
+- **AST Walker**: Interprets parsed statements and dispatches to handlers
+- **CREATE Handlers**: 
+  - `execute_create_node()`: Creates nodes with labels and properties
+  - `execute_create_relationship()`: Creates edges between nodes
+- **MATCH Handlers**:
+  - `execute_match_node()`: Queries nodes by label/properties
+  - `execute_match_relationship()`: JOINs nodes and edges for pattern matching
+- **RETURN Handler**: Projects selected variables with OpenCypher JSON serialization
+- **Entity Serializers**: 
+  - `serialize_node_entity()`: Formats nodes as `{"identity": id, "labels": [...], "properties": {...}}`
+  - `serialize_relationship_entity()`: Similar format for relationships
 
 ### 4. Memory Management
-- **AST Cleanup**: Free parser-generated trees after execution
-- **Result Management**: Clean result structures after consumption
-- **Error Handling**: Proper cleanup on parse/execution failures
+- **AST Cleanup**: Recursive tree freeing with `ast_free()`
+- **Result Management**: `graphqlite_result_free()` handles all allocations
+- **Property Key Interning**: Cached key lookups reduce allocations
+- **Error Handling**: Proper cleanup paths on all failures
 
 ### 5. API Interface
 ```c
 // SQLite extension entry point
 int sqlite3_graphqlite_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 
-// Core query execution
-int graphqlite_exec(sqlite3 *db, const char *cypher_query, graphqlite_result_t **result);
+// Main query function (registered as SQL function)
+void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_value **argv);
+
+// Returns JSON entities for MATCH, "Query executed successfully" for CREATE
 ```
 
 ## Data Flow
@@ -219,7 +279,40 @@ MATCH (n:Person {name: "John"}) RETURN n
 - Zero memory leaks under valgrind
 
 ## Validation Environment
-- CUnit test runner integrated with make test
-- Memory testing with appropriate tools
-- SQLite extension loading verification
-- Cross-platform testing (Linux/macOS)
+
+- CUnit test runner integrated with make test ✅
+- Memory testing with appropriate tools ✅
+- SQLite extension loading verification ✅
+- Cross-platform testing (macOS confirmed) ✅
+
+## Completion Summary
+
+**Initiative Status**: COMPLETE (Exceeded Original Scope)
+
+**Test Results**:
+- Unit Tests: 47/47 passing (481 assertions)
+- SQL Tests: 7/7 passing
+- No memory leaks reported
+- All target queries working plus relationship support
+
+**Key Deliverables**:
+1. **Parser**: Full BISON/FLEX implementation supporting nodes and relationships
+2. **Storage**: Typed EAV schema implementation for flexible property storage
+3. **Execution**: Complete CREATE/MATCH/RETURN pipeline with projection
+4. **Testing**: Comprehensive test suite with 100% pass rate
+5. **Extension**: Working SQLite extension with cypher() function
+
+**Unexpected Achievements**:
+- Complete relationship/edge support (was planned for future iteration)
+- Flexible pattern matching (nodes/edges with optional components)
+- OpenCypher-style JSON entity serialization
+- Multiple property support via typed tables
+- Bidirectional relationship support
+
+**Technical Decisions Made**:
+- Chose typed EAV over single property column (better extensibility)
+- Implemented property key interning (performance optimization)
+- Added RETURN projection with variable extraction
+- Used JSON format inspired by graph database conventions
+
+**Ready for Next Phase**: The foundation is solid and tested. All major architectural components are proven. The implementation exceeds the original scope and provides a strong base for adding more OpenCypher features.

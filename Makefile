@@ -87,7 +87,7 @@ $(BUILD_DIR):
 # Test suite with parser and SQL tests
 test: $(TEST_TARGET) $(EXTENSION)
 	$(TEST_TARGET)
-	./tests/run_sql_tests.sh
+	cd tests && ./run_sql_tests.sh
 
 # Run only unit tests
 test-unit: $(TEST_TARGET)
@@ -95,7 +95,7 @@ test-unit: $(TEST_TARGET)
 
 # Run only SQL tests
 test-sql: $(EXTENSION)
-	./tests/run_sql_tests.sh
+	cd tests && ./run_sql_tests.sh
 
 $(TEST_TARGET): $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) `pkg-config --cflags cunit` -I$(SRC_DIR) -I$(GRAMMAR_DIR) $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) -o $@ `pkg-config --libs cunit` $(LIBS)
