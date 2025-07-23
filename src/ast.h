@@ -15,6 +15,9 @@ typedef enum {
     AST_RETURN_STATEMENT,
     AST_COMPOUND_STATEMENT,  // MATCH + RETURN combination
     AST_NODE_PATTERN,
+    AST_RELATIONSHIP_PATTERN,
+    AST_PATH_PATTERN,
+    AST_EDGE_PATTERN,
     AST_VARIABLE,
     AST_LABEL,
     AST_PROPERTY,
@@ -51,6 +54,24 @@ struct cypher_ast_node {
             cypher_ast_node_t *label;        // Label (e.g., "Person")
             cypher_ast_node_t *properties;   // Property list (optional)
         } node_pattern;
+        
+        struct {
+            cypher_ast_node_t *left_node;    // Left node pattern
+            cypher_ast_node_t *edge;         // Edge pattern (optional)
+            cypher_ast_node_t *right_node;   // Right node pattern
+            int direction;                   // 0=undirected, 1=right, -1=left
+        } relationship_pattern;
+        
+        struct {
+            cypher_ast_node_t **patterns;    // Array of relationship patterns
+            int count;                       // Number of patterns
+        } path_pattern;
+        
+        struct {
+            cypher_ast_node_t *variable;     // Variable name (optional)
+            cypher_ast_node_t *label;        // Edge type/label (optional)
+            cypher_ast_node_t *properties;   // Property list (optional)
+        } edge_pattern;
         
         struct {
             char *name;
@@ -94,6 +115,10 @@ cypher_ast_node_t* ast_create_match_statement(cypher_ast_node_t *node_pattern);
 cypher_ast_node_t* ast_create_return_statement(cypher_ast_node_t *variable);
 cypher_ast_node_t* ast_create_compound_statement(cypher_ast_node_t *match_stmt, cypher_ast_node_t *return_stmt);
 cypher_ast_node_t* ast_create_node_pattern(cypher_ast_node_t *variable, cypher_ast_node_t *label, cypher_ast_node_t *properties);
+cypher_ast_node_t* ast_create_relationship_pattern(cypher_ast_node_t *left_node, cypher_ast_node_t *edge, cypher_ast_node_t *right_node, int direction);
+cypher_ast_node_t* ast_create_path_pattern(void);
+cypher_ast_node_t* ast_add_relationship_to_path(cypher_ast_node_t *path, cypher_ast_node_t *relationship);
+cypher_ast_node_t* ast_create_edge_pattern(cypher_ast_node_t *variable, cypher_ast_node_t *label, cypher_ast_node_t *properties);
 cypher_ast_node_t* ast_create_variable(const char *name);
 cypher_ast_node_t* ast_create_label(const char *name);
 cypher_ast_node_t* ast_create_property(const char *key, cypher_ast_node_t *value);

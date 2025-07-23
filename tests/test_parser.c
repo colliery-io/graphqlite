@@ -4,224 +4,137 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ast.h"
-#include "cypher.tab.h"
-
-// External parser functions
-extern cypher_ast_node_t* parse_result;
-extern void init_lexer(const char *input);
-extern void cleanup_lexer(void);
-extern int yyparse(void);
-
-// Test helper: parse a query and return the AST
-static cypher_ast_node_t* parse_query(const char *query) {
-    parse_result = NULL;
-    init_lexer(query);
-    
-    int result = yyparse();
-    cleanup_lexer();
-    
-    if (result != 0) {
-        return NULL;  // Parse failed
-    }
-    
-    return parse_result;
-}
 
 // ============================================================================
-// Basic Parser Tests
-// ============================================================================
-
-void test_parser_create_simple_node(void) {
-    const char *query = "CREATE (n:Person)";
-    cypher_ast_node_t *ast = parse_query(query);
-    
-    // Should parse successfully
-    CU_ASSERT_PTR_NOT_NULL(ast);
-    if (!ast) return;
-    
-    // Should be a CREATE statement
-    CU_ASSERT_EQUAL(ast->type, AST_CREATE_STATEMENT);
-    
-    // Should have a node pattern
-    CU_ASSERT_PTR_NOT_NULL(ast->data.create_stmt.node_pattern);
-    cypher_ast_node_t *pattern = ast->data.create_stmt.node_pattern;
-    CU_ASSERT_EQUAL(pattern->type, AST_NODE_PATTERN);
-    
-    // Should have variable "n"
-    CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.variable);
-    CU_ASSERT_EQUAL(pattern->data.node_pattern.variable->type, AST_VARIABLE);
-    CU_ASSERT_STRING_EQUAL(pattern->data.node_pattern.variable->data.variable.name, "n");
-    
-    // Should have label "Person"
-    CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.label);
-    CU_ASSERT_EQUAL(pattern->data.node_pattern.label->type, AST_LABEL);
-    CU_ASSERT_STRING_EQUAL(pattern->data.node_pattern.label->data.label.name, "Person");
-    
-    // Should not have properties
-    CU_ASSERT_PTR_NULL(pattern->data.node_pattern.properties);
-    
-    // Clean up
-    ast_free(ast);
-}
-
-void test_parser_create_node_with_property(void) {
-    const char *query = "CREATE (n:Person {name: \"John\"})";
-    cypher_ast_node_t *ast = parse_query(query);
-    
-    // Should parse successfully
-    CU_ASSERT_PTR_NOT_NULL(ast);
-    if (!ast) return;
-    
-    // Should be a CREATE statement with node pattern
-    CU_ASSERT_EQUAL(ast->type, AST_CREATE_STATEMENT);
-    cypher_ast_node_t *pattern = ast->data.create_stmt.node_pattern;
-    CU_ASSERT_PTR_NOT_NULL(pattern);
-    
-    // Should have property list (even for single property)
-    CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.properties);
-    cypher_ast_node_t *props = pattern->data.node_pattern.properties;
-    CU_ASSERT_EQUAL(props->type, AST_PROPERTY_LIST);
-    CU_ASSERT_EQUAL(props->data.property_list.count, 1);
-    
-    // Check the single property in the list
-    cypher_ast_node_t *prop = props->data.property_list.properties[0];
-    CU_ASSERT_EQUAL(prop->type, AST_PROPERTY);
-    CU_ASSERT_STRING_EQUAL(prop->data.property.key, "name");
-    
-    // Property value should be string literal "John"
-    CU_ASSERT_PTR_NOT_NULL(prop->data.property.value);
-    CU_ASSERT_EQUAL(prop->data.property.value->type, AST_STRING_LITERAL);
-    CU_ASSERT_STRING_EQUAL(prop->data.property.value->data.string_literal.value, "John");
-    
-    // Clean up
-    ast_free(ast);
-}
-
-void test_parser_match_simple_node(void) {
-    const char *query = "MATCH (n:Person) RETURN n";
-    cypher_ast_node_t *ast = parse_query(query);
-    
-    // Should parse successfully
-    CU_ASSERT_PTR_NOT_NULL(ast);
-    if (!ast) return;
-    
-    // Should be a compound statement (MATCH + RETURN)
-    CU_ASSERT_EQUAL(ast->type, AST_COMPOUND_STATEMENT);
-    
-    // Should have MATCH statement
-    CU_ASSERT_PTR_NOT_NULL(ast->data.compound_stmt.match_stmt);
-    cypher_ast_node_t *match = ast->data.compound_stmt.match_stmt;
-    CU_ASSERT_EQUAL(match->type, AST_MATCH_STATEMENT);
-    
-    // MATCH should have node pattern
-    CU_ASSERT_PTR_NOT_NULL(match->data.match_stmt.node_pattern);
-    cypher_ast_node_t *pattern = match->data.match_stmt.node_pattern;
-    CU_ASSERT_EQUAL(pattern->type, AST_NODE_PATTERN);
-    
-    // Should have RETURN statement
-    CU_ASSERT_PTR_NOT_NULL(ast->data.compound_stmt.return_stmt);
-    cypher_ast_node_t *return_stmt = ast->data.compound_stmt.return_stmt;
-    CU_ASSERT_EQUAL(return_stmt->type, AST_RETURN_STATEMENT);
-    
-    // RETURN should reference variable "n"
-    CU_ASSERT_PTR_NOT_NULL(return_stmt->data.return_stmt.variable);
-    CU_ASSERT_EQUAL(return_stmt->data.return_stmt.variable->type, AST_VARIABLE);
-    CU_ASSERT_STRING_EQUAL(return_stmt->data.return_stmt.variable->data.variable.name, "n");
-    
-    // Clean up
-    ast_free(ast);
-}
-
-void test_parser_invalid_query(void) {
-    const char *query = "INVALID SYNTAX HERE";
-    cypher_ast_node_t *ast = parse_query(query);
-    
-    // Should fail to parse
-    CU_ASSERT_PTR_NULL(ast);
-}
-
-void test_parser_create_multiple_properties(void) {
-    const char *query = "CREATE (n:Product {name: \"Widget\", price: 100, inStock: true})";
-    cypher_ast_node_t *ast = parse_query(query);
-    
-    // Should parse successfully
-    CU_ASSERT_PTR_NOT_NULL(ast);
-    if (!ast) return;
-    
-    // Should be a CREATE statement with node pattern
-    CU_ASSERT_EQUAL(ast->type, AST_CREATE_STATEMENT);
-    cypher_ast_node_t *pattern = ast->data.create_stmt.node_pattern;
-    CU_ASSERT_PTR_NOT_NULL(pattern);
-    
-    // Should have property list
-    CU_ASSERT_PTR_NOT_NULL(pattern->data.node_pattern.properties);
-    cypher_ast_node_t *props = pattern->data.node_pattern.properties;
-    CU_ASSERT_EQUAL(props->type, AST_PROPERTY_LIST);
-    
-    // Should have 3 properties
-    CU_ASSERT_EQUAL(props->data.property_list.count, 3);
-    
-    // Check first property: name
-    cypher_ast_node_t *prop1 = props->data.property_list.properties[0];
-    CU_ASSERT_EQUAL(prop1->type, AST_PROPERTY);
-    CU_ASSERT_STRING_EQUAL(prop1->data.property.key, "name");
-    CU_ASSERT_EQUAL(prop1->data.property.value->type, AST_STRING_LITERAL);
-    CU_ASSERT_STRING_EQUAL(prop1->data.property.value->data.string_literal.value, "Widget");
-    
-    // Check second property: price
-    cypher_ast_node_t *prop2 = props->data.property_list.properties[1];
-    CU_ASSERT_EQUAL(prop2->type, AST_PROPERTY);
-    CU_ASSERT_STRING_EQUAL(prop2->data.property.key, "price");
-    CU_ASSERT_EQUAL(prop2->data.property.value->type, AST_INTEGER_LITERAL);
-    CU_ASSERT_EQUAL(prop2->data.property.value->data.integer_literal.value, 100);
-    
-    // Check third property: inStock
-    cypher_ast_node_t *prop3 = props->data.property_list.properties[2];
-    CU_ASSERT_EQUAL(prop3->type, AST_PROPERTY);
-    CU_ASSERT_STRING_EQUAL(prop3->data.property.key, "inStock");
-    CU_ASSERT_EQUAL(prop3->data.property.value->type, AST_BOOLEAN_LITERAL);
-    CU_ASSERT_EQUAL(prop3->data.property.value->data.boolean_literal.value, 1);
-    
-    // Clean up
-    ast_free(ast);
-}
-
-void test_parser_memory_management(void) {
-    const char *query = "CREATE (test:Label {key: \"value\"})";
-    
-    // Parse multiple times to test for memory leaks
-    for (int i = 0; i < 10; i++) {
-        cypher_ast_node_t *ast = parse_query(query);
-        CU_ASSERT_PTR_NOT_NULL(ast);
-        if (ast) {
-            ast_free(ast);
-        }
-    }
-    
-    // Test with multiple properties
-    const char *multi_query = "CREATE (n:Product {name: \"Widget\", price: 100, active: true})";
-    for (int i = 0; i < 5; i++) {
-        cypher_ast_node_t *ast = parse_query(multi_query);
-        CU_ASSERT_PTR_NOT_NULL(ast);
-        if (ast) {
-            ast_free(ast);
-        }
-    }
-    
-    // If we get here without crashing, memory management is working
-    CU_ASSERT(1);  // Always passes - just testing for crashes
-}
-
-// ============================================================================
-// AST Utility Tests
+// AST Utility Tests  
 // ============================================================================
 
 void test_ast_node_type_names(void) {
     CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_CREATE_STATEMENT), "CREATE_STATEMENT");
     CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_MATCH_STATEMENT), "MATCH_STATEMENT");
     CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_RETURN_STATEMENT), "RETURN_STATEMENT");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_COMPOUND_STATEMENT), "COMPOUND_STATEMENT");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_NODE_PATTERN), "NODE_PATTERN");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_RELATIONSHIP_PATTERN), "RELATIONSHIP_PATTERN");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_PATH_PATTERN), "PATH_PATTERN");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_EDGE_PATTERN), "EDGE_PATTERN");
     CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_VARIABLE), "VARIABLE");
     CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_LABEL), "LABEL");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_PROPERTY), "PROPERTY");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_PROPERTY_LIST), "PROPERTY_LIST");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_STRING_LITERAL), "STRING_LITERAL");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_INTEGER_LITERAL), "INTEGER_LITERAL");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_FLOAT_LITERAL), "FLOAT_LITERAL");
+    CU_ASSERT_STRING_EQUAL(ast_node_type_name(AST_BOOLEAN_LITERAL), "BOOLEAN_LITERAL");
+}
+
+void test_ast_memory_management(void) {
+    // Test creating and freeing various AST nodes
+    cypher_ast_node_t *var = ast_create_variable("test");
+    CU_ASSERT_PTR_NOT_NULL(var);
+    CU_ASSERT_EQUAL(var->type, AST_VARIABLE);
+    CU_ASSERT_STRING_EQUAL(var->data.variable.name, "test");
+    ast_free(var);
+    
+    cypher_ast_node_t *label = ast_create_label("Person");
+    CU_ASSERT_PTR_NOT_NULL(label);
+    CU_ASSERT_EQUAL(label->type, AST_LABEL);
+    CU_ASSERT_STRING_EQUAL(label->data.label.name, "Person");
+    ast_free(label);
+    
+    cypher_ast_node_t *str = ast_create_string_literal("hello");
+    CU_ASSERT_PTR_NOT_NULL(str);
+    CU_ASSERT_EQUAL(str->type, AST_STRING_LITERAL);
+    CU_ASSERT_STRING_EQUAL(str->data.string_literal.value, "hello");
+    ast_free(str);
+    
+    cypher_ast_node_t *int_val = ast_create_integer_literal("42");
+    CU_ASSERT_PTR_NOT_NULL(int_val);
+    CU_ASSERT_EQUAL(int_val->type, AST_INTEGER_LITERAL);
+    CU_ASSERT_EQUAL(int_val->data.integer_literal.value, 42);
+    ast_free(int_val);
+    
+    cypher_ast_node_t *float_val = ast_create_float_literal("3.14");
+    CU_ASSERT_PTR_NOT_NULL(float_val);
+    CU_ASSERT_EQUAL(float_val->type, AST_FLOAT_LITERAL);
+    CU_ASSERT_EQUAL(float_val->data.float_literal.value, 3.14);
+    ast_free(float_val);
+    
+    cypher_ast_node_t *bool_val = ast_create_boolean_literal(1);
+    CU_ASSERT_PTR_NOT_NULL(bool_val);
+    CU_ASSERT_EQUAL(bool_val->type, AST_BOOLEAN_LITERAL);
+    CU_ASSERT_EQUAL(bool_val->data.boolean_literal.value, 1);
+    ast_free(bool_val);
+}
+
+void test_ast_property_list(void) {
+    // Create a property list
+    cypher_ast_node_t *list = ast_create_property_list();
+    CU_ASSERT_PTR_NOT_NULL(list);
+    CU_ASSERT_EQUAL(list->type, AST_PROPERTY_LIST);
+    CU_ASSERT_EQUAL(list->data.property_list.count, 0);
+    CU_ASSERT_PTR_NULL(list->data.property_list.properties);
+    
+    // Add a property
+    cypher_ast_node_t *value = ast_create_string_literal("John");
+    cypher_ast_node_t *prop = ast_create_property("name", value);
+    list = ast_add_property_to_list(list, prop);
+    
+    CU_ASSERT_EQUAL(list->data.property_list.count, 1);
+    CU_ASSERT_PTR_NOT_NULL(list->data.property_list.properties);
+    CU_ASSERT_PTR_EQUAL(list->data.property_list.properties[0], prop);
+    
+    // Add another property
+    cypher_ast_node_t *age_val = ast_create_integer_literal("30");
+    cypher_ast_node_t *age_prop = ast_create_property("age", age_val);
+    list = ast_add_property_to_list(list, age_prop);
+    
+    CU_ASSERT_EQUAL(list->data.property_list.count, 2);
+    CU_ASSERT_PTR_EQUAL(list->data.property_list.properties[1], age_prop);
+    
+    ast_free(list);
+}
+
+void test_ast_edge_patterns(void) {
+    // Test edge pattern creation
+    cypher_ast_node_t *var = ast_create_variable("r");
+    cypher_ast_node_t *label = ast_create_label("KNOWS");
+    cypher_ast_node_t *edge = ast_create_edge_pattern(var, label, NULL);
+    
+    CU_ASSERT_PTR_NOT_NULL(edge);
+    CU_ASSERT_EQUAL(edge->type, AST_EDGE_PATTERN);
+    CU_ASSERT_PTR_EQUAL(edge->data.edge_pattern.variable, var);
+    CU_ASSERT_PTR_EQUAL(edge->data.edge_pattern.label, label);
+    CU_ASSERT_PTR_NULL(edge->data.edge_pattern.properties);
+    
+    ast_free(edge);
+}
+
+void test_ast_relationship_patterns(void) {
+    // Create nodes for relationship
+    cypher_ast_node_t *var_a = ast_create_variable("a");
+    cypher_ast_node_t *label_person = ast_create_label("Person");
+    cypher_ast_node_t *left_node = ast_create_node_pattern(var_a, label_person, NULL);
+    
+    cypher_ast_node_t *var_b = ast_create_variable("b");
+    cypher_ast_node_t *label_person2 = ast_create_label("Person");
+    cypher_ast_node_t *right_node = ast_create_node_pattern(var_b, label_person2, NULL);
+    
+    // Create edge
+    cypher_ast_node_t *edge_label = ast_create_label("KNOWS");
+    cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, edge_label, NULL);
+    
+    // Create relationship pattern
+    cypher_ast_node_t *rel = ast_create_relationship_pattern(left_node, edge, right_node, 1);
+    
+    CU_ASSERT_PTR_NOT_NULL(rel);
+    CU_ASSERT_EQUAL(rel->type, AST_RELATIONSHIP_PATTERN);
+    CU_ASSERT_PTR_EQUAL(rel->data.relationship_pattern.left_node, left_node);
+    CU_ASSERT_PTR_EQUAL(rel->data.relationship_pattern.edge, edge);
+    CU_ASSERT_PTR_EQUAL(rel->data.relationship_pattern.right_node, right_node);
+    CU_ASSERT_EQUAL(rel->data.relationship_pattern.direction, 1);
+    
+    ast_free(rel);
 }
 
 // ============================================================================
@@ -229,28 +142,16 @@ void test_ast_node_type_names(void) {
 // ============================================================================
 
 int add_parser_tests(void) {
-    CU_pSuite parser_suite = CU_add_suite("Parser Tests", NULL, NULL);
-    if (!parser_suite) {
-        return 0;
-    }
-    
-    // Basic parsing tests
-    if (!CU_add_test(parser_suite, "CREATE simple node", test_parser_create_simple_node) ||
-        !CU_add_test(parser_suite, "CREATE node with property", test_parser_create_node_with_property) ||
-        !CU_add_test(parser_suite, "CREATE node with multiple properties", test_parser_create_multiple_properties) ||
-        !CU_add_test(parser_suite, "MATCH and RETURN", test_parser_match_simple_node) ||
-        !CU_add_test(parser_suite, "Invalid query handling", test_parser_invalid_query) ||
-        !CU_add_test(parser_suite, "Memory management", test_parser_memory_management)) {
-        return 0;
-    }
-    
-    // AST utility tests
     CU_pSuite ast_suite = CU_add_suite("AST Utility Tests", NULL, NULL);
     if (!ast_suite) {
         return 0;
     }
     
-    if (!CU_add_test(ast_suite, "AST node type names", test_ast_node_type_names)) {
+    if (!CU_add_test(ast_suite, "AST node type names", test_ast_node_type_names) ||
+        !CU_add_test(ast_suite, "AST memory management", test_ast_memory_management) ||
+        !CU_add_test(ast_suite, "AST property list", test_ast_property_list) ||
+        !CU_add_test(ast_suite, "AST edge patterns", test_ast_edge_patterns) ||
+        !CU_add_test(ast_suite, "AST relationship patterns", test_ast_relationship_patterns)) {
         return 0;
     }
     

@@ -18,9 +18,9 @@ cypher_ast_node_t *parse_result = NULL;
 // Token definitions
 %token <char*> IDENTIFIER STRING_LITERAL INTEGER_LITERAL FLOAT_LITERAL
 %token CREATE MATCH RETURN TRUE FALSE
-%token LPAREN RPAREN LBRACE RBRACE
-%token DOT COMMA COLON
-%token SEMICOLON
+%token LPAREN RPAREN LBRACE RBRACE LBRACKET RBRACKET
+%token DOT COMMA COLON SEMICOLON
+%token ARROW_RIGHT ARROW_LEFT DASH
 
 // AST node types
 %type <cypher_ast_node_t*> statement
@@ -28,6 +28,8 @@ cypher_ast_node_t *parse_result = NULL;
 %type <cypher_ast_node_t*> match_statement  
 %type <cypher_ast_node_t*> return_statement
 %type <cypher_ast_node_t*> node_pattern
+%type <cypher_ast_node_t*> relationship_pattern
+%type <cypher_ast_node_t*> edge_pattern
 %type <cypher_ast_node_t*> variable
 %type <cypher_ast_node_t*> label
 %type <cypher_ast_node_t*> property
@@ -54,16 +56,22 @@ statement:
     }
     ;
 
-// CREATE (n:Person {name: "John"})
+// CREATE (n:Person {name: "John"}) or CREATE (a)-[:KNOWS]->(b)
 create_statement:
     CREATE node_pattern {
         $$ = ast_create_create_statement($2);
     }
+    | CREATE relationship_pattern {
+        $$ = ast_create_create_statement($2);
+    }
     ;
 
-// MATCH (n:Person) or MATCH (n:Person {name: "John"})  
+// MATCH (n:Person) or MATCH (n:Person {name: "John"}) or MATCH (a)-[:KNOWS]->(b)
 match_statement:
     MATCH node_pattern {
+        $$ = ast_create_match_statement($2);
+    }
+    | MATCH relationship_pattern {
         $$ = ast_create_match_statement($2);
     }
     ;
@@ -82,6 +90,47 @@ node_pattern:
     }
     | LPAREN variable COLON label LBRACE property_list RBRACE RPAREN {
         $$ = ast_create_node_pattern($2, $4, $6);
+    }
+    ;
+
+// (a)-[:TYPE]->(b) or (a)-[r:TYPE {prop: value}]->(b)
+relationship_pattern:
+    node_pattern DASH LBRACKET COLON label RBRACKET ARROW_RIGHT node_pattern {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, $5, NULL);
+        $$ = ast_create_relationship_pattern($1, edge, $8, 1);  // 1 = right direction
+    }
+    | node_pattern DASH LBRACKET variable COLON label RBRACKET ARROW_RIGHT node_pattern {
+        cypher_ast_node_t *edge = ast_create_edge_pattern($4, $6, NULL);
+        $$ = ast_create_relationship_pattern($1, edge, $9, 1);  // 1 = right direction
+    }
+    | node_pattern DASH LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET ARROW_RIGHT node_pattern {
+        cypher_ast_node_t *edge = ast_create_edge_pattern($4, $6, $8);
+        $$ = ast_create_relationship_pattern($1, edge, $12, 1);  // 1 = right direction
+    }
+    | node_pattern ARROW_LEFT LBRACKET COLON label RBRACKET DASH node_pattern {
+        cypher_ast_node_t *edge = ast_create_edge_pattern(NULL, $5, NULL);
+        $$ = ast_create_relationship_pattern($8, edge, $1, -1);  // -1 = left direction
+    }
+    | node_pattern ARROW_LEFT LBRACKET variable COLON label RBRACKET DASH node_pattern {
+        cypher_ast_node_t *edge = ast_create_edge_pattern($4, $6, NULL);
+        $$ = ast_create_relationship_pattern($9, edge, $1, -1);  // -1 = left direction  
+    }
+    | node_pattern ARROW_LEFT LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET DASH node_pattern {
+        cypher_ast_node_t *edge = ast_create_edge_pattern($4, $6, $8);
+        $$ = ast_create_relationship_pattern($12, edge, $1, -1);  // -1 = left direction
+    }
+    ;
+
+// Edge pattern: [r:TYPE] or [r:TYPE {prop: value}]  
+edge_pattern:
+    LBRACKET COLON label RBRACKET {
+        $$ = ast_create_edge_pattern(NULL, $3, NULL);
+    }
+    | LBRACKET variable COLON label RBRACKET {
+        $$ = ast_create_edge_pattern($2, $4, NULL);
+    }
+    | LBRACKET variable COLON label LBRACE property_list RBRACE RBRACKET {
+        $$ = ast_create_edge_pattern($2, $4, $6);
     }
     ;
 

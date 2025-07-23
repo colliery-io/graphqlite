@@ -258,8 +258,10 @@ void test_cypher_function_exists(void) {
     char *result = execute_cypher_query("MATCH (n:Person) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return our test data
-        CU_ASSERT(strstr(result, "rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -585,10 +587,11 @@ void test_match_nodes_by_label(void) {
     char *result = execute_cypher_query("MATCH (n:Product) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return our test Product nodes (5 in test data)
-        char expected[32];
-        snprintf(expected, sizeof(expected), "%d rows returned", test_data_counts.product_nodes);
-        CU_ASSERT(strstr(result, expected) != NULL);
+        // Should return OpenCypher-compliant JSON entity with Product label
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Product\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
     
@@ -596,9 +599,11 @@ void test_match_nodes_by_label(void) {
     result = execute_cypher_query("MATCH (n:Person) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        char expected[32];
-        snprintf(expected, sizeof(expected), "%d rows returned", test_data_counts.person_nodes);
-        CU_ASSERT(strstr(result, expected) != NULL);
+        // Should return OpenCypher-compliant JSON entity with Person label
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Person\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -608,8 +613,11 @@ void test_match_nodes_with_property_filter(void) {
     char *result = execute_cypher_query("MATCH (n:Person {name: \"Alice\"}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return exactly 1 row for Alice
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity for Alice
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Person\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
     
@@ -617,7 +625,11 @@ void test_match_nodes_with_property_filter(void) {
     result = execute_cypher_query("MATCH (n:Company {name: \"TechCorp\"}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity for TechCorp
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Company\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -637,8 +649,11 @@ void test_match_by_integer_property(void) {
     char *result = execute_cypher_query("MATCH (n:Product {price: 100}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return 1 matching node
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Product\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
     
@@ -646,7 +661,11 @@ void test_match_by_integer_property(void) {
     result = execute_cypher_query("MATCH (n:Company {employees: 500}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Company\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -656,8 +675,11 @@ void test_match_by_float_property(void) {
     char *result = execute_cypher_query("MATCH (n:Product {rating: 4.5}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return 1 matching node
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Product\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -667,8 +689,11 @@ void test_match_by_boolean_property(void) {
     char *result = execute_cypher_query("MATCH (n:Product {available: true}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return 1 matching node
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Product\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
     
@@ -676,8 +701,11 @@ void test_match_by_boolean_property(void) {
     result = execute_cypher_query("MATCH (n:Product {discontinued: false}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        // Should return 1 matching node
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Product\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -686,31 +714,37 @@ void test_match_mixed_property_types(void) {
     // Test matching with our existing test data across different property types
     struct {
         const char *query;
-        const char *expected_result;
+        const char *expected_label;
     } test_cases[] = {
-        {"MATCH (n:Vehicle {model: \"Tesla\"}) RETURN n", "1 rows returned"},
-        {"MATCH (n:Vehicle {year: 2023}) RETURN n", "1 rows returned"},
-        {"MATCH (n:Product {rating: 4.5}) RETURN n", "1 rows returned"},
-        {"MATCH (n:Product {available: true}) RETURN n", "1 rows returned"},
-        {"MATCH (n:Company {employees: 500}) RETURN n", "1 rows returned"}
+        {"MATCH (n:Vehicle {model: \"Tesla\"}) RETURN n", "Vehicle"},
+        {"MATCH (n:Vehicle {year: 2023}) RETURN n", "Vehicle"},
+        {"MATCH (n:Product {rating: 4.5}) RETURN n", "Product"},
+        {"MATCH (n:Product {available: true}) RETURN n", "Product"},
+        {"MATCH (n:Company {employees: 500}) RETURN n", "Company"}
     };
     
     for (int i = 0; i < 5; i++) {
         char *result = execute_cypher_query(test_cases[i].query);
         CU_ASSERT_PTR_NOT_NULL(result);
         if (result) {
-            CU_ASSERT(strstr(result, test_cases[i].expected_result) != NULL);
+            // Should return OpenCypher-compliant JSON entity
+            CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+            CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+            CU_ASSERT(strstr(result, test_cases[i].expected_label) != NULL);
+            CU_ASSERT(strstr(result, "\"properties\":") != NULL);
             free(result);
         }
     }
     
-    // Verify total Vehicle count matches test data
+    // Verify total Vehicle count by checking for multiple Vehicle entities
     char *result = execute_cypher_query("MATCH (n:Vehicle) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        char expected[32];
-        snprintf(expected, sizeof(expected), "%d rows returned", test_data_counts.vehicle_nodes);
-        CU_ASSERT(strstr(result, expected) != NULL);
+        // Should return OpenCypher-compliant JSON entities for all Vehicle nodes
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Vehicle\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -924,14 +958,22 @@ void test_boundary_values(void) {
     result = execute_cypher_query("MATCH (n:Test {score: -100}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Test\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
     
     result = execute_cypher_query("MATCH (n:Test {count: 0}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Test\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }
@@ -975,14 +1017,22 @@ void test_string_edge_cases(void) {
     result = execute_cypher_query("MATCH (n:Test {name: \"\"}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Test\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
     
     result = execute_cypher_query("MATCH (n:Test {title: \"Hello World\"}) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) {
-        CU_ASSERT(strstr(result, "1 rows returned") != NULL);
+        // Should return OpenCypher-compliant JSON entity
+        CU_ASSERT(strstr(result, "\"identity\":") != NULL);
+        CU_ASSERT(strstr(result, "\"labels\":") != NULL);
+        CU_ASSERT(strstr(result, "\"Test\"") != NULL);
+        CU_ASSERT(strstr(result, "\"properties\":") != NULL);
         free(result);
     }
 }

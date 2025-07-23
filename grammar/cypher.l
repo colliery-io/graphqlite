@@ -38,10 +38,15 @@ NEWLINE     \n
 ")"             { yycolumn += yyleng; return RPAREN; }
 "{"             { yycolumn += yyleng; return LBRACE; }
 "}"             { yycolumn += yyleng; return RBRACE; }
+"["             { yycolumn += yyleng; return LBRACKET; }
+"]"             { yycolumn += yyleng; return RBRACKET; }
 ":"             { yycolumn += yyleng; return COLON; }
 ","             { yycolumn += yyleng; return COMMA; }
 "."             { yycolumn += yyleng; return DOT; }
 ";"             { yycolumn += yyleng; return SEMICOLON; }
+"->"            { yycolumn += yyleng; return ARROW_RIGHT; }
+"<-"            { yycolumn += yyleng; return ARROW_LEFT; }
+"-"             { yycolumn += yyleng; return DASH; }
 
     /* Identifiers */
 {IDENTIFIER}    { 

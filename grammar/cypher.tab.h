@@ -67,10 +67,15 @@ extern int yydebug;
     RPAREN = 268,                  /* RPAREN  */
     LBRACE = 269,                  /* LBRACE  */
     RBRACE = 270,                  /* RBRACE  */
-    DOT = 271,                     /* DOT  */
-    COMMA = 272,                   /* COMMA  */
-    COLON = 273,                   /* COLON  */
-    SEMICOLON = 274                /* SEMICOLON  */
+    LBRACKET = 271,                /* LBRACKET  */
+    RBRACKET = 272,                /* RBRACKET  */
+    DOT = 273,                     /* DOT  */
+    COMMA = 274,                   /* COMMA  */
+    COLON = 275,                   /* COLON  */
+    SEMICOLON = 276,               /* SEMICOLON  */
+    ARROW_RIGHT = 277,             /* ARROW_RIGHT  */
+    ARROW_LEFT = 278,              /* ARROW_LEFT  */
+    DASH = 279                     /* DASH  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -88,6 +93,7 @@ union YYSTYPE
   cypher_ast_node_t* match_statement;      /* match_statement  */
   cypher_ast_node_t* return_statement;     /* return_statement  */
   cypher_ast_node_t* node_pattern;         /* node_pattern  */
+  cypher_ast_node_t* relationship_pattern; /* relationship_pattern  */
   cypher_ast_node_t* property_list;        /* property_list  */
   cypher_ast_node_t* variable;             /* variable  */
   cypher_ast_node_t* label;                /* label  */
@@ -98,7 +104,7 @@ union YYSTYPE
   cypher_ast_node_t* float_literal;        /* float_literal  */
   cypher_ast_node_t* boolean_literal;      /* boolean_literal  */
 
-#line 102 "cypher.tab.h"
+#line 108 "cypher.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

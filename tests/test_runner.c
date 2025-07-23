@@ -5,6 +5,8 @@
 
 // Test suite headers
 #include "test_parser.h"
+#include "test_parser_nodes.h"
+#include "test_parser_edges.h"
 #include "test_database.h"
 
 
@@ -16,6 +18,16 @@ int main(void) {
 
     // Add test suites
     if (!add_parser_tests()) {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (!add_node_parser_tests()) {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (!add_edge_parser_tests()) {
         CU_cleanup_registry();
         return CU_get_error();
     }

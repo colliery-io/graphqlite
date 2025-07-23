@@ -140,6 +140,51 @@ cypher_ast_node_t* ast_create_boolean_literal(int value) {
     return node;
 }
 
+cypher_ast_node_t* ast_create_relationship_pattern(cypher_ast_node_t *left_node, cypher_ast_node_t *edge, cypher_ast_node_t *right_node, int direction) {
+    cypher_ast_node_t *node = ast_create_node(AST_RELATIONSHIP_PATTERN);
+    if (!node) return NULL;
+    
+    node->data.relationship_pattern.left_node = left_node;
+    node->data.relationship_pattern.edge = edge;
+    node->data.relationship_pattern.right_node = right_node;
+    node->data.relationship_pattern.direction = direction;
+    return node;
+}
+
+cypher_ast_node_t* ast_create_path_pattern(void) {
+    cypher_ast_node_t *node = ast_create_node(AST_PATH_PATTERN);
+    if (!node) return NULL;
+    
+    node->data.path_pattern.patterns = NULL;
+    node->data.path_pattern.count = 0;
+    return node;
+}
+
+cypher_ast_node_t* ast_add_relationship_to_path(cypher_ast_node_t *path, cypher_ast_node_t *relationship) {
+    if (!path || path->type != AST_PATH_PATTERN || !relationship) return path;
+    
+    int new_count = path->data.path_pattern.count + 1;
+    cypher_ast_node_t **new_patterns = realloc(path->data.path_pattern.patterns, 
+                                              new_count * sizeof(cypher_ast_node_t*));
+    if (!new_patterns) return path;
+    
+    new_patterns[path->data.path_pattern.count] = relationship;
+    path->data.path_pattern.patterns = new_patterns;
+    path->data.path_pattern.count = new_count;
+    
+    return path;
+}
+
+cypher_ast_node_t* ast_create_edge_pattern(cypher_ast_node_t *variable, cypher_ast_node_t *label, cypher_ast_node_t *properties) {
+    cypher_ast_node_t *node = ast_create_node(AST_EDGE_PATTERN);
+    if (!node) return NULL;
+    
+    node->data.edge_pattern.variable = variable;
+    node->data.edge_pattern.label = label;
+    node->data.edge_pattern.properties = properties;
+    return node;
+}
+
 // ============================================================================
 // AST Memory Management
 // ============================================================================
@@ -169,6 +214,25 @@ void ast_free(cypher_ast_node_t *node) {
             ast_free(node->data.node_pattern.variable);
             ast_free(node->data.node_pattern.label);
             ast_free(node->data.node_pattern.properties);
+            break;
+            
+        case AST_RELATIONSHIP_PATTERN:
+            ast_free(node->data.relationship_pattern.left_node);
+            ast_free(node->data.relationship_pattern.edge);
+            ast_free(node->data.relationship_pattern.right_node);
+            break;
+            
+        case AST_PATH_PATTERN:
+            for (int i = 0; i < node->data.path_pattern.count; i++) {
+                ast_free(node->data.path_pattern.patterns[i]);
+            }
+            free(node->data.path_pattern.patterns);
+            break;
+            
+        case AST_EDGE_PATTERN:
+            ast_free(node->data.edge_pattern.variable);
+            ast_free(node->data.edge_pattern.label);
+            ast_free(node->data.edge_pattern.properties);
             break;
             
         case AST_VARIABLE:
@@ -216,6 +280,9 @@ const char* ast_node_type_name(ast_node_type_t type) {
         case AST_RETURN_STATEMENT: return "RETURN_STATEMENT";
         case AST_COMPOUND_STATEMENT: return "COMPOUND_STATEMENT";
         case AST_NODE_PATTERN: return "NODE_PATTERN";
+        case AST_RELATIONSHIP_PATTERN: return "RELATIONSHIP_PATTERN";
+        case AST_PATH_PATTERN: return "PATH_PATTERN";
+        case AST_EDGE_PATTERN: return "EDGE_PATTERN";
         case AST_VARIABLE: return "VARIABLE";
         case AST_LABEL: return "LABEL";
         case AST_PROPERTY: return "PROPERTY";
@@ -288,6 +355,27 @@ void ast_print(cypher_ast_node_t *node, int indent) {
             ast_print(node->data.node_pattern.variable, indent + 2);
             ast_print(node->data.node_pattern.label, indent + 2);
             ast_print(node->data.node_pattern.properties, indent + 2);
+            break;
+            
+        case AST_RELATIONSHIP_PATTERN:
+            printf("%*sDirection: %s\n", indent + 2, "", 
+                   node->data.relationship_pattern.direction == 1 ? "RIGHT" :
+                   node->data.relationship_pattern.direction == -1 ? "LEFT" : "NONE");
+            ast_print(node->data.relationship_pattern.left_node, indent + 2);
+            ast_print(node->data.relationship_pattern.edge, indent + 2);
+            ast_print(node->data.relationship_pattern.right_node, indent + 2);
+            break;
+            
+        case AST_PATH_PATTERN:
+            for (int i = 0; i < node->data.path_pattern.count; i++) {
+                ast_print(node->data.path_pattern.patterns[i], indent + 2);
+            }
+            break;
+            
+        case AST_EDGE_PATTERN:
+            ast_print(node->data.edge_pattern.variable, indent + 2);
+            ast_print(node->data.edge_pattern.label, indent + 2);
+            ast_print(node->data.edge_pattern.properties, indent + 2);
             break;
             
         case AST_PROPERTY:
