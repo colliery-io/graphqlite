@@ -3,14 +3,14 @@ id: core-relationship-operations
 level: initiative
 title: "Core Relationship Operations (CREATE/MATCH/DELETE)"
 created_at: 2025-07-23T15:03:31.862844+00:00
-updated_at: 2025-07-23T15:03:31.862844+00:00
+updated_at: 2025-07-23T18:02:45.094+00:00
 parent: opencypher-implementation-strategy
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -177,3 +177,16 @@ Without robust relationship operations, RAG systems cannot effectively represent
 - Document-entity relationship modeling scenarios
 - Knowledge graph maintenance workflows (adding/removing relationships)
 - Query pattern validation for typical RAG retrieval patterns
+
+## Exit Criteria
+
+− [x] Complete relationship MATCH execution with pattern support (Implemented complete MATCH execution with relationship patterns, bidirectional matching, and property filtering)
+− [x] Relationship variable binding and return functionality (Implemented relationship variable binding with MATCH (a)-[r:TYPE]->(b) RETURN r patterns)
+− [x] Bidirectional relationship matching (`->`, `<-`, `-`) (Implemented full bidirectional matching with direction handling in SQL queries)
+− [x] Relationship property filtering in MATCH patterns (Implemented property filtering with WHERE clause integration for relationship patterns)
+− [x] Relationship DELETE operations implemented and tested (Implemented DELETE statements for relationships with AST support and comprehensive testing)
+− [x] Relationship SET operations for property updates (Implemented SET statements for relationship property updates with full grammar and execution support)
+− [x] All property types supported in relationship serialization (text, int, real, bool) (Fixed relationship serialization to include all property types from all property tables)
+− [x] Comprehensive CUnit test coverage for relationship operations (Added 10 comprehensive CUnit tests covering MATCH, DELETE, and SET operations with all passing)
+− [x] SQL functional tests covering all relationship operations (Added 3 comprehensive SQL test files covering SET operations, property serialization, and edge cases - all passing)
+− [x] Performance validation (<50ms for typical relationship queries) (Manual testing shows relationship queries execute well under 50ms target with current implementation)
