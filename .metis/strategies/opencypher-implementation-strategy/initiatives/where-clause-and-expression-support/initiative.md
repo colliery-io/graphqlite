@@ -3,14 +3,14 @@ id: where-clause-and-expression-support
 level: initiative
 title: "WHERE Clause and Expression Support"
 created_at: 2025-07-23T12:28:52.545393+00:00
-updated_at: 2025-07-23T12:28:52.545393+00:00
+updated_at: 2025-07-23T15:01:31.913407+00:00
 parent: opencypher-implementation-strategy
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

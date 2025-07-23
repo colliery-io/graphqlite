@@ -1492,7 +1492,11 @@ static char* serialize_relationship_entity(sqlite3 *db, int64_t edge_id) {
         return NULL;
     }
     
-    const char *type = (char*)sqlite3_column_text(edge_stmt, 0);
+    const char *type_text = (char*)sqlite3_column_text(edge_stmt, 0);
+    char type[256];
+    strncpy(type, type_text ? type_text : "", sizeof(type) - 1);
+    type[sizeof(type) - 1] = '\0';
+    
     int64_t start_id = sqlite3_column_int64(edge_stmt, 1);
     int64_t end_id = sqlite3_column_int64(edge_stmt, 2);
     sqlite3_finalize(edge_stmt);

@@ -9,6 +9,7 @@
 #include "test_parser_edges.h"
 #include "test_database.h"
 #include "test_where_clause.h"
+#include "test_relationship_operations.h"
 
 
 int main(void) {
@@ -39,6 +40,11 @@ int main(void) {
     }
     
     if (!add_where_clause_tests()) {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (!add_relationship_operation_tests()) {
         CU_cleanup_registry();
         return CU_get_error();
     }
