@@ -1597,9 +1597,21 @@ static graphqlite_result_t* execute_match_relationship(sqlite3 *db, cypher_ast_n
             left_label ? "AND ll.label = ?" : "",
             edge_type ? "AND e.type = ?" : "",
             right_label ? "AND rl.label = ?" : "");
-    } else {  // Undirected (not implemented yet)
-        graphqlite_result_set_error(result, "Undirected edges not yet supported");
-        return result;
+    } else {  // Undirected (direction == 0)
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT "
+            "  ln.id as left_id, ll.label as left_label, "
+            "  e.id as edge_id, e.type as edge_type, "
+            "  rn.id as right_id, rl.label as right_label "
+            "FROM edges e "
+            "JOIN nodes ln ON (e.source_id = ln.id OR e.target_id = ln.id) "
+            "JOIN nodes rn ON (e.source_id = rn.id OR e.target_id = rn.id) "
+            "JOIN node_labels ll ON ln.id = ll.node_id "
+            "JOIN node_labels rl ON rn.id = rl.node_id "
+            "WHERE ln.id != rn.id %s %s %s",
+            left_label ? "AND ll.label = ?" : "",
+            edge_type ? "AND e.type = ?" : "",
+            right_label ? "AND rl.label = ?" : "");
     }
     
     sqlite3_stmt *stmt;
@@ -1773,9 +1785,21 @@ static graphqlite_result_t* execute_match_relationship_with_where(sqlite3 *db, c
             left_label ? "AND ll.label = ?" : "",
             edge_type ? "AND e.type = ?" : "",
             right_label ? "AND rl.label = ?" : "");
-    } else {  // Undirected
-        graphqlite_result_set_error(result, "Undirected edges not yet supported");
-        return result;
+    } else {  // Undirected (direction == 0)
+        snprintf(query, sizeof(query), 
+            "SELECT DISTINCT "
+            "  ln.id as left_id, ll.label as left_label, "
+            "  e.id as edge_id, e.type as edge_type, "
+            "  rn.id as right_id, rl.label as right_label "
+            "FROM edges e "
+            "JOIN nodes ln ON (e.source_id = ln.id OR e.target_id = ln.id) "
+            "JOIN nodes rn ON (e.source_id = rn.id OR e.target_id = rn.id) "
+            "JOIN node_labels ll ON ln.id = ll.node_id "
+            "JOIN node_labels rl ON rn.id = rl.node_id "
+            "WHERE ln.id != rn.id %s %s %s",
+            left_label ? "AND ll.label = ?" : "",
+            edge_type ? "AND e.type = ?" : "",
+            right_label ? "AND rl.label = ?" : "");
     }
     
     sqlite3_stmt *stmt;

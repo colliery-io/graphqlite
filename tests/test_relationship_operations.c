@@ -107,21 +107,43 @@ void test_relationship_match_return_relationship(void) {
 
 // Test bidirectional relationship matching
 void test_bidirectional_relationship_match(void) {
-    // Create test data with left-direction relationship
-    char *result = execute_cypher_query("CREATE (a:Person {name: \"Charlie\"})<-[r:MANAGES]-(b:Person {name: \"Alice\"})");
+    // Create relationships in both directions for testing
+    char *result = execute_cypher_query("CREATE (a:Person {name: \"Alice\"})-[r:KNOWS]->(b:Person {name: \"Bob\"})");
     CU_ASSERT_PTR_NOT_NULL(result);
     if (result) free(result);
     
-    // Test left-direction MATCH
-    result = execute_cypher_query("MATCH (a:Person)<-[r:MANAGES]-(b:Person) RETURN a");
+    result = execute_cypher_query("CREATE (c:Person {name: \"Charlie\"})-[r:KNOWS]->(d:Person {name: \"Alice\"})");
     CU_ASSERT_PTR_NOT_NULL(result);
-    CU_ASSERT(strstr(result, "Charlie") != NULL);
-    printf("Left-direction match result: %s\n", result ? result : "NULL");
     if (result) free(result);
     
-    // Test if we can match in opposite direction (should not work without bidirectional support)
-    result = execute_cypher_query("MATCH (a:Person)-[r:MANAGES]->(b:Person) RETURN a");
-    printf("Opposite direction result: %s\n", result ? result : "NULL");
+    // Test right-direction MATCH: should find Alice (who knows Bob) and Charlie (who knows Alice)
+    result = execute_cypher_query("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    printf("Right-direction results: %s\n", result ? result : "NULL");
+    // Should contain both Alice and Charlie
+    if (result) {
+        CU_ASSERT(strstr(result, "Alice") != NULL);
+        CU_ASSERT(strstr(result, "Charlie") != NULL);
+        free(result);
+    }
+    
+    // Test left-direction MATCH: should find Bob (known by Alice) and Alice (known by Charlie)
+    result = execute_cypher_query("MATCH (a:Person)<-[r:KNOWS]-(b:Person) RETURN a");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    printf("Left-direction results: %s\n", result ? result : "NULL");
+    // Should contain both Bob and Alice
+    if (result) {
+        CU_ASSERT(strstr(result, "Bob") != NULL);
+        CU_ASSERT(strstr(result, "Alice") != NULL);
+        free(result);
+    }
+    
+    // Test mixed directional patterns work correctly
+    result = execute_cypher_query("MATCH (a:Person {name: \"Alice\"})-[r:KNOWS]->(b:Person) RETURN b");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT(strstr(result, "Bob") != NULL);
+    CU_ASSERT(strstr(result, "Charlie") == NULL); // Charlie doesn't match this pattern
+    printf("Alice knows (right): %s\n", result ? result : "NULL");
     if (result) free(result);
 }
 
