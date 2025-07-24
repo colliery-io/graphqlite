@@ -90,7 +90,8 @@ plus_eq     \+=
 comment     "//"[^\n\r]*
 
 /* Multi-character operators that need special handling */
-operator    [+\-*/%^<>=!&|~]+
+/* Note: < and > are handled as individual chars for relationship arrows */
+operator    [+\-*/%^=!&|~]+
 
 %%
 
@@ -196,7 +197,7 @@ operator    [+\-*/%^<>=!&|~]+
 {operator}      { prepare_string_token(CYPHER_TOKEN_OPERATOR, yytext, yytext); return CYPHER_TOKEN_OPERATOR; }
 
 :               { prepare_token(CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
-[(){}[\],;.]    { prepare_token(CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
+[(){}[\],;.<>]  { prepare_token(CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
 
 <<EOF>>         { prepare_token(CYPHER_TOKEN_EOF, ""); return CYPHER_TOKEN_EOF; }
 

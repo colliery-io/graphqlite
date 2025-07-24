@@ -266,6 +266,11 @@ rel_pattern:
         {
             $$ = make_rel_pattern($3, NULL, NULL, false, false);
         }
+    | '-' '[' variable_opt ':' IDENTIFIER ']' '-'
+        {
+            $$ = make_rel_pattern($3, $5, NULL, false, false);
+            free($5);
+        }
     ;
 
 variable_opt:
@@ -371,6 +376,7 @@ void cypher_yyerror(CYPHER_YYLTYPE *yylloc, cypher_parser_context *context, cons
     if (!context || !msg) {
         return;
     }
+    
     
     context->has_error = true;
     context->error_location = yylloc ? yylloc->first_line : -1;

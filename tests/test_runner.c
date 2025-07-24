@@ -7,6 +7,8 @@
 #include "test_scanner.h"
 #include "test_parser.h"
 #include "test_transform.h"
+#include "test_schema.h"
+#include "test_executor.h"
 
 int main(void)
 {
@@ -37,6 +39,18 @@ int main(void)
     
     if (init_transform_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add transform suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_schema_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add schema suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_executor_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

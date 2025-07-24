@@ -113,6 +113,210 @@ static void test_null_query(void)
     CU_ASSERT_PTR_NULL(result);
 }
 
+/* Test relationship patterns */
+static void test_relationship_patterns(void)
+{
+    /* Test simple relationship without type */
+    const char *query1 = "CREATE (a)-[]->(b)";
+    ast_node *result1 = parse_cypher_query(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        CU_ASSERT_EQUAL(result1->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result1);
+    }
+    
+    /* Test relationship with type */
+    const char *query2 = "CREATE (a)-[:KNOWS]->(b)";
+    ast_node *result2 = parse_cypher_query(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        CU_ASSERT_EQUAL(result2->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result2);
+    }
+    
+    /* Test bidirectional relationship */
+    const char *query3 = "CREATE (a)<-[:KNOWS]-(b)";
+    ast_node *result3 = parse_cypher_query(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        CU_ASSERT_EQUAL(result3->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result3);
+    }
+    
+    /* Test undirected relationship */
+    const char *query4 = "CREATE (a)-[:KNOWS]-(b)";
+    ast_node *result4 = parse_cypher_query(query4);
+    CU_ASSERT_PTR_NOT_NULL(result4);
+    if (result4) {
+        CU_ASSERT_EQUAL(result4->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result4);
+    }
+}
+
+/* Test relationship with variables */
+static void test_relationship_variables(void)
+{
+    const char *query = "CREATE (a)-[r:KNOWS]->(b)";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test complex path patterns */
+static void test_complex_paths(void)
+{
+    const char *query = "CREATE (a)-[:KNOWS]->(b)-[:LIKES]->(c)";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test AST structural integrity - validates the systematic AST traversal fixes */
+static void test_ast_structural_integrity(void)
+{
+    const char *query = "CREATE (a)-[:KNOWS]->(b)";
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+    
+    /* Deep AST structure validation - this tests the systematic traversal bug fix */
+    cypher_query *query_ast = (cypher_query*)result;
+    CU_ASSERT_PTR_NOT_NULL(query_ast->clauses);
+    CU_ASSERT_EQUAL(query_ast->clauses->count, 1);
+    
+    /* Validate CREATE clause structure */
+    ast_node *clause = query_ast->clauses->items[0];
+    CU_ASSERT_PTR_NOT_NULL(clause);
+    CU_ASSERT_EQUAL(clause->type, AST_NODE_CREATE);
+    
+    cypher_create *create = (cypher_create*)clause;
+    CU_ASSERT_PTR_NOT_NULL(create->pattern);
+    CU_ASSERT_EQUAL(create->pattern->count, 1);
+    
+    /* Validate path structure */
+    ast_node *path_node = create->pattern->items[0];
+    CU_ASSERT_PTR_NOT_NULL(path_node);
+    CU_ASSERT_EQUAL(path_node->type, AST_NODE_PATH);
+    
+    cypher_path *path = (cypher_path*)path_node;
+    CU_ASSERT_PTR_NOT_NULL(path->elements);
+    CU_ASSERT_EQUAL(path->elements->count, 3); /* node, rel, node */
+    
+    /* Validate first node */
+    ast_node *first_node = path->elements->items[0];
+    CU_ASSERT_EQUAL(first_node->type, AST_NODE_NODE_PATTERN);
+    
+    /* Validate relationship */
+    ast_node *rel_node = path->elements->items[1];
+    CU_ASSERT_EQUAL(rel_node->type, AST_NODE_REL_PATTERN);
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)rel_node;
+    CU_ASSERT_EQUAL(rel->left_arrow, false);
+    CU_ASSERT_EQUAL(rel->right_arrow, true);
+    CU_ASSERT_PTR_NOT_NULL(rel->type);
+    CU_ASSERT_STRING_EQUAL(rel->type, "KNOWS");
+    
+    /* Validate second node */
+    ast_node *second_node = path->elements->items[2];
+    CU_ASSERT_EQUAL(second_node->type, AST_NODE_NODE_PATTERN);
+    
+    cypher_parser_free_result(result);
+}
+
+/* Test AST traversal with complex paths */
+static void test_ast_complex_path_validation(void)
+{
+    const char *query = "CREATE (a)-[:KNOWS]->(b)-[:LIKES]->(c)";
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)create->pattern->items[0];
+    
+    /* Should have 5 elements: node, rel, node, rel, node */
+    CU_ASSERT_EQUAL(path->elements->count, 5);
+    
+    /* Validate pattern: node -> rel -> node -> rel -> node */
+    CU_ASSERT_EQUAL(path->elements->items[0]->type, AST_NODE_NODE_PATTERN);
+    CU_ASSERT_EQUAL(path->elements->items[1]->type, AST_NODE_REL_PATTERN);
+    CU_ASSERT_EQUAL(path->elements->items[2]->type, AST_NODE_NODE_PATTERN);
+    CU_ASSERT_EQUAL(path->elements->items[3]->type, AST_NODE_REL_PATTERN);
+    CU_ASSERT_EQUAL(path->elements->items[4]->type, AST_NODE_NODE_PATTERN);
+    
+    /* Validate relationship types */
+    cypher_rel_pattern *rel1 = (cypher_rel_pattern*)path->elements->items[1];
+    cypher_rel_pattern *rel2 = (cypher_rel_pattern*)path->elements->items[3];
+    CU_ASSERT_STRING_EQUAL(rel1->type, "KNOWS");
+    CU_ASSERT_STRING_EQUAL(rel2->type, "LIKES");
+    
+    cypher_parser_free_result(result);
+}
+
+/* Test AST validation for MATCH with RETURN */
+static void test_ast_match_return_validation(void)
+{
+    const char *query = "MATCH (n:Person) RETURN n.name AS name";
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    cypher_query *query_ast = (cypher_query*)result;
+    CU_ASSERT_EQUAL(query_ast->clauses->count, 2);
+    
+    /* Validate MATCH clause */
+    ast_node *match_clause = query_ast->clauses->items[0];
+    CU_ASSERT_EQUAL(match_clause->type, AST_NODE_MATCH);
+    cypher_match *match = (cypher_match*)match_clause;
+    CU_ASSERT_PTR_NOT_NULL(match->pattern);
+    CU_ASSERT_EQUAL(match->optional, false);
+    
+    /* Validate RETURN clause */
+    ast_node *return_clause = query_ast->clauses->items[1];
+    CU_ASSERT_EQUAL(return_clause->type, AST_NODE_RETURN);
+    cypher_return *ret = (cypher_return*)return_clause;
+    CU_ASSERT_PTR_NOT_NULL(ret->items);
+    CU_ASSERT_EQUAL(ret->items->count, 1);
+    CU_ASSERT_EQUAL(ret->distinct, false);
+    
+    cypher_parser_free_result(result);
+}
+
+/* Test error conditions that should be properly handled */
+static void test_ast_error_handling(void)
+{
+    /* Test malformed relationship syntax */
+    const char *bad_query1 = "CREATE (a)-[:KNOWS(b)";
+    ast_node *result1 = parse_cypher_query(bad_query1);
+    /* Should handle gracefully - either NULL or error flag set */
+    if (result1) {
+        cypher_parser_free_result(result1);
+    }
+    
+    /* Test invalid node syntax */
+    const char *bad_query2 = "CREATE (a:";
+    ast_node *result2 = parse_cypher_query(bad_query2);
+    if (result2) {
+        cypher_parser_free_result(result2);
+    }
+    
+    /* Test incomplete query */
+    const char *bad_query3 = "MATCH";
+    ast_node *result3 = parse_cypher_query(bad_query3);
+    if (result3) {
+        cypher_parser_free_result(result3);
+    }
+}
+
 /* Test AST printing for debugging */
 static void test_ast_printing(void)
 {
@@ -145,6 +349,13 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Node with label", test_node_with_label) ||
         !CU_add_test(suite, "RETURN with alias", test_return_with_alias) ||
         !CU_add_test(suite, "Literal parsing", test_literal_parsing) ||
+        !CU_add_test(suite, "Relationship patterns", test_relationship_patterns) ||
+        !CU_add_test(suite, "Relationship variables", test_relationship_variables) ||
+        !CU_add_test(suite, "Complex paths", test_complex_paths) ||
+        !CU_add_test(suite, "AST structural integrity", test_ast_structural_integrity) ||
+        !CU_add_test(suite, "AST complex path validation", test_ast_complex_path_validation) ||
+        !CU_add_test(suite, "AST MATCH RETURN validation", test_ast_match_return_validation) ||
+        !CU_add_test(suite, "AST error handling", test_ast_error_handling) ||
         !CU_add_test(suite, "Invalid syntax", test_invalid_syntax) ||
         !CU_add_test(suite, "Empty query", test_empty_query) ||
         !CU_add_test(suite, "NULL query", test_null_query) ||

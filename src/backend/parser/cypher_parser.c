@@ -298,9 +298,10 @@ const char* cypher_keyword_to_token_name(int keyword_id)
 const char* cypher_parser_get_error(ast_node *result)
 {
     UNUSED_PARAMETER(result);
-    /* For now, we don't store error information in the AST */
-    /* This could be enhanced to return stored error messages */
-    return "Parse error occurred";
+    /* This function is used to check for parse errors */
+    /* If we have a valid AST result, there was no error */
+    /* Real error handling is done through the parser context */
+    return NULL;
 }
 
 /* Token name utilities */

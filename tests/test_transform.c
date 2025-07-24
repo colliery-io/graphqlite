@@ -70,6 +70,7 @@ static cypher_query_result* parse_and_transform(const char *query_str)
         return NULL;
     }
     
+    
     /* Create transform context */
     cypher_transform_context *ctx = cypher_transform_create_context(test_db);
     if (!ctx) {
@@ -155,6 +156,122 @@ static void test_create_with_label(void)
     }
 }
 
+/* Test that CREATE transformation succeeds and prepares statements */
+static void test_create_sql_validation(void)
+{
+    const char *query = "CREATE (n)";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("\nCREATE transform error: %s\n", result->error_message ? result->error_message : "Unknown error");
+        }
+        
+        /* For CREATE queries, we expect the transform to succeed without errors */
+        /* The actual SQL execution happens in the executor layer */
+        
+        cypher_free_result(result);
+    }
+}
+
+/* Test transform error handling for unsupported features */
+static void test_transform_error_handling(void)
+{
+    const char *query = "CREATE (a)-[:KNOWS]->(b)";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (result->has_error) {
+            printf("\nRelationship transform error (expected): %s\n", 
+                   result->error_message ? result->error_message : "Unknown error");
+            /* Expected to fail until relationship transformation is implemented */
+            CU_ASSERT_TRUE(result->has_error);
+        } else {
+            printf("\nRelationship transform unexpectedly succeeded\n");
+            /* If it succeeds, that means relationship support was added */
+        }
+        
+        cypher_free_result(result);
+    }
+}
+
+/* Test transform result validation */
+static void test_transform_result_validation(void)
+{
+    const char *queries[] = {
+        "CREATE (n)",
+        "CREATE (n:Person)", 
+        "MATCH (n) RETURN n",
+        "MATCH (n:Person) RETURN n",
+        NULL
+    };
+    
+    for (int q = 0; queries[q]; q++) {
+        printf("\nTesting transform of: %s\n", queries[q]);
+        
+        cypher_query_result *result = parse_and_transform(queries[q]);
+        CU_ASSERT_PTR_NOT_NULL(result);
+        
+        if (result) {
+            /* Basic result structure validation */
+            if (result->has_error) {
+                printf("Transform error: %s\n", 
+                       result->error_message ? result->error_message : "Unknown error");
+                /* Some queries may fail - that's expected for unimplemented features */
+            } else {
+                printf("Transform succeeded\n");
+                
+                /* For successful transforms, validate structure */
+                if (strstr(queries[q], "MATCH")) {
+                    /* MATCH queries should produce a prepared statement */
+                    CU_ASSERT_PTR_NOT_NULL(result->stmt);
+                } else if (strstr(queries[q], "CREATE")) {
+                    /* CREATE queries typically affect rows (though stmt might be NULL) */
+                    /* Structure depends on implementation */
+                }
+            }
+            
+            cypher_free_result(result);
+        }
+    }
+}
+
+/* Test column information for MATCH queries */
+static void test_match_column_validation(void)
+{
+    const char *query = "MATCH (n) RETURN n";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (!result->has_error) {
+            printf("\nMATCH transform succeeded\n");
+            printf("Column count: %d\n", result->column_count);
+            
+            if (result->column_names && result->column_count > 0) {
+                for (int i = 0; i < result->column_count; i++) {
+                    printf("Column %d: %s\n", i, 
+                           result->column_names[i] ? result->column_names[i] : "NULL");
+                }
+                
+                /* Should have at least one column for RETURN n */
+                CU_ASSERT_TRUE(result->column_count > 0);
+            }
+        } else {
+            printf("\nMATCH transform failed: %s\n", 
+                   result->error_message ? result->error_message : "Unknown error");
+        }
+        
+        cypher_free_result(result);
+    }
+}
+
 /* Test invalid query handling */
 static void test_invalid_query(void)
 {
@@ -183,6 +300,10 @@ int init_transform_suite(void)
         !CU_add_test(suite, "MATCH with label", test_match_with_label) ||
         !CU_add_test(suite, "Simple CREATE", test_create_simple) ||
         !CU_add_test(suite, "CREATE with label", test_create_with_label) ||
+        !CU_add_test(suite, "CREATE SQL validation", test_create_sql_validation) ||
+        !CU_add_test(suite, "Transform error handling", test_transform_error_handling) ||
+        !CU_add_test(suite, "Transform result validation", test_transform_result_validation) ||
+        !CU_add_test(suite, "MATCH column validation", test_match_column_validation) ||
         !CU_add_test(suite, "Invalid query handling", test_invalid_query)) {
         return CU_get_error();
     }

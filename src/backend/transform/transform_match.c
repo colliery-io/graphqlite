@@ -13,6 +13,8 @@
 /* Forward declarations */
 static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern);
 static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias);
+static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel, 
+                                     cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index);
 
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
@@ -105,10 +107,30 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             }
             
         } else if (element->type == AST_NODE_REL_PATTERN) {
-            /* TODO: Handle relationship patterns */
-            ctx->has_error = true;
-            ctx->error_message = strdup("Relationship patterns not yet implemented");
-            return -1;
+            /* Handle relationship patterns - need surrounding nodes */
+            if (i == 0 || i + 1 >= path->elements->count) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Relationship pattern must be between nodes");
+                return -1;
+            }
+            
+            ast_node *prev_element = path->elements->items[i - 1];
+            ast_node *next_element = path->elements->items[i + 1];
+            
+            if (prev_element->type != AST_NODE_NODE_PATTERN || next_element->type != AST_NODE_NODE_PATTERN) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Relationship must connect node patterns");
+                return -1;
+            }
+            
+            cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+            cypher_node_pattern *source_node = (cypher_node_pattern*)prev_element;
+            cypher_node_pattern *target_node = (cypher_node_pattern*)next_element;
+            
+            /* Generate relationship match SQL */
+            if (generate_relationship_match(ctx, rel, source_node, target_node, i) < 0) {
+                return -1;
+            }
         }
     }
     
@@ -151,6 +173,72 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
     if (node->properties) {
         CYPHER_DEBUG("Property constraints not yet implemented");
     }
+    
+    return 0;
+}
+
+/* Generate SQL for matching a relationship pattern */
+static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
+                                     cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index)
+{
+    CYPHER_DEBUG("Generating match for relationship %s between nodes", 
+                 rel->type ? rel->type : "<no type>");
+    
+    /* Generate aliases for source and target nodes */
+    char source_alias[32], target_alias[32], edge_alias[32];
+    
+    if (source_node->variable) {
+        snprintf(source_alias, sizeof(source_alias), "n_%s", source_node->variable);
+    } else {
+        snprintf(source_alias, sizeof(source_alias), "n_%d", rel_index - 1);
+    }
+    
+    if (target_node->variable) {
+        snprintf(target_alias, sizeof(target_alias), "n_%s", target_node->variable);
+    } else {
+        snprintf(target_alias, sizeof(target_alias), "n_%d", rel_index + 1);
+    }
+    
+    if (rel->variable) {
+        snprintf(edge_alias, sizeof(edge_alias), "e_%s", rel->variable);
+    } else {
+        snprintf(edge_alias, sizeof(edge_alias), "e_%d", rel_index);
+    }
+    
+    /* Add edges table to FROM clause */
+    append_sql(ctx, ", edges AS %s", edge_alias);
+    
+    /* Add relationship direction constraints */
+    if (strstr(ctx->sql_buffer, "WHERE") == NULL) {
+        append_sql(ctx, " WHERE ");
+    } else {
+        append_sql(ctx, " AND ");
+    }
+    
+    /* Handle relationship direction */
+    if (rel->left_arrow && !rel->right_arrow) {
+        /* <-[:TYPE]- (reversed: target -> source) */
+        append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
+                  edge_alias, target_alias, edge_alias, source_alias);
+    } else {
+        /* -[:TYPE]-> or -[:TYPE]- (forward or undirected, treat as forward) */
+        append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
+                  edge_alias, source_alias, edge_alias, target_alias);
+    }
+    
+    /* Add relationship type constraint if specified */
+    if (rel->type) {
+        append_sql(ctx, " AND %s.type = ", edge_alias);
+        append_string_literal(ctx, rel->type);
+    }
+    
+    /* Register relationship variable if present */
+    if (rel->variable) {
+        register_variable(ctx, rel->variable, edge_alias);
+    }
+    
+    CYPHER_DEBUG("Generated relationship match: %s connects %s to %s", 
+                 edge_alias, source_alias, target_alias);
     
     return 0;
 }
