@@ -1,113 +1,126 @@
-# GraphQLite OpenCypher Implementation
-# BISON + FLEX based parser
+# GraphQLite Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -g -fPIC
-LIBS = -lsqlite3
+CFLAGS = -Wall -Wextra -g -I./src/include -I/opt/local/include
+LDFLAGS = -L/opt/local/lib -lcunit
 
-# Debug build support
-ifdef DEBUG
-CFLAGS += -DDEBUG -O0
+# Coverage flags
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+
+# Detect OS and set coverage libs accordingly
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    COVERAGE_LIBS = -lgcov
+endif
+ifeq ($(UNAME_S),Darwin)
+    # macOS with clang doesn't need -lgcov
+    COVERAGE_LIBS =
 endif
 
-# Directories
+# Source directories
 SRC_DIR = src
-GRAMMAR_DIR = grammar
-BUILD_DIR = build
+BACKEND_DIR = $(SRC_DIR)/backend
+PARSER_DIR = $(BACKEND_DIR)/parser
 TEST_DIR = tests
 
-# BISON and FLEX
-BISON = bison
-FLEX = flex
-GRAMMAR_FILE = $(GRAMMAR_DIR)/cypher.y
-LEXER_FILE = $(GRAMMAR_DIR)/cypher.l
-PARSER_C = $(GRAMMAR_DIR)/cypher.tab.c
-PARSER_H = $(GRAMMAR_DIR)/cypher.tab.h
-LEXER_C = $(GRAMMAR_DIR)/lex.yy.c
+# Build directories
+BUILD_DIR = build
+BUILD_PARSER_DIR = $(BUILD_DIR)/parser
+BUILD_TEST_DIR = $(BUILD_DIR)/tests
+COVERAGE_DIR = $(BUILD_DIR)/coverage
 
-# Source files
-SOURCES = $(wildcard $(SRC_DIR)/*.c)
-OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
+# Parser objects
+PARSER_SRCS = \
+	$(PARSER_DIR)/cypher_keywords.c
 
-# Generated parser objects
-PARSER_OBJ = $(BUILD_DIR)/cypher.tab.o
-LEXER_OBJ = $(BUILD_DIR)/lex.yy.o
+PARSER_OBJS = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.o)
+PARSER_OBJS_COV = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.cov.o)
 
-# Test files
-TEST_RUNNER = $(TEST_DIR)/test_runner.c
-TEST_SOURCES = $(filter-out $(TEST_RUNNER),$(wildcard $(TEST_DIR)/test_*.c))
-TEST_TARGET = $(BUILD_DIR)/test_runner
+# Test sources
+TEST_SRCS = \
+	$(TEST_DIR)/test_runner.c \
+	$(TEST_DIR)/test_parser_keywords.c
 
-# Target library and SQLite extension
-TARGET = $(BUILD_DIR)/libgraphqlite.a
-EXTENSION = $(BUILD_DIR)/graphqlite.so
+TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
-.PHONY: all clean test test-unit test-sql parser extension
+# Test executable
+TEST_RUNNER = $(BUILD_DIR)/test_runner
 
-all: parser $(TARGET) $(EXTENSION)
+# Default target
+all: dirs $(PARSER_OBJS)
 
-# Generate parser files
-parser: $(PARSER_C) $(LEXER_C)
+# Help target
+help:
+	@echo "GraphQLite Makefile Commands:"
+	@echo "  make         - Build parser objects (default)"
+	@echo "  make all     - Same as 'make'"
+	@echo "  make test    - Build and run CUnit tests"
+	@echo "  make coverage - Run tests and generate gcov coverage report"
+	@echo "  make clean   - Remove all build artifacts"
+	@echo "  make help    - Show this help message"
+	@echo ""
+	@echo "Build Directories:"
+	@echo "  $(BUILD_DIR)/       - Main build directory"
+	@echo "  $(BUILD_PARSER_DIR)/ - Parser objects"
+	@echo "  $(BUILD_TEST_DIR)/   - Test objects"
+	@echo "  $(COVERAGE_DIR)/     - Coverage reports"
 
-$(PARSER_C) $(PARSER_H): $(GRAMMAR_FILE)
-	cd $(GRAMMAR_DIR) && $(BISON) -d cypher.y
+# Create build directories
+dirs:
+	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BUILD_PARSER_DIR)
+	@mkdir -p $(BUILD_TEST_DIR)
+	@mkdir -p $(COVERAGE_DIR)
 
-$(LEXER_C): $(LEXER_FILE) $(PARSER_H)
-	cd $(GRAMMAR_DIR) && $(FLEX) cypher.l
+# Parser objects (regular build)
+$(BUILD_PARSER_DIR)/%.o: $(PARSER_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# Compile source files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(GRAMMAR_DIR) -c $< -o $@
+# Parser objects (coverage build)
+$(BUILD_PARSER_DIR)/%.cov.o: $(PARSER_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
 
-# Compile generated parser
-$(PARSER_OBJ): $(PARSER_C) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $(PARSER_C) -o $@
+# Test objects
+$(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# Compile generated lexer
-$(LEXER_OBJ): $(LEXER_C) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $(LEXER_C) -o $@
+# Test runner executable
+$(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) $^ -o $@ $(LDFLAGS) $(COVERAGE_LIBS)
 
-# Build static library
-$(TARGET): $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
-	ar rcs $@ $^
+# Run tests
+test: $(TEST_RUNNER)
+	./$(TEST_RUNNER)
 
-# Build SQLite extension (shared library)
-# Note: SQLite extensions must not link against libsqlite3
-# Use dynamic symbol resolution instead
-$(EXTENSION): $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
-ifeq ($(shell uname -s),Darwin)
-	$(CC) -shared -fPIC -o $@ $^ -undefined dynamic_lookup
-else
-	$(CC) -shared -fPIC -o $@ $^
-endif
+# Generate coverage report
+coverage: test
+	@echo "Generating coverage report..."
+	@for obj in $(BUILD_PARSER_DIR)/*.cov.o; do \
+		gcov -o $(BUILD_PARSER_DIR) $$obj; \
+	done
+	@find . -name "*.gcov" -maxdepth 1 -exec mv {} $(COVERAGE_DIR)/ \;
+	@echo ""
+	@echo "========== CODE COVERAGE SUMMARY =========="
+	@for file in $(COVERAGE_DIR)/*.gcov; do \
+		if [ -f "$$file" ]; then \
+			filename=$$(basename $$file .gcov); \
+			coverage=$$(grep -E "^[[:space:]]*[0-9]+:" $$file | wc -l); \
+			total=$$(grep -E "^[[:space:]]*[0-9]+:|[[:space:]]*#####:" $$file | wc -l); \
+			if [ $$total -gt 0 ]; then \
+				percent=$$(echo "scale=2; $$coverage * 100 / $$total" | bc); \
+				printf "%-40s %6.2f%%\n" "$$filename:" "$$percent"; \
+			fi; \
+		fi; \
+	done
+	@echo "==========================================="
+	@echo ""
+	@echo "Detailed reports in: $(COVERAGE_DIR)/"
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
-
-# Test suite with parser and SQL tests
-test: $(TEST_TARGET) $(EXTENSION)
-	$(TEST_TARGET)
-	cd tests && ./run_sql_tests.sh
-
-# Run only unit tests
-test-unit: $(TEST_TARGET)
-	$(TEST_TARGET)
-
-# Run only SQL tests
-test-sql: $(EXTENSION)
-	cd tests && ./run_sql_tests.sh
-
-$(TEST_TARGET): $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) `pkg-config --cflags cunit` -I$(SRC_DIR) -I$(GRAMMAR_DIR) $(TEST_SOURCES) $(TEST_RUNNER) $(OBJECTS) $(PARSER_OBJ) $(LEXER_OBJ) -o $@ `pkg-config --libs cunit` $(LIBS)
-
+# Clean
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(PARSER_C) $(PARSER_H) $(LEXER_C)
-	@echo "Cleaned build directory and generated files"
+	find . -name "*.gcda" -delete
+	find . -name "*.gcno" -delete
+	find . -name "*.gcov" -delete
 
-info:
-	@echo "GraphQLite OpenCypher - BISON/FLEX Implementation"
-	@echo "Parser files: $(PARSER_C) $(PARSER_H) $(LEXER_C)"
-	@echo "Source files: $(SOURCES)"
-	@echo "Target: $(TARGET)"
-	@echo "Available targets: all, clean, test, parser, info"
+.PHONY: all help dirs test coverage clean
