@@ -4,6 +4,8 @@
 #include <CUnit/Basic.h>
 
 #include "test_parser_keywords.h"
+#include "test_scanner.h"
+#include "test_parser.h"
 
 int main(void)
 {
@@ -16,6 +18,18 @@ int main(void)
     /* Add test suites */
     if (init_parser_keywords_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add parser keywords suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_scanner_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add scanner suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_parser_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add parser suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

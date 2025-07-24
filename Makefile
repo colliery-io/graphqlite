@@ -29,17 +29,32 @@ BUILD_PARSER_DIR = $(BUILD_DIR)/parser
 BUILD_TEST_DIR = $(BUILD_DIR)/tests
 COVERAGE_DIR = $(BUILD_DIR)/coverage
 
-# Parser objects
+# Parser sources (C files)
 PARSER_SRCS = \
-	$(PARSER_DIR)/cypher_keywords.c
+	$(PARSER_DIR)/cypher_keywords.c \
+	$(PARSER_DIR)/cypher_scanner_api.c \
+	$(PARSER_DIR)/cypher_ast.c \
+	$(PARSER_DIR)/cypher_parser.c
 
-PARSER_OBJS = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.o)
-PARSER_OBJS_COV = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.cov.o)
+# Generated sources
+SCANNER_SRC = $(BUILD_PARSER_DIR)/cypher_scanner.c
+SCANNER_L = $(PARSER_DIR)/cypher_scanner.l
+GRAMMAR_SRC = $(BUILD_PARSER_DIR)/cypher_gram.tab.c
+GRAMMAR_HDR = $(BUILD_PARSER_DIR)/cypher_gram.tab.h
+GRAMMAR_Y = $(PARSER_DIR)/cypher_gram.y
+
+# All parser sources including generated
+ALL_PARSER_SRCS = $(PARSER_SRCS) $(SCANNER_SRC) $(GRAMMAR_SRC)
+
+PARSER_OBJS = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.o) $(BUILD_PARSER_DIR)/cypher_scanner.o $(BUILD_PARSER_DIR)/cypher_gram.tab.o
+PARSER_OBJS_COV = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.cov.o) $(BUILD_PARSER_DIR)/cypher_scanner.cov.o $(BUILD_PARSER_DIR)/cypher_gram.tab.cov.o
 
 # Test sources
 TEST_SRCS = \
 	$(TEST_DIR)/test_runner.c \
-	$(TEST_DIR)/test_parser_keywords.c
+	$(TEST_DIR)/test_parser_keywords.c \
+	$(TEST_DIR)/test_scanner.c \
+	$(TEST_DIR)/test_parser.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
@@ -72,13 +87,37 @@ dirs:
 	@mkdir -p $(BUILD_TEST_DIR)
 	@mkdir -p $(COVERAGE_DIR)
 
-# Parser objects (regular build)
-$(BUILD_PARSER_DIR)/%.o: $(PARSER_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) -c $< -o $@
+# Parser objects (regular build) - need build dir for generated headers
+$(BUILD_PARSER_DIR)/%.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
+	$(CC) $(CFLAGS) -I$(BUILD_PARSER_DIR) -c $< -o $@
 
-# Parser objects (coverage build)
-$(BUILD_PARSER_DIR)/%.cov.o: $(PARSER_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
+# Parser objects (coverage build) - need build dir for generated headers
+$(BUILD_PARSER_DIR)/%.cov.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -I$(BUILD_PARSER_DIR) -c $< -o $@
+
+# Generate scanner from Flex specification
+$(SCANNER_SRC): $(SCANNER_L) | dirs
+	flex -o $@ $<
+
+# Generate parser from Bison grammar
+$(GRAMMAR_SRC) $(GRAMMAR_HDR): $(GRAMMAR_Y) | dirs
+	bison -d -o $(GRAMMAR_SRC) $<
+
+# Scanner objects (regular build)
+$(BUILD_PARSER_DIR)/cypher_scanner.o: $(SCANNER_SRC) | dirs
+	$(CC) $(CFLAGS) -Wno-sign-compare -c $< -o $@
+
+# Scanner objects (coverage build)
+$(BUILD_PARSER_DIR)/cypher_scanner.cov.o: $(SCANNER_SRC) | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -Wno-sign-compare -c $< -o $@
+
+# Grammar objects (regular build)
+$(BUILD_PARSER_DIR)/cypher_gram.tab.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
+	$(CC) $(CFLAGS) -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
+
+# Grammar objects (coverage build)
+$(BUILD_PARSER_DIR)/cypher_gram.tab.cov.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 # Test objects
 $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c | dirs
