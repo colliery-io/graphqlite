@@ -6,6 +6,7 @@
 #include "test_parser_keywords.h"
 #include "test_scanner.h"
 #include "test_parser.h"
+#include "test_transform.h"
 
 int main(void)
 {
@@ -30,6 +31,12 @@ int main(void)
     
     if (init_parser_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add parser suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_transform_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add transform suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

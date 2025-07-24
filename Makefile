@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -g -I./src/include -I/opt/local/include
-LDFLAGS = -L/opt/local/lib -lcunit
+LDFLAGS = -L/opt/local/lib -lcunit -lsqlite3
 
 # Coverage flags
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
@@ -26,6 +26,7 @@ TEST_DIR = tests
 # Build directories
 BUILD_DIR = build
 BUILD_PARSER_DIR = $(BUILD_DIR)/parser
+BUILD_TRANSFORM_DIR = $(BUILD_DIR)/transform
 BUILD_TEST_DIR = $(BUILD_DIR)/tests
 COVERAGE_DIR = $(BUILD_DIR)/coverage
 
@@ -49,12 +50,24 @@ ALL_PARSER_SRCS = $(PARSER_SRCS) $(SCANNER_SRC) $(GRAMMAR_SRC)
 PARSER_OBJS = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.o) $(BUILD_PARSER_DIR)/cypher_scanner.o $(BUILD_PARSER_DIR)/cypher_gram.tab.o
 PARSER_OBJS_COV = $(PARSER_SRCS:$(PARSER_DIR)/%.c=$(BUILD_PARSER_DIR)/%.cov.o) $(BUILD_PARSER_DIR)/cypher_scanner.cov.o $(BUILD_PARSER_DIR)/cypher_gram.tab.cov.o
 
+# Transform sources
+TRANSFORM_DIR = $(SRC_DIR)/backend/transform
+TRANSFORM_SRCS = \
+	$(TRANSFORM_DIR)/cypher_transform.c \
+	$(TRANSFORM_DIR)/transform_match.c \
+	$(TRANSFORM_DIR)/transform_create.c \
+	$(TRANSFORM_DIR)/transform_return.c
+
+TRANSFORM_OBJS = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.o)
+TRANSFORM_OBJS_COV = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.cov.o)
+
 # Test sources
 TEST_SRCS = \
 	$(TEST_DIR)/test_runner.c \
 	$(TEST_DIR)/test_parser_keywords.c \
 	$(TEST_DIR)/test_scanner.c \
-	$(TEST_DIR)/test_parser.c
+	$(TEST_DIR)/test_parser.c \
+	$(TEST_DIR)/test_transform.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
@@ -84,6 +97,7 @@ help:
 dirs:
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(BUILD_PARSER_DIR)
+	@mkdir -p $(BUILD_TRANSFORM_DIR)
 	@mkdir -p $(BUILD_TEST_DIR)
 	@mkdir -p $(COVERAGE_DIR)
 
@@ -119,12 +133,20 @@ $(BUILD_PARSER_DIR)/cypher_gram.tab.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
 $(BUILD_PARSER_DIR)/cypher_gram.tab.cov.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
 
+# Transform objects
+$(BUILD_TRANSFORM_DIR)/%.o: $(TRANSFORM_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Transform objects (coverage build)
+$(BUILD_TRANSFORM_DIR)/%.cov.o: $(TRANSFORM_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
+
 # Test objects
 $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Test runner executable
-$(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) | dirs
+$(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) $^ -o $@ $(LDFLAGS) $(COVERAGE_LIBS)
 
 # Run tests
