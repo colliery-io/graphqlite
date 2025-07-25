@@ -88,20 +88,31 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
     /* Handle ORDER BY */
     if (ret->order_by && ret->order_by->count > 0) {
         append_sql(ctx, " ORDER BY ");
-        /* TODO: Implement ORDER BY transformation */
-        CYPHER_DEBUG("ORDER BY not yet implemented");
-    }
-    
-    /* Handle SKIP */
-    if (ret->skip) {
-        /* TODO: Implement SKIP transformation */
-        CYPHER_DEBUG("SKIP not yet implemented");
+        for (int i = 0; i < ret->order_by->count; i++) {
+            if (i > 0) {
+                append_sql(ctx, ", ");
+            }
+            ast_node *order_item = ret->order_by->items[i];
+            if (transform_expression(ctx, order_item) < 0) {
+                return -1;
+            }
+        }
     }
     
     /* Handle LIMIT */
     if (ret->limit) {
-        /* TODO: Implement LIMIT transformation */
-        CYPHER_DEBUG("LIMIT not yet implemented");
+        append_sql(ctx, " LIMIT ");
+        if (transform_expression(ctx, ret->limit) < 0) {
+            return -1;
+        }
+    }
+    
+    /* Handle SKIP (using SQLite OFFSET) */
+    if (ret->skip) {
+        append_sql(ctx, " OFFSET ");
+        if (transform_expression(ctx, ret->skip) < 0) {
+            return -1;
+        }
     }
     
     return 0;

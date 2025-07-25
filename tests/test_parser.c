@@ -553,6 +553,7 @@ static void test_create_properties_no_label(void)
     }
 }
 
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {

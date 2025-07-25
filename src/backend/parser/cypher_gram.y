@@ -89,6 +89,8 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 
 %type <string> label_opt variable_opt
 %type <boolean> optional_opt distinct_opt
+%type <list> order_by_opt order_by_list
+%type <node> skip_opt limit_opt order_by_item
 
 /* Operator precedence (lowest to highest) */
 %left OR
@@ -152,9 +154,9 @@ optional_opt:
 
 /* RETURN clause */
 return_clause:
-    RETURN distinct_opt return_item_list
+    RETURN distinct_opt return_item_list order_by_opt skip_opt limit_opt
         {
-            $$ = make_cypher_return($2, $3, NULL, NULL, NULL);
+            $$ = make_cypher_return($2, $3, $4, $5, $6);
         }
     ;
 
@@ -162,6 +164,39 @@ distinct_opt:
     /* empty */     { $$ = false; }
     | DISTINCT      { $$ = true; }
     ;
+
+order_by_opt:
+    /* empty */     { $$ = NULL; }
+    | ORDER BY order_by_list { $$ = $3; }
+    ;
+
+skip_opt:
+    /* empty */     { $$ = NULL; }
+    | SKIP expr     { $$ = $2; }
+    ;
+
+limit_opt:
+    /* empty */     { $$ = NULL; }
+    | LIMIT expr    { $$ = $2; }
+    ;
+
+order_by_list:
+    order_by_item
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, $1);
+        }
+    | order_by_list ',' order_by_item
+        {
+            ast_list_append($1, $3);
+            $$ = $1;
+        }
+    ;
+
+order_by_item:
+    expr            { $$ = $1; /* TODO: Add ASC/DESC support */ }
+    ;
+
 
 return_item_list:
     return_item
@@ -319,6 +354,8 @@ expr:
     | expr AND expr     { /* TODO: implement logical operations */ $$ = $1; }
     | expr OR expr      { /* TODO: implement logical operations */ $$ = $1; }
     | NOT expr          { /* TODO: implement NOT */ $$ = $2; }
+    | expr IS NULL      { /* TODO: implement IS NULL */ $$ = $1; }
+    | expr IS NOT NULL  { /* TODO: implement IS NOT NULL */ $$ = $1; }
     | '(' expr ')'      { $$ = $2; }
     ;
 
