@@ -284,26 +284,53 @@ rel_pattern:
             $$ = make_rel_pattern($3, $5, NULL, false, true);
             free($5);
         }
+    | '-' '[' variable_opt ':' IDENTIFIER properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern($3, $5, (ast_node*)$6, false, true);
+            free($5);
+        }
     | '<' '-' '[' variable_opt ':' IDENTIFIER ']' '-'
         {
             $$ = make_rel_pattern($4, $6, NULL, true, false);
+            free($6);
+        }
+    | '<' '-' '[' variable_opt ':' IDENTIFIER properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern($4, $6, (ast_node*)$7, true, false);
             free($6);
         }
     | '-' '[' variable_opt ']' '-' '>'
         {
             $$ = make_rel_pattern($3, NULL, NULL, false, true);
         }
+    | '-' '[' variable_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern($3, NULL, (ast_node*)$4, false, true);
+        }
     | '<' '-' '[' variable_opt ']' '-'
         {
             $$ = make_rel_pattern($4, NULL, NULL, true, false);
+        }
+    | '<' '-' '[' variable_opt properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern($4, NULL, (ast_node*)$5, true, false);
         }
     | '-' '[' variable_opt ']' '-'
         {
             $$ = make_rel_pattern($3, NULL, NULL, false, false);
         }
+    | '-' '[' variable_opt properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern($3, NULL, (ast_node*)$4, false, false);
+        }
     | '-' '[' variable_opt ':' IDENTIFIER ']' '-'
         {
             $$ = make_rel_pattern($3, $5, NULL, false, false);
+            free($5);
+        }
+    | '-' '[' variable_opt ':' IDENTIFIER properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern($3, $5, (ast_node*)$6, false, false);
             free($5);
         }
     ;

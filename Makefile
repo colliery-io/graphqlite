@@ -64,7 +64,8 @@ TRANSFORM_SRCS = \
 EXECUTOR_DIR = $(SRC_DIR)/backend/executor
 EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/cypher_schema.c \
-	$(EXECUTOR_DIR)/cypher_executor.c
+	$(EXECUTOR_DIR)/cypher_executor.c \
+	$(EXECUTOR_DIR)/agtype.c
 
 TRANSFORM_OBJS = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.o)
 TRANSFORM_OBJS_COV = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.cov.o)

@@ -244,7 +244,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             
             /* Register variable if present */
             if (node->variable) {
-                register_variable(ctx, node->variable, alias);
+                register_node_variable(ctx, node->variable, alias);
             }
             
             /* Generate SQL for this node */
@@ -341,7 +341,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     
     /* Register relationship variable if present */
     if (rel->variable) {
-        register_variable(ctx, rel->variable, edge_alias);
+        register_edge_variable(ctx, rel->variable, edge_alias);
     }
     
     CYPHER_DEBUG("Generated relationship match: %s connects %s to %s", 

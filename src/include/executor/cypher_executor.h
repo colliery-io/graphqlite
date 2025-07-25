@@ -7,6 +7,7 @@
 #include "executor/cypher_schema.h"
 #include "parser/cypher_parser.h"
 #include "transform/cypher_transform.h"
+#include "executor/agtype.h"
 
 /* Forward declarations */
 typedef struct cypher_executor cypher_executor;
@@ -20,7 +21,11 @@ typedef struct cypher_result {
     int row_count;
     int column_count;
     char **column_names;
-    char ***data; /* 2D array: data[row][column] */
+    char ***data; /* 2D array: data[row][column] - legacy format */
+    
+    /* AGType-compatible result data */
+    agtype_value ***agtype_data; /* 2D array: agtype_data[row][column] */
+    bool use_agtype; /* Whether to use agtype format */
     
     /* Statistics for modification queries */
     int nodes_created;

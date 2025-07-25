@@ -167,6 +167,7 @@ int register_variable(cypher_transform_context *ctx, const char *name, const cha
     ctx->variables[ctx->variable_count].table_alias = strdup(alias);
     ctx->variables[ctx->variable_count].is_bound = false;
     ctx->variables[ctx->variable_count].node_id = -1;
+    ctx->variables[ctx->variable_count].type = VAR_TYPE_NODE; /* Default to node */
     ctx->variable_count++;
     
     return 0;
@@ -187,6 +188,39 @@ bool is_variable_bound(cypher_transform_context *ctx, const char *name)
     for (int i = 0; i < ctx->variable_count; i++) {
         if (strcmp(ctx->variables[i].name, name) == 0) {
             return ctx->variables[i].is_bound;
+        }
+    }
+    return false;
+}
+
+/* Register a node variable */
+int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias)
+{
+    int result = register_variable(ctx, name, alias);
+    if (result == 0) {
+        /* Variable was just added, it's the last one */
+        ctx->variables[ctx->variable_count - 1].type = VAR_TYPE_NODE;
+    }
+    return result;
+}
+
+/* Register an edge variable */
+int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias)
+{
+    int result = register_variable(ctx, name, alias);
+    if (result == 0) {
+        /* Variable was just added, it's the last one */
+        ctx->variables[ctx->variable_count - 1].type = VAR_TYPE_EDGE;
+    }
+    return result;
+}
+
+/* Check if a variable is an edge variable */
+bool is_edge_variable(cypher_transform_context *ctx, const char *name)
+{
+    for (int i = 0; i < ctx->variable_count; i++) {
+        if (strcmp(ctx->variables[i].name, name) == 0) {
+            return ctx->variables[i].type == VAR_TYPE_EDGE;
         }
     }
     return false;

@@ -18,6 +18,10 @@ struct cypher_transform_context {
         char *table_alias;          /* SQL table alias */
         int node_id;                /* For already-bound nodes */
         bool is_bound;              /* Whether variable has a value */
+        enum {
+            VAR_TYPE_NODE,          /* Node variable */
+            VAR_TYPE_EDGE           /* Edge/relationship variable */
+        } type;                     /* Variable type */
     } *variables;
     int variable_count;
     int variable_capacity;
@@ -79,8 +83,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
 
 /* Variable management */
 int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);
+int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias);
+int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 const char* lookup_variable_alias(cypher_transform_context *ctx, const char *name);
 bool is_variable_bound(cypher_transform_context *ctx, const char *name);
+bool is_edge_variable(cypher_transform_context *ctx, const char *name);
 
 /* SQL generation helpers */
 void append_sql(cypher_transform_context *ctx, const char *format, ...);

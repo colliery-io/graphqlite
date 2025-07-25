@@ -125,12 +125,12 @@ static int transform_return_item(cypher_transform_context *ctx, cypher_return_it
         append_sql(ctx, ", ");
     }
     
-    /* Special handling for node identifiers with aliases */
+    /* Special handling for identifiers with aliases */
     if (item->alias && item->expr->type == AST_NODE_IDENTIFIER) {
         cypher_identifier *id = (cypher_identifier*)item->expr;
         const char *table_alias = lookup_variable_alias(ctx, id->name);
         if (table_alias) {
-            /* For node variables with alias, select the ID and alias it */
+            /* For variables with alias, select the ID and alias it */
             append_sql(ctx, "%s.id AS ", table_alias);
             append_identifier(ctx, item->alias);
             return 0;
@@ -166,8 +166,13 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 cypher_identifier *id = (cypher_identifier*)expr;
                 const char *alias = lookup_variable_alias(ctx, id->name);
                 if (alias) {
-                    /* This is a node variable - return all columns for now */
-                    append_sql(ctx, "%s.*", alias);
+                    if (is_edge_variable(ctx, id->name)) {
+                        /* This is an edge variable - return the edge ID */
+                        append_sql(ctx, "%s.id", alias);
+                    } else {
+                        /* This is a node variable - return the node ID for now */
+                        append_sql(ctx, "%s.id", alias);
+                    }
                 } else {
                     /* Unknown identifier */
                     ctx->has_error = true;

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
@@ -60,7 +61,10 @@ void cypher_executor_free(cypher_executor *executor)
 
 /* Forward declarations */
 static int execute_match_return_query(cypher_executor *executor, cypher_match *match, cypher_return *return_clause, cypher_result *result);
-static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result);
+static int execute_match_create_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_result *result);
+static int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result);
+static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result, cypher_transform_context *ctx);
+static agtype_value* create_property_agtype_value(const char* value);
 
 /* Create empty result */
 static cypher_result* create_empty_result(void)
@@ -76,6 +80,8 @@ static cypher_result* create_empty_result(void)
     result->column_count = 0;
     result->column_names = NULL;
     result->data = NULL;
+    result->agtype_data = NULL;
+    result->use_agtype = false;
     result->nodes_created = 0;
     result->nodes_deleted = 0;
     result->relationships_created = 0;
@@ -533,7 +539,7 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
     }
     
     /* Build result from SQL execution */
-    if (build_query_results(executor, stmt, return_clause, result) < 0) {
+    if (build_query_results(executor, stmt, return_clause, result, ctx) < 0) {
         sqlite3_finalize(stmt);
         cypher_transform_free_context(ctx);
         return -1;
@@ -545,10 +551,8 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
 }
 
 /* Build query results from executed SQL statement */
-static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result)
+static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result, cypher_transform_context *ctx)
 {
-    UNUSED_PARAMETER(executor);
-    
     if (!stmt || !return_clause || !result) {
         return -1;
     }
@@ -563,11 +567,26 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
         return -1;
     }
     
+    /* Determine if we're returning vertices/edges/properties by analyzing return items */
+    bool has_agtype_values = false;
+    for (int i = 0; i < column_count; i++) {
+        cypher_return_item *item = (cypher_return_item*)return_clause->items->items[i];
+        if (item->expr && (item->expr->type == AST_NODE_IDENTIFIER || item->expr->type == AST_NODE_PROPERTY)) {
+            /* This looks like a node/relationship variable (e.g., RETURN n, r) or property access (e.g., RETURN n.name) */
+            has_agtype_values = true;
+        }
+    }
+    
     /* Set column names from return items */
     for (int i = 0; i < column_count; i++) {
         cypher_return_item *item = (cypher_return_item*)return_clause->items->items[i];
         if (item->alias) {
             result->column_names[i] = strdup(item->alias);
+        } else if (item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
+            /* Use the identifier name as column name */
+            char default_name[32];
+            snprintf(default_name, sizeof(default_name), "column_%d", i);
+            result->column_names[i] = strdup(default_name);
         } else {
             /* Generate default column name */
             char default_name[32];
@@ -594,11 +613,21 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
     /* Reset statement for actual data reading */
     sqlite3_reset(stmt);
     
-    /* Allocate data array */
+    /* Allocate data arrays */
     result->data = malloc(row_count * sizeof(char**));
     if (!result->data) {
         set_result_error(result, "Memory allocation failed for result data");
         return -1;
+    }
+    
+    /* Allocate agtype data if we have graph entities or property access */
+    if (has_agtype_values) {
+        result->agtype_data = malloc(row_count * sizeof(agtype_value**));
+        if (!result->agtype_data) {
+            set_result_error(result, "Memory allocation failed for agtype data");
+            return -1;
+        }
+        result->use_agtype = true;
     }
     
     /* Read actual data */
@@ -610,12 +639,94 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
             return -1;
         }
         
+        if (has_agtype_values) {
+            result->agtype_data[current_row] = malloc(column_count * sizeof(agtype_value*));
+            if (!result->agtype_data[current_row]) {
+                set_result_error(result, "Memory allocation failed for agtype row data");
+                return -1;
+            }
+        }
+        
         for (int col = 0; col < column_count; col++) {
             const char *value = (const char*)sqlite3_column_text(stmt, col);
             if (value) {
                 result->data[current_row][col] = strdup(value);
+                
+                /* Create agtype value for graph entities */
+                if (has_agtype_values) {
+                    cypher_return_item *item = (cypher_return_item*)return_clause->items->items[col];
+                    if (item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
+                        cypher_identifier *ident = (cypher_identifier*)item->expr;
+                        
+                        /* Check if this is an edge variable */
+                        if (ctx && is_edge_variable(ctx, ident->name)) {
+                            /* Parse the edge ID from the SQL result */
+                            int64_t edge_id = atoll(value);
+                            
+                            /* Query the schema to get edge details */
+                            char *type = NULL;
+                            int64_t source_id = 0, target_id = 0;
+                            
+                            if (executor && executor->schema_mgr) {
+                                /* Get edge details from edges table */
+                                sqlite3_stmt *edge_stmt;
+                                const char *edge_sql = "SELECT source_id, target_id, type FROM edges WHERE id = ?";
+                                if (sqlite3_prepare_v2(executor->db, edge_sql, -1, &edge_stmt, NULL) == SQLITE_OK) {
+                                    sqlite3_bind_int64(edge_stmt, 1, edge_id);
+                                    if (sqlite3_step(edge_stmt) == SQLITE_ROW) {
+                                        source_id = sqlite3_column_int64(edge_stmt, 0);
+                                        target_id = sqlite3_column_int64(edge_stmt, 1);
+                                        const char *type_text = (const char*)sqlite3_column_text(edge_stmt, 2);
+                                        if (type_text) {
+                                            type = strdup(type_text);
+                                        }
+                                    }
+                                    sqlite3_finalize(edge_stmt);
+                                }
+                            }
+                            
+                            /* Create edge agtype value with properties */
+                            result->agtype_data[current_row][col] = agtype_value_create_edge_with_properties(executor->db, edge_id, type, source_id, target_id);
+                            free(type);
+                        } else {
+                            /* This is a node variable */
+                            int64_t node_id = atoll(value);
+                            
+                            /* Query the schema to get node details */
+                            char *label = NULL;
+                            if (executor && executor->schema_mgr) {
+                                /* Get node label from node_labels table */
+                                sqlite3_stmt *label_stmt;
+                                const char *label_sql = "SELECT label FROM node_labels WHERE node_id = ? LIMIT 1";
+                                if (sqlite3_prepare_v2(executor->db, label_sql, -1, &label_stmt, NULL) == SQLITE_OK) {
+                                    sqlite3_bind_int64(label_stmt, 1, node_id);
+                                    if (sqlite3_step(label_stmt) == SQLITE_ROW) {
+                                        const char *label_text = (const char*)sqlite3_column_text(label_stmt, 0);
+                                        if (label_text) {
+                                            label = strdup(label_text);
+                                        }
+                                    }
+                                    sqlite3_finalize(label_stmt);
+                                }
+                            }
+                            
+                            /* Create vertex agtype value with properties */
+                            result->agtype_data[current_row][col] = agtype_value_create_vertex_with_properties(executor->db, node_id, label);
+                            free(label);
+                        }
+                    } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
+                        /* Property access - try to detect the original data type */
+                        result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                    } else {
+                        /* For other non-entity columns, create string agtype values */
+                        result->agtype_data[current_row][col] = agtype_value_create_string(value);
+                    }
+                }
             } else {
                 result->data[current_row][col] = strdup("NULL");
+                if (has_agtype_values) {
+                    result->agtype_data[current_row][col] = agtype_value_create_null();
+                }
             }
         }
         current_row++;
@@ -624,8 +735,175 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
     result->row_count = row_count;
     result->success = true;
     
-    CYPHER_DEBUG("Built result with %d rows, %d columns", row_count, column_count);
+    CYPHER_DEBUG("Built result with %d rows, %d columns (agtype: %s)", 
+                row_count, column_count, has_agtype_values ? "yes" : "no");
     return 0;
+}
+
+/* Create agtype value for property access by detecting data type from string value */
+static agtype_value* create_property_agtype_value(const char* value)
+{
+    if (!value) {
+        return agtype_value_create_null();
+    }
+    
+    /* Try to detect the data type from the string value */
+    
+    /* Check for boolean values */
+    if (strcmp(value, "true") == 0) {
+        return agtype_value_create_bool(true);
+    }
+    if (strcmp(value, "false") == 0) {
+        return agtype_value_create_bool(false);
+    }
+    
+    /* Check for integer values */
+    char *endptr;
+    errno = 0;
+    long long_val = strtoll(value, &endptr, 10);
+    if (errno == 0 && *endptr == '\0' && endptr != value) {
+        /* Successfully parsed as integer */
+        return agtype_value_create_integer((int64_t)long_val);
+    }
+    
+    /* Check for float values */
+    errno = 0;
+    double double_val = strtod(value, &endptr);
+    if (errno == 0 && *endptr == '\0' && endptr != value) {
+        /* Successfully parsed as float */
+        return agtype_value_create_float(double_val);
+    }
+    
+    /* Default to string */
+    return agtype_value_create_string(value);
+}
+
+/* Execute MATCH+CREATE query combination */
+static int execute_match_create_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_result *result)
+{
+    if (!executor || !match || !create || !result) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Executing MATCH+CREATE query");
+    
+    /* First, execute the MATCH to bind variables to existing nodes */
+    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    if (!ctx) {
+        set_result_error(result, "Failed to create transform context");
+        return -1;
+    }
+    
+    /* Transform MATCH clause to generate SQL */
+    if (transform_match_clause(ctx, match) < 0) {
+        set_result_error(result, "Failed to transform MATCH clause");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    /* Add a simple SELECT to get the matched node IDs */
+    char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
+    if (select_pos) {
+        /* Replace SELECT * with specific node ID selection */
+        char *after_star = select_pos + strlen("SELECT *");
+        char *temp = strdup(after_star);
+        
+        ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
+        ctx->sql_buffer[ctx->sql_size] = '\0';
+        
+        /* Select all node variables found in the MATCH */
+        bool first = true;
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+                if (!first) append_sql(ctx, ", ");
+                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                first = false;
+            }
+        }
+        
+        append_sql(ctx, " %s", temp);
+        free(temp);
+    }
+    
+    CYPHER_DEBUG("Generated MATCH SQL: %s", ctx->sql_buffer);
+    
+    /* Execute the MATCH query to get existing node IDs */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        char error[512];
+        snprintf(error, sizeof(error), "MATCH SQL prepare failed: %s", sqlite3_errmsg(executor->db));
+        set_result_error(result, error);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    /* Create variable map to store matched node IDs */
+    variable_map *var_map = create_variable_map();
+    if (!var_map) {
+        set_result_error(result, "Failed to create variable map");
+        sqlite3_finalize(stmt);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    /* Read matched node IDs */
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int col = 0;
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+                int64_t node_id = sqlite3_column_int64(stmt, col);
+                set_variable_node_id(var_map, ctx->variables[i].name, (int)node_id);
+                CYPHER_DEBUG("Bound variable '%s' to existing node %lld", ctx->variables[i].name, (long long)node_id);
+                col++;
+            }
+        }
+        break; /* For now, just take the first match */
+    }
+    
+    sqlite3_finalize(stmt);
+    cypher_transform_free_context(ctx);
+    
+    /* Now execute the CREATE clause with the bound variables */
+    if (!create->pattern) {
+        set_result_error(result, "No pattern in CREATE clause");
+        free_variable_map(var_map);
+        return -1;
+    }
+    
+    /* Process each path pattern in the CREATE clause */
+    for (int i = 0; i < create->pattern->count; i++) {
+        ast_node *pattern = create->pattern->items[i];
+        
+        if (pattern->type == AST_NODE_PATH) {
+            if (execute_path_pattern_with_variables(executor, (cypher_path*)pattern, result, var_map) < 0) {
+                free_variable_map(var_map);
+                return -1;
+            }
+        }
+    }
+    
+    free_variable_map(var_map);
+    return 0;
+}
+
+/* Execute MATCH+CREATE+RETURN query combination */
+static int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result)
+{
+    if (!executor || !match || !create || !return_clause || !result) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Executing MATCH+CREATE+RETURN query");
+    
+    /* First execute MATCH+CREATE */
+    if (execute_match_create_query(executor, match, create, result) < 0) {
+        return -1;
+    }
+    
+    /* Then execute the RETURN clause as a separate MATCH query */
+    /* This is a simplified approach - in a full implementation, we'd track created objects */
+    return execute_match_return_query(executor, match, return_clause, result);
 }
 
 /* Execute AST node */
@@ -689,7 +967,19 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     }
                     
                     /* Execute based on query pattern */
-                    if (match_clause && return_clause) {
+                    if (match_clause && create_clause && return_clause) {
+                        /* MATCH ... CREATE ... RETURN pattern */
+                        CYPHER_DEBUG("Executing MATCH+CREATE+RETURN query");
+                        if (execute_match_create_return_query(executor, match_clause, create_clause, return_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else if (match_clause && create_clause) {
+                        /* MATCH ... CREATE pattern */
+                        CYPHER_DEBUG("Executing MATCH+CREATE query");
+                        if (execute_match_create_query(executor, match_clause, create_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else if (match_clause && return_clause) {
                         /* MATCH ... RETURN pattern */
                         CYPHER_DEBUG("Executing MATCH+RETURN query");
                         if (execute_match_return_query(executor, match_clause, return_clause, result) < 0) {
@@ -820,6 +1110,18 @@ void cypher_result_free(cypher_result *result)
             }
         }
         free(result->data);
+    }
+    
+    if (result->agtype_data) {
+        for (int row = 0; row < result->row_count; row++) {
+            if (result->agtype_data[row]) {
+                for (int col = 0; col < result->column_count; col++) {
+                    agtype_value_free(result->agtype_data[row][col]);
+                }
+                free(result->agtype_data[row]);
+            }
+        }
+        free(result->agtype_data);
     }
     
     free(result);

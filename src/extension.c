@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "executor/cypher_schema.h"
 #include "executor/cypher_executor.h"
+#include "executor/agtype.h"
 #include "parser/cypher_parser.h"
 
 SQLITE_EXTENSION_INIT1
@@ -58,14 +59,89 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
     
     /* Format result based on success/failure */
     if (result->success) {
-        if (result->row_count > 0 && result->data) {
-            /* Return actual query data as JSON */
-            /* Calculate buffer size needed */
-            int buffer_size = 1024; /* Start with reasonable size */
+        if (result->row_count > 0 && result->use_agtype && result->agtype_data) {
+            /* Use AGE-compatible format */
+            if (result->row_count == 1 && result->column_count == 1) {
+                /* Single result - return just the value */
+                char *agtype_str = agtype_value_to_string(result->agtype_data[0][0]);
+                sqlite3_result_text(context, agtype_str, -1, SQLITE_TRANSIENT);
+                free(agtype_str);
+            } else {
+                /* Multiple results - return as JSON array */
+                int buffer_size = 1024;
+                for (int row = 0; row < result->row_count; row++) {
+                    for (int col = 0; col < result->column_count; col++) {
+                        if (result->agtype_data[row][col]) {
+                            char *temp_str = agtype_value_to_string(result->agtype_data[row][col]);
+                            if (temp_str) {
+                                buffer_size += strlen(temp_str) + 20;
+                                free(temp_str);
+                            }
+                        }
+                    }
+                }
+                
+                char *json_result = malloc(buffer_size);
+                if (!json_result) {
+                    sqlite3_result_error(context, "Memory allocation failed for agtype result formatting", -1);
+                    cypher_result_free(result);
+                    cypher_executor_free(executor);
+                    return;
+                }
+                
+                strcpy(json_result, "[");
+                
+                for (int row = 0; row < result->row_count; row++) {
+                    if (row > 0) strcat(json_result, ",");
+                    
+                    if (result->column_count == 1) {
+                        /* Single column - just append the agtype value */
+                        char *agtype_str = agtype_value_to_string(result->agtype_data[row][0]);
+                        if (agtype_str) {
+                            strcat(json_result, agtype_str);
+                            free(agtype_str);
+                        } else {
+                            strcat(json_result, "null");
+                        }
+                    } else {
+                        /* Multiple columns - create object */
+                        strcat(json_result, "{");
+                        for (int col = 0; col < result->column_count; col++) {
+                            if (col > 0) strcat(json_result, ",");
+                            
+                            strcat(json_result, "\"");
+                            if (result->column_names && result->column_names[col]) {
+                                strcat(json_result, result->column_names[col]);
+                            } else {
+                                char col_name[32];
+                                snprintf(col_name, sizeof(col_name), "column_%d", col);
+                                strcat(json_result, col_name);
+                            }
+                            strcat(json_result, "\":");
+                            
+                            char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
+                            if (agtype_str) {
+                                strcat(json_result, agtype_str);
+                                free(agtype_str);
+                            } else {
+                                strcat(json_result, "null");
+                            }
+                        }
+                        strcat(json_result, "}");
+                    }
+                }
+                strcat(json_result, "]");
+                
+                sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
+                free(json_result);
+            }
+        } else if (result->row_count > 0 && result->data) {
+            /* Fallback to legacy JSON format */
+            int buffer_size = 1024;
             for (int row = 0; row < result->row_count; row++) {
                 for (int col = 0; col < result->column_count; col++) {
                     if (result->data[row][col]) {
-                        buffer_size += strlen(result->data[row][col]) + 20; /* +20 for JSON formatting */
+                        buffer_size += strlen(result->data[row][col]) + 20;
                     }
                 }
             }
@@ -87,18 +163,16 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                 for (int col = 0; col < result->column_count; col++) {
                     if (col > 0) strcat(json_result, ",");
                     
-                    /* Add column name */
                     strcat(json_result, "\"");
                     if (result->column_names && result->column_names[col]) {
                         strcat(json_result, result->column_names[col]);
                     } else {
                         char col_name[32];
-                        snprintf(col_name, sizeof(col_name), "col_%d", col);
+                        snprintf(col_name, sizeof(col_name), "column_%d", col);
                         strcat(json_result, col_name);
                     }
                     strcat(json_result, "\":\"");
                     
-                    /* Add value (escaped) */
                     if (result->data[row][col]) {
                         strcat(json_result, result->data[row][col]);
                     } else {
