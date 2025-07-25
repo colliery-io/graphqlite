@@ -403,6 +403,54 @@ static int execute_path_pattern_with_variables(cypher_executor *executor, cypher
                 return -1;
             }
             
+            /* Process relationship properties if present */
+            if (rel_pattern->properties && rel_pattern->properties->type == AST_NODE_MAP) {
+                cypher_map *map = (cypher_map*)rel_pattern->properties;
+                if (map->pairs) {
+                    for (int j = 0; j < map->pairs->count; j++) {
+                        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+                        if (pair->key && pair->value) {
+                            /* Determine property type and value */
+                            property_type prop_type = PROP_TYPE_TEXT;
+                            const void *prop_value = NULL;
+                            
+                            if (pair->value->type == AST_NODE_LITERAL) {
+                                cypher_literal *lit = (cypher_literal*)pair->value;
+                                switch (lit->literal_type) {
+                                    case LITERAL_STRING:
+                                        prop_type = PROP_TYPE_TEXT;
+                                        prop_value = lit->value.string;
+                                        break;
+                                    case LITERAL_INTEGER:
+                                        prop_type = PROP_TYPE_INTEGER;
+                                        prop_value = &lit->value.integer;
+                                        break;
+                                    case LITERAL_DECIMAL:
+                                        prop_type = PROP_TYPE_REAL;
+                                        prop_value = &lit->value.decimal;
+                                        break;
+                                    case LITERAL_BOOLEAN:
+                                        prop_type = PROP_TYPE_BOOLEAN;
+                                        prop_value = &lit->value.boolean;
+                                        break;
+                                    default:
+                                        continue; /* Skip unsupported types */
+                                }
+                                
+                                /* Set the property on the edge */
+                                if (cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value) < 0) {
+                                    set_result_error(result, "Failed to set edge property");
+                                    return -1;
+                                }
+                                
+                                result->properties_set++;
+                                CYPHER_DEBUG("Added edge property: %s", pair->key);
+                            }
+                        }
+                    }
+                }
+            }
+            
             result->relationships_created++;
             previous_node_id = target_node_id;
             

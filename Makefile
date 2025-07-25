@@ -227,8 +227,8 @@ $(BUILD_EXECUTOR_DIR)/%.pic.o: $(EXECUTOR_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # Test objects
-$(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs
+	$(CC) $(CFLAGS) -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 # Test runner executable
 $(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) $(EXECUTOR_OBJS_COV) | dirs
@@ -258,6 +258,12 @@ coverage: test
 	@echo "Generating coverage report..."
 	@for obj in $(BUILD_PARSER_DIR)/*.cov.o; do \
 		gcov -o $(BUILD_PARSER_DIR) $$obj; \
+	done
+	@for obj in $(BUILD_TRANSFORM_DIR)/*.cov.o; do \
+		gcov -o $(BUILD_TRANSFORM_DIR) $$obj; \
+	done
+	@for obj in $(BUILD_EXECUTOR_DIR)/*.cov.o; do \
+		gcov -o $(BUILD_EXECUTOR_DIR) $$obj; \
 	done
 	@find . -name "*.gcov" -maxdepth 1 -exec mv {} $(COVERAGE_DIR)/ \;
 	@echo ""

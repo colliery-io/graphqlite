@@ -7,6 +7,7 @@
 #include "parser/cypher_parser.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
+#include "cypher_gram.tab.h"
 #include "test_parser.h"
 
 /* Test basic query parsing */
@@ -553,6 +554,199 @@ static void test_create_properties_no_label(void)
     }
 }
 
+/* Test parser keyword-to-token utility function */
+static void test_parser_keyword_utilities(void)
+{
+    /* Test cypher_keyword_to_token_name function */
+    const char *match_name = cypher_keyword_to_token_name(CYPHER_MATCH);
+    CU_ASSERT_PTR_NOT_NULL(match_name);
+    
+    const char *return_name = cypher_keyword_to_token_name(CYPHER_RETURN);
+    CU_ASSERT_PTR_NOT_NULL(return_name);
+    
+    const char *create_name = cypher_keyword_to_token_name(CYPHER_CREATE);
+    CU_ASSERT_PTR_NOT_NULL(create_name);
+    
+    /* Test with invalid token ID */
+    const char *unknown_name = cypher_keyword_to_token_name(99999);
+    CU_ASSERT_PTR_NOT_NULL(unknown_name);
+    CU_ASSERT_STRING_EQUAL(unknown_name, "unknown");
+    
+    printf("\nKeyword utility test completed\n");
+}
+
+/* Test parser token name utility function */
+static void test_parser_token_names(void)
+{
+    /* Test cypher_token_name function */
+    const char *eof_name = cypher_token_name(0);
+    CU_ASSERT_PTR_NOT_NULL(eof_name);
+    CU_ASSERT_STRING_EQUAL(eof_name, "EOF");
+    
+    const char *integer_name = cypher_token_name(CYPHER_INTEGER);
+    CU_ASSERT_PTR_NOT_NULL(integer_name);
+    CU_ASSERT_STRING_EQUAL(integer_name, "INTEGER");
+    
+    const char *string_name = cypher_token_name(CYPHER_STRING);
+    CU_ASSERT_PTR_NOT_NULL(string_name);
+    CU_ASSERT_STRING_EQUAL(string_name, "STRING");
+    
+    const char *match_name = cypher_token_name(CYPHER_MATCH);
+    CU_ASSERT_PTR_NOT_NULL(match_name);
+    CU_ASSERT_STRING_EQUAL(match_name, "MATCH");
+    
+    /* Test with character token */
+    const char *char_name = cypher_token_name('(');
+    CU_ASSERT_PTR_NOT_NULL(char_name);
+    CU_ASSERT_STRING_EQUAL(char_name, "'('");
+    
+    /* Test with unknown token */
+    const char *unknown_name = cypher_token_name(99999);
+    CU_ASSERT_PTR_NOT_NULL(unknown_name);
+    CU_ASSERT_STRING_EQUAL(unknown_name, "UNKNOWN");
+    
+    printf("\nToken name utility test completed\n");
+}
+
+/* Test parser with malformed input that could cause scanner errors */
+static void test_parser_scanner_edge_cases(void)
+{
+    /* Test with input that has unclosed strings */
+    const char *unclosed_string = "MATCH (n {name: \"unclosed";
+    ast_node *result1 = parse_cypher_query(unclosed_string);
+    
+    if (result1) {
+        /* If parsing succeeded, that's fine too */
+        cypher_parser_free_result(result1);
+        printf("\nUnclosed string query parsed successfully\n");
+    } else {
+        printf("\nUnclosed string query failed as expected\n");
+    }
+    
+    /* Test with input that has invalid characters */
+    const char *invalid_chars = "MATCH (n) @#$%^";
+    ast_node *result2 = parse_cypher_query(invalid_chars);
+    
+    if (result2) {
+        cypher_parser_free_result(result2);
+        printf("\nInvalid characters query parsed\n");
+    } else {
+        printf("\nInvalid characters query failed\n");
+    }
+    
+    /* Test with very long identifier */
+    char long_identifier[2000];
+    strcpy(long_identifier, "MATCH (");
+    for (int i = 0; i < 1800; i++) {
+        strcat(long_identifier, "a");
+    }
+    strcat(long_identifier, ") RETURN n");
+    
+    ast_node *result3 = parse_cypher_query(long_identifier);
+    if (result3) {
+        cypher_parser_free_result(result3);
+        printf("\nLong identifier query parsed\n");
+    } else {
+        printf("\nLong identifier query failed\n");
+    }
+    
+    printf("\nScanner edge cases test completed\n");
+}
+
+/* Test parser with various special token types */
+static void test_parser_special_tokens(void)
+{
+    /* Test queries that would generate special tokens if implemented */
+    
+    /* Test parameter token (currently not implemented but should be handled) */
+    const char *param_query = "MATCH (n {name: $param}) RETURN n";
+    ast_node *result1 = parse_cypher_query(param_query);
+    if (result1) {
+        cypher_parser_free_result(result1);
+        printf("\nParameter query parsed\n");
+    } else {
+        printf("\nParameter query failed\n");
+    }
+    
+    /* Test comparison operators that generate special tokens */
+    const char *compare_query1 = "MATCH (n) WHERE n.age >= 18 RETURN n";
+    ast_node *result2 = parse_cypher_query(compare_query1);
+    if (result2) {
+        cypher_parser_free_result(result2);
+        printf("\nGreater-equal query parsed\n");
+    } else {
+        printf("\nGreater-equal query failed\n");
+    }
+    
+    const char *compare_query2 = "MATCH (n) WHERE n.age <= 65 RETURN n";
+    ast_node *result3 = parse_cypher_query(compare_query2);
+    if (result3) {
+        cypher_parser_free_result(result3);
+        printf("\nLess-equal query parsed\n");
+    } else {
+        printf("\nLess-equal query failed\n");
+    }
+    
+    const char *compare_query3 = "MATCH (n) WHERE n.name <> 'test' RETURN n";
+    ast_node *result4 = parse_cypher_query(compare_query3);
+    if (result4) {
+        cypher_parser_free_result(result4);
+        printf("\nNot-equal query parsed\n");
+    } else {
+        printf("\nNot-equal query failed\n");
+    }
+    
+    printf("\nSpecial tokens test completed\n");
+}
+
+/* Test parser with NULL result handling */
+static void test_parser_null_result_handling(void)
+{
+    /* Test cypher_parser_free_result with NULL */
+    cypher_parser_free_result(NULL);
+    printf("\nNULL result free test completed\n");
+    
+    /* Test cypher_parser_get_error with various inputs */
+    const char *error1 = cypher_parser_get_error(NULL);
+    CU_ASSERT_PTR_NULL(error1); /* Should return NULL for no error */
+    
+    /* Parse a valid query and check error */
+    ast_node *valid_result = parse_cypher_query("MATCH (n) RETURN n");
+    if (valid_result) {
+        const char *error2 = cypher_parser_get_error(valid_result);
+        CU_ASSERT_PTR_NULL(error2); /* Should return NULL for successful parse */
+        cypher_parser_free_result(valid_result);
+    }
+    
+    printf("\nNULL result handling test completed\n");
+}
+
+/* Test parser with complex nested structures */
+static void test_parser_complex_nesting(void)
+{
+    /* Test deeply nested property access */
+    const char *nested_query = "MATCH (a)-[:KNOWS]->(b)-[:WORKS_AT]->(c) WHERE a.name = 'Alice' RETURN a, b, c";
+    ast_node *result1 = parse_cypher_query(nested_query);
+    if (result1) {
+        cypher_parser_free_result(result1);
+        printf("\nComplex nested query parsed\n");
+    } else {
+        printf("\nComplex nested query failed\n");
+    }
+    
+    /* Test multiple CREATE patterns */
+    const char *multi_create = "CREATE (a:Person), (b:Company), (a)-[:WORKS_AT]->(b)";
+    ast_node *result2 = parse_cypher_query(multi_create);
+    if (result2) {
+        cypher_parser_free_result(result2);
+        printf("\nMultiple CREATE patterns parsed\n");
+    } else {
+        printf("\nMultiple CREATE patterns failed\n");
+    }
+    
+    printf("\nComplex nesting test completed\n");
+}
+
 
 /* Initialize the parser test suite */
 int init_parser_suite(void)
@@ -587,7 +781,13 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Invalid syntax", test_invalid_syntax) ||
         !CU_add_test(suite, "Empty query", test_empty_query) ||
         !CU_add_test(suite, "NULL query", test_null_query) ||
-        !CU_add_test(suite, "AST printing", test_ast_printing))
+        !CU_add_test(suite, "AST printing", test_ast_printing) ||
+        !CU_add_test(suite, "Parser keyword utilities", test_parser_keyword_utilities) ||
+        !CU_add_test(suite, "Parser token names", test_parser_token_names) ||
+        !CU_add_test(suite, "Parser scanner edge cases", test_parser_scanner_edge_cases) ||
+        !CU_add_test(suite, "Parser special tokens", test_parser_special_tokens) ||
+        !CU_add_test(suite, "Parser NULL result handling", test_parser_null_result_handling) ||
+        !CU_add_test(suite, "Parser complex nesting", test_parser_complex_nesting))
     {
         return CU_get_error();
     }

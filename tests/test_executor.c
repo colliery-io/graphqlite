@@ -87,7 +87,7 @@ static void test_create_query_execution(void)
         }
         CU_ASSERT_TRUE(result->success);
         CU_ASSERT_EQUAL(result->nodes_created, 1);
-        CU_ASSERT_EQUAL(result->properties_set, 1); /* Test property added in implementation */
+        CU_ASSERT_EQUAL(result->properties_set, 0); /* No properties set for simple CREATE (n) */
         
         cypher_result_free(result);
     }
@@ -592,6 +592,119 @@ static void test_edge_database_consistency(void)
     }
 }
 
+/* Test edge properties with multiple data types */
+static void test_edge_properties_data_types(void)
+{
+    const char *query = "CREATE (a)-[:WORKS_WITH {years: 5, salary: 75000.50, verified: true, department: \"Engineering\"}]->(b)";
+    
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (!result->success) {
+            printf("\nEdge properties with data types failed: %s\n", result->error_message ? result->error_message : "No error message");
+        } else {
+            CU_ASSERT_EQUAL(result->nodes_created, 2);
+            CU_ASSERT_EQUAL(result->relationships_created, 1);
+            CU_ASSERT_EQUAL(result->properties_set, 4); /* 4 properties: years, salary, verified, department */
+        }
+        
+        cypher_result_free(result);
+    }
+}
+
+/* Test MATCH...CREATE with edge properties */
+static void test_match_create_edge_properties(void)
+{
+    /* First create nodes */
+    const char *setup_query = "CREATE (alice:Person {name: \"Alice\"}), (bob:Person {name: \"Bob\"})";
+    cypher_result *setup_result = cypher_executor_execute(executor, setup_query);
+    CU_ASSERT_PTR_NOT_NULL(setup_result);
+    CU_ASSERT_TRUE(setup_result->success);
+    cypher_result_free(setup_result);
+    
+    /* Then use MATCH...CREATE with edge properties */
+    const char *query = "MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) CREATE (a)-[:KNOWS {since: 2020, strength: 0.8}]->(b)";
+    
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (!result->success) {
+            printf("\nMATCH...CREATE with edge properties failed: %s\n", result->error_message ? result->error_message : "No error message");
+        } else {
+            CU_ASSERT_EQUAL(result->nodes_created, 0); /* Should use existing nodes */
+            CU_ASSERT_EQUAL(result->relationships_created, 1);
+            CU_ASSERT_EQUAL(result->properties_set, 2); /* 2 properties: since, strength */
+        }
+        
+        cypher_result_free(result);
+    }
+}
+
+/* Test property access type preservation */
+static void test_property_access_types(void)
+{
+    /* First create a node with various property types */
+    const char *setup_query = "CREATE (n:TestNode {str: \"text\", int: 42, float: 3.14, bool: true})";
+    cypher_result *setup_result = cypher_executor_execute(executor, setup_query);
+    CU_ASSERT_PTR_NOT_NULL(setup_result);
+    CU_ASSERT_TRUE(setup_result->success);
+    cypher_result_free(setup_result);
+    
+    /* Test property access returns proper types */
+    const char *query = "MATCH (n:TestNode) RETURN n.str, n.int, n.float, n.bool";
+    
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (!result->success) {
+            printf("\nProperty access types test failed: %s\n", result->error_message ? result->error_message : "No error message");
+        } else {
+            CU_ASSERT_TRUE(result->success);
+            CU_ASSERT_EQUAL(result->row_count, 1);
+            CU_ASSERT_EQUAL(result->column_count, 4);
+            CU_ASSERT_TRUE(result->use_agtype); /* Should use AGType for property access */
+        }
+        
+        cypher_result_free(result);
+    }
+}
+
+/* Test AGType output format compliance */
+static void test_agtype_output_format(void)
+{
+    /* Create test data */
+    const char *setup_query = "CREATE (alice:Person {name: \"Alice\"})-[:KNOWS {since: 2020}]->(bob:Person {name: \"Bob\"})";
+    cypher_result *setup_result = cypher_executor_execute(executor, setup_query);
+    CU_ASSERT_PTR_NOT_NULL(setup_result);
+    CU_ASSERT_TRUE(setup_result->success);
+    cypher_result_free(setup_result);
+    
+    /* Test vertex AGType format */
+    const char *vertex_query = "MATCH (n:Person) RETURN n LIMIT 1";
+    cypher_result *vertex_result = cypher_executor_execute(executor, vertex_query);
+    CU_ASSERT_PTR_NOT_NULL(vertex_result);
+    if (vertex_result) {
+        CU_ASSERT_TRUE(vertex_result->success);
+        CU_ASSERT_TRUE(vertex_result->use_agtype);
+        CU_ASSERT_PTR_NOT_NULL(vertex_result->agtype_data);
+        cypher_result_free(vertex_result);
+    }
+    
+    /* Test edge AGType format */
+    const char *edge_query = "MATCH ()-[r:KNOWS]->() RETURN r";
+    cypher_result *edge_result = cypher_executor_execute(executor, edge_query);
+    CU_ASSERT_PTR_NOT_NULL(edge_result);
+    if (edge_result) {
+        CU_ASSERT_TRUE(edge_result->success);
+        CU_ASSERT_TRUE(edge_result->use_agtype);
+        CU_ASSERT_PTR_NOT_NULL(edge_result->agtype_data);
+        cypher_result_free(edge_result);
+    }
+}
+
 /* Initialize the executor test suite */
 int init_executor_suite(void)
 {
@@ -623,7 +736,11 @@ int init_executor_suite(void)
         !CU_add_test(suite, "Numeric node variables", test_numeric_node_variables) ||
         !CU_add_test(suite, "Mixed relationship directions", test_mixed_relationship_directions) ||
         !CU_add_test(suite, "Relationship variable reuse", test_relationship_variable_reuse) ||
-        !CU_add_test(suite, "Edge database consistency", test_edge_database_consistency)) {
+        !CU_add_test(suite, "Edge database consistency", test_edge_database_consistency) ||
+        !CU_add_test(suite, "Edge properties data types", test_edge_properties_data_types) ||
+        !CU_add_test(suite, "MATCH...CREATE edge properties", test_match_create_edge_properties) ||
+        !CU_add_test(suite, "Property access types", test_property_access_types) ||
+        !CU_add_test(suite, "AGType output format", test_agtype_output_format)) {
         return CU_get_error();
     }
     

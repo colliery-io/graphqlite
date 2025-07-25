@@ -783,6 +783,82 @@ int cypher_schema_delete_edge(cypher_schema_manager *manager, int edge_id)
     return 0;
 }
 
+int cypher_schema_set_edge_property(cypher_schema_manager *manager,
+                                   int edge_id, const char *key,
+                                   property_type type, const void *value)
+{
+    if (!manager || !manager->db || !key || !value || edge_id < 0) {
+        return -1;
+    }
+    
+    /* Get or create property key ID */
+    int key_id = cypher_schema_ensure_property_key(manager, key);
+    if (key_id < 0) {
+        return -1;
+    }
+    
+    /* Determine the appropriate table and SQL based on type */
+    const char *table_name;
+    const char *sql_template = "INSERT OR REPLACE INTO %s (edge_id, key_id, value) VALUES (?, ?, ?)";
+    char sql[256];
+    
+    switch (type) {
+        case PROP_TYPE_INTEGER:
+            table_name = "edge_props_int";
+            break;
+        case PROP_TYPE_TEXT:
+            table_name = "edge_props_text";
+            break;
+        case PROP_TYPE_REAL:
+            table_name = "edge_props_real";
+            break;
+        case PROP_TYPE_BOOLEAN:
+            table_name = "edge_props_bool";
+            break;
+        default:
+            return -1;
+    }
+    
+    snprintf(sql, sizeof(sql), sql_template, table_name);
+    
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to prepare edge property insert statement: %s", sqlite3_errmsg(manager->db));
+        return -1;
+    }
+    
+    sqlite3_bind_int(stmt, 1, edge_id);
+    sqlite3_bind_int(stmt, 2, key_id);
+    
+    /* Bind value based on type */
+    switch (type) {
+        case PROP_TYPE_INTEGER:
+            sqlite3_bind_int(stmt, 3, *(const int*)value);
+            break;
+        case PROP_TYPE_TEXT:
+            sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);
+            break;
+        case PROP_TYPE_REAL:
+            sqlite3_bind_double(stmt, 3, *(const double*)value);
+            break;
+        case PROP_TYPE_BOOLEAN:
+            sqlite3_bind_int(stmt, 3, *(const int*)value ? 1 : 0);
+            break;
+    }
+    
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    
+    if (rc != SQLITE_DONE) {
+        CYPHER_DEBUG("Failed to set property '%s' on edge %d: %s", key, edge_id, sqlite3_errmsg(manager->db));
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Set property '%s' on edge %d (type %s)", key, edge_id, cypher_schema_property_type_name(type));
+    return 0;
+}
+
 /* Statistics */
 void property_key_cache_stats(property_key_cache *cache, 
                              long *hits, long *misses, long *insertions)
