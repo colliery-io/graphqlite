@@ -193,6 +193,15 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_PROPERTY:
             return transform_property_access(ctx, (cypher_property*)expr);
             
+        case AST_NODE_LABEL_EXPR:
+            return transform_label_expression(ctx, (cypher_label_expr*)expr);
+            
+        case AST_NODE_NOT_EXPR:
+            return transform_not_expression(ctx, (cypher_not_expr*)expr);
+            
+        case AST_NODE_BINARY_OP:
+            return transform_binary_operation(ctx, (cypher_binary_op*)expr);
+            
         case AST_NODE_LITERAL:
             {
                 cypher_literal *lit = (cypher_literal*)expr;
@@ -265,6 +274,121 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
     append_string_literal(ctx, prop->property_name);
     append_sql(ctx, ")))");
+    
+    return 0;
+}
+
+/* Transform label expression (e.g., n:Person) */
+int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr)
+{
+    CYPHER_DEBUG("Transforming label expression");
+    
+    /* Get the base expression (should be an identifier) */
+    if (label_expr->expr->type != AST_NODE_IDENTIFIER) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Complex label expressions not yet supported");
+        return -1;
+    }
+    
+    cypher_identifier *id = (cypher_identifier*)label_expr->expr;
+    const char *alias = lookup_variable_alias(ctx, id->name);
+    if (!alias) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "Unknown variable in label expression: %s", id->name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+    
+    /* Generate SQL to check if the node has the specified label */
+    /* This checks if there's a record in node_labels table with this node_id and label */
+    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ", alias);
+    append_string_literal(ctx, label_expr->label_name);
+    append_sql(ctx, ")");
+    
+    return 0;
+}
+
+/* Transform NOT expression (e.g., NOT n:Person) */
+int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr)
+{
+    CYPHER_DEBUG("Transforming NOT expression");
+    
+    append_sql(ctx, "NOT (");
+    
+    if (transform_expression(ctx, not_expr->expr) < 0) {
+        return -1;
+    }
+    
+    append_sql(ctx, ")");
+    
+    return 0;
+}
+
+/* Transform binary operation (e.g., expr AND expr, expr OR expr) */
+int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op)
+{
+    CYPHER_DEBUG("Transforming binary operation");
+    
+    /* Add left parenthesis for precedence */
+    append_sql(ctx, "(");
+    
+    /* Transform left expression */
+    if (transform_expression(ctx, binary_op->left) < 0) {
+        return -1;
+    }
+    
+    /* Add operator */
+    switch (binary_op->op_type) {
+        case BINARY_OP_AND:
+            append_sql(ctx, " AND ");
+            break;
+        case BINARY_OP_OR:
+            append_sql(ctx, " OR ");
+            break;
+        case BINARY_OP_EQ:
+            append_sql(ctx, " = ");
+            break;
+        case BINARY_OP_NEQ:
+            append_sql(ctx, " <> ");
+            break;
+        case BINARY_OP_LT:
+            append_sql(ctx, " < ");
+            break;
+        case BINARY_OP_GT:
+            append_sql(ctx, " > ");
+            break;
+        case BINARY_OP_LTE:
+            append_sql(ctx, " <= ");
+            break;
+        case BINARY_OP_GTE:
+            append_sql(ctx, " >= ");
+            break;
+        case BINARY_OP_ADD:
+            append_sql(ctx, " + ");
+            break;
+        case BINARY_OP_SUB:
+            append_sql(ctx, " - ");
+            break;
+        case BINARY_OP_MUL:
+            append_sql(ctx, " * ");
+            break;
+        case BINARY_OP_DIV:
+            append_sql(ctx, " / ");
+            break;
+        default:
+            ctx->has_error = true;
+            ctx->error_message = strdup("Unknown binary operator");
+            return -1;
+    }
+    
+    /* Transform right expression */
+    if (transform_expression(ctx, binary_op->right) < 0) {
+        return -1;
+    }
+    
+    /* Close parenthesis */
+    append_sql(ctx, ")");
     
     return 0;
 }

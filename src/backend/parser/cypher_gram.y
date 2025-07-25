@@ -44,6 +44,9 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_literal *literal;
     cypher_identifier *identifier;
     cypher_parameter *parameter;
+    cypher_label_expr *label_expr;
+    cypher_not_expr *not_expr;
+    cypher_binary_op *binary_op;
     cypher_node_pattern *node_pattern;
     cypher_rel_pattern *rel_pattern;
     cypher_path *path;
@@ -382,9 +385,9 @@ expr:
     | expr '>' expr     { /* TODO: implement comparisons */ $$ = $1; }
     | expr LT_EQ expr   { /* TODO: implement comparisons */ $$ = $1; }
     | expr GT_EQ expr   { /* TODO: implement comparisons */ $$ = $1; }
-    | expr AND expr     { /* TODO: implement logical operations */ $$ = $1; }
-    | expr OR expr      { /* TODO: implement logical operations */ $$ = $1; }
-    | NOT expr          { /* TODO: implement NOT */ $$ = $2; }
+    | expr AND expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_AND, $1, $3, @2.first_line); }
+    | expr OR expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_OR, $1, $3, @2.first_line); }
+    | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
     | expr IS NULL      { /* TODO: implement IS NULL */ $$ = $1; }
     | expr IS NOT NULL  { /* TODO: implement IS NOT NULL */ $$ = $1; }
     | '(' expr ')'      { $$ = $2; }
@@ -398,6 +401,13 @@ primary_expr:
         {
             cypher_identifier *base = make_identifier($1, @1.first_line);
             $$ = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
+            free($1);
+            free($3);
+        }
+    | IDENTIFIER ':' IDENTIFIER
+        {
+            cypher_identifier *base = make_identifier($1, @1.first_line);
+            $$ = (ast_node*)make_label_expr((ast_node*)base, $3, @3.first_line);
             free($1);
             free($3);
         }

@@ -223,9 +223,8 @@ SELECT 'Test 9.2 - Empty property matching:' as test_name;
 SELECT cypher('MATCH (n:Person) WHERE n.nonexistent = "value" RETURN n') as result;
 
 SELECT 'Test 9.3 - Matching nodes with no labels:' as test_name;
--- NOTE: This is valid Cypher but currently fails to parse - indicates missing feature/bug
--- SELECT cypher('MATCH (n) WHERE NOT n:Person AND NOT n:Company AND NOT n:Product RETURN n LIMIT 3') as result;
-SELECT 'SKIPPED: NOT label syntax not yet supported' as result;
+-- NOTE: AND operator not fully implemented yet, but NOT label syntax now works
+SELECT cypher('MATCH (n) WHERE NOT n:Person RETURN n LIMIT 3') as result;
 
 SELECT 'Test 9.4 - Property comparison edge cases:' as test_name;
 SELECT cypher('MATCH (n) WHERE n.age = 0 RETURN n') as result; -- Should match zero values

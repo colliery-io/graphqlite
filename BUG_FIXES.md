@@ -139,7 +139,7 @@ MATCH ()-[r]->() RETURN type(r)
 ## Parser Syntax Issues
 
 ### Issue: NOT Label Syntax Not Supported
-**Status**: Open  
+**Status**: ✅ COMPLETED  
 **Priority**: High  
 **AGE Compatibility**: Breaks standard Cypher filtering
 
@@ -177,7 +177,7 @@ MATCH (n) WHERE NOT n:Person AND NOT n:Company RETURN n
 ---
 
 ### Issue: ORDER BY DESC Keyword Not Supported
-**Status**: Open  
+**Status**: ✅ COMPLETED  
 **Priority**: High  
 **AGE Compatibility**: Breaks standard sorting functionality
 

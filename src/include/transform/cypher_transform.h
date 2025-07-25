@@ -80,6 +80,9 @@ int transform_path_pattern(cypher_transform_context *ctx, cypher_path *path);
 /* Expression transformers */
 int transform_expression(cypher_transform_context *ctx, ast_node *expr);
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop);
+int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr);
+int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr);
+int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op);
 
 /* Variable management */
 int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);

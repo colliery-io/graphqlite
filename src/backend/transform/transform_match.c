@@ -208,7 +208,14 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     
     /* Handle WHERE clause if present */
     if (match->where) {
-        if (transform_where_clause(ctx, match->where) < 0) {
+        /* Add AND if we already have WHERE constraints, otherwise add WHERE */
+        if (!first_constraint) {
+            append_sql(ctx, " AND ");
+        } else {
+            append_sql(ctx, " WHERE ");
+        }
+        
+        if (transform_expression(ctx, match->where) < 0) {
             return -1;
         }
     }
@@ -350,18 +357,15 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     return 0;
 }
 
-/* Transform WHERE clause - stub for now */
+/* Transform WHERE clause expression (used by other modules) */
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where)
 {
-    CYPHER_DEBUG("WHERE clause transformation not yet implemented");
+    CYPHER_DEBUG("Transforming WHERE clause expression");
     
-    /* TODO: Implement WHERE clause transformation */
-    /* This will need to handle:
-     * - Property access (n.name)
-     * - Comparisons (=, <>, <, >, etc.)
-     * - Logical operators (AND, OR, NOT)
-     * - Functions
-     */
+    if (!where) {
+        return 0;
+    }
     
-    return 0;
+    /* Transform the WHERE expression - caller handles WHERE/AND keywords */
+    return transform_expression(ctx, where);
 }

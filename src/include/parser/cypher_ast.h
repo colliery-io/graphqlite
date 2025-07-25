@@ -35,6 +35,9 @@ typedef enum ast_node_type {
     AST_NODE_IDENTIFIER,
     AST_NODE_PARAMETER,
     AST_NODE_PROPERTY,
+    AST_NODE_LABEL_EXPR,
+    AST_NODE_NOT_EXPR,
+    AST_NODE_BINARY_OP,
     AST_NODE_FUNCTION_CALL,
     AST_NODE_LIST,
     AST_NODE_MAP,
@@ -46,6 +49,22 @@ typedef enum ast_node_type {
     AST_NODE_SKIP,
     AST_NODE_LIMIT
 } ast_node_type;
+
+/* Binary operator types */
+typedef enum {
+    BINARY_OP_AND,
+    BINARY_OP_OR,
+    BINARY_OP_EQ,
+    BINARY_OP_NEQ,
+    BINARY_OP_LT,
+    BINARY_OP_GT,
+    BINARY_OP_LTE,
+    BINARY_OP_GTE,
+    BINARY_OP_ADD,
+    BINARY_OP_SUB,
+    BINARY_OP_MUL,
+    BINARY_OP_DIV
+} binary_op_type;
 
 /* Base AST node structure */
 typedef struct ast_node {
@@ -173,6 +192,27 @@ typedef struct cypher_property {
     char *property_name;  /* Property name */
 } cypher_property;
 
+/* Label expression: expr:Label */
+typedef struct cypher_label_expr {
+    ast_node base;
+    ast_node *expr;       /* Expression to check (usually identifier) */
+    char *label_name;     /* Label name to check for */
+} cypher_label_expr;
+
+/* NOT expression: NOT expr */
+typedef struct cypher_not_expr {
+    ast_node base;
+    ast_node *expr;       /* Expression to negate */
+} cypher_not_expr;
+
+/* Binary operation: expr OP expr */
+typedef struct cypher_binary_op {
+    ast_node base;
+    binary_op_type op_type;  /* Operation type (AND, OR, EQ, etc.) */
+    ast_node *left;          /* Left expression */
+    ast_node *right;         /* Right expression */
+} cypher_binary_op;
+
 /* Function call */
 typedef struct cypher_function_call {
     ast_node base;
@@ -227,6 +267,9 @@ cypher_literal* make_null_literal(int location);
 cypher_identifier* make_identifier(char *name, int location);
 cypher_parameter* make_parameter(char *name, int location);
 cypher_property* make_property(ast_node *expr, char *property_name, int location);
+cypher_label_expr* make_label_expr(ast_node *expr, char *label_name, int location);
+cypher_not_expr* make_not_expr(ast_node *expr, int location);
+cypher_binary_op* make_binary_op(binary_op_type op_type, ast_node *left, ast_node *right, int location);
 cypher_function_call* make_function_call(char *function_name, ast_list *args, bool distinct, int location);
 cypher_map* make_map(ast_list *pairs, int location);
 cypher_map_pair* make_map_pair(char *key, ast_node *value, int location);

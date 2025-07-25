@@ -505,6 +505,42 @@ cypher_property* make_property(ast_node *expr, char *property_name, int location
     return prop;
 }
 
+cypher_label_expr* make_label_expr(ast_node *expr, char *label_name, int location)
+{
+    cypher_label_expr *label_expr = (cypher_label_expr*)ast_node_create(AST_NODE_LABEL_EXPR, location, sizeof(cypher_label_expr));
+    if (!label_expr) {
+        return NULL;
+    }
+    
+    label_expr->expr = expr;
+    label_expr->label_name = label_name ? strdup(label_name) : NULL;
+    return label_expr;
+}
+
+cypher_not_expr* make_not_expr(ast_node *expr, int location)
+{
+    cypher_not_expr *not_expr = (cypher_not_expr*)ast_node_create(AST_NODE_NOT_EXPR, location, sizeof(cypher_not_expr));
+    if (!not_expr) {
+        return NULL;
+    }
+    
+    not_expr->expr = expr;
+    return not_expr;
+}
+
+cypher_binary_op* make_binary_op(binary_op_type op_type, ast_node *left, ast_node *right, int location)
+{
+    cypher_binary_op *binary_op = (cypher_binary_op*)ast_node_create(AST_NODE_BINARY_OP, location, sizeof(cypher_binary_op));
+    if (!binary_op) {
+        return NULL;
+    }
+    
+    binary_op->op_type = op_type;
+    binary_op->left = left;
+    binary_op->right = right;
+    return binary_op;
+}
+
 cypher_function_call* make_function_call(char *function_name, ast_list *args, bool distinct, int location)
 {
     cypher_function_call *func = (cypher_function_call*)ast_node_create(AST_NODE_FUNCTION_CALL, location, sizeof(cypher_function_call));
