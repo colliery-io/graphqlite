@@ -243,6 +243,41 @@ Changed all references from `element_id` to `edge_id` in edge property queries.
 
 ---
 
+### Issue: Implement AND/OR Logical Operators in WHERE Clauses
+**Status**: ✅ COMPLETED  
+**Priority**: High  
+**AGE Compatibility**: Critical for compound filtering
+
+**Description:**
+Logical operators `AND` and `OR` were not implemented, preventing compound filtering in WHERE clauses.
+
+**Previous Behavior:**
+```cypher
+MATCH (n) WHERE NOT n:Person AND NOT n:Company RETURN n
+Runtime error: Failed to parse query
+```
+
+**Current AGE-Compatible Behavior:**
+```cypher
+MATCH (n) WHERE NOT n:Person AND NOT n:Company RETURN n
+[{"id": 1, "properties": {...}}::vertex]
+```
+
+**Root Cause (Fixed):**
+- Missing AND/OR operators in parser grammar
+- No binary operation AST nodes or transform logic
+- Incomplete WHERE clause implementation
+
+**Fix Applied:**
+1. Added binary operation AST nodes for AND, OR, comparison, and arithmetic operators
+2. Updated parser grammar with proper operator precedence
+3. Implemented SQL generation for all binary operations
+4. Added comprehensive transform support for complex logical expressions
+
+**Test Status**: ✅ All parser and transform tests passing (109/112 overall)
+
+---
+
 ### Issue: COUNT() Aggregate Function Not Implemented
 **Status**: Open  
 **Priority**: High  
