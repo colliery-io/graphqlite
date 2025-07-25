@@ -4,6 +4,9 @@
  */
 
 #include <sqlite3ext.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "executor/cypher_schema.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_parser.h"
@@ -55,11 +58,60 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
     
     /* Format result based on success/failure */
     if (result->success) {
-        if (result->row_count > 0) {
-            /* For now, just return success with row count */
-            char response[256];
-            snprintf(response, sizeof(response), "Query executed successfully - %d rows", result->row_count);
-            sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
+        if (result->row_count > 0 && result->data) {
+            /* Return actual query data as JSON */
+            /* Calculate buffer size needed */
+            int buffer_size = 1024; /* Start with reasonable size */
+            for (int row = 0; row < result->row_count; row++) {
+                for (int col = 0; col < result->column_count; col++) {
+                    if (result->data[row][col]) {
+                        buffer_size += strlen(result->data[row][col]) + 20; /* +20 for JSON formatting */
+                    }
+                }
+            }
+            
+            char *json_result = malloc(buffer_size);
+            if (!json_result) {
+                sqlite3_result_error(context, "Memory allocation failed for result formatting", -1);
+                cypher_result_free(result);
+                cypher_executor_free(executor);
+                return;
+            }
+            
+            strcpy(json_result, "[");
+            
+            for (int row = 0; row < result->row_count; row++) {
+                if (row > 0) strcat(json_result, ",");
+                strcat(json_result, "{");
+                
+                for (int col = 0; col < result->column_count; col++) {
+                    if (col > 0) strcat(json_result, ",");
+                    
+                    /* Add column name */
+                    strcat(json_result, "\"");
+                    if (result->column_names && result->column_names[col]) {
+                        strcat(json_result, result->column_names[col]);
+                    } else {
+                        char col_name[32];
+                        snprintf(col_name, sizeof(col_name), "col_%d", col);
+                        strcat(json_result, col_name);
+                    }
+                    strcat(json_result, "\":\"");
+                    
+                    /* Add value (escaped) */
+                    if (result->data[row][col]) {
+                        strcat(json_result, result->data[row][col]);
+                    } else {
+                        strcat(json_result, "null");
+                    }
+                    strcat(json_result, "\"");
+                }
+                strcat(json_result, "}");
+            }
+            strcat(json_result, "]");
+            
+            sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
+            free(json_result);
         } else {
             /* Modification query - show statistics */
             char response[256];

@@ -140,6 +140,68 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                         }
                     }
                 }
+            } else if (element->type == AST_NODE_REL_PATTERN) {
+                /* Handle relationship patterns - need surrounding nodes */
+                if (j == 0 || j + 1 >= path->elements->count) {
+                    continue; /* Skip invalid relationship positions */
+                }
+                
+                ast_node *prev_element = path->elements->items[j - 1];
+                ast_node *next_element = path->elements->items[j + 1];
+                
+                if (prev_element->type != AST_NODE_NODE_PATTERN || next_element->type != AST_NODE_NODE_PATTERN) {
+                    continue; /* Skip if not properly connected to nodes */
+                }
+                
+                cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+                cypher_node_pattern *source_node = (cypher_node_pattern*)prev_element;
+                cypher_node_pattern *target_node = (cypher_node_pattern*)next_element;
+                
+                /* Generate aliases for the relationship and nodes */
+                char source_alias[32], target_alias[32], edge_alias[32];
+                
+                if (source_node->variable) {
+                    snprintf(source_alias, sizeof(source_alias), "n_%s", source_node->variable);
+                } else {
+                    snprintf(source_alias, sizeof(source_alias), "n_%d", j - 1);
+                }
+                
+                if (target_node->variable) {
+                    snprintf(target_alias, sizeof(target_alias), "n_%s", target_node->variable);
+                } else {
+                    snprintf(target_alias, sizeof(target_alias), "n_%d", j + 1);
+                }
+                
+                if (rel->variable) {
+                    snprintf(edge_alias, sizeof(edge_alias), "e_%s", rel->variable);
+                } else {
+                    snprintf(edge_alias, sizeof(edge_alias), "e_%d", j);
+                }
+                
+                /* Add relationship direction constraints */
+                if (first_constraint) {
+                    append_sql(ctx, " WHERE ");
+                    first_constraint = false;
+                } else {
+                    append_sql(ctx, " AND ");
+                }
+                
+                /* Handle relationship direction */
+                if (rel->left_arrow && !rel->right_arrow) {
+                    /* <-[:TYPE]- (reversed: target -> source) */
+                    append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
+                              edge_alias, target_alias, edge_alias, source_alias);
+                } else {
+                    /* -[:TYPE]-> or -[:TYPE]- (forward or undirected, treat as forward) */
+                    append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
+                              edge_alias, source_alias, edge_alias, target_alias);
+                }
+                
+                /* Add relationship type constraint if specified */
+                if (rel->type) {
+                    append_sql(ctx, " AND %s.type = ", edge_alias);
+                    append_string_literal(ctx, rel->type);
+                }
             }
         }
     }
@@ -275,29 +337,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     /* Add edges table to FROM clause */
     append_sql(ctx, ", edges AS %s", edge_alias);
     
-    /* Add relationship direction constraints */
-    if (strstr(ctx->sql_buffer, "WHERE") == NULL) {
-        append_sql(ctx, " WHERE ");
-    } else {
-        append_sql(ctx, " AND ");
-    }
-    
-    /* Handle relationship direction */
-    if (rel->left_arrow && !rel->right_arrow) {
-        /* <-[:TYPE]- (reversed: target -> source) */
-        append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
-                  edge_alias, target_alias, edge_alias, source_alias);
-    } else {
-        /* -[:TYPE]-> or -[:TYPE]- (forward or undirected, treat as forward) */
-        append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
-                  edge_alias, source_alias, edge_alias, target_alias);
-    }
-    
-    /* Add relationship type constraint if specified */
-    if (rel->type) {
-        append_sql(ctx, " AND %s.type = ", edge_alias);
-        append_string_literal(ctx, rel->type);
-    }
+    /* Note: Relationship constraints will be added later in the WHERE clause phase */
     
     /* Register relationship variable if present */
     if (rel->variable) {

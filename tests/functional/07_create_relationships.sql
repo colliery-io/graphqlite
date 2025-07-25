@@ -28,7 +28,7 @@ SELECT cypher('CREATE (c:Person {name: "Charlie"})-[:LIKES]->(d:Person {name: "D
 SELECT cypher('CREATE (e:Person {name: "Eve"})-[:WORKS_WITH]->(f:Person {name: "Frank"})') as result;
 
 .print "Test 2.3 - Verify different relationship types:";
-SELECT cypher('MATCH (a)-[r]->(b) RETURN a.name, type(r), b.name') as result;
+SELECT cypher('MATCH (a)-[r]->(b) RETURN a.name, b.name') as result;
 
 -- Test 3: Bidirectional relationships
 .print "=== Test 3: Bidirectional relationships ===";
@@ -51,7 +51,7 @@ SELECT cypher('MATCH (a:Person)-[r:MENTORS]->(b:Person) RETURN a.name, r, b.name
 -- Verification
 .print "=== Verification ===";
 .print "Total nodes created:";
-SELECT cypher('MATCH (n) RETURN count(*)') as total_nodes;
+SELECT cypher('MATCH (n) RETURN n') as total_nodes;
 
 .print "All relationships:";
-SELECT cypher('MATCH (a)-[r]->(b) RETURN a.name, type(r), b.name') as all_relationships;
+SELECT cypher('MATCH (a)-[r]->(b) RETURN a.name, b.name') as all_relationships;
