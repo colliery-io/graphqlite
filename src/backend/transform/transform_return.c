@@ -92,9 +92,15 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             if (i > 0) {
                 append_sql(ctx, ", ");
             }
-            ast_node *order_item = ret->order_by->items[i];
-            if (transform_expression(ctx, order_item) < 0) {
+            cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
+            if (transform_expression(ctx, order_item->expr) < 0) {
                 return -1;
+            }
+            /* Add sort direction */
+            if (order_item->descending) {
+                append_sql(ctx, " DESC");
+            } else {
+                append_sql(ctx, " ASC");
             }
         }
     }

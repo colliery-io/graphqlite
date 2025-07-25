@@ -106,6 +106,13 @@ void ast_node_free(ast_node *node)
             }
             break;
             
+        case AST_NODE_ORDER_BY:
+            {
+                cypher_order_by_item *item = (cypher_order_by_item*)node;
+                ast_node_free(item->expr);
+            }
+            break;
+            
         case AST_NODE_NODE_PATTERN:
             {
                 cypher_node_pattern *pattern = (cypher_node_pattern*)node;
@@ -339,6 +346,18 @@ cypher_return_item* make_return_item(ast_node *expr, char *alias)
     
     item->expr = expr;
     item->alias = alias ? strdup(alias) : NULL;
+    return item;
+}
+
+cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending)
+{
+    cypher_order_by_item *item = (cypher_order_by_item*)ast_node_create(AST_NODE_ORDER_BY, -1, sizeof(cypher_order_by_item));
+    if (!item) {
+        return NULL;
+    }
+    
+    item->expr = expr;
+    item->descending = descending;
     return item;
 }
 

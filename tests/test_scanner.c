@@ -181,7 +181,7 @@ static void test_keyword_recognition(void)
     CypherToken token;
     
     /* Test common keywords */
-    const char *keywords[] = {"match", "create", "where", "return", "with", NULL};
+    const char *keywords[] = {"match", "create", "where", "return", "with", "asc", "desc", NULL};
     
     for (int i = 0; keywords[i]; i++) {
         scanner = create_string_scanner(keywords[i]);

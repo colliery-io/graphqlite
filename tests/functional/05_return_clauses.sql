@@ -56,17 +56,15 @@ SELECT 'Test 2.2 - Order by age (ascending):' as test_name;
 SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age') as result;
 
 SELECT 'Test 2.3 - Order by age (descending):' as test_name;
--- NOTE: DESC keyword not supported - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age DESC') as result;
-SELECT 'SKIPPED: DESC keyword not supported' as result;
+-- NOTE: DESC keyword should now be supported
+SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age DESC') as result;
 
 SELECT 'Test 2.4 - Order by multiple columns:' as test_name;
 SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.name, n.age') as result;
 
 SELECT 'Test 2.5 - Order by multiple columns (mixed direction):' as test_name;
--- NOTE: ASC/DESC keywords not supported - documented in BUG_FIXES.md  
--- SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.name ASC, n.age DESC') as result;
-SELECT 'SKIPPED: ASC/DESC keywords not supported' as result;
+-- NOTE: ASC/DESC keywords should now be supported
+SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.name ASC, n.age DESC') as result;
 
 SELECT 'Test 2.6 - Order by numeric property:' as test_name;
 SELECT cypher('MATCH (n:Product) RETURN n.name, n.price ORDER BY n.price') as result;

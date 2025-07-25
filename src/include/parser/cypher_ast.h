@@ -104,6 +104,13 @@ typedef struct cypher_return_item {
     char *alias;          /* Optional alias (AS alias) */
 } cypher_return_item;
 
+/* Order by item: expression with optional ASC/DESC */
+typedef struct cypher_order_by_item {
+    ast_node base;
+    ast_node *expr;       /* Expression to sort by */
+    bool descending;      /* true for DESC, false for ASC (default) */
+} cypher_order_by_item;
+
 /* Node pattern: (var:Label {props}) */
 typedef struct cypher_node_pattern {
     ast_node base;
@@ -208,6 +215,7 @@ cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optiona
 cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *order_by, ast_node *skip, ast_node *limit);
 cypher_create* make_cypher_create(ast_list *pattern);
 cypher_return_item* make_return_item(ast_node *expr, char *alias);
+cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending);
 cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *properties);
 cypher_rel_pattern* make_rel_pattern(char *variable, char *type, ast_node *properties, bool left_arrow, bool right_arrow);
 cypher_path* make_path(ast_list *elements);

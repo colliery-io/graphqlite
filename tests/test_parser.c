@@ -7,6 +7,7 @@
 #include "parser/cypher_parser.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
+#include "parser/cypher_keywords.h"
 #include "cypher_gram.tab.h"
 #include "test_parser.h"
 
@@ -63,6 +64,56 @@ static void test_return_with_alias(void)
     
     if (result) {
         CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test ORDER BY DESC parsing */
+static void test_order_by_desc_parsing(void)
+{
+    /* Test that ASC keyword is being properly recognized */
+    int asc_token = cypher_keyword_lookup("asc");
+    int desc_token = cypher_keyword_lookup("desc");
+    printf("\nASC token: %d, DESC token: %d\n", asc_token, desc_token);
+    CU_ASSERT(asc_token >= 0);
+    CU_ASSERT(desc_token >= 0);
+    
+    /* Test simple ORDER BY (should work) */
+    const char *simple_query = "MATCH (n) RETURN n ORDER BY n.name";
+    ast_node *result = parse_cypher_query(simple_query);
+    if (!result) {
+        printf("\nSimple ORDER BY parse failed\n");
+    } else {
+        printf("\nSimple ORDER BY query parsed successfully\n");
+    }
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        cypher_parser_free_result(result);
+    }
+    
+    /* Test ORDER BY ASC */
+    const char *asc_query = "MATCH (n) RETURN n ORDER BY n.name ASC";
+    result = parse_cypher_query(asc_query);
+    if (!result) {
+        printf("\nORDER BY ASC parse failed\n");
+    } else {
+        printf("\nORDER BY ASC query parsed successfully\n");
+    }
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        cypher_parser_free_result(result);
+    }
+    
+    /* Test ORDER BY DESC */
+    const char *desc_query = "MATCH (n) RETURN n ORDER BY n.name DESC";
+    result = parse_cypher_query(desc_query);
+    if (!result) {
+        printf("\nORDER BY DESC parse failed\n");
+    } else {
+        printf("\nORDER BY DESC query parsed successfully\n");
+    }
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
         cypher_parser_free_result(result);
     }
 }
@@ -770,6 +821,7 @@ int init_parser_suite(void)
         !CU_add_test(suite, "CREATE properties no label", test_create_properties_no_label) ||
         !CU_add_test(suite, "Node with label", test_node_with_label) ||
         !CU_add_test(suite, "RETURN with alias", test_return_with_alias) ||
+        !CU_add_test(suite, "ORDER BY DESC parsing", test_order_by_desc_parsing) ||
         !CU_add_test(suite, "Literal parsing", test_literal_parsing) ||
         !CU_add_test(suite, "Relationship patterns", test_relationship_patterns) ||
         !CU_add_test(suite, "Relationship variables", test_relationship_variables) ||

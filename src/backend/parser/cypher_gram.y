@@ -40,6 +40,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_return *return_clause;
     cypher_create *create;
     cypher_return_item *return_item;
+    cypher_order_by_item *order_by_item;
     cypher_literal *literal;
     cypher_identifier *identifier;
     cypher_parameter *parameter;
@@ -60,7 +61,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 
 /* Keywords */
 %token MATCH RETURN CREATE WHERE WITH SET DELETE REMOVE MERGE UNWIND
-%token OPTIONAL DISTINCT ORDER BY SKIP LIMIT AS
+%token OPTIONAL DISTINCT ORDER BY SKIP LIMIT AS ASC DESC
 %token AND OR NOT IN IS NULL TRUE FALSE
 %token UNION ALL CASE WHEN THEN ELSE END
 
@@ -90,7 +91,8 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <string> label_opt variable_opt
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list
-%type <node> skip_opt limit_opt order_by_item
+%type <node> skip_opt limit_opt
+%type <order_by_item> order_by_item
 
 /* Operator precedence (lowest to highest) */
 %left OR
@@ -184,17 +186,19 @@ order_by_list:
     order_by_item
         {
             $$ = ast_list_create();
-            ast_list_append($$, $1);
+            ast_list_append($$, (ast_node*)$1);
         }
     | order_by_list ',' order_by_item
         {
-            ast_list_append($1, $3);
+            ast_list_append($1, (ast_node*)$3);
             $$ = $1;
         }
     ;
 
 order_by_item:
-    expr            { $$ = $1; /* TODO: Add ASC/DESC support */ }
+    expr            { $$ = make_order_by_item($1, false); /* Default is ASC */ }
+    | expr ASC      { $$ = make_order_by_item($1, false); }
+    | expr DESC     { $$ = make_order_by_item($1, true); }
     ;
 
 
@@ -494,6 +498,22 @@ map_pair:
     | STRING ':' expr
         {
             $$ = make_map_pair($1, $3, @1.first_line);
+        }
+    | ASC ':' expr
+        {
+            $$ = make_map_pair("asc", $3, @1.first_line);
+        }
+    | DESC ':' expr
+        {
+            $$ = make_map_pair("desc", $3, @1.first_line);
+        }
+    | ORDER ':' expr
+        {
+            $$ = make_map_pair("order", $3, @1.first_line);
+        }
+    | BY ':' expr
+        {
+            $$ = make_map_pair("by", $3, @1.first_line);
         }
     ;
 

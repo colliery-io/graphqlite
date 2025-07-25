@@ -327,6 +327,38 @@ static void test_return_order_by(void)
         }
         cypher_free_result(result);
     }
+    
+    /* Test ORDER BY DESC */
+    const char *desc_query = "MATCH (n) RETURN n ORDER BY n.name DESC";
+    result = parse_and_transform(desc_query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (!result->has_error) {
+            CU_ASSERT_PTR_NOT_NULL(result->stmt);
+            printf("\nORDER BY DESC query transformed successfully\n");
+        } else {
+            printf("\nORDER BY DESC query failed: %s\n", 
+                   result->error_message ? result->error_message : "Unknown error");
+        }
+        cypher_free_result(result);
+    }
+    
+    /* Test ORDER BY ASC */
+    const char *asc_query = "MATCH (n) RETURN n ORDER BY n.name ASC";
+    result = parse_and_transform(asc_query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (!result->has_error) {
+            CU_ASSERT_PTR_NOT_NULL(result->stmt);
+            printf("\nORDER BY ASC query transformed successfully\n");
+        } else {
+            printf("\nORDER BY ASC query failed: %s\n", 
+                   result->error_message ? result->error_message : "Unknown error");
+        }
+        cypher_free_result(result);
+    }
 }
 
 /* Test RETURN with LIMIT clause */
