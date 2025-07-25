@@ -58,6 +58,10 @@ void cypher_executor_free(cypher_executor *executor)
     CYPHER_DEBUG("Freed cypher executor");
 }
 
+/* Forward declarations */
+static int execute_match_return_query(cypher_executor *executor, cypher_match *match, cypher_return *return_clause, cypher_result *result);
+static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result);
+
 /* Create empty result */
 static cypher_result* create_empty_result(void)
 {
@@ -485,6 +489,145 @@ static int execute_match_clause(cypher_executor *executor, cypher_match *match, 
     return 0;
 }
 
+/* Execute MATCH+RETURN query combination */
+static int execute_match_return_query(cypher_executor *executor, cypher_match *match, cypher_return *return_clause, cypher_result *result)
+{
+    if (!executor || !match || !return_clause || !result) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Executing MATCH+RETURN query");
+    
+    /* Build SQL query from MATCH and RETURN clauses */
+    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    if (!ctx) {
+        set_result_error(result, "Failed to create transform context");
+        return -1;
+    }
+    
+    /* Transform MATCH clause to generate FROM/WHERE */
+    if (transform_match_clause(ctx, match) < 0) {
+        set_result_error(result, "Failed to transform MATCH clause");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    /* Transform RETURN clause to generate SELECT projections */
+    if (transform_return_clause(ctx, return_clause) < 0) {
+        set_result_error(result, "Failed to transform RETURN clause");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
+    
+    /* Execute the SQL query */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        char error[512];
+        snprintf(error, sizeof(error), "SQL prepare failed: %s", sqlite3_errmsg(executor->db));
+        set_result_error(result, error);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    /* Build result from SQL execution */
+    if (build_query_results(executor, stmt, return_clause, result) < 0) {
+        sqlite3_finalize(stmt);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    sqlite3_finalize(stmt);
+    cypher_transform_free_context(ctx);
+    return 0;
+}
+
+/* Build query results from executed SQL statement */
+static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result)
+{
+    UNUSED_PARAMETER(executor);
+    
+    if (!stmt || !return_clause || !result) {
+        return -1;
+    }
+    
+    /* Get column count from return clause */
+    int column_count = return_clause->items->count;
+    
+    /* Allocate column names array */
+    result->column_names = malloc(column_count * sizeof(char*));
+    if (!result->column_names) {
+        set_result_error(result, "Memory allocation failed for column names");
+        return -1;
+    }
+    
+    /* Set column names from return items */
+    for (int i = 0; i < column_count; i++) {
+        cypher_return_item *item = (cypher_return_item*)return_clause->items->items[i];
+        if (item->alias) {
+            result->column_names[i] = strdup(item->alias);
+        } else {
+            /* Generate default column name */
+            char default_name[32];
+            snprintf(default_name, sizeof(default_name), "column_%d", i);
+            result->column_names[i] = strdup(default_name);
+        }
+    }
+    result->column_count = column_count;
+    
+    /* Count rows first */
+    int row_count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        row_count++;
+    }
+    
+    if (row_count == 0) {
+        /* No results */
+        result->row_count = 0;
+        result->data = NULL;
+        result->success = true;
+        return 0;
+    }
+    
+    /* Reset statement for actual data reading */
+    sqlite3_reset(stmt);
+    
+    /* Allocate data array */
+    result->data = malloc(row_count * sizeof(char**));
+    if (!result->data) {
+        set_result_error(result, "Memory allocation failed for result data");
+        return -1;
+    }
+    
+    /* Read actual data */
+    int current_row = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && current_row < row_count) {
+        result->data[current_row] = malloc(column_count * sizeof(char*));
+        if (!result->data[current_row]) {
+            set_result_error(result, "Memory allocation failed for row data");
+            return -1;
+        }
+        
+        for (int col = 0; col < column_count; col++) {
+            const char *value = (const char*)sqlite3_column_text(stmt, col);
+            if (value) {
+                result->data[current_row][col] = strdup(value);
+            } else {
+                result->data[current_row][col] = strdup("NULL");
+            }
+        }
+        current_row++;
+    }
+    
+    result->row_count = row_count;
+    result->success = true;
+    
+    CYPHER_DEBUG("Built result with %d rows, %d columns", row_count, column_count);
+    return 0;
+}
+
 /* Execute AST node */
 cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *ast)
 {
@@ -519,35 +662,54 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
             {
                 cypher_query *query = (cypher_query*)ast;
                 CYPHER_DEBUG("Found query node with %d clauses", query->clauses ? query->clauses->count : 0);
+                
                 if (query->clauses) {
+                    /* Analyze query structure to determine execution strategy */
+                    cypher_match *match_clause = NULL;
+                    cypher_return *return_clause = NULL;
+                    cypher_create *create_clause = NULL;
+                    
+                    /* Scan for clause types */
                     for (int i = 0; i < query->clauses->count; i++) {
                         ast_node *clause = query->clauses->items[i];
-                        CYPHER_DEBUG("Processing clause %d, type: %d", i, clause->type);
-                        
                         switch (clause->type) {
-                            case AST_NODE_CREATE:
-                                CYPHER_DEBUG("Executing CREATE clause");
-                                if (execute_create_clause(executor, (cypher_create*)clause, result) < 0) {
-                                    return result; /* Error already set */
-                                }
-                                break;
-                                
                             case AST_NODE_MATCH:
-                                CYPHER_DEBUG("Executing MATCH clause");
-                                if (execute_match_clause(executor, (cypher_match*)clause, result) < 0) {
-                                    return result; /* Error already set */
-                                }
+                                match_clause = (cypher_match*)clause;
                                 break;
-                                
                             case AST_NODE_RETURN:
-                                CYPHER_DEBUG("Skipping RETURN clause");
-                                /* RETURN handled by MATCH for now */
+                                return_clause = (cypher_return*)clause;
                                 break;
-                                
+                            case AST_NODE_CREATE:
+                                create_clause = (cypher_create*)clause;
+                                break;
                             default:
-                                CYPHER_DEBUG("Unhandled clause type: %d", clause->type);
+                                CYPHER_DEBUG("Found clause type: %d", clause->type);
                                 break;
                         }
+                    }
+                    
+                    /* Execute based on query pattern */
+                    if (match_clause && return_clause) {
+                        /* MATCH ... RETURN pattern */
+                        CYPHER_DEBUG("Executing MATCH+RETURN query");
+                        if (execute_match_return_query(executor, match_clause, return_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else if (create_clause) {
+                        /* CREATE pattern */
+                        CYPHER_DEBUG("Executing CREATE clause");
+                        if (execute_create_clause(executor, create_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else if (match_clause) {
+                        /* MATCH without RETURN - not typical but handle it */
+                        CYPHER_DEBUG("Executing MATCH without RETURN");
+                        if (execute_match_clause(executor, match_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else {
+                        set_result_error(result, "Unsupported query pattern");
+                        return result;
                     }
                 } else {
                     CYPHER_DEBUG("No clauses found in query");

@@ -39,8 +39,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
         append_sql(ctx, "* ");
     }
     
-    /* Process each pattern in the MATCH */
-    bool first_pattern = true;
+    /* Process each pattern in the MATCH - this only adds table joins */
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
         
@@ -50,13 +49,98 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
             return -1;
         }
         
-        if (!first_pattern) {
-            append_sql(ctx, ", ");
-        }
-        first_pattern = false;
-        
         if (transform_match_pattern(ctx, pattern) < 0) {
             return -1;
+        }
+    }
+    
+    /* Now add WHERE constraints for all patterns */
+    bool first_constraint = true;
+    for (int i = 0; i < match->pattern->count; i++) {
+        ast_node *pattern = match->pattern->items[i];
+        cypher_path *path = (cypher_path*)pattern;
+        
+        /* Add constraints for each node in this pattern */
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *element = path->elements->items[j];
+            
+            if (element->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *node = (cypher_node_pattern*)element;
+                
+                /* Generate table alias */
+                char alias[32];
+                if (node->variable) {
+                    snprintf(alias, sizeof(alias), "n_%s", node->variable);
+                } else {
+                    snprintf(alias, sizeof(alias), "n_%d", j);
+                }
+                
+                /* Add label constraint if specified */
+                if (node->label) {
+                    if (first_constraint) {
+                        append_sql(ctx, " WHERE ");
+                        first_constraint = false;
+                    } else {
+                        append_sql(ctx, " AND ");
+                    }
+                    
+                    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ", alias);
+                    append_string_literal(ctx, node->label);
+                    append_sql(ctx, ")");
+                }
+                
+                /* Add property constraints if specified */
+                if (node->properties && node->properties->type == AST_NODE_MAP) {
+                    cypher_map *map = (cypher_map*)node->properties;
+                    if (map->pairs) {
+                        for (int k = 0; k < map->pairs->count; k++) {
+                            cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[k];
+                            if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
+                                if (first_constraint) {
+                                    append_sql(ctx, " WHERE ");
+                                    first_constraint = false;
+                                } else {
+                                    append_sql(ctx, " AND ");
+                                }
+                                
+                                cypher_literal *lit = (cypher_literal*)pair->value;
+                                switch (lit->literal_type) {
+                                    case LITERAL_STRING:
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
+                                        append_string_literal(ctx, pair->key);
+                                        append_sql(ctx, " AND npt.value = ");
+                                        append_string_literal(ctx, lit->value.string);
+                                        append_sql(ctx, ")");
+                                        break;
+                                    case LITERAL_INTEGER:
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
+                                        append_string_literal(ctx, pair->key);
+                                        append_sql(ctx, " AND npi.value = %d)", lit->value.integer);
+                                        break;
+                                    case LITERAL_DECIMAL:
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
+                                        append_string_literal(ctx, pair->key);
+                                        append_sql(ctx, " AND npr.value = %f)", lit->value.decimal);
+                                        break;
+                                    case LITERAL_BOOLEAN:
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
+                                        append_string_literal(ctx, pair->key);
+                                        append_sql(ctx, " AND npb.value = %d)", lit->value.boolean ? 1 : 0);
+                                        break;
+                                    case LITERAL_NULL:
+                                        append_sql(ctx, "NOT EXISTS (SELECT 1 FROM property_keys pk WHERE pk.key = ");
+                                        append_string_literal(ctx, pair->key);
+                                        append_sql(ctx, " AND (EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR ", alias);
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s.id AND key_id = pk.id) OR ", alias);
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR ", alias);
+                                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id)))", alias);
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -154,25 +238,8 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
     /* Join nodes table */
     append_sql(ctx, "nodes AS %s", alias);
     
-    /* Add label constraint if specified */
-    if (node->label) {
-        /* Check if we need WHERE clause */
-        if (strstr(ctx->sql_buffer, "WHERE") == NULL) {
-            append_sql(ctx, " WHERE ");
-        } else {
-            append_sql(ctx, " AND ");
-        }
-        
-        /* Add label check using EXISTS subquery */
-        append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ", alias);
-        append_string_literal(ctx, node->label);
-        append_sql(ctx, ")");
-    }
-    
-    /* TODO: Handle property constraints */
-    if (node->properties) {
-        CYPHER_DEBUG("Property constraints not yet implemented");
-    }
+    /* Note: Label and property constraints will be added later in transform_match_clause */
+    /* to ensure all table joins are complete before WHERE clause starts */
     
     return 0;
 }

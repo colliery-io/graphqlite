@@ -42,9 +42,10 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         append_sql(ctx, "SELECT ");
     } else {
         /* Replace the * with actual column list */
-        /* This is a bit hacky - in a real implementation we'd build the query differently */
-        char *after_select = select_pos + strlen("SELECT ");
-        char *temp = strdup(after_select + 2); /* Skip "* " */
+        /* Find the end of "SELECT *" and skip any spaces */
+        char *after_star = select_pos + strlen("SELECT *");
+        while (*after_star == ' ') after_star++; /* Skip any extra spaces */
+        char *temp = strdup(after_star);
         
         /* Truncate at SELECT */
         ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
@@ -113,13 +114,25 @@ static int transform_return_item(cypher_transform_context *ctx, cypher_return_it
         append_sql(ctx, ", ");
     }
     
+    /* Special handling for node identifiers with aliases */
+    if (item->alias && item->expr->type == AST_NODE_IDENTIFIER) {
+        cypher_identifier *id = (cypher_identifier*)item->expr;
+        const char *table_alias = lookup_variable_alias(ctx, id->name);
+        if (table_alias) {
+            /* For node variables with alias, select the ID and alias it */
+            append_sql(ctx, "%s.id AS ", table_alias);
+            append_identifier(ctx, item->alias);
+            return 0;
+        }
+    }
+    
     /* Transform the expression */
     if (transform_expression(ctx, item->expr) < 0) {
         return -1;
     }
     
-    /* Add alias if specified */
-    if (item->alias) {
+    /* Add alias if specified (for non-wildcard expressions) */
+    if (item->alias && item->expr->type != AST_NODE_IDENTIFIER) {
         append_sql(ctx, " AS ");
         append_identifier(ctx, item->alias);
     }
@@ -215,11 +228,21 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return -1;
     }
     
-    /* Generate property access query */
-    /* This is simplified - in reality we'd need a proper property lookup */
-    append_sql(ctx, "(SELECT value FROM properties WHERE element_id = %s.id AND key = ", alias);
+    /* Generate property access query using our actual schema */
+    /* We need to check multiple property tables based on type */
+    append_sql(ctx, "(SELECT COALESCE(");
+    append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
     append_string_literal(ctx, prop->property_name);
-    append_sql(ctx, " AND element_type = 'node')");
+    append_sql(ctx, "), ");
+    append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
+    append_string_literal(ctx, prop->property_name);
+    append_sql(ctx, "), ");
+    append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
+    append_string_literal(ctx, prop->property_name);
+    append_sql(ctx, "), ");
+    append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
+    append_string_literal(ctx, prop->property_name);
+    append_sql(ctx, ")))");
     
     return 0;
 }
