@@ -93,9 +93,15 @@ TEST_RUNNER = $(BUILD_DIR)/test_runner
 MAIN_APP = $(BUILD_DIR)/graphqlite
 MAIN_OBJ = $(BUILD_DIR)/main.o
 
-# SQLite extension
-EXTENSION_LIB = $(BUILD_DIR)/graphqlite.so
+# SQLite extension - use .dylib on macOS, .so on Linux
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    EXTENSION_LIB = $(BUILD_DIR)/graphqlite.dylib
+else
+    EXTENSION_LIB = $(BUILD_DIR)/graphqlite.so
+endif
 EXTENSION_OBJ = $(BUILD_DIR)/extension.o
+
 
 # Default target
 all: dirs $(PARSER_OBJS)
@@ -106,11 +112,12 @@ graphqlite: $(MAIN_APP)
 # Build SQLite extension
 extension: $(EXTENSION_LIB)
 
+
 $(MAIN_APP): $(MAIN_OBJ) $(PARSER_OBJS) $(TRANSFORM_OBJS) $(EXECUTOR_OBJS) | dirs
 	$(CC) $(CFLAGS) $^ -o $@ -lsqlite3
 
-# SQLite extension shared library
-$(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) | dirs
+# SQLite extension shared library (with schema migration)
+$(EXTENSION_LIB): $(EXTENSION_OBJ) $(BUILD_EXECUTOR_DIR)/cypher_schema.pic.o | dirs
 	$(CC) -shared -fPIC $^ -o $@ -lsqlite3
 
 # Main application object
@@ -119,7 +126,8 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 
 # Extension object
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(CFLAGS) -fPIC -I$(SRC_DIR) -c $< -o $@
+
 
 # Help target
 help:
@@ -127,7 +135,7 @@ help:
 	@echo "  make           - Build parser objects (default)"
 	@echo "  make all       - Same as 'make'"
 	@echo "  make graphqlite - Build main interactive application"
-	@echo "  make extension - Build SQLite extension (graphqlite.so)"
+	@echo "  make extension - Build SQLite extension (graphqlite.dylib on macOS, graphqlite.so on Linux)"
 	@echo "  make test      - Build and run CUnit tests"
 	@echo "  make coverage  - Run tests and generate gcov coverage report"
 	@echo "  make clean     - Remove all build artifacts"
