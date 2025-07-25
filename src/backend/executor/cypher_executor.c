@@ -225,10 +225,51 @@ static int execute_path_pattern_with_variables(cypher_executor *executor, cypher
                     }
                 }
                 
-                /* Add demo property for new nodes */
-                const char *test_name = "TestNode";
-                if (cypher_schema_set_node_property(executor->schema_mgr, node_id, "name", PROP_TYPE_TEXT, test_name) == 0) {
-                    result->properties_set++;
+                /* Process node properties if present */
+                if (node_pattern->properties && node_pattern->properties->type == AST_NODE_MAP) {
+                    cypher_map *map = (cypher_map*)node_pattern->properties;
+                    if (map->pairs) {
+                        for (int j = 0; j < map->pairs->count; j++) {
+                            cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+                            if (pair->key && pair->value) {
+                                /* Determine property type and value */
+                                property_type prop_type = PROP_TYPE_TEXT;
+                                const void *prop_value = NULL;
+                                
+                                if (pair->value->type == AST_NODE_LITERAL) {
+                                    cypher_literal *lit = (cypher_literal*)pair->value;
+                                    switch (lit->literal_type) {
+                                        case LITERAL_STRING:
+                                            prop_type = PROP_TYPE_TEXT;
+                                            prop_value = lit->value.string;
+                                            break;
+                                        case LITERAL_INTEGER:
+                                            prop_type = PROP_TYPE_INTEGER;
+                                            prop_value = &lit->value.integer;
+                                            break;
+                                        case LITERAL_DECIMAL:
+                                            prop_type = PROP_TYPE_REAL;
+                                            prop_value = &lit->value.decimal;
+                                            break;
+                                        case LITERAL_BOOLEAN:
+                                            prop_type = PROP_TYPE_BOOLEAN;
+                                            prop_value = &lit->value.boolean;
+                                            break;
+                                        case LITERAL_NULL:
+                                            /* Skip null properties for now */
+                                            continue;
+                                    }
+                                    
+                                    if (prop_value) {
+                                        if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value) == 0) {
+                                            result->properties_set++;
+                                            CYPHER_DEBUG("Set property '%s' on node %d", pair->key, node_id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             
@@ -283,10 +324,51 @@ static int execute_path_pattern_with_variables(cypher_executor *executor, cypher
                     }
                 }
                 
-                /* Add demo property for new target nodes */
-                const char *test_name = "TestNode";
-                if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, "name", PROP_TYPE_TEXT, test_name) == 0) {
-                    result->properties_set++;
+                /* Process target node properties if present */
+                if (target_pattern->properties && target_pattern->properties->type == AST_NODE_MAP) {
+                    cypher_map *map = (cypher_map*)target_pattern->properties;
+                    if (map->pairs) {
+                        for (int j = 0; j < map->pairs->count; j++) {
+                            cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+                            if (pair->key && pair->value) {
+                                /* Determine property type and value */
+                                property_type prop_type = PROP_TYPE_TEXT;
+                                const void *prop_value = NULL;
+                                
+                                if (pair->value->type == AST_NODE_LITERAL) {
+                                    cypher_literal *lit = (cypher_literal*)pair->value;
+                                    switch (lit->literal_type) {
+                                        case LITERAL_STRING:
+                                            prop_type = PROP_TYPE_TEXT;
+                                            prop_value = lit->value.string;
+                                            break;
+                                        case LITERAL_INTEGER:
+                                            prop_type = PROP_TYPE_INTEGER;
+                                            prop_value = &lit->value.integer;
+                                            break;
+                                        case LITERAL_DECIMAL:
+                                            prop_type = PROP_TYPE_REAL;
+                                            prop_value = &lit->value.decimal;
+                                            break;
+                                        case LITERAL_BOOLEAN:
+                                            prop_type = PROP_TYPE_BOOLEAN;
+                                            prop_value = &lit->value.boolean;
+                                            break;
+                                        case LITERAL_NULL:
+                                            /* Skip null properties for now */
+                                            continue;
+                                    }
+                                    
+                                    if (prop_value) {
+                                        if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value) == 0) {
+                                            result->properties_set++;
+                                            CYPHER_DEBUG("Set property '%s' on target node %d", pair->key, target_node_id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             

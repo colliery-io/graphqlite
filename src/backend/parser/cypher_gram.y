@@ -100,7 +100,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left '^'
 %left IN IS
 %left '.'
-%nonassoc UMINUS
+%right UNARY_MINUS UNARY_PLUS
 
 %%
 
@@ -286,6 +286,26 @@ label_opt:
 /* Expressions */
 expr:
     primary_expr        { $$ = $1; }
+    | '+' expr %prec UNARY_PLUS  { $$ = $2; }  /* unary plus - just return the expression */
+    | '-' expr %prec UNARY_MINUS  { 
+        /* Handle unary minus */
+        if ($2->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)$2;
+            if (lit->literal_type == LITERAL_INTEGER) {
+                lit->value.integer = -lit->value.integer;
+                $$ = $2;
+            } else if (lit->literal_type == LITERAL_DECIMAL) {
+                lit->value.decimal = -lit->value.decimal;
+                $$ = $2;
+            } else {
+                /* For other types, we'd need a unary minus node */
+                $$ = $2;
+            }
+        } else {
+            /* For non-literals, we'd need a unary minus expression node */
+            $$ = $2;
+        }
+    }
     | expr '+' expr     { /* TODO: implement binary operations */ $$ = $1; }
     | expr '-' expr     { /* TODO: implement binary operations */ $$ = $1; }
     | expr '*' expr     { /* TODO: implement binary operations */ $$ = $1; }

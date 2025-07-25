@@ -461,6 +461,48 @@ static void test_create_property_types(void)
     }
 }
 
+/* Test CREATE with negative numbers */
+static void test_create_negative_numbers(void)
+{
+    const char *query = "CREATE (n {neg_int: -42, neg_float: -3.14})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+        
+        CU_ASSERT_PTR_NOT_NULL(node->properties);
+        CU_ASSERT_EQUAL(node->properties->type, AST_NODE_MAP);
+        
+        cypher_map *map = (cypher_map*)node->properties;
+        CU_ASSERT_EQUAL(map->pairs->count, 2);
+        
+        /* Check first property value is negative integer */
+        cypher_map_pair *pair1 = (cypher_map_pair*)map->pairs->items[0];
+        CU_ASSERT_STRING_EQUAL(pair1->key, "neg_int");
+        CU_ASSERT_EQUAL(pair1->value->type, AST_NODE_LITERAL);
+        cypher_literal *lit1 = (cypher_literal*)pair1->value;
+        CU_ASSERT_EQUAL(lit1->literal_type, LITERAL_INTEGER);
+        CU_ASSERT_EQUAL(lit1->value.integer, -42);
+        
+        /* Check second property value is negative decimal */
+        cypher_map_pair *pair2 = (cypher_map_pair*)map->pairs->items[1];
+        CU_ASSERT_STRING_EQUAL(pair2->key, "neg_float");
+        CU_ASSERT_EQUAL(pair2->value->type, AST_NODE_LITERAL);
+        cypher_literal *lit2 = (cypher_literal*)pair2->value;
+        CU_ASSERT_EQUAL(lit2->literal_type, LITERAL_DECIMAL);
+        CU_ASSERT_DOUBLE_EQUAL(lit2->value.decimal, -3.14, 0.001);
+        
+        cypher_parser_free_result(result);
+    }
+}
+
 /* Test CREATE with just label (no variable, no properties) */
 static void test_create_label_only(void)
 {
@@ -528,6 +570,7 @@ int init_parser_suite(void)
         !CU_add_test(suite, "CREATE with variable", test_create_with_variable) ||
         !CU_add_test(suite, "CREATE multiple nodes", test_create_multiple_nodes) ||
         !CU_add_test(suite, "CREATE with property types", test_create_property_types) ||
+        !CU_add_test(suite, "CREATE with negative numbers", test_create_negative_numbers) ||
         !CU_add_test(suite, "CREATE label only", test_create_label_only) ||
         !CU_add_test(suite, "CREATE properties no label", test_create_properties_no_label) ||
         !CU_add_test(suite, "Node with label", test_node_with_label) ||
