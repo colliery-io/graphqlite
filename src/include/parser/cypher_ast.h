@@ -38,6 +38,7 @@ typedef enum ast_node_type {
     AST_NODE_FUNCTION_CALL,
     AST_NODE_LIST,
     AST_NODE_MAP,
+    AST_NODE_MAP_PAIR,
     
     /* Return items */
     AST_NODE_RETURN_ITEM,

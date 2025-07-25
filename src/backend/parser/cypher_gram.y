@@ -46,6 +46,8 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_node_pattern *node_pattern;
     cypher_rel_pattern *rel_pattern;
     cypher_path *path;
+    cypher_map *map;
+    cypher_map_pair *map_pair;
 }
 
 /* Terminal tokens */
@@ -81,6 +83,9 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <literal> literal
 %type <identifier> identifier
 %type <parameter> parameter
+%type <map> map_literal properties_opt
+%type <map_pair> map_pair
+%type <list> map_pair_list
 
 %type <string> label_opt variable_opt
 %type <boolean> optional_opt distinct_opt
@@ -232,14 +237,9 @@ path:
     ;
 
 node_pattern:
-    '(' variable_opt label_opt ')'
+    '(' variable_opt label_opt properties_opt ')'
         {
-            $$ = make_node_pattern($2, $3, NULL);
-        }
-    | '(' variable_opt label_opt '{' '}' ')'
-        {
-            /* Empty properties for now */
-            $$ = make_node_pattern($2, $3, NULL);
+            $$ = make_node_pattern($2, $3, (ast_node*)$4);
         }
     ;
 
@@ -365,6 +365,51 @@ parameter:
         {
             $$ = make_parameter($1, @1.first_line);
             free($1);
+        }
+    ;
+
+/* Property map support */
+properties_opt:
+    /* empty */         { $$ = NULL; }
+    | '{' '}'           { $$ = NULL; }
+    | '{' map_pair_list '}'
+        {
+            $$ = make_map($2, @1.first_line);
+        }
+    ;
+
+map_literal:
+    '{' '}'
+        {
+            $$ = make_map(ast_list_create(), @1.first_line);
+        }
+    | '{' map_pair_list '}'
+        {
+            $$ = make_map($2, @1.first_line);
+        }
+    ;
+
+map_pair_list:
+    map_pair
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)$1);
+        }
+    | map_pair_list ',' map_pair
+        {
+            ast_list_append($1, (ast_node*)$3);
+            $$ = $1;
+        }
+    ;
+
+map_pair:
+    IDENTIFIER ':' expr
+        {
+            $$ = make_map_pair($1, $3, @1.first_line);
+        }
+    | STRING ':' expr
+        {
+            $$ = make_map_pair($1, $3, @1.first_line);
         }
     ;
 

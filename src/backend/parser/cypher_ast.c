@@ -191,6 +191,14 @@ void ast_node_free(ast_node *node)
             }
             break;
             
+        case AST_NODE_MAP_PAIR:
+            {
+                cypher_map_pair *pair = (cypher_map_pair*)node;
+                free(pair->key);
+                ast_node_free(pair->value);
+            }
+            break;
+            
         case AST_NODE_LIST:
             {
                 cypher_list *list = (cypher_list*)node;
@@ -504,7 +512,7 @@ cypher_map* make_map(ast_list *pairs, int location)
 
 cypher_map_pair* make_map_pair(char *key, ast_node *value, int location)
 {
-    cypher_map_pair *pair = (cypher_map_pair*)ast_node_create(AST_NODE_MAP, location, sizeof(cypher_map));
+    cypher_map_pair *pair = (cypher_map_pair*)ast_node_create(AST_NODE_MAP_PAIR, location, sizeof(cypher_map_pair));
     if (!pair) {
         return NULL;
     }

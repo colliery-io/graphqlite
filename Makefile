@@ -116,9 +116,13 @@ extension: $(EXTENSION_LIB)
 $(MAIN_APP): $(MAIN_OBJ) $(PARSER_OBJS) $(TRANSFORM_OBJS) $(EXECUTOR_OBJS) | dirs
 	$(CC) $(CFLAGS) $^ -o $@ -lsqlite3
 
-# SQLite extension shared library (with schema migration)
-$(EXTENSION_LIB): $(EXTENSION_OBJ) $(BUILD_EXECUTOR_DIR)/cypher_schema.pic.o | dirs
-	$(CC) -shared -fPIC $^ -o $@ -lsqlite3
+# SQLite extension shared library (with full parser, transform, and executor)
+$(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) | dirs $(GRAMMAR_HDR)
+ifeq ($(UNAME_S),Darwin)
+	$(CC) -g -fPIC -dynamiclib $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -undefined dynamic_lookup
+else
+	$(CC) -shared -fPIC $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@
+endif
 
 # Main application object
 $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
@@ -137,6 +141,7 @@ help:
 	@echo "  make graphqlite - Build main interactive application"
 	@echo "  make extension - Build SQLite extension (graphqlite.dylib on macOS, graphqlite.so on Linux)"
 	@echo "  make test      - Build and run CUnit tests"
+	@echo "  make test-functional - Build extension and run functional SQL tests"
 	@echo "  make coverage  - Run tests and generate gcov coverage report"
 	@echo "  make clean     - Remove all build artifacts"
 	@echo "  make help      - Show this help message"
@@ -231,6 +236,21 @@ $(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) $(EXECUTOR
 # Run tests
 test: $(TEST_RUNNER)
 	./$(TEST_RUNNER)
+
+# Run functional tests with SQLite extension
+test-functional: extension
+	@echo "Running functional tests..."
+	@for test_file in tests/functional/*.sql; do \
+		if [ -f "$$test_file" ]; then \
+			echo ""; \
+			echo "========================================"; \
+			echo "Running: $$(basename $$test_file)"; \
+			echo "========================================"; \
+			sqlite3 -bail < "$$test_file" || exit 1; \
+		fi; \
+	done
+	@echo ""
+	@echo "All functional tests completed successfully!"
 
 # Generate coverage report
 coverage: test

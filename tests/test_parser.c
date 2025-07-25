@@ -335,6 +335,182 @@ static void test_ast_printing(void)
     }
 }
 
+/* Test CREATE with node properties */
+static void test_create_node_properties(void)
+{
+    const char *query = "CREATE (n {name: 'Alice', age: 30})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    // Just verify parsing succeeded - the detailed validation is in our debug script
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with label and properties */
+static void test_create_label_and_properties(void)
+{
+    const char *query = "CREATE (n:Person {name: 'Bob', age: 25})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+        
+        CU_ASSERT_PTR_NOT_NULL(node->label);
+        CU_ASSERT_STRING_EQUAL(node->label, "Person");
+        CU_ASSERT_PTR_NOT_NULL(node->properties);
+        CU_ASSERT_EQUAL(node->properties->type, AST_NODE_MAP);
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with empty properties */
+static void test_create_empty_properties(void)
+{
+    const char *query = "CREATE (n {})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with variable name */
+static void test_create_with_variable(void)
+{
+    const char *query = "CREATE (alice:Person {name: 'Alice'})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+        
+        CU_ASSERT_PTR_NOT_NULL(node->variable);
+        CU_ASSERT_STRING_EQUAL(node->variable, "alice");
+        CU_ASSERT_PTR_NOT_NULL(node->label);
+        CU_ASSERT_STRING_EQUAL(node->label, "Person");
+        CU_ASSERT_PTR_NOT_NULL(node->properties);
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE multiple nodes */
+static void test_create_multiple_nodes(void)
+{
+    const char *query = "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(create->pattern->count, 2); /* Two separate patterns */
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with different property types */
+static void test_create_property_types(void)
+{
+    const char *query = "CREATE (n {name: 'Alice', age: 30, active: true, score: 95.5})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+        
+        CU_ASSERT_PTR_NOT_NULL(node->properties);
+        CU_ASSERT_EQUAL(node->properties->type, AST_NODE_MAP);
+        
+        cypher_map *map = (cypher_map*)node->properties;
+        CU_ASSERT_PTR_NOT_NULL(map->pairs);
+        CU_ASSERT_EQUAL(map->pairs->count, 4); /* 4 properties */
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with just label (no variable, no properties) */
+static void test_create_label_only(void)
+{
+    const char *query = "CREATE (:Person)";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+        
+        CU_ASSERT_PTR_NULL(node->variable); /* No variable */
+        CU_ASSERT_PTR_NOT_NULL(node->label);
+        CU_ASSERT_STRING_EQUAL(node->label, "Person");
+        CU_ASSERT_PTR_NULL(node->properties); /* No properties */
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with properties but no label */
+static void test_create_properties_no_label(void)
+{
+    const char *query = "CREATE (n {name: 'Alice'})";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+        
+        CU_ASSERT_PTR_NOT_NULL(node->variable);
+        CU_ASSERT_STRING_EQUAL(node->variable, "n");
+        CU_ASSERT_PTR_NULL(node->label); /* No label */
+        CU_ASSERT_PTR_NOT_NULL(node->properties);
+        
+        cypher_parser_free_result(result);
+    }
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -346,6 +522,14 @@ int init_parser_suite(void)
     /* Add tests to suite */
     if (!CU_add_test(suite, "Simple MATCH RETURN", test_simple_match_return) ||
         !CU_add_test(suite, "Simple CREATE", test_simple_create) ||
+        !CU_add_test(suite, "CREATE with empty properties", test_create_empty_properties) ||
+        !CU_add_test(suite, "CREATE with node properties", test_create_node_properties) ||
+        !CU_add_test(suite, "CREATE with label and properties", test_create_label_and_properties) ||
+        !CU_add_test(suite, "CREATE with variable", test_create_with_variable) ||
+        !CU_add_test(suite, "CREATE multiple nodes", test_create_multiple_nodes) ||
+        !CU_add_test(suite, "CREATE with property types", test_create_property_types) ||
+        !CU_add_test(suite, "CREATE label only", test_create_label_only) ||
+        !CU_add_test(suite, "CREATE properties no label", test_create_properties_no_label) ||
         !CU_add_test(suite, "Node with label", test_node_with_label) ||
         !CU_add_test(suite, "RETURN with alias", test_return_with_alias) ||
         !CU_add_test(suite, "Literal parsing", test_literal_parsing) ||
