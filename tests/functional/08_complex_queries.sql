@@ -81,14 +81,12 @@ SELECT 'Test 2.1 - Multiple relationship types from same node:' as test_name;
 SELECT 'SKIPPED: SQL generation bug - ambiguous column references' as result;
 
 SELECT 'Test 2.2 - Fan-out pattern (one-to-many):' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (manager:Person)-[:MANAGES]->(employee:Person) RETURN manager.name, count(employee.name) as team_size') as result;
-SELECT 'SKIPPED: count() function not implemented' as result;
+-- COUNT function now implemented
+SELECT cypher('MATCH (manager:Person)-[:MANAGES]->(employee:Person) RETURN manager.name, count(employee.name) as team_size') as result;
 
 SELECT 'Test 2.3 - Fan-in pattern (many-to-one):' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (person:Person)-[:WORKS_FOR]->(company:Company) RETURN company.name, count(person.name) as employee_count') as result;
-SELECT 'SKIPPED: count() function not implemented' as result;
+-- COUNT function now implemented
+SELECT cypher('MATCH (person:Person)-[:WORKS_FOR]->(company:Company) RETURN company.name, count(person.name) as employee_count') as result;
 
 SELECT 'Test 2.4 - Diamond pattern (diverge and converge):' as test_name;
 -- NOTE: Complex patterns with reused variables generate ambiguous SQL - documented in BUG_FIXES.md
@@ -133,9 +131,9 @@ SELECT 'Test 4.2 - Find people who work on projects led by their manager:' as te
 SELECT 'SKIPPED: SQL generation bug - ambiguous column references' as result;
 
 SELECT 'Test 4.3 - Complex company ecosystem:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
+-- NOTE: Multiple relationship types (|) syntax not implemented - documented in BUG_FIXES.md
 -- SELECT cypher('MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name, company.name, count(*) as relationships') as result;
-SELECT 'SKIPPED: count() function not implemented' as result;
+SELECT 'SKIPPED: Multiple relationship type syntax (|) not implemented' as result;
 
 -- =======================================================================
 -- SECTION 5: Graph Traversal Patterns
@@ -164,14 +162,13 @@ SELECT cypher('MATCH (a:Person)-[:WORKS_FOR]->(company:Company)<-[:WORKS_FOR]-(c
 SELECT '=== Section 6: Aggregation and Grouping Patterns ===' as section;
 
 SELECT 'Test 6.1 - Count relationships by type:' as test_name;
--- NOTE: type(), count() functions and ORDER BY DESC not implemented - documented in BUG_FIXES.md
+-- NOTE: type() function not implemented, but COUNT and ORDER BY DESC now work - documented in BUG_FIXES.md
 -- SELECT cypher('MATCH ()-[r]->() RETURN type(r) as relationship_type, count(r) as count ORDER BY count DESC') as result;
-SELECT 'SKIPPED: type(), count() functions and ORDER BY DESC not implemented' as result;
+SELECT 'SKIPPED: type() function not implemented' as result;
 
 SELECT 'Test 6.2 - Aggregate by department:' as test_name;
--- NOTE: count(), avg() functions and ORDER BY DESC not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (p:Person) RETURN p.department, count(p) as department_size, avg(p.age) as avg_age ORDER BY department_size DESC') as result;
-SELECT 'SKIPPED: count(), avg() functions and ORDER BY DESC not implemented' as result;
+-- COUNT, AVG functions and ORDER BY DESC now implemented
+SELECT cypher('MATCH (p:Person) RETURN p.department, count(p) as department_size, avg(p.age) as avg_age ORDER BY department_size DESC') as result;
 
 SELECT 'Test 6.3 - Company statistics:' as test_name;
 -- NOTE: ORDER BY DESC not implemented - documented in BUG_FIXES.md
@@ -240,9 +237,8 @@ SELECT 'low_degree' as category, COUNT(*) as count FROM (
 );
 
 SELECT 'Multi-hop connectivity verification:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (start:Person)-[:WORKS_FOR]->(company:Company)-[:LOCATED_IN]->(city:City) RETURN count(*) as multi_hop_paths') as paths;
-SELECT 'SKIPPED: count() function not implemented' as paths;
+-- COUNT function now implemented
+SELECT cypher('MATCH (start:Person)-[:WORKS_FOR]->(company:Company)-[:LOCATED_IN]->(city:City) RETURN count(*) as multi_hop_paths') as paths;
 
 -- Cleanup note
 SELECT '=== Complex Query Operations Test Complete ===' as section;

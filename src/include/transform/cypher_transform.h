@@ -83,6 +83,9 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
 int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr);
 int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr);
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op);
+int transform_function_call(cypher_transform_context *ctx, cypher_function_call *func_call);
+int transform_count_function(cypher_transform_context *ctx, cypher_function_call *func_call);
+int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 
 /* Variable management */
 int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);

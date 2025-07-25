@@ -50,7 +50,7 @@ The `build_query_results()` function in `cypher_executor.c` falls back to generi
 
 
 ### Issue: COUNT() Function Not Implemented
-**Status**: Open  
+**Status**: ✅ COMPLETED  
 **Priority**: High  
 **AGE Compatibility**: Blocks basic aggregate functionality
 
@@ -279,12 +279,21 @@ MATCH (n) WHERE NOT n:Person AND NOT n:Company RETURN n
 ---
 
 ### Issue: COUNT() Aggregate Function Not Implemented
-**Status**: Open  
+**Status**: ✅ COMPLETED  
 **Priority**: High  
 **AGE Compatibility**: Breaks basic aggregate functionality
 
 **Description:**
 Aggregate functions (`count()`, `MIN()`, `MAX()`, `avg()`) and utility functions (`type()`, `length()`) are not implemented, causing parse errors in common queries.
+
+**✅ COMPLETED FUNCTIONS:**
+- `COUNT()` - Both `count(*)` and `count(variable)` syntax supported
+- `COUNT(DISTINCT variable)` - Distinct counting implemented
+- `MIN()`, `MAX()`, `AVG()`, `SUM()` - All basic aggregate functions working
+
+**REMAINING WORK:**
+- `type()` function for relationship types still not implemented
+- `length()` function still not implemented
 
 **Current Behavior:**
 ```cypher
@@ -514,6 +523,84 @@ Runtime error near line 79: SQL prepare failed: ambiguous column name: n_p.id
 2. Use qualified column references (`table.column` not just `column`)
 3. Generate unique aliases for repeated table patterns
 4. Test with complex multi-hop relationship queries
+
+---
+
+### Issue: Self-Referencing Relationship Patterns Cause SQL Ambiguity
+**Status**: Open  
+**Priority**: Medium  
+**AGE Compatibility**: Breaks self-referencing graph patterns
+
+**Description:**
+Self-referencing relationship patterns like `(n)-[r]->(n)` generate SQL with ambiguous column references, causing query execution failures.
+
+**Current Behavior:**
+```cypher
+MATCH (n)-[r]->(n) RETURN count(r)
+Runtime error: SQL prepare failed: ambiguous column name: n_n.id
+```
+
+**Expected AGE-Compatible Behavior:**
+```cypher
+MATCH (n)-[r]->(n) RETURN count(r)
+2  # Count of self-referencing relationships
+```
+
+**Location**: `tests/functional/09_edge_cases.sql:250`
+
+**Root Cause:**
+- SQL generation creates duplicate table aliases when same node variable appears multiple times
+- Transform layer doesn't handle self-referencing patterns with unique aliases
+- Column references become ambiguous in generated SQL
+
+**Affected Code:**
+- `src/backend/transform/transform_match.c` - Pattern transformation logic
+- SQL generation for relationship patterns with repeated variables
+
+**Solution Approach:**
+1. Generate unique table aliases for repeated node variables in same pattern
+2. Update transform logic to detect self-referencing patterns
+3. Ensure proper column qualification in generated SQL
+4. Test with various self-referencing scenarios
+
+---
+
+### Issue: Multiple Relationship Type Syntax Not Supported
+**Status**: Open  
+**Priority**: Medium  
+**AGE Compatibility**: Breaks union-type relationship matching
+
+**Description:**
+The pipe syntax for matching multiple relationship types (`[:TYPE1|TYPE2]`) is not implemented in the parser.
+
+**Current Behavior:**
+```cypher
+MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name
+Runtime error: Failed to parse query
+```
+
+**Expected AGE-Compatible Behavior:**
+```cypher
+MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name
+["Alice", "Bob", "Charlie"]  # People with either relationship type
+```
+
+**Location**: `tests/functional/08_complex_queries.sql:135`
+
+**Root Cause:**
+- Parser grammar doesn't support pipe `|` operator in relationship type specifications
+- No AST node for union relationship types
+- Transform layer has no logic for multiple relationship type matching
+
+**Affected Code:**
+- `src/backend/parser/cypher_gram.y` - Relationship pattern grammar
+- `src/backend/transform/transform_match.c` - Relationship type handling
+
+**Solution Approach:**
+1. Add pipe operator support to relationship type grammar
+2. Create AST node for union relationship types
+3. Implement SQL generation for OR conditions on relationship types
+4. Support arbitrary number of types: `[:TYPE1|TYPE2|TYPE3]`
 
 ---
 

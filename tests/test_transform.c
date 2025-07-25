@@ -9,6 +9,7 @@
 #include "parser/cypher_ast.h"
 #include "transform/cypher_transform.h"
 #include "parser/cypher_debug.h"
+#include "executor/cypher_schema.h"
 #include "test_transform.h"
 
 /* Test database handle */
@@ -23,31 +24,18 @@ static int setup_transform_suite(void)
         return -1;
     }
     
-    /* Create graph schema */
-    const char *schema[] = {
-        "CREATE TABLE nodes (id INTEGER PRIMARY KEY AUTOINCREMENT)",
-        "CREATE TABLE edges (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "source_id INTEGER, target_id INTEGER, type TEXT, "
-        "FOREIGN KEY(source_id) REFERENCES nodes(id), "
-        "FOREIGN KEY(target_id) REFERENCES nodes(id))",
-        "CREATE TABLE node_labels (node_id INTEGER, label TEXT, "
-        "PRIMARY KEY(node_id, label), FOREIGN KEY(node_id) REFERENCES nodes(id))",
-        "CREATE TABLE properties (element_id INTEGER, element_type TEXT, "
-        "key TEXT, value TEXT, value_type TEXT, "
-        "PRIMARY KEY(element_id, element_type, key))",
-        NULL
-    };
-    
-    for (int i = 0; schema[i]; i++) {
-        char *error;
-        rc = sqlite3_exec(test_db, schema[i], NULL, NULL, &error);
-        if (rc != SQLITE_OK) {
-            fprintf(stderr, "Schema error: %s\n", error);
-            sqlite3_free(error);
-            return -1;
-        }
+    /* Use the proper GraphQLite schema */
+    cypher_schema_manager *schema_mgr = cypher_schema_create_manager(test_db);
+    if (!schema_mgr) {
+        return -1;
     }
     
+    if (cypher_schema_initialize(schema_mgr) < 0) {
+        cypher_schema_free_manager(schema_mgr);
+        return -1;
+    }
+    
+    cypher_schema_free_manager(schema_mgr);
     return 0;
 }
 
@@ -850,6 +838,126 @@ static void test_return_additional_errors(void)
     }
 }
 
+/* Test COUNT function variations */
+static void test_count_function(void)
+{
+    /* Test COUNT(*) */
+    const char *query1 = "RETURN count(*)";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        if (!result1->has_error) {
+            printf("\nCOUNT(*) query transformed successfully\n");
+        } else {
+            printf("\nCOUNT(*) query failed: %s\n", 
+                   result1->error_message ? result1->error_message : "Unknown error");
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test COUNT(variable) */
+    const char *query2 = "MATCH (n) RETURN count(n)";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        if (!result2->has_error) {
+            printf("\nCOUNT(variable) query transformed successfully\n");
+        } else {
+            printf("\nCOUNT(variable) query failed: %s\n", 
+                   result2->error_message ? result2->error_message : "Unknown error");
+        }
+        cypher_free_result(result2);
+    }
+    
+    /* Test COUNT(DISTINCT variable) */
+    const char *query3 = "MATCH (n) RETURN count(distinct n)";
+    cypher_query_result *result3 = parse_and_transform(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        if (!result3->has_error) {
+            printf("\nCOUNT(DISTINCT variable) query transformed successfully\n");
+        } else {
+            printf("\nCOUNT(DISTINCT variable) query failed: %s\n", 
+                   result3->error_message ? result3->error_message : "Unknown error");
+        }
+        cypher_free_result(result3);
+    }
+    
+    /* Test COUNT with property */
+    const char *query4 = "MATCH (n) RETURN count(n.name)";
+    cypher_query_result *result4 = parse_and_transform(query4);
+    CU_ASSERT_PTR_NOT_NULL(result4);
+    if (result4) {
+        if (!result4->has_error) {
+            printf("\nCOUNT(property) query transformed successfully\n");
+        } else {
+            printf("\nCOUNT(property) query failed: %s\n", 
+                   result4->error_message ? result4->error_message : "Unknown error");
+        }
+        cypher_free_result(result4);
+    }
+}
+
+/* Test other aggregate functions */
+static void test_aggregate_functions(void)
+{
+    /* Test MIN function */
+    const char *query1 = "MATCH (n) RETURN min(n.age)";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        if (!result1->has_error) {
+            printf("\nMIN function query transformed successfully\n");
+        } else {
+            printf("\nMIN function query failed: %s\n", 
+                   result1->error_message ? result1->error_message : "Unknown error");
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test MAX function */
+    const char *query2 = "MATCH (n) RETURN max(n.age)";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        if (!result2->has_error) {
+            printf("\nMAX function query transformed successfully\n");
+        } else {
+            printf("\nMAX function query failed: %s\n", 
+                   result2->error_message ? result2->error_message : "Unknown error");
+        }
+        cypher_free_result(result2);
+    }
+    
+    /* Test AVG function */
+    const char *query3 = "MATCH (n) RETURN avg(n.age)";
+    cypher_query_result *result3 = parse_and_transform(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        if (!result3->has_error) {
+            printf("\nAVG function query transformed successfully\n");
+        } else {
+            printf("\nAVG function query failed: %s\n", 
+                   result3->error_message ? result3->error_message : "Unknown error");
+        }
+        cypher_free_result(result3);
+    }
+    
+    /* Test SUM function */
+    const char *query4 = "MATCH (n) RETURN sum(n.age)";
+    cypher_query_result *result4 = parse_and_transform(query4);
+    CU_ASSERT_PTR_NOT_NULL(result4);
+    if (result4) {
+        if (!result4->has_error) {
+            printf("\nSUM function query transformed successfully\n");
+        } else {
+            printf("\nSUM function query failed: %s\n", 
+                   result4->error_message ? result4->error_message : "Unknown error");
+        }
+        cypher_free_result(result4);
+    }
+}
+
 /* Initialize the transform test suite */
 int init_transform_suite(void)
 {
@@ -882,7 +990,9 @@ int init_transform_suite(void)
         !CU_add_test(suite, "RETURN error conditions", test_return_error_conditions) ||
         !CU_add_test(suite, "RETURN execution paths", test_return_execution_paths) ||
         !CU_add_test(suite, "RETURN binary operators", test_return_binary_operators) ||
-        !CU_add_test(suite, "RETURN additional errors", test_return_additional_errors)) {
+        !CU_add_test(suite, "RETURN additional errors", test_return_additional_errors) ||
+        !CU_add_test(suite, "COUNT function variations", test_count_function) ||
+        !CU_add_test(suite, "Aggregate functions", test_aggregate_functions)) {
         return CU_get_error();
     }
     

@@ -188,14 +188,12 @@ SELECT cypher('MATCH (n) RETURN DISTINCT n.name ORDER BY n.name LIMIT 5') as res
 SELECT '=== Verification: Result Set Analysis ===' as section;
 
 SELECT 'Total test nodes:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n) RETURN count(n)') as total_count;
-SELECT 'SKIPPED: count() function not implemented' as total_count;
+-- COUNT function now implemented
+SELECT cypher('MATCH (n) RETURN count(n)') as total_count;
 
 SELECT 'Unique names count:' as test_name;
--- NOTE: count() and DISTINCT functions not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n) WHERE n.name IS NOT NULL RETURN count(DISTINCT n.name)') as unique_names;
-SELECT 'SKIPPED: count() and DISTINCT functions not implemented' as unique_names;
+-- COUNT DISTINCT function now implemented
+SELECT cypher('MATCH (n) WHERE n.name IS NOT NULL RETURN count(DISTINCT n.name)') as unique_names;
 
 SELECT 'Age distribution:' as test_name;
 SELECT cypher('MATCH (n:Person) RETURN n.age ORDER BY n.age') as age_dist;

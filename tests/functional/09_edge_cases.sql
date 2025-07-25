@@ -101,9 +101,8 @@ SELECT 'Test 4.4 - Large SKIP (beyond result set):' as test_name;
 SELECT cypher('MATCH (n:TestNode) RETURN n SKIP 999999') as result;
 
 SELECT 'Test 4.5 - SKIP equals result set size:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as count_first;
-SELECT 'SKIPPED: count() function not implemented' as count_first;
+-- COUNT function now implemented
+SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as count_first;
 SELECT cypher('MATCH (n:TestNode) RETURN n SKIP 5') as result; -- Assuming 5 TestNodes
 
 -- =======================================================================
@@ -222,9 +221,8 @@ SELECT '=== Section 10: Error Recovery and Graceful Degradation ===' as section;
 SELECT 'Test 10.1 - Recovery after error:' as test_name;
 -- NOTE: Parser error handling not graceful - documented in BUG_FIXES.md
 -- SELECT cypher('INVALID SYNTAX') as error_query;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as recovery_query;
-SELECT 'SKIPPED: Parser error handling not graceful, count() function not implemented' as recovery_query;
+-- COUNT function now implemented
+SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as recovery_query;
 
 SELECT 'Test 10.2 - Partial success queries:' as test_name;
 SELECT cypher('MATCH (exists:TestNode), (missing:NonExistent) RETURN exists, missing') as result;
@@ -240,24 +238,21 @@ SELECT 'SKIPPED: Parser error handling not graceful - invalid property syntax' a
 SELECT '=== Verification: Edge Case Analysis ===' as section;
 
 SELECT 'Special value nodes created:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as count;
-SELECT 'SKIPPED: count() function not implemented' as count;
+-- COUNT function now implemented
+SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as count;
 
 SELECT 'Null property handling verification:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n) WHERE n.explicit_null IS NULL RETURN count(n)') as null_count;
-SELECT 'SKIPPED: count() function not implemented' as null_count;
+-- COUNT function now implemented
+SELECT cypher('MATCH (n) WHERE n.explicit_null IS NULL RETURN count(n)') as null_count;
 
 SELECT 'Self-referencing relationships:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
+-- NOTE: Self-referencing patterns cause SQL ambiguous column errors - documented in BUG_FIXES.md
 -- SELECT cypher('MATCH (n)-[r]->(n) RETURN count(r)') as self_refs;
-SELECT 'SKIPPED: count() function not implemented' as self_refs;
+SELECT 'SKIPPED: SQL generation bug - ambiguous column references in self-referencing patterns' as self_refs;
 
 SELECT 'Multiple relationship types between nodes:' as test_name;
--- NOTE: count() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (a:MultiRel)-[r]->(b:MultiRel) RETURN count(r)') as multi_rels;
-SELECT 'SKIPPED: count() function not implemented' as multi_rels;
+-- COUNT function now implemented
+SELECT cypher('MATCH (a:MultiRel)-[r]->(b:MultiRel) RETURN count(r)') as multi_rels;
 
 SELECT 'Property distribution across all test nodes:' as test_name;
 .mode column

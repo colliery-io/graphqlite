@@ -83,7 +83,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <rel_pattern> rel_pattern
 %type <return_item> return_item
 
-%type <node> expr primary_expr literal_expr
+%type <node> expr primary_expr literal_expr function_call
 %type <literal> literal
 %type <identifier> identifier
 %type <parameter> parameter
@@ -397,6 +397,7 @@ primary_expr:
     literal_expr        { $$ = $1; }
     | identifier        { $$ = (ast_node*)$1; }
     | parameter         { $$ = (ast_node*)$1; }
+    | function_call     { $$ = $1; }
     | IDENTIFIER '.' IDENTIFIER
         {
             cypher_identifier *base = make_identifier($1, @1.first_line);
@@ -415,6 +416,37 @@ primary_expr:
 
 literal_expr:
     literal             { $$ = (ast_node*)$1; }
+    ;
+
+function_call:
+    IDENTIFIER '(' ')'
+        {
+            ast_list *args = ast_list_create();
+            $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
+            free($1);
+        }
+    | IDENTIFIER '(' expr ')'
+        {
+            ast_list *args = ast_list_create();
+            ast_list_append(args, $3);
+            $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
+            free($1);
+        }
+    | IDENTIFIER '(' DISTINCT expr ')'
+        {
+            ast_list *args = ast_list_create();
+            ast_list_append(args, $4);
+            $$ = (ast_node*)make_function_call($1, args, true, @1.first_line);
+            free($1);
+        }
+    | IDENTIFIER '(' '*' ')'
+        {
+            ast_list *args = ast_list_create();
+            /* For count(*), we'll use a special NULL argument to indicate * */
+            ast_list_append(args, NULL);
+            $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
+            free($1);
+        }
     ;
 
 literal:

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "transform/cypher_transform.h"
 #include "parser/cypher_debug.h"
@@ -202,6 +203,9 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_BINARY_OP:
             return transform_binary_operation(ctx, (cypher_binary_op*)expr);
             
+        case AST_NODE_FUNCTION_CALL:
+            return transform_function_call(ctx, (cypher_function_call*)expr);
+            
         case AST_NODE_LITERAL:
             {
                 cypher_literal *lit = (cypher_literal*)expr;
@@ -390,5 +394,112 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     /* Close parenthesis */
     append_sql(ctx, ")");
     
+    return 0;
+}
+
+/* Transform function call (e.g., count(n), count(*)) */
+int transform_function_call(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming function call");
+    
+    if (!func_call || !func_call->function_name) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Invalid function call");
+        return -1;
+    }
+    
+    /* Handle COUNT function specifically */
+    if (strcasecmp(func_call->function_name, "count") == 0) {
+        return transform_count_function(ctx, func_call);
+    }
+    
+    /* Handle other aggregate functions */
+    if (strcasecmp(func_call->function_name, "min") == 0 ||
+        strcasecmp(func_call->function_name, "max") == 0 ||
+        strcasecmp(func_call->function_name, "avg") == 0 ||
+        strcasecmp(func_call->function_name, "sum") == 0) {
+        return transform_aggregate_function(ctx, func_call);
+    }
+    
+    /* Unsupported function */
+    ctx->has_error = true;
+    char error[256];
+    snprintf(error, sizeof(error), "Unsupported function: %s", func_call->function_name);
+    ctx->error_message = strdup(error);
+    return -1;
+}
+
+/* Transform COUNT function specifically */
+int transform_count_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming COUNT function");
+    
+    /* COUNT() with no arguments - treat as COUNT(*) */
+    if (!func_call->args || func_call->args->count == 0) {
+        append_sql(ctx, "COUNT(*)");
+        return 0;
+    }
+    
+    /* COUNT(*) case - represented as single NULL argument */
+    if (func_call->args->count == 1 && func_call->args->items[0] == NULL) {
+        append_sql(ctx, "COUNT(*)");
+        return 0;
+    }
+    
+    /* COUNT(expression) case */
+    if (func_call->args->count == 1 && func_call->args->items[0] != NULL) {
+        if (func_call->distinct) {
+            append_sql(ctx, "COUNT(DISTINCT ");
+        } else {
+            append_sql(ctx, "COUNT(");
+        }
+        
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) {
+            return -1;
+        }
+        
+        append_sql(ctx, ")");
+        return 0;
+    }
+    
+    /* Invalid COUNT usage */
+    ctx->has_error = true;
+    ctx->error_message = strdup("COUNT function accepts 0 or 1 argument");
+    return -1;
+}
+
+/* Transform other aggregate functions (MIN, MAX, AVG, SUM) */
+int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming aggregate function: %s", func_call->function_name);
+    
+    /* These functions require exactly one argument */
+    if (!func_call->args || func_call->args->count != 1 || func_call->args->items[0] == NULL) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "%s function requires exactly one non-null argument", func_call->function_name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+    
+    /* Generate SQL function call - convert to uppercase for SQL compliance */
+    char upper_func[64];
+    strncpy(upper_func, func_call->function_name, sizeof(upper_func) - 1);
+    upper_func[sizeof(upper_func) - 1] = '\0';
+    for (int i = 0; upper_func[i]; i++) {
+        upper_func[i] = toupper(upper_func[i]);
+    }
+    
+    if (func_call->distinct) {
+        append_sql(ctx, "%s(DISTINCT ", upper_func);
+    } else {
+        append_sql(ctx, "%s(", upper_func);
+    }
+    
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) {
+        return -1;
+    }
+    
+    append_sql(ctx, ")");
     return 0;
 }
