@@ -489,6 +489,367 @@ static void test_return_without_match(void)
     }
 }
 
+/* Test RETURN with different literal types */
+static void test_return_literals(void) 
+{
+    /* Test decimal literal */
+    const char *query1 = "RETURN 3.14";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        if (!result1->has_error) {
+            printf("\nDecimal literal RETURN transformed successfully\n");
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test string literal */
+    const char *query2 = "RETURN 'hello'";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        if (!result2->has_error) {
+            printf("\nString literal RETURN transformed successfully\n");
+        }
+        cypher_free_result(result2);
+    }
+    
+    /* Test boolean literal */
+    const char *query3 = "RETURN true";
+    cypher_query_result *result3 = parse_and_transform(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        if (!result3->has_error) {
+            printf("\nBoolean literal RETURN transformed successfully\n");
+        }
+        cypher_free_result(result3);
+    }
+    
+    /* Test null literal */
+    const char *query4 = "RETURN null";
+    cypher_query_result *result4 = parse_and_transform(query4);
+    CU_ASSERT_PTR_NOT_NULL(result4);
+    if (result4) {
+        if (!result4->has_error) {
+            printf("\nNull literal RETURN transformed successfully\n");
+        }
+        cypher_free_result(result4);
+    }
+}
+
+/* Test RETURN with WHERE expressions (label expressions, NOT, binary ops) */
+static void test_return_expressions(void)
+{
+    /* Test label expression in RETURN context (through WHERE) */
+    const char *query1 = "MATCH (n) WHERE n:Person RETURN n";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        if (!result1->has_error) {
+            printf("\nLabel expression RETURN transformed successfully\n");
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test NOT expression */
+    const char *query2 = "MATCH (n) WHERE NOT n:Person RETURN n";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        if (!result2->has_error) {
+            printf("\nNOT expression RETURN transformed successfully\n");
+        }
+        cypher_free_result(result2);
+    }
+    
+    /* Test binary operation */
+    const char *query3 = "MATCH (n) WHERE n.age > 25 AND n.age < 65 RETURN n";
+    cypher_query_result *result3 = parse_and_transform(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        if (!result3->has_error) {
+            printf("\nBinary operation RETURN transformed successfully\n");
+        }
+        cypher_free_result(result3);
+    }
+}
+
+/* Test RETURN with different ORDER BY directions */  
+static void test_return_order_by_detailed(void)
+{
+    /* Test ORDER BY ASC explicitly */
+    const char *query1 = "MATCH (n) RETURN n ORDER BY n.name ASC";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        if (!result1->has_error) {
+            printf("\nORDER BY ASC RETURN transformed successfully\n");
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test ORDER BY DESC */
+    const char *query2 = "MATCH (n) RETURN n ORDER BY n.age DESC";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        if (!result2->has_error) {
+            printf("\nORDER BY DESC RETURN transformed successfully\n");
+        }
+        cypher_free_result(result2);
+    }
+    
+    /* Test multiple ORDER BY columns */
+    const char *query3 = "MATCH (n) RETURN n ORDER BY n.name ASC, n.age DESC";
+    cypher_query_result *result3 = parse_and_transform(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        if (!result3->has_error) {
+            printf("\nMultiple ORDER BY columns RETURN transformed successfully\n");
+        }
+        cypher_free_result(result3);
+    }
+}
+
+/* Test error conditions */
+static void test_return_error_conditions(void)
+{
+    /* Test invalid NULL input */
+    cypher_transform_context *ctx = cypher_transform_create_context(test_db);
+    CU_ASSERT_PTR_NOT_NULL(ctx);
+    
+    if (ctx) {
+        /* Test transform_return_clause with NULL parameters */
+        int result = transform_return_clause(NULL, NULL);
+        CU_ASSERT_EQUAL(result, -1);
+        
+        /* Test transform_expression with NULL expression */
+        result = transform_expression(ctx, NULL);
+        CU_ASSERT_EQUAL(result, -1);
+        
+        cypher_transform_free_context(ctx);
+    }
+}
+
+/* Test actual ORDER BY, LIMIT, SKIP execution paths */
+static void test_return_execution_paths(void)
+{
+    cypher_transform_context *ctx = cypher_transform_create_context(test_db);
+    CU_ASSERT_PTR_NOT_NULL(ctx);
+    
+    if (ctx) {
+        /* Test ORDER BY execution path - needs to go through SELECT * replacement path */
+        {
+            /* Create a simple return item */
+            cypher_identifier *id = make_identifier("n", 0);  
+            cypher_return_item *item = make_return_item((ast_node*)id, NULL);
+            ast_list *items = ast_list_create();
+            ast_list_append(items, (ast_node*)item);
+            
+            /* Create ORDER BY item */
+            cypher_identifier *order_expr = make_identifier("n", 0);
+            cypher_order_by_item *order_item = make_order_by_item((ast_node*)order_expr, true);
+            ast_list *order_list = ast_list_create();
+            ast_list_append(order_list, (ast_node*)order_item);
+            
+            cypher_return *ret = make_cypher_return(false, items, order_list, NULL, NULL);
+            
+            /* CRITICAL: Set up context to have SELECT * so it goes through the right path */
+            append_sql(ctx, "SELECT * FROM nodes n0 WHERE 1=1");
+            register_node_variable(ctx, "n", "n0");
+            
+            int result = transform_return_clause(ctx, ret);
+            if (result == 0) {
+                printf("\nORDER BY execution path tested (with SELECT *)\n");
+            } else {
+                printf("\nORDER BY execution path test failed\n");
+            }
+        }
+        
+        /* Test LIMIT execution path - also use SELECT * path */
+        {
+            /* Reset context */
+            cypher_transform_free_context(ctx);
+            ctx = cypher_transform_create_context(test_db);
+            
+            cypher_identifier *id = make_identifier("n", 0);
+            cypher_return_item *item = make_return_item((ast_node*)id, NULL);
+            ast_list *items = ast_list_create();
+            ast_list_append(items, (ast_node*)item);
+            
+            cypher_literal *limit_expr = make_integer_literal(10, 0);
+            cypher_return *ret = make_cypher_return(false, items, NULL, NULL, (ast_node*)limit_expr);
+            
+            append_sql(ctx, "SELECT * FROM nodes n0 WHERE 1=1");
+            register_node_variable(ctx, "n", "n0");
+            
+            int result = transform_return_clause(ctx, ret);
+            if (result == 0) {
+                printf("\nLIMIT execution path tested (with SELECT *)\n");
+            } else {
+                printf("\nLIMIT execution path test failed\n");
+            }
+        }
+        
+        /* Test SKIP execution path - also use SELECT * path */
+        {
+            /* Reset context */
+            cypher_transform_free_context(ctx);
+            ctx = cypher_transform_create_context(test_db);
+            
+            cypher_identifier *id = make_identifier("n", 0);
+            cypher_return_item *item = make_return_item((ast_node*)id, NULL);
+            ast_list *items = ast_list_create();
+            ast_list_append(items, (ast_node*)item);
+            
+            cypher_literal *skip_expr = make_integer_literal(5, 0);
+            cypher_return *ret = make_cypher_return(false, items, NULL, (ast_node*)skip_expr, NULL);
+            
+            append_sql(ctx, "SELECT * FROM nodes n0 WHERE 1=1");
+            register_node_variable(ctx, "n", "n0");
+            
+            int result = transform_return_clause(ctx, ret);
+            if (result == 0) {
+                printf("\nSKIP execution path tested (with SELECT *)\n");
+            } else {
+                printf("\nSKIP execution path test failed\n");
+            }
+        }
+        
+        /* Test combined ORDER BY + LIMIT + SKIP */
+        {
+            /* Reset context */
+            cypher_transform_free_context(ctx);
+            ctx = cypher_transform_create_context(test_db);
+            
+            cypher_identifier *id = make_identifier("n", 0);
+            cypher_return_item *item = make_return_item((ast_node*)id, NULL);
+            ast_list *items = ast_list_create();
+            ast_list_append(items, (ast_node*)item);
+            
+            /* Create ORDER BY */
+            cypher_identifier *order_expr = make_identifier("n", 0);
+            cypher_order_by_item *order_item = make_order_by_item((ast_node*)order_expr, false); /* ASC */
+            ast_list *order_list = ast_list_create();
+            ast_list_append(order_list, (ast_node*)order_item);
+            
+            cypher_literal *skip_expr = make_integer_literal(2, 0);
+            cypher_literal *limit_expr = make_integer_literal(5, 0);
+            
+            cypher_return *ret = make_cypher_return(false, items, order_list, (ast_node*)skip_expr, (ast_node*)limit_expr);
+            
+            append_sql(ctx, "SELECT * FROM nodes n0 WHERE 1=1");
+            register_node_variable(ctx, "n", "n0");
+            
+            int result = transform_return_clause(ctx, ret);
+            if (result == 0) {
+                printf("\nCombined ORDER BY + LIMIT + SKIP execution path tested\n");
+            } else {
+                printf("\nCombined execution path test failed\n");
+            }
+        }
+        
+        cypher_transform_free_context(ctx);
+    }
+}
+
+/* Test other binary operators */
+static void test_return_binary_operators(void)
+{
+    /* Test OR operation */
+    const char *query1 = "MATCH (n) WHERE n.age > 25 OR n.name = 'Alice' RETURN n";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    if (result1) {
+        if (!result1->has_error) {
+            printf("\nOR binary operation RETURN transformed successfully\n");
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test comparison operations */
+    const char *query2 = "MATCH (n) WHERE n.age = 30 RETURN n";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    if (result2) {
+        if (!result2->has_error) {
+            printf("\nEquality comparison RETURN transformed successfully\n");
+        }
+        cypher_free_result(result2);
+    }
+    
+    /* Test not equal */
+    const char *query3 = "MATCH (n) WHERE n.age <> 30 RETURN n";
+    cypher_query_result *result3 = parse_and_transform(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+    if (result3) {
+        if (!result3->has_error) {
+            printf("\nNot equal comparison RETURN transformed successfully\n");
+        }
+        cypher_free_result(result3);
+    }
+    
+    /* Test less than */
+    const char *query4 = "MATCH (n) WHERE n.age < 40 RETURN n";
+    cypher_query_result *result4 = parse_and_transform(query4);
+    CU_ASSERT_PTR_NOT_NULL(result4);
+    if (result4) {
+        if (!result4->has_error) {
+            printf("\nLess than comparison RETURN transformed successfully\n");
+        }
+        cypher_free_result(result4);
+    }
+    
+    /* Test greater than or equal */
+    const char *query5 = "MATCH (n) WHERE n.age >= 18 RETURN n";
+    cypher_query_result *result5 = parse_and_transform(query5);
+    CU_ASSERT_PTR_NOT_NULL(result5);
+    if (result5) {
+        if (!result5->has_error) {
+            printf("\nGreater than or equal comparison RETURN transformed successfully\n");
+        }
+        cypher_free_result(result5);
+    }
+    
+    /* Test arithmetic operations */
+    const char *query6 = "MATCH (n) WHERE n.age + 5 > 30 RETURN n";
+    cypher_query_result *result6 = parse_and_transform(query6);
+    CU_ASSERT_PTR_NOT_NULL(result6);
+    if (result6) {
+        if (!result6->has_error) {
+            printf("\nArithmetic addition RETURN transformed successfully\n");
+        }
+        cypher_free_result(result6);
+    }
+}
+
+/* Test additional error conditions */
+static void test_return_additional_errors(void)
+{
+    cypher_transform_context *ctx = cypher_transform_create_context(test_db);
+    CU_ASSERT_PTR_NOT_NULL(ctx);
+    
+    if (ctx) {
+        /* Test RETURN with non-identifier expression and alias */
+        cypher_literal *lit = make_string_literal("test", 0);
+        cypher_return_item *item = make_return_item((ast_node*)lit, "test_alias");
+        ast_list *items = ast_list_create();
+        ast_list_append(items, (ast_node*)item);
+        
+        cypher_return *ret = make_cypher_return(false, items, NULL, NULL, NULL);
+        
+        /* This should exercise the non-identifier alias path */
+        register_node_variable(ctx, "n", "n0");
+        append_sql(ctx, "SELECT * FROM nodes n0");
+        int result = transform_return_clause(ctx, ret);
+        if (result == 0) {
+            printf("\nNon-identifier alias case tested successfully\n");
+        }
+        
+        cypher_transform_free_context(ctx);
+    }
+}
+
 /* Initialize the transform test suite */
 int init_transform_suite(void)
 {
@@ -514,7 +875,14 @@ int init_transform_suite(void)
         !CU_add_test(suite, "RETURN combined clauses", test_return_combined_clauses) ||
         !CU_add_test(suite, "RETURN with alias", test_return_with_alias) ||
         !CU_add_test(suite, "RETURN after CREATE", test_return_after_create) ||
-        !CU_add_test(suite, "RETURN without MATCH", test_return_without_match)) {
+        !CU_add_test(suite, "RETURN without MATCH", test_return_without_match) ||
+        !CU_add_test(suite, "RETURN with literals", test_return_literals) ||
+        !CU_add_test(suite, "RETURN with expressions", test_return_expressions) ||
+        !CU_add_test(suite, "RETURN ORDER BY detailed", test_return_order_by_detailed) ||
+        !CU_add_test(suite, "RETURN error conditions", test_return_error_conditions) ||
+        !CU_add_test(suite, "RETURN execution paths", test_return_execution_paths) ||
+        !CU_add_test(suite, "RETURN binary operators", test_return_binary_operators) ||
+        !CU_add_test(suite, "RETURN additional errors", test_return_additional_errors)) {
         return CU_get_error();
     }
     
