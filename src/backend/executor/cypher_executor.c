@@ -65,6 +65,8 @@ static int execute_match_create_query(cypher_executor *executor, cypher_match *m
 static int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result);
 static int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
 static int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result);
+static int delete_edge_by_id(cypher_executor *executor, int64_t edge_id);
+static int delete_node_by_id(cypher_executor *executor, int64_t node_id);
 static int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result);
 static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result, cypher_transform_context *ctx);
 static agtype_value* create_property_agtype_value(const char* value);
@@ -1187,140 +1189,270 @@ static int execute_match_delete_query(cypher_executor *executor, cypher_match *m
         return -1;
     }
     
-    /* Transform MATCH clause */
+    /* Transform MATCH clause to build SELECT query */
     if (transform_match_clause(ctx, match) < 0) {
         set_result_error(result, "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
     
-    /* Add RETURN clause to get the IDs of entities to delete */
-    /* For now, we'll assume we're deleting nodes and get their IDs */
-    append_sql(ctx, " FROM nodes");
+    /* Following AGE's approach: execute MATCH first to get a result set, 
+     * then iterate through each row and delete the specified entities */
     
-    /* Add WHERE clause if there are any conditions from MATCH */
-    if (match->where) {
-        append_sql(ctx, " WHERE ");
-        if (transform_where_clause(ctx, match->where) < 0) {
-            set_result_error(result, "Failed to transform WHERE clause");
-            cypher_transform_free_context(ctx);
-            return -1;
-        }
-    }
-    
-    CYPHER_DEBUG("Generated MATCH SQL: %s", ctx->sql_buffer);
-    
-    /* Build proper SQL to find nodes that match the MATCH pattern */
-    /* Reset the context and build a SELECT query */
-    ctx->sql_size = 0;
-    ctx->sql_buffer[0] = '\0';
-    
-    /* Transform MATCH clause to build proper SELECT with WHERE */
-    if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause for node selection");
+    /* Create a synthetic RETURN clause for the variables to delete */
+    cypher_return *synthetic_return = calloc(1, sizeof(cypher_return));
+    if (!synthetic_return) {
+        set_result_error(result, "Failed to allocate memory for DELETE processing");
         cypher_transform_free_context(ctx);
         return -1;
     }
     
-    /* The MATCH transform should have built a query, we need to modify it to SELECT node IDs */
-    /* For now, let's use a simpler approach and build our own query */
-    ctx->sql_size = 0;
-    ctx->sql_buffer[0] = '\0';
+    synthetic_return->base.type = AST_NODE_RETURN;
+    synthetic_return->items = ast_list_create();
+    synthetic_return->distinct = false;
+    synthetic_return->order_by = NULL;
+    synthetic_return->limit = NULL;
+    synthetic_return->skip = NULL;
     
-    append_sql(ctx, "SELECT DISTINCT n1.id FROM nodes n1");
-    append_sql(ctx, " JOIN node_labels nl1 ON n1.id = nl1.node_id");
-    append_sql(ctx, " LEFT JOIN node_props_text nt1 ON n1.id = nt1.node_id");
-    append_sql(ctx, " LEFT JOIN property_keys pk1 ON nt1.key_id = pk1.id");
-    append_sql(ctx, " WHERE nl1.label = 'DeleteTest'");
-    
-    /* Add WHERE clause if present */
-    if (match->where) {
-        append_sql(ctx, " AND pk1.key = 'name' AND nt1.value = 'Bob'");
-    }
-    
-    CYPHER_DEBUG("Node selection SQL: %s", ctx->sql_buffer);
-    
-    sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        char error[512];
-        snprintf(error, sizeof(error), "Failed to prepare node selection query: %s", sqlite3_errmsg(executor->db));
-        set_result_error(result, error);
-        cypher_transform_free_context(ctx);
-        return -1;
-    }
-    
-    /* Collect node IDs to delete */
-    int *node_ids = NULL;
-    int node_count = 0;
-    int capacity = 10;
-    node_ids = malloc(capacity * sizeof(int));
-    if (!node_ids) {
-        set_result_error(result, "Out of memory");
-        sqlite3_finalize(stmt);
-        cypher_transform_free_context(ctx);
-        return -1;
-    }
-    
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        if (node_count >= capacity) {
-            capacity *= 2;
-            int *new_ids = realloc(node_ids, capacity * sizeof(int));
-            if (!new_ids) {
-                free(node_ids);
-                set_result_error(result, "Out of memory");
-                sqlite3_finalize(stmt);
-                cypher_transform_free_context(ctx);
-                return -1;
-            }
-            node_ids = new_ids;
-        }
-        node_ids[node_count++] = sqlite3_column_int(stmt, 0);
-    }
-    sqlite3_finalize(stmt);
-    
-    /* Step 2: Delete the found entities */
-    int nodes_deleted = 0;
-    
-    for (int i = 0; i < node_count; i++) {
-        int node_id = node_ids[i];
-        CYPHER_DEBUG("Deleting node ID: %d", node_id);
-        
-        /* Delete from property tables */
-        const char *delete_queries[] = {
-            "DELETE FROM node_props_text WHERE node_id = ?",
-            "DELETE FROM node_props_int WHERE node_id = ?", 
-            "DELETE FROM node_props_real WHERE node_id = ?",
-            "DELETE FROM node_props_bool WHERE node_id = ?",
-            "DELETE FROM node_labels WHERE node_id = ?",
-            "DELETE FROM edges WHERE source_id = ? OR target_id = ?",
-            "DELETE FROM nodes WHERE id = ?"
-        };
-        
-        for (int j = 0; j < 7; j++) {
-            sqlite3_stmt *delete_stmt;
-            rc = sqlite3_prepare_v2(executor->db, delete_queries[j], -1, &delete_stmt, NULL);
-            if (rc != SQLITE_OK) {
-                continue; /* Skip this deletion on error */
-            }
+    /* Add RETURN items for each variable to delete */
+    for (int i = 0; i < delete_clause->items->count; i++) {
+        cypher_delete_item *del_item = (cypher_delete_item*)delete_clause->items->items[i];
+        if (del_item && del_item->variable) {
+            /* Create identifier for the variable */
+            cypher_identifier *id = calloc(1, sizeof(cypher_identifier));
+            id->base.type = AST_NODE_IDENTIFIER;
+            id->name = strdup(del_item->variable);
             
-            sqlite3_bind_int(delete_stmt, 1, node_id);
-            if (j == 5) { /* edges table needs both source and target */
-                sqlite3_bind_int(delete_stmt, 2, node_id);
-            }
+            /* Create return item */
+            cypher_return_item *ret_item = calloc(1, sizeof(cypher_return_item));
+            ret_item->base.type = AST_NODE_RETURN_ITEM;
+            ret_item->expr = (ast_node*)id;
+            ret_item->alias = NULL;
             
-            sqlite3_step(delete_stmt);
-            sqlite3_finalize(delete_stmt);
+            ast_list_append(synthetic_return->items, (ast_node*)ret_item);
         }
-        nodes_deleted++;
     }
     
-    free(node_ids);
+    /* Execute the MATCH query to get entities */
+    cypher_result *match_result = create_empty_result();
+    if (execute_match_return_query(executor, match, synthetic_return, match_result) < 0) {
+        set_result_error(result, "Failed to execute MATCH for DELETE");
+        cypher_transform_free_context(ctx);
+        cypher_result_free(match_result);
+        /* Clean up synthetic return */
+        if (synthetic_return->items) {
+            for (int i = 0; i < synthetic_return->items->count; i++) {
+                cypher_return_item *item = (cypher_return_item*)synthetic_return->items->items[i];
+                if (item && item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
+                    cypher_identifier *id = (cypher_identifier*)item->expr;
+                    free(id->name);
+                    free(id);
+                }
+                free(item);
+            }
+            ast_list_free(synthetic_return->items);
+        }
+        free(synthetic_return);
+        return -1;
+    }
+    
+    /* Process each entity found by the MATCH and delete it */
+    int deleted_nodes = 0, deleted_edges = 0;
+    
+    /* Following AGE's process_delete_list pattern */
+    for (int i = 0; i < delete_clause->items->count; i++) {
+        cypher_delete_item *item = (cypher_delete_item*)delete_clause->items->items[i];
+        if (!item || !item->variable) continue;
+        
+        /* Check if this variable is an edge or node */
+        /* bool is_edge = is_edge_variable(ctx, item->variable); -- not needed, we check entity type */
+        
+        /* For each variable to delete, we need to find its value in the MATCH results */
+        /* AGE uses entity_position but we'll find by variable name */
+        for (int row = 0; row < match_result->row_count; row++) {
+            for (int col = 0; col < match_result->column_count; col++) {
+                if (match_result->column_names[col] && 
+                    strcmp(match_result->column_names[col], item->variable) == 0) {
+                    
+                    /* Found the variable's column - get the entity */
+                    if (match_result->agtype_data && match_result->agtype_data[row][col]) {
+                        agtype_value *entity = match_result->agtype_data[row][col];
+                        
+                        /* Extract entity following AGE's pattern */
+                        
+                        if (entity->type == AGTV_VERTEX) {
+                            /* For vertex, use the entity structure */
+                            int64_t entity_id = entity->val.entity.id;
+                            
+                            CYPHER_DEBUG("Deleting node '%s' with ID %lld", item->variable, entity_id);
+                            
+                            int delete_result = delete_node_by_id(executor, entity_id);
+                            if (delete_result == 0) {
+                                deleted_nodes++;
+                            } else {
+                                /* Failed to delete node - likely due to constraint violation */
+                                set_result_error(result, "Cannot delete node - it still has relationships");
+                                cypher_result_free(match_result);
+                                cypher_transform_free_context(ctx);
+                                
+                                /* Clean up synthetic return */
+                                if (synthetic_return->items) {
+                                    for (int j = 0; j < synthetic_return->items->count; j++) {
+                                        cypher_return_item *cleanup_item = (cypher_return_item*)synthetic_return->items->items[j];
+                                        if (cleanup_item && cleanup_item->expr && cleanup_item->expr->type == AST_NODE_IDENTIFIER) {
+                                            cypher_identifier *cleanup_id = (cypher_identifier*)cleanup_item->expr;
+                                            free(cleanup_id->name);
+                                            free(cleanup_id);
+                                        }
+                                        free(cleanup_item);
+                                    }
+                                    ast_list_free(synthetic_return->items);
+                                }
+                                free(synthetic_return);
+                                
+                                return -1;
+                            }
+                        } else if (entity->type == AGTV_EDGE) {
+                            /* For edge, use the edge structure */
+                            int64_t entity_id = entity->val.edge.id;
+                            
+                            CYPHER_DEBUG("Deleting edge '%s' with ID %lld", item->variable, entity_id);
+                            
+                            if (delete_edge_by_id(executor, entity_id) == 0) {
+                                deleted_edges++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    cypher_result_free(match_result);
     cypher_transform_free_context(ctx);
     
-    /* Set result statistics */
-    result->nodes_deleted = nodes_deleted;
+    /* Clean up synthetic return */
+    if (synthetic_return->items) {
+        for (int i = 0; i < synthetic_return->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item*)synthetic_return->items->items[i];
+            if (item && item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
+                cypher_identifier *id = (cypher_identifier*)item->expr;
+                free(id->name);
+                free(id);
+            }
+            free(item);
+        }
+        ast_list_free(synthetic_return->items);
+    }
+    free(synthetic_return);
+    
+    /* Set result with deletion counts */
     result->success = true;
+    result->nodes_deleted = deleted_nodes;
+    result->relationships_deleted = deleted_edges;
+    
+    return 0;
+}
+
+/* Delete an edge by ID */
+static int delete_edge_by_id(cypher_executor *executor, int64_t edge_id)
+{
+    if (!executor || !executor->db) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Deleting edge with ID %lld", edge_id);
+    
+    /* Delete edge properties first */
+    const char *prop_tables[] = {
+        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool"
+    };
+    
+    char sql[256];
+    for (int i = 0; i < 4; i++) {
+        snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE edge_id = %lld", prop_tables[i], edge_id);
+        char *err_msg = NULL;
+        int rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);
+        if (rc != SQLITE_OK) {
+            CYPHER_DEBUG("Warning: Failed to delete from %s: %s", prop_tables[i], err_msg ? err_msg : "unknown error");
+            if (err_msg) sqlite3_free(err_msg);
+        }
+    }
+    
+    /* Delete the edge itself */
+    snprintf(sql, sizeof(sql), "DELETE FROM edges WHERE id = %lld", edge_id);
+    char *err_msg = NULL;
+    int rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to delete edge: %s", err_msg ? err_msg : "unknown error");
+        if (err_msg) sqlite3_free(err_msg);
+        return -1;
+    }
+    
+    return 0;
+}
+
+/* Delete a node by ID */
+static int delete_node_by_id(cypher_executor *executor, int64_t node_id)
+{
+    if (!executor || !executor->db) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Deleting node with ID %lld", node_id);
+    
+    /* Check for connected edges (constraint enforcement) */
+    char check_sql[256];
+    snprintf(check_sql, sizeof(check_sql), "SELECT COUNT(*) FROM edges WHERE source_id = %lld OR target_id = %lld", node_id, node_id);
+    
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, check_sql, -1, &stmt, NULL);
+    if (rc == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            int edge_count = sqlite3_column_int(stmt, 0);
+            if (edge_count > 0) {
+                sqlite3_finalize(stmt);
+                CYPHER_DEBUG("Cannot delete node with ID %lld: has %d connected edges", node_id, edge_count);
+                return -1; /* Node has connected edges */
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    /* Delete node properties first */
+    const char *prop_tables[] = {
+        "node_props_text", "node_props_int", "node_props_real", "node_props_bool"
+    };
+    
+    char sql[256];
+    for (int i = 0; i < 4; i++) {
+        snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE node_id = %lld", prop_tables[i], node_id);
+        char *err_msg = NULL;
+        rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);
+        if (rc != SQLITE_OK) {
+            CYPHER_DEBUG("Warning: Failed to delete from %s: %s", prop_tables[i], err_msg ? err_msg : "unknown error");
+            if (err_msg) sqlite3_free(err_msg);
+        }
+    }
+    
+    /* Delete node labels */
+    snprintf(sql, sizeof(sql), "DELETE FROM node_labels WHERE node_id = %lld", node_id);
+    char *err_msg = NULL;
+    rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Warning: Failed to delete node labels: %s", err_msg ? err_msg : "unknown error");
+        if (err_msg) sqlite3_free(err_msg);
+    }
+    
+    /* Delete the node itself */
+    snprintf(sql, sizeof(sql), "DELETE FROM nodes WHERE id = %lld", node_id);
+    err_msg = NULL;
+    rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to delete node: %s", err_msg ? err_msg : "unknown error");
+        if (err_msg) sqlite3_free(err_msg);
+        return -1;
+    }
     
     return 0;
 }

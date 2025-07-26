@@ -1261,6 +1261,152 @@ static void test_column_naming_complex_expression(void)
     }
 }
 
+/* Test delete_edge_by_id helper function */
+static void test_delete_edge_by_id(void)
+{
+    /* First create a relationship to delete */
+    const char *create_query = "CREATE (a:TestNode {name: 'A'})-[r:TEST_REL {weight: 10}]->(b:TestNode {name: 'B'})";
+    cypher_result *create_result = cypher_executor_execute(executor, create_query);
+    CU_ASSERT_PTR_NOT_NULL(create_result);
+    if (create_result) {
+        CU_ASSERT_TRUE(create_result->success);
+        CU_ASSERT_EQUAL(create_result->relationships_created, 1);
+        cypher_result_free(create_result);
+    }
+    
+    /* Query to get the edge ID */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(test_db, "SELECT id FROM edges WHERE type = 'TEST_REL'", -1, &stmt, NULL);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    
+    int64_t edge_id = -1;
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        edge_id = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    
+    CU_ASSERT_TRUE(edge_id > 0);
+    
+    /* Verify edge properties exist */
+    char check_sql[256];
+    snprintf(check_sql, sizeof(check_sql), "SELECT COUNT(*) FROM edge_props_int WHERE edge_id = %lld", edge_id);
+    rc = sqlite3_prepare_v2(test_db, check_sql, -1, &stmt, NULL);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    
+    int prop_count = 0;
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        prop_count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    CU_ASSERT_EQUAL(prop_count, 1); /* Should have weight property */
+    
+    /* Test the delete function directly - need to access internal function */
+    /* Since delete_edge_by_id is static, we'll test it through DELETE query */
+    char delete_query[256];
+    snprintf(delete_query, sizeof(delete_query), "MATCH ()-[r:TEST_REL]->() DELETE r");
+    cypher_result *delete_result = cypher_executor_execute(executor, delete_query);
+    CU_ASSERT_PTR_NOT_NULL(delete_result);
+    if (delete_result) {
+        CU_ASSERT_TRUE(delete_result->success);
+        CU_ASSERT_EQUAL(delete_result->relationships_deleted, 1);
+        cypher_result_free(delete_result);
+    }
+    
+    /* Verify edge is gone */
+    rc = sqlite3_prepare_v2(test_db, "SELECT COUNT(*) FROM edges WHERE type = 'TEST_REL'", -1, &stmt, NULL);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    
+    int edge_count = 0;
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        edge_count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    CU_ASSERT_EQUAL(edge_count, 0);
+    
+    /* Verify edge properties are gone */
+    snprintf(check_sql, sizeof(check_sql), "SELECT COUNT(*) FROM edge_props_int WHERE edge_id = %lld", edge_id);
+    rc = sqlite3_prepare_v2(test_db, check_sql, -1, &stmt, NULL);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    
+    prop_count = 0;
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        prop_count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    CU_ASSERT_EQUAL(prop_count, 0); /* Properties should be deleted */
+}
+
+/* Test delete_node_by_id helper function */
+static void test_delete_node_by_id(void)
+{
+    /* First create a node to delete */
+    const char *create_query = "CREATE (n:TestDeleteNode {name: 'ToDelete', value: 42})";
+    cypher_result *create_result = cypher_executor_execute(executor, create_query);
+    CU_ASSERT_PTR_NOT_NULL(create_result);
+    if (create_result) {
+        CU_ASSERT_TRUE(create_result->success);
+        CU_ASSERT_EQUAL(create_result->nodes_created, 1);
+        cypher_result_free(create_result);
+    }
+    
+    /* Query to get the node ID */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(test_db, 
+        "SELECT n.id FROM nodes n JOIN node_labels nl ON n.id = nl.node_id WHERE nl.label = 'TestDeleteNode'", 
+        -1, &stmt, NULL);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    
+    int64_t node_id = -1;
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        node_id = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    
+    CU_ASSERT_TRUE(node_id > 0);
+    
+    /* Test deleting node through DELETE query */
+    const char *delete_query = "MATCH (n:TestDeleteNode) DELETE n";
+    cypher_result *delete_result = cypher_executor_execute(executor, delete_query);
+    CU_ASSERT_PTR_NOT_NULL(delete_result);
+    if (delete_result) {
+        CU_ASSERT_TRUE(delete_result->success);
+        CU_ASSERT_EQUAL(delete_result->nodes_deleted, 1);
+        cypher_result_free(delete_result);
+    }
+    
+    /* Verify node is gone */
+    rc = sqlite3_prepare_v2(test_db, 
+        "SELECT COUNT(*) FROM nodes n JOIN node_labels nl ON n.id = nl.node_id WHERE nl.label = 'TestDeleteNode'", 
+        -1, &stmt, NULL);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    
+    int node_count = 0;
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        node_count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    CU_ASSERT_EQUAL(node_count, 0);
+    
+    /* Test constraint: can't delete node with edges */
+    const char *create_connected = "CREATE (a:A)-[:CONNECTED]->(b:B)";
+    create_result = cypher_executor_execute(executor, create_connected);
+    CU_ASSERT_PTR_NOT_NULL(create_result);
+    if (create_result) {
+        CU_ASSERT_TRUE(create_result->success);
+        cypher_result_free(create_result);
+    }
+    
+    /* Try to delete node with edge - should fail */
+    const char *invalid_delete = "MATCH (a:A) DELETE a";
+    cypher_result *invalid_result = cypher_executor_execute(executor, invalid_delete);
+    CU_ASSERT_PTR_NOT_NULL(invalid_result);
+    if (invalid_result) {
+        /* This should fail due to constraint */
+        CU_ASSERT_FALSE(invalid_result->success);
+        cypher_result_free(invalid_result);
+    }
+}
+
 /* Initialize the executor test suite */
 int init_executor_suite(void)
 {
@@ -1316,7 +1462,10 @@ int init_executor_suite(void)
         !CU_add_test(suite, "Column naming variable access", test_column_naming_variable_access) ||
         !CU_add_test(suite, "Column naming explicit alias", test_column_naming_explicit_alias) ||
         !CU_add_test(suite, "Column naming mixed types", test_column_naming_mixed_types) ||
-        !CU_add_test(suite, "Column naming complex expression", test_column_naming_complex_expression)) {
+        !CU_add_test(suite, "Column naming complex expression", test_column_naming_complex_expression) ||
+        /* DELETE helper function tests */
+        !CU_add_test(suite, "Delete edge by ID", test_delete_edge_by_id) ||
+        !CU_add_test(suite, "Delete node by ID", test_delete_node_by_id)) {
         return CU_get_error();
     }
     

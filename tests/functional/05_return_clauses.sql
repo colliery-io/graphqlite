@@ -172,9 +172,7 @@ SELECT cypher('MATCH (n) WHERE n.name IS NOT NULL RETURN DISTINCT n.name ORDER B
 SELECT '=== Section 8: Performance and Optimization Patterns ===' as section;
 
 SELECT 'Test 8.1 - TOP-N pattern with LIMIT:' as test_name;
--- NOTE: DESC keyword not supported - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age DESC LIMIT 1') as result;
-SELECT 'SKIPPED: DESC keyword not supported' as result;
+SELECT cypher('MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age DESC LIMIT 1') as result;
 
 SELECT 'Test 8.2 - Pagination pattern:' as test_name;
 SELECT cypher('MATCH (n:Person) RETURN n.name ORDER BY n.name SKIP 1 LIMIT 2') as result;

@@ -162,7 +162,7 @@ SELECT cypher('MATCH (a:Person)-[:WORKS_FOR]->(company:Company)<-[:WORKS_FOR]-(c
 SELECT '=== Section 6: Aggregation and Grouping Patterns ===' as section;
 
 SELECT 'Test 6.1 - Count relationships by type:' as test_name;
--- NOTE: type() function not implemented, but COUNT and ORDER BY DESC now work - documented in BUG_FIXES.md
+-- NOTE: type() function not implemented - documented in BUG_FIXES.md
 -- SELECT cypher('MATCH ()-[r]->() RETURN type(r) as relationship_type, count(r) as count ORDER BY count DESC') as result;
 SELECT 'SKIPPED: type() function not implemented' as result;
 
@@ -171,9 +171,7 @@ SELECT 'Test 6.2 - Aggregate by department:' as test_name;
 SELECT cypher('MATCH (p:Person) RETURN p.department, count(p) as department_size, avg(p.age) as avg_age ORDER BY department_size DESC') as result;
 
 SELECT 'Test 6.3 - Company statistics:' as test_name;
--- NOTE: ORDER BY DESC not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (c:Company) RETURN c.name, c.employees, c.founded ORDER BY c.employees DESC') as result;
-SELECT 'SKIPPED: ORDER BY DESC not implemented' as result;
+SELECT cypher('MATCH (c:Company) RETURN c.name, c.employees, c.founded ORDER BY c.employees DESC') as result;
 
 -- =======================================================================
 -- SECTION 7: Complex Filtering and Conditions

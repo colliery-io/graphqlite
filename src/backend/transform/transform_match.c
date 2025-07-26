@@ -71,6 +71,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 char alias[32];
                 if (node->variable) {
                     snprintf(alias, sizeof(alias), "n_%s", node->variable);
+                    /* Register the node variable */
+                    register_node_variable(ctx, node->variable, alias);
                 } else {
                     snprintf(alias, sizeof(alias), "n_%d", j);
                 }
@@ -174,6 +176,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 
                 if (rel->variable) {
                     snprintf(edge_alias, sizeof(edge_alias), "e_%s", rel->variable);
+                    /* Register the relationship variable as an edge variable */
+                    register_edge_variable(ctx, rel->variable, edge_alias);
                 } else {
                     snprintf(edge_alias, sizeof(edge_alias), "e_%d", j);
                 }

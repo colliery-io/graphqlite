@@ -1084,6 +1084,113 @@ static void test_set_transform_validation(void)
     }
 }
 
+/* DELETE variable binding test */
+static void test_delete_variable_binding(void)
+{
+    const char *query = "MATCH (a)-[r:KNOWS]->(b) DELETE r";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        
+        /* Get the MATCH clause */
+        cypher_match *match_clause = (cypher_match*)query_ast->clauses->items[0];
+        
+        /* Get the DELETE clause */
+        cypher_delete *delete_clause = (cypher_delete*)query_ast->clauses->items[1];
+        
+        /* Create transform context */
+        cypher_transform_context *ctx = cypher_transform_create_context(NULL);
+        CU_ASSERT_PTR_NOT_NULL(ctx);
+        
+        if (ctx) {
+            /* Transform the MATCH clause to register variables */
+            int result = transform_match_clause(ctx, match_clause);
+            CU_ASSERT_EQUAL(result, 0);
+            
+            /* Debug: Check if transform failed */
+            if (ctx->has_error) {
+                printf("\nTransform error: %s\n", ctx->error_message);
+            }
+            
+            /* Debug: Print SQL generated */
+            printf("\nGenerated SQL: %s\n", ctx->sql_buffer);
+            
+            /* Verify that variable 'r' is registered as an edge variable */
+            const char *r_alias = lookup_variable_alias(ctx, "r");
+            CU_ASSERT_PTR_NOT_NULL(r_alias);
+            
+            bool r_is_edge = is_edge_variable(ctx, "r");
+            CU_ASSERT_TRUE(r_is_edge);
+            
+            /* Verify that variables 'a' and 'b' are registered as node variables */
+            const char *a_alias = lookup_variable_alias(ctx, "a");
+            CU_ASSERT_PTR_NOT_NULL(a_alias);
+            
+            bool a_is_edge = is_edge_variable(ctx, "a");
+            CU_ASSERT_FALSE(a_is_edge); /* Should be false - it's a node */
+            
+            const char *b_alias = lookup_variable_alias(ctx, "b");
+            CU_ASSERT_PTR_NOT_NULL(b_alias);
+            
+            bool b_is_edge = is_edge_variable(ctx, "b");
+            CU_ASSERT_FALSE(b_is_edge); /* Should be false - it's a node */
+            
+            if (r_alias) {
+                /* Should be in the format "e_r" for edge variable r */
+                printf("DELETE variable binding test passed: r_alias='%s', is_edge=%s\n", 
+                       r_alias, r_is_edge ? "true" : "false");
+            }
+            
+            cypher_transform_free_context(ctx);
+        }
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test DELETE item creation and validation */
+static void test_delete_item_creation(void)
+{
+    CYPHER_DEBUG("Running DELETE item creation test");
+    
+    const char *query = "MATCH (a)-[r:KNOWS]->(b) DELETE r, a";
+    
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        
+        /* Get the DELETE clause */
+        cypher_delete *delete_clause = (cypher_delete*)query_ast->clauses->items[1];
+        CU_ASSERT_PTR_NOT_NULL(delete_clause);
+        CU_ASSERT_EQUAL(delete_clause->base.type, AST_NODE_DELETE);
+        
+        /* Verify delete items list */
+        CU_ASSERT_PTR_NOT_NULL(delete_clause->items);
+        CU_ASSERT_EQUAL(delete_clause->items->count, 2);
+        
+        /* Check first delete item (r) */
+        cypher_delete_item *item1 = (cypher_delete_item*)delete_clause->items->items[0];
+        CU_ASSERT_PTR_NOT_NULL(item1);
+        CU_ASSERT_EQUAL(item1->base.type, AST_NODE_DELETE_ITEM);
+        CU_ASSERT_PTR_NOT_NULL(item1->variable);
+        CU_ASSERT_STRING_EQUAL(item1->variable, "r");
+        
+        /* Check second delete item (a) */
+        cypher_delete_item *item2 = (cypher_delete_item*)delete_clause->items->items[1];
+        CU_ASSERT_PTR_NOT_NULL(item2);
+        CU_ASSERT_EQUAL(item2->base.type, AST_NODE_DELETE_ITEM);
+        CU_ASSERT_PTR_NOT_NULL(item2->variable);
+        CU_ASSERT_STRING_EQUAL(item2->variable, "a");
+        
+        cypher_parser_free_result(result);
+    }
+}
+
 /* Initialize the transform test suite */
 int init_transform_suite(void)
 {
@@ -1125,7 +1232,10 @@ int init_transform_suite(void)
         !CU_add_test(suite, "SET data types", test_set_data_types) ||
         !CU_add_test(suite, "SET with WHERE", test_set_with_where) ||
         !CU_add_test(suite, "SET error conditions", test_set_error_conditions) ||
-        !CU_add_test(suite, "SET transform validation", test_set_transform_validation)) {
+        !CU_add_test(suite, "SET transform validation", test_set_transform_validation) ||
+        /* DELETE clause transform tests */
+        !CU_add_test(suite, "DELETE variable binding", test_delete_variable_binding) ||
+        !CU_add_test(suite, "DELETE item creation", test_delete_item_creation)) {
         return CU_get_error();
     }
     

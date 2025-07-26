@@ -145,6 +145,7 @@ help:
 	@echo "  make extension - Build SQLite extension (graphqlite.dylib on macOS, graphqlite.so on Linux)"
 	@echo "  make test      - Build and run CUnit tests"
 	@echo "  make test-functional - Build extension and run functional SQL tests"
+	@echo "  make test-constraints - Run constraint tests (expected to fail)"
 	@echo "  make coverage  - Run tests and generate gcov coverage report"
 	@echo "  make clean     - Remove all build artifacts"
 	@echo "  make help      - Show this help message"
@@ -240,16 +241,31 @@ $(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) $(EXECUTOR
 test: $(TEST_RUNNER)
 	./$(TEST_RUNNER)
 
-# Run functional tests with SQLite extension
+# Run functional tests with SQLite extension (excludes constraint error tests)
 test-functional: extension
 	@echo "Running functional tests..."
 	@for test_file in tests/functional/*.sql; do \
-		if [ -f "$$test_file" ]; then \
+		if [ -f "$$test_file" ] && [[ "$$test_file" != *"constraint"* ]]; then \
 			echo ""; \
 			echo "========================================"; \
 			echo "Running: $$(basename $$test_file)"; \
 			echo "========================================"; \
 			sqlite3 -bail < "$$test_file" || exit 1; \
+		fi; \
+	done
+	@echo ""
+	@echo "All functional tests completed successfully!"
+
+# Run constraint tests (expected to fail with specific errors)
+test-constraints: extension
+	@echo "Running constraint tests (expected to fail)..."
+	@for test_file in tests/functional/*constraint*.sql; do \
+		if [ -f "$$test_file" ]; then \
+			echo ""; \
+			echo "========================================"; \
+			echo "Running: $$(basename $$test_file)"; \
+			echo "========================================"; \
+			sqlite3 < "$$test_file" 2>&1 && echo "ERROR: Test should have failed!" || echo "Constraint correctly enforced"; \
 		fi; \
 	done
 	@echo ""

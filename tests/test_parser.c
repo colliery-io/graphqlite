@@ -798,6 +798,98 @@ static void test_parser_complex_nesting(void)
     printf("\nComplex nesting test completed\n");
 }
 
+/* DELETE clause parsing tests */
+static void test_delete_clause_parsing(void)
+{
+    const char *query = "MATCH (a)-[r:KNOWS]->(b) DELETE r";
+    
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (!result) return;
+    
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+    
+    /* Should be a query with 2 clauses: MATCH and DELETE */
+    cypher_query *query_ast = (cypher_query*)result;
+    CU_ASSERT_PTR_NOT_NULL(query_ast->clauses);
+    CU_ASSERT_EQUAL(query_ast->clauses->count, 2);
+    
+    /* First clause should be MATCH */
+    ast_node *first_clause = query_ast->clauses->items[0];
+    CU_ASSERT_EQUAL(first_clause->type, AST_NODE_MATCH);
+    
+    /* Second clause should be DELETE */
+    ast_node *second_clause = query_ast->clauses->items[1];
+    CU_ASSERT_EQUAL(second_clause->type, AST_NODE_DELETE);
+    
+    /* Validate DELETE clause structure */
+    cypher_delete *delete_clause = (cypher_delete*)second_clause;
+    CU_ASSERT_PTR_NOT_NULL(delete_clause->items);
+    CU_ASSERT_EQUAL(delete_clause->items->count, 1);
+    
+    /* Validate DELETE item */
+    cypher_delete_item *item = (cypher_delete_item*)delete_clause->items->items[0];
+    CU_ASSERT_PTR_NOT_NULL(item);
+    CU_ASSERT_PTR_NOT_NULL(item->variable);
+    CU_ASSERT_STRING_EQUAL(item->variable, "r");
+    
+    printf("DELETE clause parsing test passed: variable='%s'\n", item->variable);
+    
+    cypher_parser_free_result(result);
+}
+
+static void test_delete_node_parsing(void)
+{
+    const char *query = "MATCH (n:Person) DELETE n";
+    
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+    
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2);
+        
+        ast_node *delete_clause_node = query_ast->clauses->items[1];
+        CU_ASSERT_EQUAL(delete_clause_node->type, AST_NODE_DELETE);
+        
+        cypher_delete *delete_clause = (cypher_delete*)delete_clause_node;
+        CU_ASSERT_EQUAL(delete_clause->items->count, 1);
+        
+        cypher_delete_item *item = (cypher_delete_item*)delete_clause->items->items[0];
+        CU_ASSERT_STRING_EQUAL(item->variable, "n");
+        
+        printf("DELETE node parsing test passed: variable='%s'\n", item->variable);
+        
+        cypher_parser_free_result(result);
+    }
+}
+
+static void test_detach_delete_parsing(void)
+{
+    const char *query = "MATCH (n:Person) DELETE n";  /* Skip DETACH for now since it's not implemented */
+    
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+    
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        
+        ast_node *delete_clause_node = query_ast->clauses->items[1];
+        cypher_delete *delete_clause = (cypher_delete*)delete_clause_node;
+        
+        /* Just verify basic DELETE works for now */
+        CU_ASSERT_EQUAL(delete_clause->items->count, 1);
+        
+        printf("Basic DELETE parsing test passed (DETACH not yet implemented)\n");
+        
+        cypher_parser_free_result(result);
+    }
+}
 
 /* Initialize the parser test suite */
 int init_parser_suite(void)
@@ -839,7 +931,10 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Parser scanner edge cases", test_parser_scanner_edge_cases) ||
         !CU_add_test(suite, "Parser special tokens", test_parser_special_tokens) ||
         !CU_add_test(suite, "Parser NULL result handling", test_parser_null_result_handling) ||
-        !CU_add_test(suite, "Parser complex nesting", test_parser_complex_nesting))
+        !CU_add_test(suite, "Parser complex nesting", test_parser_complex_nesting) ||
+        !CU_add_test(suite, "DELETE clause parsing", test_delete_clause_parsing) ||
+        !CU_add_test(suite, "DELETE node parsing", test_delete_node_parsing) ||
+        !CU_add_test(suite, "DETACH DELETE parsing", test_detach_delete_parsing))
     {
         return CU_get_error();
     }

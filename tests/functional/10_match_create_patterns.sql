@@ -219,9 +219,7 @@ SELECT 'Relationship types created:' as test_name;
 SELECT type, COUNT(*) as count FROM edges GROUP BY type ORDER BY count DESC;
 
 SELECT 'Node reuse verification:' as test_name;
--- NOTE: ORDER BY not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:Person) RETURN n.name, n.age, n.department ORDER BY n.name') as all_persons;
-SELECT 'SKIPPED: ORDER BY not implemented' as all_persons;
+SELECT cypher('MATCH (n:Person) RETURN n.name, n.age, n.department ORDER BY n.name') as all_persons;
 
 SELECT 'MATCH...CREATE effectiveness:' as test_name;
 SELECT 
