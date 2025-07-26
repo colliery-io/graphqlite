@@ -67,14 +67,27 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
             if (element->type == AST_NODE_NODE_PATTERN) {
                 cypher_node_pattern *node = (cypher_node_pattern*)element;
                 
-                /* Generate table alias */
-                char alias[32];
+                /* Use entity system for node variables (AGE-style) */
+                const char *alias;
                 if (node->variable) {
-                    snprintf(alias, sizeof(alias), "n_%s", node->variable);
-                    /* Register the node variable */
+                    transform_entity *entity = lookup_entity(ctx, node->variable);
+                    if (!entity) {
+                        /* New entity - add it */
+                        if (add_entity(ctx, node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                            ctx->has_error = true;
+                            ctx->error_message = strdup("Failed to add node entity");
+                            return -1;
+                        }
+                        entity = lookup_entity(ctx, node->variable);
+                    }
+                    alias = entity->table_alias;
+                    /* Also register in legacy system for compatibility */
                     register_node_variable(ctx, node->variable, alias);
                 } else {
-                    snprintf(alias, sizeof(alias), "n_%d", j);
+                    /* Anonymous node - use legacy approach for now */
+                    char temp_alias[32];
+                    snprintf(temp_alias, sizeof(temp_alias), "n_%d", j);
+                    alias = temp_alias;
                 }
                 
                 /* Add label constraint if specified */
@@ -159,27 +172,60 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 cypher_node_pattern *source_node = (cypher_node_pattern*)prev_element;
                 cypher_node_pattern *target_node = (cypher_node_pattern*)next_element;
                 
-                /* Generate aliases for the relationship and nodes */
-                char source_alias[32], target_alias[32], edge_alias[32];
+                /* Get aliases using entity system (AGE-style) */
+                const char *source_alias, *target_alias, *edge_alias;
                 
+                /* Source node alias */
                 if (source_node->variable) {
-                    snprintf(source_alias, sizeof(source_alias), "n_%s", source_node->variable);
+                    transform_entity *entity = lookup_entity(ctx, source_node->variable);
+                    if (!entity) {
+                        /* This should have been added already, but add if missing */
+                        if (add_entity(ctx, source_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                            continue;
+                        }
+                        entity = lookup_entity(ctx, source_node->variable);
+                    }
+                    source_alias = entity->table_alias;
                 } else {
-                    snprintf(source_alias, sizeof(source_alias), "n_%d", j - 1);
+                    static char temp_source[32];
+                    snprintf(temp_source, sizeof(temp_source), "n_%d", j - 1);
+                    source_alias = temp_source;
                 }
                 
+                /* Target node alias */
                 if (target_node->variable) {
-                    snprintf(target_alias, sizeof(target_alias), "n_%s", target_node->variable);
+                    transform_entity *entity = lookup_entity(ctx, target_node->variable);
+                    if (!entity) {
+                        /* This should have been added already, but add if missing */
+                        if (add_entity(ctx, target_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                            continue;
+                        }
+                        entity = lookup_entity(ctx, target_node->variable);
+                    }
+                    target_alias = entity->table_alias;
                 } else {
-                    snprintf(target_alias, sizeof(target_alias), "n_%d", j + 1);
+                    static char temp_target[32];
+                    snprintf(temp_target, sizeof(temp_target), "n_%d", j + 1);
+                    target_alias = temp_target;
                 }
                 
+                /* Edge alias */
                 if (rel->variable) {
-                    snprintf(edge_alias, sizeof(edge_alias), "e_%s", rel->variable);
-                    /* Register the relationship variable as an edge variable */
+                    transform_entity *entity = lookup_entity(ctx, rel->variable);
+                    if (!entity) {
+                        /* New relationship entity */
+                        if (add_entity(ctx, rel->variable, ENTITY_TYPE_EDGE, true) < 0) {
+                            continue;
+                        }
+                        entity = lookup_entity(ctx, rel->variable);
+                    }
+                    edge_alias = entity->table_alias;
+                    /* Register in legacy system for compatibility */
                     register_edge_variable(ctx, rel->variable, edge_alias);
                 } else {
-                    snprintf(edge_alias, sizeof(edge_alias), "e_%d", j);
+                    static char temp_edge[32];
+                    snprintf(temp_edge, sizeof(temp_edge), "e_%d", j);
+                    edge_alias = temp_edge;
                 }
                 
                 /* Add relationship direction constraints */
@@ -245,22 +291,53 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
         if (element->type == AST_NODE_NODE_PATTERN) {
             cypher_node_pattern *node = (cypher_node_pattern*)element;
             
-            /* Generate table alias */
-            char alias[32];
+            /* Use entity system (AGE-style) */
+            const char *alias;
+            bool need_from_clause = false;
+            
             if (node->variable) {
-                snprintf(alias, sizeof(alias), "n_%s", node->variable);
+                /* Check if entity already exists */
+                transform_entity *entity = lookup_entity(ctx, node->variable);
+                if (entity && entity->is_current_clause) {
+                    /* Entity exists and is from current clause, reuse alias but check if we need FROM clause */
+                    alias = entity->table_alias;
+                    /* Check if this alias is already in the FROM clause */
+                    if (!strstr(ctx->sql_buffer, entity->table_alias)) {
+                        need_from_clause = true;
+                    }
+                } else if (entity && !entity->is_current_clause) {
+                    /* Entity from previous clause - reuse but may need FROM clause */
+                    alias = entity->table_alias;
+                    entity->is_current_clause = true; /* Mark as used in current clause */
+                    if (!strstr(ctx->sql_buffer, entity->table_alias)) {
+                        need_from_clause = true;
+                    }
+                } else {
+                    /* New entity, add it */
+                    if (add_entity(ctx, node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to add node entity in pattern");
+                        return -1;
+                    }
+                    entity = lookup_entity(ctx, node->variable);
+                    alias = entity->table_alias;
+                    need_from_clause = true;
+                    /* Register in legacy system for compatibility */
+                    register_node_variable(ctx, node->variable, alias);
+                }
             } else {
-                snprintf(alias, sizeof(alias), "n_%d", i);
+                /* Anonymous node - use generated alias */
+                static char temp_alias[32];
+                snprintf(temp_alias, sizeof(temp_alias), "n_%d", i);
+                alias = temp_alias;
+                need_from_clause = true;
             }
             
-            /* Register variable if present */
-            if (node->variable) {
-                register_node_variable(ctx, node->variable, alias);
-            }
-            
-            /* Generate SQL for this node */
-            if (generate_node_match(ctx, node, alias) < 0) {
-                return -1;
+            /* Generate SQL for this node if needed */
+            if (need_from_clause) {
+                if (generate_node_match(ctx, node, alias) < 0) {
+                    return -1;
+                }
             }
             
         } else if (element->type == AST_NODE_REL_PATTERN) {
@@ -324,25 +401,61 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     CYPHER_DEBUG("Generating match for relationship %s between nodes", 
                  rel->type ? rel->type : "<no type>");
     
-    /* Generate aliases for source and target nodes */
-    char source_alias[32], target_alias[32], edge_alias[32];
+    /* Get aliases using entity system (AGE-style) */
+    const char *source_alias, *target_alias, *edge_alias;
     
+    /* Source node */
     if (source_node->variable) {
-        snprintf(source_alias, sizeof(source_alias), "n_%s", source_node->variable);
+        transform_entity *entity = lookup_entity(ctx, source_node->variable);
+        if (!entity) {
+            /* Add missing entity */
+            if (add_entity(ctx, source_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                return -1;
+            }
+            entity = lookup_entity(ctx, source_node->variable);
+        }
+        source_alias = entity->table_alias;
     } else {
-        snprintf(source_alias, sizeof(source_alias), "n_%d", rel_index - 1);
+        static char temp_source[32];
+        snprintf(temp_source, sizeof(temp_source), "n_%d", rel_index - 1);
+        source_alias = temp_source;
     }
     
+    /* Target node */
     if (target_node->variable) {
-        snprintf(target_alias, sizeof(target_alias), "n_%s", target_node->variable);
+        transform_entity *entity = lookup_entity(ctx, target_node->variable);
+        if (!entity) {
+            /* Add missing entity */
+            if (add_entity(ctx, target_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                return -1;
+            }
+            entity = lookup_entity(ctx, target_node->variable);
+        }
+        target_alias = entity->table_alias;
     } else {
-        snprintf(target_alias, sizeof(target_alias), "n_%d", rel_index + 1);
+        static char temp_target[32];
+        snprintf(temp_target, sizeof(temp_target), "n_%d", rel_index + 1);
+        target_alias = temp_target;
     }
     
+    /* Edge */
     if (rel->variable) {
-        snprintf(edge_alias, sizeof(edge_alias), "e_%s", rel->variable);
+        transform_entity *entity = lookup_entity(ctx, rel->variable);
+        if (!entity) {
+            /* Add new edge entity */
+            if (add_entity(ctx, rel->variable, ENTITY_TYPE_EDGE, true) < 0) {
+                return -1;
+            }
+            entity = lookup_entity(ctx, rel->variable);
+        }
+        edge_alias = entity->table_alias;
     } else {
-        snprintf(edge_alias, sizeof(edge_alias), "e_%d", rel_index);
+        char *generated_alias = get_next_default_alias(ctx);
+        static char temp_edge[64];
+        strncpy(temp_edge, generated_alias, sizeof(temp_edge) - 1);
+        temp_edge[sizeof(temp_edge) - 1] = '\0';
+        edge_alias = temp_edge;
+        free(generated_alias);
     }
     
     /* Add edges table to FROM clause */
@@ -353,6 +466,12 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     /* Register relationship variable if present */
     if (rel->variable) {
         register_edge_variable(ctx, rel->variable, edge_alias);
+    } else {
+        /* For unnamed relationships, we need a way to track them */
+        /* Create a synthetic variable name based on position for tracking */
+        char synthetic_var[32];
+        snprintf(synthetic_var, sizeof(synthetic_var), "__unnamed_rel_%d", rel_index);
+        register_edge_variable(ctx, synthetic_var, edge_alias);
     }
     
     CYPHER_DEBUG("Generated relationship match: %s connects %s to %s", 

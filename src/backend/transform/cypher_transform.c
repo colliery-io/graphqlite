@@ -36,9 +36,20 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->sql_capacity = INITIAL_SQL_BUFFER_SIZE;
     ctx->sql_size = 0;
     
+    /* Initialize entity tracking (AGE-style) */
+    ctx->entities = calloc(INITIAL_VARIABLE_CAPACITY, sizeof(ctx->entities[0]));
+    if (!ctx->entities) {
+        free(ctx->sql_buffer);
+        free(ctx);
+        return NULL;
+    }
+    ctx->entity_capacity = INITIAL_VARIABLE_CAPACITY;
+    ctx->entity_count = 0;
+    
     /* Initialize variable tracking */
     ctx->variables = calloc(INITIAL_VARIABLE_CAPACITY, sizeof(ctx->variables[0]));
     if (!ctx->variables) {
+        free(ctx->entities);
         free(ctx->sql_buffer);
         free(ctx);
         return NULL;
@@ -48,6 +59,7 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     
     ctx->query_type = QUERY_TYPE_UNKNOWN;
     ctx->has_error = false;
+    ctx->global_alias_counter = 0;
     ctx->error_message = NULL;
     ctx->in_comparison = false;
     
@@ -63,6 +75,13 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     }
     
     CYPHER_DEBUG("Freeing transform context %p", (void*)ctx);
+    
+    /* Free entities (AGE-style) */
+    for (int i = 0; i < ctx->entity_count; i++) {
+        free(ctx->entities[i].name);
+        free(ctx->entities[i].table_alias);
+    }
+    free(ctx->entities);
     
     /* Free variables */
     for (int i = 0; i < ctx->variable_count; i++) {
@@ -227,6 +246,80 @@ bool is_edge_variable(cypher_transform_context *ctx, const char *name)
     return false;
 }
 
+/* Entity management (AGE-style) */
+
+/* Add a new entity (following AGE's add_entity pattern) */
+int add_entity(cypher_transform_context *ctx, const char *name, entity_type type, bool is_current_clause)
+{
+    CYPHER_DEBUG("Adding entity %s, type %d, current_clause %d", name, type, is_current_clause);
+    
+    /* Check if entity already exists */
+    for (int i = 0; i < ctx->entity_count; i++) {
+        if (strcmp(ctx->entities[i].name, name) == 0) {
+            /* Entity already exists, update its current clause status */
+            ctx->entities[i].is_current_clause = is_current_clause;
+            return 0;
+        }
+    }
+    
+    /* Grow array if needed */
+    if (ctx->entity_count >= ctx->entity_capacity) {
+        int new_capacity = ctx->entity_capacity * 2;
+        void *new_entities = realloc(ctx->entities, 
+                                   new_capacity * sizeof(ctx->entities[0]));
+        if (!new_entities) {
+            return -1;
+        }
+        ctx->entities = new_entities;
+        ctx->entity_capacity = new_capacity;
+    }
+    
+    /* Generate default alias using AGE's pattern */
+    char *alias = get_next_default_alias(ctx);
+    if (!alias) {
+        return -1;
+    }
+    
+    /* Add new entity */
+    ctx->entities[ctx->entity_count].name = strdup(name);
+    ctx->entities[ctx->entity_count].table_alias = alias;
+    ctx->entities[ctx->entity_count].type = type;
+    ctx->entities[ctx->entity_count].is_current_clause = is_current_clause;
+    ctx->entity_count++;
+    
+    return 0;
+}
+
+/* Lookup an entity by name (following AGE's lookup pattern) */
+transform_entity* lookup_entity(cypher_transform_context *ctx, const char *name)
+{
+    for (int i = 0; i < ctx->entity_count; i++) {
+        if (strcmp(ctx->entities[i].name, name) == 0) {
+            return &ctx->entities[i];
+        }
+    }
+    return NULL;
+}
+
+/* Mark all current clause entities as inherited for next clause */
+void mark_entities_as_inherited(cypher_transform_context *ctx)
+{
+    for (int i = 0; i < ctx->entity_count; i++) {
+        ctx->entities[i].is_current_clause = false;
+    }
+}
+
+/* Generate next unique alias (AGE's pattern with default prefix) */
+char* get_next_default_alias(cypher_transform_context *ctx)
+{
+    char *alias = malloc(64);
+    if (!alias) {
+        return NULL;
+    }
+    snprintf(alias, 64, "_gql_default_alias_%d", ctx->global_alias_counter++);
+    return alias;
+}
+
 /* Main transform dispatcher */
 
 cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cypher_query *query)
@@ -243,10 +336,23 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     ctx->has_error = false;
     free(ctx->error_message);
     ctx->error_message = NULL;
+    ctx->global_alias_counter = 0;
+    
+    /* Reset entity tracking for new query (AGE-style) */
+    for (int i = 0; i < ctx->entity_count; i++) {
+        free(ctx->entities[i].name);
+        free(ctx->entities[i].table_alias);
+    }
+    ctx->entity_count = 0;
     
     /* Process each clause in order */
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
+        
+        /* Mark entities from previous clause as inherited (AGE pattern) */
+        if (i > 0) {
+            mark_entities_as_inherited(ctx);
+        }
         
         CYPHER_DEBUG("Processing clause type %s", ast_node_type_name(clause->type));
         

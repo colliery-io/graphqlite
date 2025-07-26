@@ -7,12 +7,32 @@
 /* Forward declarations */
 typedef struct cypher_transform_context cypher_transform_context;
 typedef struct cypher_query_result cypher_query_result;
+typedef struct transform_entity transform_entity;
+
+/* Entity types following AGE patterns */
+typedef enum {
+    ENTITY_TYPE_VERTEX,
+    ENTITY_TYPE_EDGE
+} entity_type;
+
+/* Transform entity structure (similar to AGE's transform_entity) */
+struct transform_entity {
+    char *name;                     /* Variable name (e.g., "p", "r") */
+    char *table_alias;              /* Generated SQL alias (e.g., "gql_default_alias_0") */
+    entity_type type;               /* VERTEX or EDGE */
+    bool is_current_clause;         /* True if declared in current clause, false if inherited */
+};
 
 /* Transform context - tracks state during AST transformation */
 struct cypher_transform_context {
     sqlite3 *db;                    /* SQLite database connection */
     
-    /* Variable tracking */
+    /* Entity tracking (AGE-style) */
+    transform_entity *entities;     /* List of entities */
+    int entity_count;
+    int entity_capacity;
+    
+    /* Legacy variable tracking (will be phased out) */
     struct {
         char *name;                 /* Variable name (e.g., "n", "m") */
         char *table_alias;          /* SQL table alias */
@@ -37,6 +57,9 @@ struct cypher_transform_context {
     
     /* Context flags */
     bool in_comparison;             /* True when transforming expressions in comparison context */
+    
+    /* Unique alias counters */
+    int global_alias_counter;       /* Global counter for all unnamed entities (like AGE) */
     
     /* Query type tracking */
     enum {
@@ -93,7 +116,13 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
 int transform_count_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 
-/* Variable management */
+/* Entity management (AGE-style) */
+int add_entity(cypher_transform_context *ctx, const char *name, entity_type type, bool is_current_clause);
+transform_entity* lookup_entity(cypher_transform_context *ctx, const char *name);
+void mark_entities_as_inherited(cypher_transform_context *ctx);
+char* get_next_default_alias(cypher_transform_context *ctx);
+
+/* Legacy variable management (will be phased out) */
 int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias);
