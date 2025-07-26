@@ -39,6 +39,8 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_match *match;
     cypher_return *return_clause;
     cypher_create *create;
+    cypher_set *set;
+    cypher_set_item *set_item;
     cypher_return_item *return_item;
     cypher_order_by_item *order_by_item;
     cypher_literal *literal;
@@ -76,8 +78,10 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <match> match_clause
 %type <return_clause> return_clause
 %type <create> create_clause
+%type <set> set_clause
 
-%type <list> pattern_list return_item_list
+%type <list> pattern_list return_item_list set_item_list
+%type <set_item> set_item
 %type <path> path
 %type <node_pattern> node_pattern
 %type <rel_pattern> rel_pattern
@@ -94,7 +98,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <string> label_opt variable_opt
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list
-%type <node> skip_opt limit_opt
+%type <node> skip_opt limit_opt where_opt
 %type <order_by_item> order_by_item
 
 /* Operator precedence (lowest to highest) */
@@ -138,17 +142,14 @@ clause:
     match_clause        { $$ = (ast_node*)$1; }
     | return_clause     { $$ = (ast_node*)$1; }
     | create_clause     { $$ = (ast_node*)$1; }
+    | set_clause        { $$ = (ast_node*)$1; }
     ;
 
 /* MATCH clause */
 match_clause:
-    optional_opt MATCH pattern_list
+    optional_opt MATCH pattern_list where_opt
         {
-            $$ = make_cypher_match($3, NULL, $1);
-        }
-    | optional_opt MATCH pattern_list WHERE expr
-        {
-            $$ = make_cypher_match($3, $5, $1);
+            $$ = make_cypher_match($3, $4, $1);
         }
     ;
 
@@ -183,6 +184,11 @@ skip_opt:
 limit_opt:
     /* empty */     { $$ = NULL; }
     | LIMIT expr    { $$ = $2; }
+    ;
+
+where_opt:
+    /* empty */     { $$ = NULL; }
+    | WHERE expr    { $$ = $2; }
     ;
 
 order_by_list:
@@ -230,11 +236,39 @@ return_item:
         }
     ;
 
+set_item_list:
+    set_item
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)$1);
+        }
+    | set_item_list ',' set_item
+        {
+            ast_list_append($1, (ast_node*)$3);
+            $$ = $1;
+        }
+    ;
+
+set_item:
+    expr '=' expr
+        {
+            $$ = make_cypher_set_item($1, $3);
+        }
+    ;
+
 /* CREATE clause */
 create_clause:
     CREATE pattern_list
         {
             $$ = make_cypher_create($2);
+        }
+    ;
+
+/* SET clause */
+set_clause:
+    SET set_item_list
+        {
+            $$ = make_cypher_set($2);
         }
     ;
 
@@ -375,16 +409,16 @@ expr:
             $$ = $2;
         }
     }
-    | expr '+' expr     { /* TODO: implement binary operations */ $$ = $1; }
-    | expr '-' expr     { /* TODO: implement binary operations */ $$ = $1; }
-    | expr '*' expr     { /* TODO: implement binary operations */ $$ = $1; }
-    | expr '/' expr     { /* TODO: implement binary operations */ $$ = $1; }
-    | expr '=' expr     { /* TODO: implement comparisons */ $$ = $1; }
-    | expr NOT_EQ expr  { /* TODO: implement comparisons */ $$ = $1; }
-    | expr '<' expr     { /* TODO: implement comparisons */ $$ = $1; }
-    | expr '>' expr     { /* TODO: implement comparisons */ $$ = $1; }
-    | expr LT_EQ expr   { /* TODO: implement comparisons */ $$ = $1; }
-    | expr GT_EQ expr   { /* TODO: implement comparisons */ $$ = $1; }
+    | expr '+' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_ADD, $1, $3, @2.first_line); }
+    | expr '-' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_SUB, $1, $3, @2.first_line); }
+    | expr '*' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MUL, $1, $3, @2.first_line); }
+    | expr '/' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_DIV, $1, $3, @2.first_line); }
+    | expr '=' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_EQ, $1, $3, @2.first_line); }
+    | expr NOT_EQ expr  { $$ = (ast_node*)make_binary_op(BINARY_OP_NEQ, $1, $3, @2.first_line); }
+    | expr '<' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_LT, $1, $3, @2.first_line); }
+    | expr '>' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_GT, $1, $3, @2.first_line); }
+    | expr LT_EQ expr   { $$ = (ast_node*)make_binary_op(BINARY_OP_LTE, $1, $3, @2.first_line); }
+    | expr GT_EQ expr   { $$ = (ast_node*)make_binary_op(BINARY_OP_GTE, $1, $3, @2.first_line); }
     | expr AND expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_AND, $1, $3, @2.first_line); }
     | expr OR expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_OR, $1, $3, @2.first_line); }
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }

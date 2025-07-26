@@ -98,6 +98,30 @@ void ast_node_free(ast_node *node)
             }
             break;
             
+        case AST_NODE_SET:
+            {
+                cypher_set *set = (cypher_set*)node;
+                if (set->items) {
+                    ast_list_free(set->items);
+                    set->items = NULL;
+                }
+            }
+            break;
+            
+        case AST_NODE_SET_ITEM:
+            {
+                cypher_set_item *item = (cypher_set_item*)node;
+                if (item->property) {
+                    ast_node_free(item->property);
+                    item->property = NULL;
+                }
+                if (item->expr) {
+                    ast_node_free(item->expr);
+                    item->expr = NULL;
+                }
+            }
+            break;
+            
         case AST_NODE_RETURN_ITEM:
             {
                 cypher_return_item *item = (cypher_return_item*)node;
@@ -180,6 +204,29 @@ void ast_node_free(ast_node *node)
                 cypher_property *prop = (cypher_property*)node;
                 ast_node_free(prop->expr);
                 free(prop->property_name);
+            }
+            break;
+            
+        case AST_NODE_LABEL_EXPR:
+            {
+                cypher_label_expr *label_expr = (cypher_label_expr*)node;
+                ast_node_free(label_expr->expr);
+                free(label_expr->label_name);
+            }
+            break;
+            
+        case AST_NODE_NOT_EXPR:
+            {
+                cypher_not_expr *not_expr = (cypher_not_expr*)node;
+                ast_node_free(not_expr->expr);
+            }
+            break;
+            
+        case AST_NODE_BINARY_OP:
+            {
+                cypher_binary_op *binary_op = (cypher_binary_op*)node;
+                ast_node_free(binary_op->left);
+                ast_node_free(binary_op->right);
             }
             break;
             
@@ -335,6 +382,29 @@ cypher_create* make_cypher_create(ast_list *pattern)
     
     create->pattern = pattern;
     return create;
+}
+
+cypher_set* make_cypher_set(ast_list *items)
+{
+    cypher_set *set = (cypher_set*)ast_node_create(AST_NODE_SET, -1, sizeof(cypher_set));
+    if (!set) {
+        return NULL;
+    }
+    
+    set->items = items;
+    return set;
+}
+
+cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr)
+{
+    cypher_set_item *item = (cypher_set_item*)ast_node_create(AST_NODE_SET_ITEM, -1, sizeof(cypher_set_item));
+    if (!item) {
+        return NULL;
+    }
+    
+    item->property = property;
+    item->expr = expr;
+    return item;
 }
 
 cypher_return_item* make_return_item(ast_node *expr, char *alias)
@@ -622,6 +692,7 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_ORDER_BY:       return "ORDER_BY";
         case AST_NODE_SKIP:           return "SKIP";
         case AST_NODE_LIMIT:          return "LIMIT";
+        case AST_NODE_SET_ITEM:       return "SET_ITEM";
         default:                      return "UNKNOWN";
     }
 }

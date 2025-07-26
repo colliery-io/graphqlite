@@ -35,6 +35,9 @@ struct cypher_transform_context {
     bool has_error;
     char *error_message;
     
+    /* Context flags */
+    bool in_comparison;             /* True when transforming expressions in comparison context */
+    
     /* Query type tracking */
     enum {
         QUERY_TYPE_UNKNOWN,
@@ -69,6 +72,7 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
 /* Individual clause transformers */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match);
 int transform_create_clause(cypher_transform_context *ctx, cypher_create *create);
+int transform_set_clause(cypher_transform_context *ctx, cypher_set *set);
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret);
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where);
 

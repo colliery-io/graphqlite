@@ -958,6 +958,132 @@ static void test_aggregate_functions(void)
     }
 }
 
+/* Test SET clause transformations */
+static void test_set_basic(void)
+{
+    const char *query = "MATCH (n:Person) SET n.age = 30";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("SET basic transform error: %s\n", result->error_message);
+        } else {
+            printf("SET basic query transformed successfully\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET with multiple properties */
+static void test_set_multiple(void)
+{
+    const char *query = "MATCH (n:Person) SET n.age = 30, n.name = \"Alice\"";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("SET multiple transform error: %s\n", result->error_message);
+        } else {
+            printf("SET multiple properties query transformed successfully\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET with different data types */
+static void test_set_data_types(void)
+{
+    const char *query = "MATCH (n:Test) SET n.str = \"hello\", n.int = 42, n.real = 3.14, n.bool = true";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("SET data types transform error: %s\n", result->error_message);
+        } else {
+            printf("SET data types query transformed successfully\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET with WHERE clause */
+static void test_set_with_where(void)
+{
+    const char *query = "MATCH (n:Person) WHERE n.age > 25 SET n.senior = true";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("SET with WHERE transform error: %s\n", result->error_message);
+        } else {
+            printf("SET with WHERE query transformed successfully\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET error conditions */
+static void test_set_error_conditions(void)
+{
+    /* Test SET without MATCH - should fail */
+    const char *query1 = "SET n.age = 30";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    
+    if (result1) {
+        /* This should fail because there's no MATCH clause */
+        CU_ASSERT_TRUE(result1->has_error);
+        printf("SET without MATCH correctly failed: %s\n", 
+               result1->error_message ? result1->error_message : "Parse error");
+        cypher_free_result(result1);
+    }
+    
+    /* Test invalid SET syntax */
+    const char *query2 = "MATCH (n) SET n = 30"; /* Missing property */
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    
+    if (result2) {
+        /* This might fail at parse or transform level */
+        if (result2->has_error) {
+            printf("Invalid SET syntax correctly failed: %s\n", 
+                   result2->error_message ? result2->error_message : "Parse error");
+        }
+        cypher_free_result(result2);
+    }
+}
+
+/* Test SET transform validation */
+static void test_set_transform_validation(void)
+{
+    const char *query = "MATCH (n:Person) SET n.age = 30, n.name = \"test\"";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("SET transform validation failed: %s\n", result->error_message);
+        } else {
+            printf("SET transform validation passed\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
 /* Initialize the transform test suite */
 int init_transform_suite(void)
 {
@@ -992,7 +1118,14 @@ int init_transform_suite(void)
         !CU_add_test(suite, "RETURN binary operators", test_return_binary_operators) ||
         !CU_add_test(suite, "RETURN additional errors", test_return_additional_errors) ||
         !CU_add_test(suite, "COUNT function variations", test_count_function) ||
-        !CU_add_test(suite, "Aggregate functions", test_aggregate_functions)) {
+        !CU_add_test(suite, "Aggregate functions", test_aggregate_functions) ||
+        /* SET clause transform tests */
+        !CU_add_test(suite, "SET basic", test_set_basic) ||
+        !CU_add_test(suite, "SET multiple properties", test_set_multiple) ||
+        !CU_add_test(suite, "SET data types", test_set_data_types) ||
+        !CU_add_test(suite, "SET with WHERE", test_set_with_where) ||
+        !CU_add_test(suite, "SET error conditions", test_set_error_conditions) ||
+        !CU_add_test(suite, "SET transform validation", test_set_transform_validation)) {
         return CU_get_error();
     }
     

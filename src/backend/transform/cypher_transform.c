@@ -49,6 +49,7 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->query_type = QUERY_TYPE_UNKNOWN;
     ctx->has_error = false;
     ctx->error_message = NULL;
+    ctx->in_comparison = false;
     
     CYPHER_DEBUG("Created transform context %p", (void*)ctx);
     
@@ -258,6 +259,12 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 
             case AST_NODE_CREATE:
                 if (transform_create_clause(ctx, (cypher_create*)clause) < 0) {
+                    goto error;
+                }
+                break;
+                
+            case AST_NODE_SET:
+                if (transform_set_clause(ctx, (cypher_set*)clause) < 0) {
                     goto error;
                 }
                 break;

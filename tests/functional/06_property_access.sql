@@ -155,38 +155,107 @@ SELECT cypher('CREATE (num:TestNode {int: 42, zero: 0, negative: -123})') as set
 SELECT cypher('MATCH (n:TestNode) RETURN n.int, n.zero, n.negative') as result;
 
 SELECT 'Test 7.2 - Float type preservation:' as test_name;
--- NOTE: SET clause not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:TestNode) SET n.pi = 3.14159, n.small = 0.001, n.negFloat = -2.5') as setup;
--- SELECT cypher('MATCH (n:TestNode) RETURN n.pi, n.small, n.negFloat') as result;
-SELECT 'SKIPPED: SET clause not implemented' as result;
+SELECT cypher('MATCH (n:TestNode) SET n.pi = 3.14159, n.small = 0.001, n.negFloat = -2.5') as setup;
+SELECT cypher('MATCH (n:TestNode) RETURN n.pi, n.small, n.negFloat') as result;
 
 SELECT 'Test 7.3 - Boolean type preservation:' as test_name;
--- NOTE: SET clause not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:TestNode) SET n.isTrue = true, n.isFalse = false') as setup;
--- SELECT cypher('MATCH (n:TestNode) RETURN n.isTrue, n.isFalse') as result;
-SELECT 'SKIPPED: SET clause not implemented' as result;
+SELECT cypher('MATCH (n:TestNode) SET n.isTrue = true, n.isFalse = false') as setup;
+SELECT cypher('MATCH (n:TestNode) RETURN n.isTrue, n.isFalse') as result;
 
 SELECT 'Test 7.4 - String edge cases:' as test_name;
--- NOTE: SET clause not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:TestNode) SET n.empty = "", n.spaces = "  ", n.special = "@#$%"') as setup;
--- SELECT cypher('MATCH (n:TestNode) RETURN n.empty, n.spaces, n.special') as result;
-SELECT 'SKIPPED: SET clause not implemented' as result;
+SELECT cypher('MATCH (n:TestNode) SET n.empty = "", n.spaces = "  ", n.special = "@#$%"') as setup;
+SELECT cypher('MATCH (n:TestNode) RETURN n.empty, n.spaces, n.special') as result;
 
 -- =======================================================================
--- SECTION 8: Complex Property Access Patterns
+-- SECTION 8: SET Clause Advanced Tests
 -- =======================================================================
-SELECT '=== Section 8: Complex Property Access Patterns ===' as section;
+SELECT '=== Section 8: SET Clause Advanced Tests ===' as section;
 
-SELECT 'Test 8.1 - Nested property filtering:' as test_name;
+SELECT 'Test 8.1 - SET with pattern matching:' as test_name;
+SELECT cypher('CREATE (a:Person {name: "Alice", age: 30}), (b:Person {name: "Bob", age: 25})') as setup;
+SELECT cypher('MATCH (p:Person) WHERE p.age > 28 SET p.senior = true') as set_result;
+SELECT cypher('MATCH (p:Person) RETURN p.name, p.age, p.senior ORDER BY p.name') as verify_result;
+
+SELECT 'Test 8.2 - SET overwriting existing properties:' as test_name;
+SELECT cypher('CREATE (n:Product {name: "Widget", price: 100})') as setup;
+SELECT cypher('MATCH (n:Product {name: "Widget"}) SET n.price = 150') as update_result;
+SELECT cypher('MATCH (n:Product {name: "Widget"}) RETURN n.name, n.price') as verify_result;
+
+SELECT 'Test 8.3 - SET with multiple nodes:' as test_name;
+SELECT cypher('CREATE (a:Item {status: "pending"}), (b:Item {status: "pending"}), (c:Item {status: "done"})') as setup;
+SELECT cypher('MATCH (n:Item) WHERE n.status = "pending" SET n.status = "processing"') as batch_update;
+SELECT cypher('MATCH (n:Item) RETURN n.status ORDER BY n.status') as verify_batch;
+
+SELECT 'Test 8.4 - SET with null values:' as test_name;
+SELECT cypher('CREATE (n:TestNull {name: "test", value: 42})') as setup;
+-- Note: Setting to NULL not yet supported, would need special handling
+-- SELECT cypher('MATCH (n:TestNull) SET n.value = null') as set_null;
+-- SELECT cypher('MATCH (n:TestNull) RETURN n.name, n.value') as verify_null;
+
+-- =======================================================================
+-- SECTION 8B: SET Clause Data Type Comprehensive Testing
+-- =======================================================================
+SELECT '=== Section 8B: SET Clause Data Type Comprehensive Testing ===' as section;
+
+SELECT 'Test 8B.1 - SET integer data types and edge cases:' as test_name;
+SELECT cypher('CREATE (n:IntTypeTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:IntTypeTest) SET n.positive = 42, n.negative = -123, n.zero = 0, n.large = 999999') as set_integers;
+SELECT cypher('MATCH (n:IntTypeTest) WHERE n.positive > 40 AND n.negative < 0 AND n.zero = 0 RETURN n.positive, n.negative, n.zero, n.large') as verify_integers;
+
+SELECT 'Test 8B.2 - SET real/float data types and precision:' as test_name;
+SELECT cypher('CREATE (n:RealTypeTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:RealTypeTest) SET n.pi = 3.14159, n.small = 0.001, n.negative = -2.5, n.zero = 0.0') as set_reals;
+SELECT cypher('MATCH (n:RealTypeTest) WHERE n.pi > 3.0 AND n.small < 1.0 AND n.negative < 0.0 RETURN n.pi, n.small, n.negative, n.zero') as verify_reals;
+
+SELECT 'Test 8B.3 - SET boolean data types and comparisons:' as test_name;
+SELECT cypher('CREATE (n:BoolTypeTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:BoolTypeTest) SET n.isTrue = true, n.isFalse = false') as set_booleans;
+SELECT cypher('MATCH (n:BoolTypeTest) WHERE n.isTrue = true RETURN n.isTrue') as verify_true;
+SELECT cypher('MATCH (n:BoolTypeTest) WHERE n.isFalse = false RETURN n.isFalse') as verify_false;
+
+SELECT 'Test 8B.4 - SET string data types and edge cases:' as test_name;
+SELECT cypher('CREATE (n:StringTypeTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:StringTypeTest) SET n.normal = "hello", n.empty = "", n.spaces = "  ", n.special = "@#$%^&*()"') as set_strings;
+SELECT cypher('MATCH (n:StringTypeTest) WHERE n.normal = "hello" AND n.empty = "" RETURN n.normal, n.empty, n.spaces, n.special') as verify_strings;
+
+SELECT 'Test 8B.5 - SET mixed data types in single operation:' as test_name;
+SELECT cypher('CREATE (n:MixedTypeTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:MixedTypeTest) SET n.str = "test", n.int = 42, n.real = 3.14, n.bool = true') as set_mixed;
+SELECT cypher('MATCH (n:MixedTypeTest) WHERE n.str = "test" AND n.int = 42 AND n.real > 3.0 AND n.bool = true RETURN n.str, n.int, n.real, n.bool') as verify_mixed;
+
+SELECT 'Test 8B.6 - SET type overwrite scenarios:' as test_name;
+SELECT cypher('CREATE (n:TypeOverwriteTest {value: "123"})') as setup;
+SELECT cypher('MATCH (n:TypeOverwriteTest) SET n.value = 456') as overwrite_with_int;
+SELECT cypher('MATCH (n:TypeOverwriteTest) WHERE n.value > 400 RETURN n.value') as verify_numeric;
+SELECT cypher('MATCH (n:TypeOverwriteTest) SET n.value = "changed"') as overwrite_with_string;
+SELECT cypher('MATCH (n:TypeOverwriteTest) WHERE n.value = "changed" RETURN n.value') as verify_string;
+
+SELECT 'Test 8B.7 - SET with numeric string handling:' as test_name;
+SELECT cypher('CREATE (n:NumericStringTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:NumericStringTest) SET n.numstr = "456", n.actualnum = 456') as set_both;
+SELECT cypher('MATCH (n:NumericStringTest) WHERE n.actualnum > 400 RETURN n.actualnum') as verify_numeric_comparison;
+SELECT cypher('MATCH (n:NumericStringTest) WHERE n.numstr = "456" RETURN n.numstr') as verify_string_comparison;
+
+SELECT 'Test 8B.8 - SET large value handling:' as test_name;
+SELECT cypher('CREATE (n:LargeValueTest {id: 1})') as setup;
+SELECT cypher('MATCH (n:LargeValueTest) SET n.bigint = 9223372036854775807, n.longstr = "This is a very long string with many characters to test large text storage capabilities"') as set_large;
+SELECT cypher('MATCH (n:LargeValueTest) RETURN n.bigint, n.longstr') as verify_large;
+
+-- =======================================================================
+-- SECTION 9: Complex Property Access Patterns
+-- =======================================================================
+SELECT '=== Section 9: Complex Property Access Patterns ===' as section;
+
+SELECT 'Test 9.1 - Nested property filtering:' as test_name;
 SELECT cypher('MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age ORDER BY n.age') as result;
 
-SELECT 'Test 8.2 - Property-based JOIN patterns:' as test_name;
+SELECT 'Test 9.2 - Property-based JOIN patterns:' as test_name;
 SELECT cypher('MATCH (a:Person)-[r:WORKS_WITH]->(b:Person) WHERE r.verified = true RETURN a.name, b.name') as result;
 
-SELECT 'Test 8.3 - Multi-level property access:' as test_name;
+SELECT 'Test 9.3 - Multi-level property access:' as test_name;
 SELECT cypher('MATCH (p:Person)-[r]->(target) RETURN p.name, r, target.name LIMIT 3') as result;
 
-SELECT 'Test 8.4 - Property aggregation patterns:' as test_name;
+SELECT 'Test 9.4 - Property aggregation patterns:' as test_name;
 -- NOTE: MIN/MAX aggregate functions not implemented - documented in BUG_FIXES.md
 -- SELECT cypher('MATCH (n:Person) WHERE n.age IS NOT NULL RETURN MIN(n.age), MAX(n.age)') as result;
 SELECT 'SKIPPED: MIN/MAX aggregate functions not implemented' as result;

@@ -651,9 +651,27 @@ int cypher_schema_set_node_property(cypher_schema_manager *manager,
         return -1;
     }
     
+    /* Clean up the property from all other type tables to avoid COALESCE conflicts */
+    const char *cleanup_tables[] = {"node_props_text", "node_props_int", "node_props_real", "node_props_bool"};
+    const char *cleanup_sql = "DELETE FROM %s WHERE node_id = ? AND key_id = ?";
+    
+    for (int i = 0; i < 4; i++) {
+        char cleanup_query[256];
+        snprintf(cleanup_query, sizeof(cleanup_query), cleanup_sql, cleanup_tables[i]);
+        
+        sqlite3_stmt *cleanup_stmt;
+        int rc = sqlite3_prepare_v2(manager->db, cleanup_query, -1, &cleanup_stmt, NULL);
+        if (rc == SQLITE_OK) {
+            sqlite3_bind_int(cleanup_stmt, 1, node_id);
+            sqlite3_bind_int(cleanup_stmt, 2, key_id);
+            sqlite3_step(cleanup_stmt);
+            sqlite3_finalize(cleanup_stmt);
+        }
+    }
+    
     /* Determine the appropriate table and SQL based on type */
     const char *table_name;
-    const char *sql_template = "INSERT OR REPLACE INTO %s (node_id, key_id, value) VALUES (?, ?, ?)";
+    const char *sql_template = "INSERT INTO %s (node_id, key_id, value) VALUES (?, ?, ?)";
     char sql[256];
     
     switch (type) {

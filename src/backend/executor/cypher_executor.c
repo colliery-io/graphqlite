@@ -63,6 +63,8 @@ void cypher_executor_free(cypher_executor *executor)
 static int execute_match_return_query(cypher_executor *executor, cypher_match *match, cypher_return *return_clause, cypher_result *result);
 static int execute_match_create_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_result *result);
 static int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result);
+static int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
+static int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result);
 static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result, cypher_transform_context *ctx);
 static agtype_value* create_property_agtype_value(const char* value);
 
@@ -113,6 +115,9 @@ typedef struct {
     int count;
     int capacity;
 } variable_map;
+
+/* Forward declaration that needs variable_map type */
+static int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_map *var_map, cypher_result *result);
 
 /* Create variable map */
 static variable_map* create_variable_map(void)
@@ -629,14 +634,18 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
     for (int i = 0; i < column_count; i++) {
         cypher_return_item *item = (cypher_return_item*)return_clause->items->items[i];
         if (item->alias) {
+            /* Use explicit alias if provided */
             result->column_names[i] = strdup(item->alias);
+        } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
+            /* Extract property name from property access (n.age -> "age") */
+            cypher_property *prop = (cypher_property*)item->expr;
+            result->column_names[i] = strdup(prop->property_name);
         } else if (item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
-            /* Use the identifier name as column name */
-            char default_name[32];
-            snprintf(default_name, sizeof(default_name), "column_%d", i);
-            result->column_names[i] = strdup(default_name);
+            /* Use identifier name as column name (n -> "n") */
+            cypher_identifier *ident = (cypher_identifier*)item->expr;
+            result->column_names[i] = strdup(ident->name);
         } else {
-            /* Generate default column name */
+            /* Generate default column name for complex expressions */
             char default_name[32];
             snprintf(default_name, sizeof(default_name), "column_%d", i);
             result->column_names[i] = strdup(default_name);
@@ -954,6 +963,213 @@ static int execute_match_create_return_query(cypher_executor *executor, cypher_m
     return execute_match_return_query(executor, match, return_clause, result);
 }
 
+/* Execute MATCH+SET query combination */
+static int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result)
+{
+    if (!executor || !match || !set || !result) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Executing MATCH+SET query");
+    
+    /* Transform MATCH clause to get bound variables */
+    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    if (!ctx) {
+        set_result_error(result, "Failed to create transform context");
+        return -1;
+    }
+    
+    if (transform_match_clause(ctx, match) < 0) {
+        printf("DEBUG - Transform MATCH failed: %s\n", ctx->error_message ? ctx->error_message : "No error message");
+        set_result_error(result, "Failed to transform MATCH clause");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    if (ctx->has_error) {
+        printf("DEBUG - Transform context has error: %s\n", ctx->error_message ? ctx->error_message : "No error message");
+    }
+    
+    /* Add SELECT to get matched node IDs */
+    char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
+    if (select_pos) {
+        /* Replace SELECT * with specific node ID selection */
+        char *after_star = select_pos + strlen("SELECT *");
+        char *temp = strdup(after_star);
+        
+        ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
+        ctx->sql_buffer[ctx->sql_size] = '\0';
+        
+        /* Select all node variables found in the MATCH */
+        bool first = true;
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+                if (!first) append_sql(ctx, ", ");
+                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                first = false;
+            }
+        }
+        
+        append_sql(ctx, " %s", temp);
+        free(temp);
+    }
+    
+    CYPHER_DEBUG("Generated MATCH SQL: %s", ctx->sql_buffer);
+    printf("\nDEBUG - Generated MATCH SQL for SET (length %zu/%zu): %s\n", ctx->sql_size, ctx->sql_capacity, ctx->sql_buffer);
+    
+    /* Execute the MATCH query to get node IDs */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        char error[512];
+        snprintf(error, sizeof(error), "MATCH SQL prepare failed: %s", sqlite3_errmsg(executor->db));
+        set_result_error(result, error);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+    
+    /* Process each matched row and apply SET operations */
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        /* Create variable map from MATCH results */
+        variable_map *var_map = create_variable_map();
+        if (!var_map) {
+            set_result_error(result, "Failed to create variable map");
+            sqlite3_finalize(stmt);
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+        
+        /* Bind variables to matched node IDs */
+        int col = 0;
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+                int64_t node_id = sqlite3_column_int64(stmt, col);
+                set_variable_node_id(var_map, ctx->variables[i].name, (int)node_id);
+                printf("DEBUG - MATCH returned node_id=%lld for variable '%s'\n", (long long)node_id, ctx->variables[i].name);
+                CYPHER_DEBUG("Bound variable '%s' to node %lld", ctx->variables[i].name, (long long)node_id);
+                col++;
+            }
+        }
+        
+        /* Execute SET operations for this matched row */
+        if (execute_set_operations(executor, set, var_map, result) < 0) {
+            free_variable_map(var_map);
+            sqlite3_finalize(stmt);
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+        
+        free_variable_map(var_map);
+    }
+    
+    sqlite3_finalize(stmt);
+    cypher_transform_free_context(ctx);
+    return 0;
+}
+
+/* Execute standalone SET clause */
+static int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result)
+{
+    if (!executor || !set || !result) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Executing standalone SET clause");
+    
+    /* For standalone SET, we don't have any bound variables
+     * This would typically be an error in real Cypher, but for 
+     * testing purposes we'll allow it */
+    
+    set_result_error(result, "SET clause requires MATCH to bind variables");
+    return -1;
+}
+
+/* Execute SET operations with variable bindings */
+static int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_map *var_map, cypher_result *result)
+{
+    if (!executor || !set || !var_map || !result) {
+        return -1;
+    }
+    
+    CYPHER_DEBUG("Executing SET operations");
+    
+    /* Process each SET item */
+    for (int i = 0; i < set->items->count; i++) {
+        cypher_set_item *item = (cypher_set_item*)set->items->items[i];
+        
+        if (!item->property || item->property->type != AST_NODE_PROPERTY) {
+            set_result_error(result, "SET target must be a property");
+            return -1;
+        }
+        
+        cypher_property *prop = (cypher_property*)item->property;
+        if (!prop->expr || prop->expr->type != AST_NODE_IDENTIFIER) {
+            set_result_error(result, "SET property must be on a variable");
+            return -1;
+        }
+        
+        cypher_identifier *var_id = (cypher_identifier*)prop->expr;
+        
+        /* Get the node ID for this variable */
+        int node_id = get_variable_node_id(var_map, var_id->name);
+        if (node_id < 0) {
+            char error[256];
+            snprintf(error, sizeof(error), "Unbound variable in SET: %s", var_id->name);
+            set_result_error(result, error);
+            return -1;
+        }
+        
+        /* Evaluate the value expression */
+        if (!item->expr || item->expr->type != AST_NODE_LITERAL) {
+            set_result_error(result, "SET value must be a literal");
+            return -1;
+        }
+        
+        cypher_literal *lit = (cypher_literal*)item->expr;
+        
+        /* Determine property type and value */
+        property_type prop_type = PROP_TYPE_TEXT;
+        const void *prop_value = NULL;
+        
+        switch (lit->literal_type) {
+            case LITERAL_STRING:
+                prop_type = PROP_TYPE_TEXT;
+                prop_value = lit->value.string;
+                break;
+            case LITERAL_INTEGER:
+                prop_type = PROP_TYPE_INTEGER;
+                prop_value = &lit->value.integer;
+                break;
+            case LITERAL_DECIMAL:
+                prop_type = PROP_TYPE_REAL;
+                prop_value = &lit->value.decimal;
+                break;
+            case LITERAL_BOOLEAN:
+                prop_type = PROP_TYPE_BOOLEAN;
+                prop_value = &lit->value.boolean;
+                break;
+            case LITERAL_NULL:
+                /* Skip null properties for now */
+                continue;
+        }
+        
+        /* Set the property on the node */
+        if (prop_value) {
+            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, prop->property_name, prop_type, prop_value) == 0) {
+                result->properties_set++;
+                CYPHER_DEBUG("Set property '%s' = value on node %d", prop->property_name, node_id);
+            } else {
+                char error[512];
+                snprintf(error, sizeof(error), "Failed to set property '%s' on node %d", prop->property_name, node_id);
+                set_result_error(result, error);
+                return -1;
+            }
+        }
+    }
+    
+    return 0;
+}
+
 /* Execute AST node */
 cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *ast)
 {
@@ -995,6 +1211,8 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     cypher_return *return_clause = NULL;
                     cypher_create *create_clause = NULL;
                     
+                    cypher_set *set_clause = NULL;
+                    
                     /* Scan for clause types */
                     for (int i = 0; i < query->clauses->count; i++) {
                         ast_node *clause = query->clauses->items[i];
@@ -1007,6 +1225,9 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                                 break;
                             case AST_NODE_CREATE:
                                 create_clause = (cypher_create*)clause;
+                                break;
+                            case AST_NODE_SET:
+                                set_clause = (cypher_set*)clause;
                                 break;
                             default:
                                 CYPHER_DEBUG("Found clause type: %d", clause->type);
@@ -1021,6 +1242,12 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         if (execute_match_create_return_query(executor, match_clause, create_clause, return_clause, result) < 0) {
                             return result; /* Error already set */
                         }
+                    } else if (match_clause && set_clause) {
+                        /* MATCH ... SET pattern */
+                        CYPHER_DEBUG("Executing MATCH+SET query");
+                        if (execute_match_set_query(executor, match_clause, set_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
                     } else if (match_clause && create_clause) {
                         /* MATCH ... CREATE pattern */
                         CYPHER_DEBUG("Executing MATCH+CREATE query");
@@ -1031,6 +1258,12 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         /* MATCH ... RETURN pattern */
                         CYPHER_DEBUG("Executing MATCH+RETURN query");
                         if (execute_match_return_query(executor, match_clause, return_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else if (set_clause) {
+                        /* SET pattern (standalone) */
+                        CYPHER_DEBUG("Executing SET clause");
+                        if (execute_set_clause(executor, set_clause, result) < 0) {
                             return result; /* Error already set */
                         }
                     } else if (create_clause) {
@@ -1057,6 +1290,12 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
             
         case AST_NODE_CREATE:
             if (execute_create_clause(executor, (cypher_create*)ast, result) < 0) {
+                return result; /* Error already set */
+            }
+            break;
+            
+        case AST_NODE_SET:
+            if (execute_set_clause(executor, (cypher_set*)ast, result) < 0) {
                 return result; /* Error already set */
             }
             break;

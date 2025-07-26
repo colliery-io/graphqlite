@@ -360,12 +360,24 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 /* Transform WHERE clause expression (used by other modules) */
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where)
 {
-    CYPHER_DEBUG("Transforming WHERE clause expression");
+    CYPHER_DEBUG("Transforming WHERE clause expression, type: %s", 
+                 where ? ast_node_type_name(where->type) : "NULL");
     
     if (!where) {
         return 0;
     }
     
+    /* Debug the WHERE AST structure */
+    if (where->type == AST_NODE_BINARY_OP) {
+        cypher_binary_op *binop = (cypher_binary_op*)where;
+        CYPHER_DEBUG("WHERE contains binary op: op_type=%d, left=%s, right=%s",
+                     binop->op_type,
+                     binop->left ? ast_node_type_name(binop->left->type) : "NULL",
+                     binop->right ? ast_node_type_name(binop->right->type) : "NULL");
+    }
+    
     /* Transform the WHERE expression - caller handles WHERE/AND keywords */
-    return transform_expression(ctx, where);
+    int result = transform_expression(ctx, where);
+    CYPHER_DEBUG("WHERE transformation result: %d, SQL so far: %s", result, ctx->sql_buffer);
+    return result;
 }

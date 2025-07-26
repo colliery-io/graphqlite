@@ -265,19 +265,43 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     
     /* Generate property access query using our actual schema */
     /* We need to check multiple property tables based on type */
-    append_sql(ctx, "(SELECT COALESCE(");
-    append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
-    append_string_literal(ctx, prop->property_name);
-    append_sql(ctx, "), ");
-    append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
-    append_string_literal(ctx, prop->property_name);
-    append_sql(ctx, "), ");
-    append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
-    append_string_literal(ctx, prop->property_name);
-    append_sql(ctx, "), ");
-    append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
-    append_string_literal(ctx, prop->property_name);
-    append_sql(ctx, ")))");
+    
+    /* For comparisons, preserve proper types instead of casting everything to text */
+    if (ctx->in_comparison) {
+        /* Use COALESCE with all property types for comparisons */
+        append_sql(ctx, "(SELECT COALESCE(");
+        /* Text properties (both numeric and non-numeric strings) */
+        append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, "), ");
+        /* Integer properties */
+        append_sql(ctx, "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, "), ");
+        /* Real properties */
+        append_sql(ctx, "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, "), ");
+        /* Boolean properties (cast to integer for comparison) */
+        append_sql(ctx, "(SELECT CAST(npb.value AS INTEGER) FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, ")))");
+    } else {
+        /* For RETURN clauses, convert everything to text as before */
+        append_sql(ctx, "(SELECT COALESCE(");
+        append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, "), ");
+        append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, "), ");
+        append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, "), ");
+        append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
+        append_string_literal(ctx, prop->property_name);
+        append_sql(ctx, ")))");
+    }
     
     return 0;
 }
@@ -332,15 +356,26 @@ int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not
 /* Transform binary operation (e.g., expr AND expr, expr OR expr) */
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op)
 {
-    CYPHER_DEBUG("Transforming binary operation");
+    CYPHER_DEBUG("Transforming binary operation: op_type=%d", binary_op->op_type);
+    
+    /* Set comparison context for comparison operators */
+    bool was_in_comparison = ctx->in_comparison;
+    if (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||
+        binary_op->op_type == BINARY_OP_LT || binary_op->op_type == BINARY_OP_GT ||
+        binary_op->op_type == BINARY_OP_LTE || binary_op->op_type == BINARY_OP_GTE) {
+        ctx->in_comparison = true;
+    }
     
     /* Add left parenthesis for precedence */
     append_sql(ctx, "(");
     
     /* Transform left expression */
+    CYPHER_DEBUG("Transforming left operand");
     if (transform_expression(ctx, binary_op->left) < 0) {
+        CYPHER_DEBUG("Left operand transformation failed");
         return -1;
     }
+    CYPHER_DEBUG("Left operand done, SQL so far: %s", ctx->sql_buffer);
     
     /* Add operator */
     switch (binary_op->op_type) {
@@ -360,6 +395,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             append_sql(ctx, " < ");
             break;
         case BINARY_OP_GT:
+            CYPHER_DEBUG("Adding > operator");
             append_sql(ctx, " > ");
             break;
         case BINARY_OP_LTE:
@@ -381,18 +417,30 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             append_sql(ctx, " / ");
             break;
         default:
+            CYPHER_DEBUG("Unknown binary operator: %d", binary_op->op_type);
             ctx->has_error = true;
             ctx->error_message = strdup("Unknown binary operator");
             return -1;
     }
     
+    CYPHER_DEBUG("Operator added, SQL so far: %s", ctx->sql_buffer);
+    
     /* Transform right expression */
+    CYPHER_DEBUG("Transforming right operand");
     if (transform_expression(ctx, binary_op->right) < 0) {
+        CYPHER_DEBUG("Right operand transformation failed");
         return -1;
     }
     
+    CYPHER_DEBUG("Right operand done, SQL so far: %s", ctx->sql_buffer);
+    
     /* Close parenthesis */
     append_sql(ctx, ")");
+    
+    /* Restore comparison context */
+    ctx->in_comparison = was_in_comparison;
+    
+    CYPHER_DEBUG("Binary operation complete: %s", ctx->sql_buffer);
     
     return 0;
 }

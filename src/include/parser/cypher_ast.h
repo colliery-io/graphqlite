@@ -18,6 +18,7 @@ typedef enum ast_node_type {
     AST_NODE_WHERE,
     AST_NODE_WITH,
     AST_NODE_SET,
+    AST_NODE_SET_ITEM,
     AST_NODE_DELETE,
     AST_NODE_REMOVE,
     AST_NODE_MERGE,
@@ -109,6 +110,19 @@ typedef struct cypher_create {
     ast_node base;
     ast_list *pattern;    /* List of patterns to create */
 } cypher_create;
+
+/* SET clause */
+typedef struct cypher_set {
+    ast_node base;
+    ast_list *items;      /* List of set items */
+} cypher_set;
+
+/* SET item (e.g., n.prop = value) */
+typedef struct cypher_set_item {
+    ast_node base;
+    ast_node *property;   /* Property to set (n.prop) */
+    ast_node *expr;       /* Expression to set it to */
+} cypher_set_item;
 
 /* WHERE clause */
 typedef struct cypher_where {
@@ -254,6 +268,8 @@ cypher_query* make_cypher_query(ast_list *clauses);
 cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optional);
 cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *order_by, ast_node *skip, ast_node *limit);
 cypher_create* make_cypher_create(ast_list *pattern);
+cypher_set* make_cypher_set(ast_list *items);
+cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr);
 cypher_return_item* make_return_item(ast_node *expr, char *alias);
 cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending);
 cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *properties);
