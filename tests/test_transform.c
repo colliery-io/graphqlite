@@ -1191,6 +1191,76 @@ static void test_delete_item_creation(void)
     }
 }
 
+/* Test TYPE function basic functionality */
+static void test_type_function_basic(void)
+{
+    /* Test that TYPE function is recognized and generates proper SQL */
+    const char *query = "MATCH ()-[r:KNOWS]->() RETURN type(r)";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        /* Should succeed - no errors */
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("Transform error: %s\n", result->error_message);
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test TYPE function argument validation */
+static void test_type_function_validation(void)
+{
+    /* Test with valid relationship variable */
+    const char *query = "MATCH ()-[r]->() RETURN type(r)";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        /* Should succeed */
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("Transform error: %s\n", result->error_message);
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test TYPE function error cases */
+static void test_type_function_errors(void)
+{
+    /* Test 1: TYPE function with no arguments */
+    const char *query1 = "MATCH ()-[r]->() RETURN type()";
+    cypher_query_result *result1 = parse_and_transform(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    
+    if (result1) {
+        /* Should fail with error about missing argument */
+        CU_ASSERT_TRUE(result1->has_error);
+        if (result1->error_message) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result1->error_message, "exactly one non-null argument"));
+        }
+        cypher_free_result(result1);
+    }
+    
+    /* Test 2: TYPE function with node variable */
+    const char *query2 = "MATCH (n) RETURN type(n)";
+    cypher_query_result *result2 = parse_and_transform(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    
+    if (result2) {
+        /* Should fail with error about requiring relationship */
+        CU_ASSERT_TRUE(result2->has_error);
+        if (result2->error_message) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result2->error_message, "relationship variable"));
+        }
+        cypher_free_result(result2);
+    }
+}
+
 /* Initialize the transform test suite */
 int init_transform_suite(void)
 {
@@ -1235,7 +1305,11 @@ int init_transform_suite(void)
         !CU_add_test(suite, "SET transform validation", test_set_transform_validation) ||
         /* DELETE clause transform tests */
         !CU_add_test(suite, "DELETE variable binding", test_delete_variable_binding) ||
-        !CU_add_test(suite, "DELETE item creation", test_delete_item_creation)) {
+        !CU_add_test(suite, "DELETE item creation", test_delete_item_creation) ||
+        /* TYPE function tests */
+        !CU_add_test(suite, "TYPE function basic", test_type_function_basic) ||
+        !CU_add_test(suite, "TYPE function validation", test_type_function_validation) ||
+        !CU_add_test(suite, "TYPE function error cases", test_type_function_errors)) {
         return CU_get_error();
     }
     

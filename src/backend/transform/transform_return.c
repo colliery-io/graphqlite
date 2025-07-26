@@ -456,6 +456,11 @@ int transform_function_call(cypher_transform_context *ctx, cypher_function_call 
         return -1;
     }
     
+    /* Handle TYPE function specifically */
+    if (strcasecmp(func_call->function_name, "type") == 0) {
+        return transform_type_function(ctx, func_call);
+    }
+    
     /* Handle COUNT function specifically */
     if (strcasecmp(func_call->function_name, "count") == 0) {
         return transform_count_function(ctx, func_call);
@@ -549,5 +554,52 @@ int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_
     }
     
     append_sql(ctx, ")");
+    return 0;
+}
+
+/* Transform TYPE function specifically */
+int transform_type_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming TYPE function");
+    
+    /* TYPE function requires exactly one argument */
+    if (!func_call->args || func_call->args->count != 1 || func_call->args->items[0] == NULL) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("type() function requires exactly one non-null argument");
+        return -1;
+    }
+    
+    /* The argument must be an identifier (variable) */
+    ast_node *arg = func_call->args->items[0];
+    if (arg->type != AST_NODE_IDENTIFIER) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("type() function argument must be a relationship variable");
+        return -1;
+    }
+    
+    cypher_identifier *id = (cypher_identifier*)arg;
+    
+    /* Check if the variable is registered */
+    const char *alias = lookup_variable_alias(ctx, id->name);
+    if (!alias) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "Unknown variable in type() function: %s", id->name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+    
+    /* Check if the variable is a relationship/edge variable */
+    if (!is_edge_variable(ctx, id->name)) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("type() function argument must be a relationship variable");
+        return -1;
+    }
+    
+    /* Generate SQL to extract the relationship type from the edges table */
+    /* The relationship alias should point to the edges table with an 'id' column */
+    /* We extract the 'type' column which contains the relationship type */
+    append_sql(ctx, "(SELECT type FROM edges WHERE id = %s.id)", alias);
+    
     return 0;
 }
