@@ -269,6 +269,12 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 }
                 break;
                 
+            case AST_NODE_DELETE:
+                if (transform_delete_clause(ctx, (cypher_delete*)clause) < 0) {
+                    goto error;
+                }
+                break;
+                
             case AST_NODE_RETURN:
                 if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
                     goto error;

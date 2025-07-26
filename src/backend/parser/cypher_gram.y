@@ -41,6 +41,8 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_create *create;
     cypher_set *set;
     cypher_set_item *set_item;
+    cypher_delete *delete;
+    cypher_delete_item *delete_item;
     cypher_return_item *return_item;
     cypher_order_by_item *order_by_item;
     cypher_literal *literal;
@@ -79,9 +81,11 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <return_clause> return_clause
 %type <create> create_clause
 %type <set> set_clause
+%type <delete> delete_clause
 
-%type <list> pattern_list return_item_list set_item_list
+%type <list> pattern_list return_item_list set_item_list delete_item_list
 %type <set_item> set_item
+%type <delete_item> delete_item
 %type <path> path
 %type <node_pattern> node_pattern
 %type <rel_pattern> rel_pattern
@@ -143,6 +147,7 @@ clause:
     | return_clause     { $$ = (ast_node*)$1; }
     | create_clause     { $$ = (ast_node*)$1; }
     | set_clause        { $$ = (ast_node*)$1; }
+    | delete_clause     { $$ = (ast_node*)$1; }
     ;
 
 /* MATCH clause */
@@ -269,6 +274,35 @@ set_clause:
     SET set_item_list
         {
             $$ = make_cypher_set($2);
+        }
+    ;
+
+/* DELETE clause */
+delete_clause:
+    DELETE delete_item_list
+        {
+            $$ = make_cypher_delete($2);
+        }
+    ;
+
+delete_item_list:
+    delete_item
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)$1);
+        }
+    | delete_item_list ',' delete_item
+        {
+            ast_list_append($1, (ast_node*)$3);
+            $$ = $1;
+        }
+    ;
+
+delete_item:
+    IDENTIFIER
+        {
+            $$ = make_delete_item($1);
+            free($1);
         }
     ;
 

@@ -20,6 +20,7 @@ typedef enum ast_node_type {
     AST_NODE_SET,
     AST_NODE_SET_ITEM,
     AST_NODE_DELETE,
+    AST_NODE_DELETE_ITEM,
     AST_NODE_REMOVE,
     AST_NODE_MERGE,
     AST_NODE_UNWIND,
@@ -123,6 +124,18 @@ typedef struct cypher_set_item {
     ast_node *property;   /* Property to set (n.prop) */
     ast_node *expr;       /* Expression to set it to */
 } cypher_set_item;
+
+/* DELETE clause */
+typedef struct cypher_delete {
+    ast_node base;
+    ast_list *items;      /* List of delete items (variables to delete) */
+} cypher_delete;
+
+/* DELETE item (e.g., n or r) */
+typedef struct cypher_delete_item {
+    ast_node base;
+    char *variable;       /* Variable name to delete */
+} cypher_delete_item;
 
 /* WHERE clause */
 typedef struct cypher_where {
@@ -270,6 +283,8 @@ cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *orde
 cypher_create* make_cypher_create(ast_list *pattern);
 cypher_set* make_cypher_set(ast_list *items);
 cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr);
+cypher_delete* make_cypher_delete(ast_list *items);
+cypher_delete_item* make_delete_item(char *variable);
 cypher_return_item* make_return_item(ast_node *expr, char *alias);
 cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending);
 cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *properties);

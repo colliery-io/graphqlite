@@ -73,6 +73,7 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match);
 int transform_create_clause(cypher_transform_context *ctx, cypher_create *create);
 int transform_set_clause(cypher_transform_context *ctx, cypher_set *set);
+int transform_delete_clause(cypher_transform_context *ctx, cypher_delete *delete_clause);
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret);
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where);
 

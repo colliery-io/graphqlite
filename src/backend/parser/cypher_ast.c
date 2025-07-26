@@ -122,6 +122,26 @@ void ast_node_free(ast_node *node)
             }
             break;
             
+        case AST_NODE_DELETE:
+            {
+                cypher_delete *del = (cypher_delete*)node;
+                if (del->items) {
+                    ast_list_free(del->items);
+                    del->items = NULL;
+                }
+            }
+            break;
+            
+        case AST_NODE_DELETE_ITEM:
+            {
+                cypher_delete_item *item = (cypher_delete_item*)node;
+                if (item->variable) {
+                    free(item->variable);
+                    item->variable = NULL;
+                }
+            }
+            break;
+            
         case AST_NODE_RETURN_ITEM:
             {
                 cypher_return_item *item = (cypher_return_item*)node;
@@ -404,6 +424,28 @@ cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr)
     
     item->property = property;
     item->expr = expr;
+    return item;
+}
+
+cypher_delete* make_cypher_delete(ast_list *items)
+{
+    cypher_delete *del = (cypher_delete*)ast_node_create(AST_NODE_DELETE, -1, sizeof(cypher_delete));
+    if (!del) {
+        return NULL;
+    }
+    
+    del->items = items;
+    return del;
+}
+
+cypher_delete_item* make_delete_item(char *variable)
+{
+    cypher_delete_item *item = (cypher_delete_item*)ast_node_create(AST_NODE_DELETE_ITEM, -1, sizeof(cypher_delete_item));
+    if (!item) {
+        return NULL;
+    }
+    
+    item->variable = variable ? strdup(variable) : NULL;
     return item;
 }
 
@@ -693,6 +735,7 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_SKIP:           return "SKIP";
         case AST_NODE_LIMIT:          return "LIMIT";
         case AST_NODE_SET_ITEM:       return "SET_ITEM";
+        case AST_NODE_DELETE_ITEM:    return "DELETE_ITEM";
         default:                      return "UNKNOWN";
     }
 }

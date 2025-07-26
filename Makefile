@@ -59,6 +59,7 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_match.c \
 	$(TRANSFORM_DIR)/transform_create.c \
 	$(TRANSFORM_DIR)/transform_set.c \
+	$(TRANSFORM_DIR)/transform_delete.c \
 	$(TRANSFORM_DIR)/transform_return.c
 
 # Executor sources
