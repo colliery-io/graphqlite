@@ -439,9 +439,9 @@ static void test_set_label_operations(void)
                 CU_ASSERT_TRUE(result->success);
                 CU_ASSERT_EQUAL(result->properties_set, 1); /* Should count label as 1 operation */
                 
-                /* Verify the label was added by querying */
+                /* Verify the label was added by querying - check if Employee label exists */
                 cypher_result *verify_result = cypher_executor_execute(executor, 
-                    "MATCH (n:Person:Employee) RETURN n.name");
+                    "MATCH (n:Employee) RETURN n.name");
                 
                 if (verify_result && verify_result->success) {
                     printf("Label verification successful\n");

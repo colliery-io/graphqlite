@@ -204,9 +204,8 @@ SELECT 'Test 8.3 - Complex NULL handling:' as test_name;
 SELECT cypher('MATCH (p:Person) WHERE p.nonexistent IS NULL RETURN p.name, p.nonexistent LIMIT 3') as result;
 
 SELECT 'Test 8.4 - Mixed optional relationships:' as test_name;
--- NOTE: OPTIONAL MATCH not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate:Person) RETURN p.name, subordinate.name') as result;
-SELECT 'SKIPPED: OPTIONAL MATCH not implemented' as result;
+-- OPTIONAL MATCH now implemented - testing left-outer-join behavior
+SELECT cypher('MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate:Person) RETURN p.name, subordinate.name') as result;
 
 -- =======================================================================
 -- VERIFICATION: Complex Query Analysis

@@ -110,7 +110,10 @@ static void test_match_query_execution(void)
         CU_ASSERT_PTR_NOT_NULL(create_result);
         
         if (create_result) {
-            CU_ASSERT_FALSE(create_result->success);
+            CU_ASSERT_TRUE(create_result->success);
+            if (!create_result->success) {
+                printf("CREATE execution error: %s\n", create_result->error_message);
+            }
             cypher_result_free(create_result);
         }
         
@@ -120,8 +123,8 @@ static void test_match_query_execution(void)
         CU_ASSERT_PTR_NOT_NULL(match_result);
         
         if (match_result) {
-            CU_ASSERT_FALSE(match_result->success);
-            if (match_result->success) {
+            CU_ASSERT_TRUE(match_result->success);
+            if (!match_result->success) {
                 printf("MATCH execution error: %s\n", match_result->error_message);
             } else {
                 printf("MATCH query succeeded\n");
@@ -277,7 +280,10 @@ static void test_match_with_where(void)
         CU_ASSERT_PTR_NOT_NULL(create_result);
         
         if (create_result) {
-            CU_ASSERT_FALSE(create_result->success);
+            CU_ASSERT_TRUE(create_result->success);
+            if (!create_result->success) {
+                printf("CREATE execution error: %s\n", create_result->error_message);
+            }
             cypher_result_free(create_result);
         }
         

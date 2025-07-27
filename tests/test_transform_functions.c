@@ -54,14 +54,26 @@ static cypher_query_result* parse_and_transform(const char *query_str)
     /* Parse the query */
     ast_node *ast = parse_cypher_query(query_str);
     if (!ast) {
-        return NULL;
+        /* Create an error result for parse failures */
+        cypher_query_result *error_result = (cypher_query_result*)calloc(1, sizeof(cypher_query_result));
+        if (error_result) {
+            error_result->has_error = true;
+            error_result->error_message = strdup("Parse error");
+        }
+        return error_result;
     }
     
     /* Create transform context */
     cypher_transform_context *ctx = cypher_transform_create_context(test_db);
     if (!ctx) {
         cypher_parser_free_result(ast);
-        return NULL;
+        /* Create an error result for context creation failures */
+        cypher_query_result *error_result = (cypher_query_result*)calloc(1, sizeof(cypher_query_result));
+        if (error_result) {
+            error_result->has_error = true;
+            error_result->error_message = strdup("Context creation error");
+        }
+        return error_result;
     }
     
     /* Transform to SQL */
