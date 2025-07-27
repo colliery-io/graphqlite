@@ -9,6 +9,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #include "parser/cypher_scanner.h"
 #include "parser/cypher_keywords.h"
@@ -20,6 +21,7 @@ static void prepare_string_token(CypherTokenType type, const char *text, const c
 static void prepare_integer_token(const char *text);
 static void prepare_decimal_token(const char *text);
 static void scanner_error(const char *message);
+static char* unescape_string(const char *escaped_str, int length);
 
 /* Global variables for current scanner state */
 CypherScannerState *current_scanner = NULL;
@@ -126,35 +128,28 @@ operator    [+\-*/%^=!&|~]+
 {string}        {
                     /* Remove quotes and handle escapes */
                     int len = yyleng - 2; /* Remove quotes */
-                    char *value = malloc(len + 1);
-                    if (!value) {
-                        scanner_error("Out of memory");
+                    char *unescaped = unescape_string(yytext + 1, len);
+                    if (!unescaped) {
+                        scanner_error("Out of memory processing string literal");
                         return CYPHER_TOKEN_EOF;
                     }
                     
-                    /* Simple unescaping - copy content between quotes */
-                    strncpy(value, yytext + 1, len);
-                    value[len] = '\0';
-                    
-                    prepare_string_token(CYPHER_TOKEN_STRING, yytext, value);
-                    free(value);
+                    prepare_string_token(CYPHER_TOKEN_STRING, yytext, unescaped);
+                    free(unescaped);
                     return CYPHER_TOKEN_STRING;
                 }
 
 {sstring}       {
-                    /* Same as double-quoted strings */
+                    /* Same as double-quoted strings with escape processing */
                     int len = yyleng - 2;
-                    char *value = malloc(len + 1);
-                    if (!value) {
-                        scanner_error("Out of memory");
+                    char *unescaped = unescape_string(yytext + 1, len);
+                    if (!unescaped) {
+                        scanner_error("Out of memory processing string literal");
                         return CYPHER_TOKEN_EOF;
                     }
                     
-                    strncpy(value, yytext + 1, len);
-                    value[len] = '\0';
-                    
-                    prepare_string_token(CYPHER_TOKEN_STRING, yytext, value);
-                    free(value);
+                    prepare_string_token(CYPHER_TOKEN_STRING, yytext, unescaped);
+                    free(unescaped);
                     return CYPHER_TOKEN_STRING;
                 }
 
@@ -282,4 +277,111 @@ static void scanner_error(const char *message)
 CypherToken cypher_scanner_get_current_token(void)
 {
     return current_token;
+}
+
+/* Process escape sequences in string literals */
+static char* unescape_string(const char *escaped_str, int length)
+{
+    char *result = malloc(length + 1); /* Worst case - no escapes */
+    if (!result) {
+        return NULL;
+    }
+    
+    int i = 0, j = 0;
+    while (i < length) {
+        if (escaped_str[i] == '\\' && i + 1 < length) {
+            char next = escaped_str[i + 1];
+            switch (next) {
+                case 't':
+                    result[j++] = '\t';
+                    i += 2;
+                    break;
+                case 'b':
+                    result[j++] = '\b';
+                    i += 2;
+                    break;
+                case 'n':
+                    result[j++] = '\n';
+                    i += 2;
+                    break;
+                case 'r':
+                    result[j++] = '\r';
+                    i += 2;
+                    break;
+                case 'f':
+                    result[j++] = '\f';
+                    i += 2;
+                    break;
+                case '\'':
+                    result[j++] = '\'';
+                    i += 2;
+                    break;
+                case '"':
+                    result[j++] = '"';
+                    i += 2;
+                    break;
+                case '\\':
+                    result[j++] = '\\';
+                    i += 2;
+                    break;
+                case 'u':
+                    /* Unicode escape sequence \uxxxx */
+                    if (i + 5 < length) {
+                        char hex_chars[5];
+                        bool valid_hex = true;
+                        
+                        /* Extract 4 hex digits */
+                        for (int k = 0; k < 4; k++) {
+                            char c = escaped_str[i + 2 + k];
+                            if (!((c >= '0' && c <= '9') || 
+                                  (c >= 'A' && c <= 'F') || 
+                                  (c >= 'a' && c <= 'f'))) {
+                                valid_hex = false;
+                                break;
+                            }
+                            hex_chars[k] = c;
+                        }
+                        hex_chars[4] = '\0';
+                        
+                        if (valid_hex) {
+                            /* Convert hex to unicode code point */
+                            unsigned int codepoint = strtoul(hex_chars, NULL, 16);
+                            
+                            /* Convert to UTF-8 (simplified for basic ASCII range) */
+                            if (codepoint <= 0x7F) {
+                                /* ASCII range */
+                                result[j++] = (char)codepoint;
+                            } else if (codepoint <= 0x7FF) {
+                                /* 2-byte UTF-8 */
+                                result[j++] = (char)(0xC0 | (codepoint >> 6));
+                                result[j++] = (char)(0x80 | (codepoint & 0x3F));
+                            } else {
+                                /* 3-byte UTF-8 for Basic Multilingual Plane */
+                                result[j++] = (char)(0xE0 | (codepoint >> 12));
+                                result[j++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                                result[j++] = (char)(0x80 | (codepoint & 0x3F));
+                            }
+                            i += 6; /* Skip \uxxxx */
+                        } else {
+                            /* Invalid unicode escape - treat as literal */
+                            result[j++] = escaped_str[i++];
+                        }
+                    } else {
+                        /* Incomplete unicode escape - treat as literal */
+                        result[j++] = escaped_str[i++];
+                    }
+                    break;
+                default:
+                    /* Unknown escape sequence - treat as literal */
+                    result[j++] = escaped_str[i++];
+                    break;
+            }
+        } else {
+            /* Regular character */
+            result[j++] = escaped_str[i++];
+        }
+    }
+    
+    result[j] = '\0';
+    return result;
 }

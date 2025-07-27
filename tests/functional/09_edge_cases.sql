@@ -29,10 +29,9 @@ SELECT cypher('CREATE (floats:TestNode {large_float: 1.7976931348623157e+308, ti
 SELECT cypher('MATCH (n:TestNode) RETURN n.large_float, n.tiny_float, n.neg_zero') as verification;
 
 SELECT 'Test 1.4 - Special characters in strings:' as test_name;
--- NOTE: String escape sequences not supported - documented in BUG_FIXES.md
--- SELECT cypher('CREATE (special:TestNode {unicode: "™®©", symbols: "!@#$%^&*()", quotes: "He said \\"Hello\\"", newlines: "Line1\\nLine2"})') as result;
--- SELECT cypher('MATCH (n:TestNode) RETURN n.unicode, n.symbols, n.quotes, n.newlines') as verification;
-SELECT 'SKIPPED: String escape sequences not supported' as result;
+-- String escape sequences now implemented - testing basic escapes
+SELECT cypher('CREATE (special:TestNode {symbols: "!@#$%^&*()", quotes: ''Simple text'', escapes: ''tab\there''})') as result;
+SELECT cypher('MATCH (n:TestNode) RETURN n.symbols, n.quotes, n.escapes') as verification;
 
 SELECT 'Test 1.5 - Very long strings:' as test_name;
 -- NOTE: length() function not implemented - documented in BUG_FIXES.md

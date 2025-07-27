@@ -143,6 +143,101 @@ static void test_string_literals(void)
     cypher_scanner_destroy(scanner);
 }
 
+/* Test string escape sequences */
+static void test_string_escapes(void)
+{
+    CypherScannerState *scanner;
+    CypherToken token;
+    
+    /* Test basic escape sequences */
+    scanner = create_string_scanner("\"hello\\nworld\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\nworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test tab escape */
+    scanner = create_string_scanner("\"hello\\tworld\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\tworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test carriage return escape */
+    scanner = create_string_scanner("\"hello\\rworld\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\rworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test backslash escape */
+    scanner = create_string_scanner("\"hello\\\\world\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\\world");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test quote escapes in double-quoted string */
+    scanner = create_string_scanner("\"He said \\\"Hello\\\"\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "He said \"Hello\"");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test quote escapes in single-quoted string */
+    scanner = create_string_scanner("'He said \\'Hello\\''");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "He said 'Hello'");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test backspace escape */
+    scanner = create_string_scanner("\"hello\\bworld\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\bworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test form feed escape */
+    scanner = create_string_scanner("\"hello\\fworld\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\fworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test unicode escape - simple ASCII */
+    scanner = create_string_scanner("\"hello\\u0041world\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "helloAworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test multiple escapes in one string */
+    scanner = create_string_scanner("\"line1\\nline2\\ttab\\\\backslash\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "line1\nline2\ttab\\backslash");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+    
+    /* Test invalid escape sequence (should be treated as literal) */
+    scanner = create_string_scanner("\"hello\\zworld\"");
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_STRING);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "hello\\zworld");
+    cypher_token_free(&token);
+    cypher_scanner_destroy(scanner);
+}
+
 /* Test identifier scanning */
 static void test_identifiers(void)
 {
@@ -639,6 +734,7 @@ int init_scanner_suite(void)
         !CU_add_test(suite, "Integer literals", test_integer_literals) ||
         !CU_add_test(suite, "Decimal literals", test_decimal_literals) ||
         !CU_add_test(suite, "String literals", test_string_literals) ||
+        !CU_add_test(suite, "String escape sequences", test_string_escapes) ||
         !CU_add_test(suite, "Identifiers", test_identifiers) ||
         !CU_add_test(suite, "Keyword recognition", test_keyword_recognition) ||
         !CU_add_test(suite, "Parameters", test_parameters) ||

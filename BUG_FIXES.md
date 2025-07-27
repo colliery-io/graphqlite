@@ -42,88 +42,7 @@ MATCH path = (a)-[:REL]->(b) RETURN path
 
 ---
 
-### Issue: OPTIONAL MATCH Not Supported
-**Status**: ✅ **FIXED**  
-**Priority**: High  
-**AGE Compatibility**: ✅ **RESTORED**
 
-**Description:**
-The `OPTIONAL MATCH` clause for left-outer-join style pattern matching is now fully implemented.
-
-**Current Behavior:**
-```cypher
-MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name, subordinate.name
-✅ Query executes successfully with LEFT JOIN SQL generation
-```
-
-**Expected AGE-Compatible Behavior:**
-```cypher
-MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name, subordinate.name
-[{"p.name": "Alice", "subordinate.name": "Bob"}, {"p.name": "Charlie", "subordinate.name": null}]
-```
-
-**Implementation Summary:**
-✅ **Parser**: OPTIONAL MATCH grammar fully implemented  
-✅ **Transform**: SQL Builder with two-pass generation (FROM/JOIN + WHERE)  
-✅ **SQL Generation**: Correct LEFT JOIN syntax with proper clause ordering  
-✅ **Testing**: Unit tests pass, transformation succeeds  
-
-**Generated SQL Example:**
-```sql
-SELECT * FROM nodes AS _gql_default_alias_0 
-LEFT JOIN nodes AS _gql_default_alias_2 ON 1=1 
-LEFT JOIN edges AS _gql_default_alias_3 ON _gql_default_alias_3.source_id = _gql_default_alias_0.id 
-  AND _gql_default_alias_3.target_id = _gql_default_alias_2.id 
-  AND _gql_default_alias_3.type = 'MANAGES' 
-WHERE EXISTS (SELECT 1 FROM node_labels WHERE node_id = _gql_default_alias_0.id AND label = 'Person')
-```
-
-**Key Components Implemented:**
-- `src/backend/parser/cypher_gram.y` - ✅ OPTIONAL MATCH grammar
-- `src/backend/transform/transform_match.c` - ✅ SQL Builder pattern with deduplication
-- `src/backend/transform/cypher_transform.c` - ✅ Query-level detection and finalization
-- `src/include/transform/cypher_transform.h` - ✅ SQL Builder context structures
-- `tests/test_transform_delete.c` - ✅ Comprehensive unit tests
-
----
-
-### Issue: String Escape Sequences Not Supported
-**Status**: Open  
-**Priority**: Medium  
-**AGE Compatibility**: Breaks string literal parsing
-
-**Description:**
-String escape sequences like `\"` (escaped quotes) and `\\n` (newlines) are not properly parsed in string literals.
-
-**Current Behavior:**
-```cypher
-CREATE (n {text: "He said \"Hello\""})
-Runtime error: Failed to parse query
-```
-
-**Expected AGE-Compatible Behavior:**
-```cypher
-CREATE (n {text: "He said \"Hello\""})
-Query executed successfully - nodes created: 1
-```
-
-**Location**: `tests/functional/09_edge_cases.sql:32`
-
-**Root Cause:**
-- String literal parsing doesn't handle escape sequences
-- Lexer/scanner doesn't recognize escaped characters
-- Missing support for standard escape sequences: `\"`, `\\`, `\n`, `\t`, etc.
-
-**Affected Code:**
-- `src/backend/parser/cypher_scanner.l` - String literal lexing
-- String literal token handling in parser
-
-**Solution Approach:**
-1. Update scanner to handle escape sequences in string literals
-2. Add support for common escapes: `\"`, `\\`, `\n`, `\t`, `\r`
-3. Properly unescape strings during token processing
-
----
 
 ### Issue: Multiple Relationship Type Syntax Not Supported
 **Status**: Open  
@@ -164,47 +83,7 @@ MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person
 
 ---
 
-## Parser and Error Handling
 
-### Issue: Parser Error Handling for Invalid Syntax
-**Status**: ✅ **FIXED**  
-**Priority**: Medium  
-**AGE Compatibility**: ✅ **IMPROVED**
-
-**Description:**
-GraphQLite now provides detailed error messages with line and column information for syntax errors.
-
-**Previous Behavior:**
-```cypher
-MATCH n RETURN n  -- Missing parentheses around node variable
-Runtime error: Failed to parse query
-```
-
-**Fixed Behavior:**
-```cypher
-MATCH n RETURN n
-Parse error at line 1, column 7: syntax error
-```
-
-**Location**: `tests/functional/09_edge_cases.sql:115`
-
-**Root Cause:**
-- Parser context had error details but they weren't propagated to the user
-- Executor was discarding detailed parser error messages
-
-**Fix Applied:**
-- Added `cypher_parse_result` structure to return both AST and error details
-- Created `parse_cypher_query_ext()` function for extended error handling
-- Updated executor to use detailed parser error messages
-- Error messages now include line and column information
-
-**Files Modified:**
-- `src/include/parser/cypher_parser.h` - Added extended parser interface
-- `src/backend/parser/cypher_parser.c` - Implemented extended parser
-- `src/backend/parser/cypher_gram.y` - Already had proper error formatting
-- `src/backend/executor/cypher_executor.c` - Updated to use detailed errors
-
----
 
 ### Issue: Nested Property Access Not Supported
 **Status**: Open  
