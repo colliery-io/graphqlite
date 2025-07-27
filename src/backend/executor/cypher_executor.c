@@ -1100,8 +1100,47 @@ static int execute_set_operations(cypher_executor *executor, cypher_set *set, va
     for (int i = 0; i < set->items->count; i++) {
         cypher_set_item *item = (cypher_set_item*)set->items->items[i];
         
-        if (!item->property || item->property->type != AST_NODE_PROPERTY) {
-            set_result_error(result, "SET target must be a property");
+        if (!item->property) {
+            set_result_error(result, "Invalid SET item");
+            return -1;
+        }
+        
+        /* Handle label assignment (SET n:Label) */
+        if (item->property->type == AST_NODE_LABEL_EXPR) {
+            cypher_label_expr *label_expr = (cypher_label_expr*)item->property;
+            
+            if (!label_expr->expr || label_expr->expr->type != AST_NODE_IDENTIFIER) {
+                set_result_error(result, "SET label must be on a variable");
+                return -1;
+            }
+            
+            cypher_identifier *var_id = (cypher_identifier*)label_expr->expr;
+            
+            /* Get the node ID for this variable */
+            int node_id = get_variable_node_id(var_map, var_id->name);
+            if (node_id < 0) {
+                char error[256];
+                snprintf(error, sizeof(error), "Unbound variable in SET label: %s", var_id->name);
+                set_result_error(result, error);
+                return -1;
+            }
+            
+            /* Add the label to the node */
+            if (cypher_schema_add_node_label(executor->schema_mgr, node_id, label_expr->label_name) == 0) {
+                result->properties_set++; /* We use properties_set counter for labels too */
+                CYPHER_DEBUG("Added label '%s' to node %d", label_expr->label_name, node_id);
+            } else {
+                char error[512];
+                snprintf(error, sizeof(error), "Failed to add label '%s' to node %d", label_expr->label_name, node_id);
+                set_result_error(result, error);
+                return -1;
+            }
+            continue;
+        }
+        
+        /* Handle property assignment (SET n.prop = value) */
+        if (item->property->type != AST_NODE_PROPERTY) {
+            set_result_error(result, "SET target must be a property or label");
             return -1;
         }
         

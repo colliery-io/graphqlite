@@ -415,6 +415,54 @@ static void test_set_type_overwrite(void)
     }
 }
 
+/* Test SET label operations */
+static void test_set_label_operations(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    
+    if (executor) {
+        /* Create a test node */
+        const char *create_query = "CREATE (n:Person {name: \"Alice\"})";
+        execute_and_verify(executor, create_query, true, "CREATE for label test");
+        
+        /* Add a label to the node */
+        const char *set_query = "MATCH (n:Person) SET n:Employee";
+        cypher_result *result = cypher_executor_execute(executor, set_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+        
+        if (result) {
+            printf("SET label result: success=%d, properties_set=%d\n", 
+                   result->success, result->properties_set);
+            
+            if (result->success) {
+                CU_ASSERT_TRUE(result->success);
+                CU_ASSERT_EQUAL(result->properties_set, 1); /* Should count label as 1 operation */
+                
+                /* Verify the label was added by querying */
+                cypher_result *verify_result = cypher_executor_execute(executor, 
+                    "MATCH (n:Person:Employee) RETURN n.name");
+                
+                if (verify_result && verify_result->success) {
+                    printf("Label verification successful\n");
+                } else {
+                    printf("Label verification failed: %s\n", 
+                           verify_result ? verify_result->error_message : "NULL result");
+                }
+                
+                if (verify_result) cypher_result_free(verify_result);
+            } else {
+                printf("SET label failed: %s\n", result->error_message);
+                CU_FAIL("SET label operation should succeed");
+            }
+            
+            cypher_result_free(result);
+        }
+        
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the SET executor test suite */
 int init_executor_set_suite(void)
 {
@@ -435,7 +483,8 @@ int init_executor_set_suite(void)
         !CU_add_test(suite, "SET boolean types", test_set_boolean_types) ||
         !CU_add_test(suite, "SET string types", test_set_string_types) ||
         !CU_add_test(suite, "SET mixed types", test_set_mixed_types) ||
-        !CU_add_test(suite, "SET type overwrite", test_set_type_overwrite)) {
+        !CU_add_test(suite, "SET type overwrite", test_set_type_overwrite) ||
+        !CU_add_test(suite, "SET label operations", test_set_label_operations)) {
         return CU_get_error();
     }
     
