@@ -11,15 +11,15 @@
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
-static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern);
-static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias);
+static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional);
+static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias, bool optional);
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel, 
-                                     cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index);
+                                     cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index, bool optional);
 
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
-    CYPHER_DEBUG("Transforming MATCH clause");
+    CYPHER_DEBUG("Transforming %s MATCH clause", match->optional ? "OPTIONAL" : "regular");
     
     if (!ctx || !match) {
         return -1;
@@ -32,8 +32,10 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
         ctx->query_type = QUERY_TYPE_MIXED;
     }
     
-    /* Start SELECT clause if this is the first clause */
-    if (ctx->sql_size == 0) {
+    /* SQL builder mode is now determined at query level */
+    
+    /* Start SELECT clause if this is the first clause and not using builder */
+    if (!ctx->sql_builder.using_builder && ctx->sql_size == 0) {
         append_sql(ctx, "SELECT ");
         /* We'll fill in the column list later in RETURN */
         append_sql(ctx, "* ");
@@ -49,13 +51,27 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
             return -1;
         }
         
-        if (transform_match_pattern(ctx, pattern) < 0) {
+        if (transform_match_pattern(ctx, pattern, match->optional) < 0) {
             return -1;
         }
     }
     
     /* Now add WHERE constraints for all patterns */
-    bool first_constraint = true;
+    /* Determine constraint logic based on SQL builder mode */
+    bool first_constraint;
+    if (ctx->sql_builder.using_builder) {
+        /* In SQL builder mode, check if builder has WHERE clauses */
+        first_constraint = (ctx->sql_builder.where_size == 0);
+    } else {
+        /* In traditional mode, check SQL buffer for WHERE clause */
+        bool has_where_clause = (strstr(ctx->sql_buffer, " WHERE ") != NULL);
+        first_constraint = !has_where_clause;
+    }
+    
+    /* For OPTIONAL MATCH, skip pattern constraint generation (constraints are in JOIN ON clauses) */
+    if (match->optional) {
+        goto handle_where_clause;
+    }
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
         cypher_path *path = (cypher_path*)pattern;
@@ -92,16 +108,26 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 
                 /* Add label constraint if specified */
                 if (node->label) {
-                    if (first_constraint) {
-                        append_sql(ctx, " WHERE ");
-                        first_constraint = false;
+                    if (ctx->sql_builder.using_builder) {
+                        /* Using SQL builder - collect WHERE constraints */
+                        if (ctx->sql_builder.where_size > 0) {
+                            append_where_clause(ctx, " AND ");
+                        }
+                        append_where_clause(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = '%s')", 
+                                          alias, node->label);
                     } else {
-                        append_sql(ctx, " AND ");
+                        /* Traditional SQL generation */
+                        if (first_constraint) {
+                            append_sql(ctx, " WHERE ");
+                            first_constraint = false;
+                        } else {
+                            append_sql(ctx, " AND ");
+                        }
+                        
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ", alias);
+                        append_string_literal(ctx, node->label);
+                        append_sql(ctx, ")");
                     }
-                    
-                    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ", alias);
-                    append_string_literal(ctx, node->label);
-                    append_sql(ctx, ")");
                 }
                 
                 /* Add property constraints if specified */
@@ -257,13 +283,24 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
         }
     }
     
+handle_where_clause:
     /* Handle WHERE clause if present */
     if (match->where) {
-        /* Add AND if we already have WHERE constraints, otherwise add WHERE */
-        if (!first_constraint) {
-            append_sql(ctx, " AND ");
+        /* For OPTIONAL MATCH, check if we need WHERE or AND */
+        bool needs_where = true;
+        if (match->optional) {
+            /* Check if there's already a WHERE clause in the SQL buffer */
+            needs_where = (strstr(ctx->sql_buffer, " WHERE ") == NULL);
         } else {
+            /* For regular MATCH, use the first_constraint variable */
+            needs_where = first_constraint;
+        }
+        
+        /* Add WHERE or AND */
+        if (needs_where) {
             append_sql(ctx, " WHERE ");
+        } else {
+            append_sql(ctx, " AND ");
         }
         
         if (transform_expression(ctx, match->where) < 0) {
@@ -275,11 +312,11 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 }
 
 /* Transform a single pattern (path) */
-static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern)
+static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional)
 {
     cypher_path *path = (cypher_path*)pattern;
     
-    CYPHER_DEBUG("Transforming path with %d elements", path->elements->count);
+    CYPHER_DEBUG("Transforming %s path with %d elements", optional ? "OPTIONAL" : "regular", path->elements->count);
     
     /* For now, handle simple node patterns */
     /* TODO: Handle relationship patterns */
@@ -336,7 +373,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             
             /* Generate SQL for this node if needed */
             if (need_from_clause) {
-                if (generate_node_match(ctx, node, alias) < 0) {
+                if (generate_node_match(ctx, node, alias, optional) < 0) {
                     return -1;
                 }
             }
@@ -370,7 +407,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             }
             
             /* Generate relationship match SQL */
-            if (generate_relationship_match(ctx, rel, source_node, target_node, i) < 0) {
+            if (generate_relationship_match(ctx, rel, source_node, target_node, i, optional) < 0) {
                 return -1;
             }
         }
@@ -380,21 +417,57 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
 }
 
 /* Generate SQL for matching a node pattern */
-static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias)
+static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias, bool optional)
 {
-    CYPHER_DEBUG("Generating match for node %s (label: %s)", 
+    CYPHER_DEBUG("Generating %s match for node %s (label: %s)", 
+                 optional ? "OPTIONAL" : "regular",
                  node->variable ? node->variable : "<anonymous>",
                  node->label ? node->label : "<no label>");
     
-    /* Check if we need FROM clause */
-    if (strstr(ctx->sql_buffer, "FROM") == NULL) {
-        append_sql(ctx, "FROM ");
+    if (ctx->sql_builder.using_builder) {
+        /* Using SQL builder - build FROM/JOIN clauses separately */
+        
+        /* Check if this alias is already in the FROM or JOIN clauses to avoid duplicates */
+        bool already_added = false;
+        if (ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, alias)) {
+            already_added = true;
+        }
+        if (!already_added && ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, alias)) {
+            already_added = true;
+        }
+        
+        if (!already_added) {
+            if (!ctx->sql_builder.from_clause || ctx->sql_builder.from_size == 0) {
+                /* First table - use FROM */
+                append_from_clause(ctx, "FROM nodes AS %s", alias);
+            } else {
+                /* Subsequent tables - use LEFT JOIN for optional, comma for regular */
+                if (optional) {
+                    append_join_clause(ctx, " LEFT JOIN nodes AS %s ON 1=1", alias);
+                } else {
+                    append_from_clause(ctx, ", nodes AS %s", alias);
+                }
+            }
+        }
     } else {
-        append_sql(ctx, ", ");
+        /* Traditional SQL generation */
+        /* Check if we need FROM clause or JOIN */
+        bool has_from = (strstr(ctx->sql_buffer, "FROM") != NULL);
+        
+        if (!has_from) {
+            /* First table - always use FROM */
+            append_sql(ctx, "FROM ");
+            append_sql(ctx, "nodes AS %s", alias);
+        } else {
+            /* Subsequent tables - use LEFT JOIN for optional, comma for regular */
+            if (optional) {
+                append_sql(ctx, " LEFT JOIN nodes AS %s ON 1=1", alias);
+            } else {
+                append_sql(ctx, ", ");
+                append_sql(ctx, "nodes AS %s", alias);
+            }
+        }
     }
-    
-    /* Join nodes table */
-    append_sql(ctx, "nodes AS %s", alias);
     
     /* Note: Label and property constraints will be added later in transform_match_clause */
     /* to ensure all table joins are complete before WHERE clause starts */
@@ -404,9 +477,10 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 
 /* Generate SQL for matching a relationship pattern */
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
-                                     cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index)
+                                     cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index, bool optional)
 {
-    CYPHER_DEBUG("Generating match for relationship %s between nodes", 
+    CYPHER_DEBUG("Generating %s match for relationship %s between nodes", 
+                 optional ? "OPTIONAL" : "regular",
                  rel->type ? rel->type : "<no type>");
     
     /* Get aliases using entity system (AGE-style) */
@@ -440,6 +514,8 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             entity = lookup_entity(ctx, target_node->variable);
         }
         target_alias = entity->table_alias;
+        /* Register in legacy system for compatibility */
+        register_node_variable(ctx, target_node->variable, target_alias);
     } else {
         static char temp_target[32];
         snprintf(temp_target, sizeof(temp_target), "n_%d", rel_index + 1);
@@ -471,8 +547,52 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         free(default_name);
     }
     
-    /* Add edges table to FROM clause */
-    append_sql(ctx, ", edges AS %s", edge_alias);
+    /* Add edges table - use LEFT JOIN for optional relationships */
+    if (ctx->sql_builder.using_builder) {
+        /* Using SQL builder */
+        if (optional) {
+            /* For OPTIONAL MATCH, we need to LEFT JOIN both the target node and the edge */
+            /* Check if target node is already added to avoid duplicates */
+            bool target_already_added = false;
+            if (ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, target_alias)) {
+                target_already_added = true;
+            }
+            if (!target_already_added && ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, target_alias)) {
+                target_already_added = true;
+            }
+            
+            if (!target_already_added) {
+                append_join_clause(ctx, " LEFT JOIN nodes AS %s ON 1=1", target_alias);
+            }
+            
+            /* Always add the edge JOIN as each relationship is unique */
+            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id", 
+                              edge_alias, edge_alias, source_alias, edge_alias, target_alias);
+            
+            /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
+            if (rel->type) {
+                append_join_clause(ctx, " AND %s.type = '%s'", edge_alias, rel->type);
+            }
+        } else {
+            append_from_clause(ctx, ", edges AS %s", edge_alias);
+        }
+    } else {
+        /* Traditional SQL generation */
+        if (optional) {
+            /* For OPTIONAL MATCH, we need to LEFT JOIN both the target node and the edge */
+            append_sql(ctx, " LEFT JOIN nodes AS %s ON 1=1", target_alias);
+            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id", 
+                       edge_alias, edge_alias, source_alias, edge_alias, target_alias);
+            
+            /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
+            if (rel->type) {
+                append_sql(ctx, " AND %s.type = ", edge_alias);
+                append_string_literal(ctx, rel->type);
+            }
+        } else {
+            append_sql(ctx, ", edges AS %s", edge_alias);
+        }
+    }
     
     /* Note: Relationship constraints will be added later in the WHERE clause phase */
     

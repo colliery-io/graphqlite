@@ -298,6 +298,103 @@ static void test_delete_error_conditions(void)
     }
 }
 
+/* Test OPTIONAL MATCH SQL structure */
+static void test_optional_match_sql_structure(void)
+{
+    printf("\n--- Testing OPTIONAL MATCH SQL structure ---\n");
+    
+    /* Test simple OPTIONAL MATCH - just build the SQL without executing it */
+    const char *query = "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name, subordinate.name";
+    
+    /* Parse the query */
+    ast_node *ast = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(ast);
+    
+    if (ast) {
+        /* Create transform context */
+        cypher_transform_context *ctx = cypher_transform_create_context(test_db);
+        CU_ASSERT_PTR_NOT_NULL(ctx);
+        
+        if (ctx) {
+            /* Transform to SQL without executing */
+            cypher_query *query_ast = (cypher_query*)ast;
+            
+            /* Process each clause manually to see the SQL build-up */
+            for (int i = 0; i < query_ast->clauses->count; i++) {
+                ast_node *clause = query_ast->clauses->items[i];
+                
+                /* Mark entities from previous clause as inherited (AGE pattern) */
+                if (i > 0) {
+                    mark_entities_as_inherited(ctx);
+                }
+                
+                printf("Before clause %d (%s): SQL = '%s'\n", 
+                       i, ast_node_type_name(clause->type), ctx->sql_buffer);
+                
+                switch (clause->type) {
+                    case AST_NODE_MATCH:
+                        if (transform_match_clause(ctx, (cypher_match*)clause) < 0) {
+                            printf("Error in MATCH clause %d: %s\n", i, 
+                                   ctx->error_message ? ctx->error_message : "Unknown error");
+                        }
+                        break;
+                    case AST_NODE_RETURN:
+                        if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
+                            printf("Error in RETURN clause %d: %s\n", i, 
+                                   ctx->error_message ? ctx->error_message : "Unknown error");
+                        }
+                        break;
+                    default:
+                        printf("Skipping unsupported clause type: %s\n", ast_node_type_name(clause->type));
+                        break;
+                }
+                
+                printf("After clause %d: SQL = '%s'\n", i, ctx->sql_buffer);
+                
+                if (ctx->has_error) {
+                    printf("Transform error after clause %d: %s\n", i, ctx->error_message);
+                    break;
+                }
+            }
+            
+            printf("Final SQL: %s\n", ctx->sql_buffer);
+            
+            /* Check if SQL contains expected keywords for OPTIONAL MATCH */
+            if (strstr(ctx->sql_buffer, "LEFT JOIN") || strstr(ctx->sql_buffer, "LEFT OUTER JOIN")) {
+                printf("✅ SQL contains LEFT JOIN - structure looks correct\n");
+            } else {
+                printf("❌ SQL missing LEFT JOIN - OPTIONAL MATCH not implemented correctly\n");
+            }
+            
+            cypher_transform_free_context(ctx);
+        }
+        
+        cypher_parser_free_result(ast);
+    }
+}
+
+/* Test OPTIONAL MATCH transformation */
+static void test_optional_match_transformation(void)
+{
+    printf("\n--- Testing OPTIONAL MATCH transformation ---\n");
+    
+    /* Test simple OPTIONAL MATCH */
+    const char *query = "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name, subordinate.name";
+    cypher_query_result *result = parse_and_transform(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        if (result->has_error) {
+            printf("OPTIONAL MATCH transformation failed: %s\n", 
+                   result->error_message ? result->error_message : "Unknown error");
+        } else {
+            printf("✅ OPTIONAL MATCH transformation succeeded\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
 /* Initialize the DELETE transform test suite */
 int init_transform_delete_suite(void)
 {
@@ -313,7 +410,9 @@ int init_transform_delete_suite(void)
         !CU_add_test(suite, "DELETE clause transformation", test_delete_clause_transformation) ||
         !CU_add_test(suite, "DELETE multiple items", test_delete_multiple_items) ||
         !CU_add_test(suite, "DELETE with WHERE", test_delete_with_where) ||
-        !CU_add_test(suite, "DELETE error conditions", test_delete_error_conditions)) {
+        !CU_add_test(suite, "DELETE error conditions", test_delete_error_conditions) ||
+        !CU_add_test(suite, "OPTIONAL MATCH SQL structure", test_optional_match_sql_structure) ||
+        !CU_add_test(suite, "OPTIONAL MATCH transformation", test_optional_match_transformation)) {
         return CU_get_error();
     }
     

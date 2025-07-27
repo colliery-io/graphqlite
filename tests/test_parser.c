@@ -891,6 +891,68 @@ static void test_detach_delete_parsing(void)
     }
 }
 
+/* Test OPTIONAL MATCH parsing */
+static void test_optional_match_parsing(void)
+{
+    /* Test 1: Simple OPTIONAL MATCH */
+    const char *query1 = "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name, subordinate.name";
+    
+    ast_node *result1 = parse_cypher_query(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    CU_ASSERT_EQUAL(result1->type, AST_NODE_QUERY);
+    
+    if (result1) {
+        cypher_query *query_ast = (cypher_query*)result1;
+        
+        /* Should have 3 clauses: MATCH, OPTIONAL MATCH, RETURN */
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 3);
+        
+        /* Check first MATCH clause */
+        ast_node *match1_node = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(match1_node->type, AST_NODE_MATCH);
+        cypher_match *match1 = (cypher_match*)match1_node;
+        CU_ASSERT_FALSE(match1->optional); /* Regular MATCH */
+        
+        /* Check OPTIONAL MATCH clause */
+        ast_node *match2_node = query_ast->clauses->items[1];
+        CU_ASSERT_EQUAL(match2_node->type, AST_NODE_MATCH);
+        cypher_match *match2 = (cypher_match*)match2_node;
+        CU_ASSERT_TRUE(match2->optional); /* OPTIONAL MATCH */
+        
+        /* Check RETURN clause */
+        ast_node *return_node = query_ast->clauses->items[2];
+        CU_ASSERT_EQUAL(return_node->type, AST_NODE_RETURN);
+        
+        printf("OPTIONAL MATCH parsing test passed: optional flag=%s\n", 
+               match2->optional ? "true" : "false");
+        
+        cypher_parser_free_result(result1);
+    }
+    
+    /* Test 2: Standalone OPTIONAL MATCH */
+    const char *query2 = "OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m";
+    
+    ast_node *result2 = parse_cypher_query(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+    
+    if (result2) {
+        cypher_query *query_ast = (cypher_query*)result2;
+        
+        /* Should have 2 clauses: OPTIONAL MATCH, RETURN */
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2);
+        
+        /* Check OPTIONAL MATCH clause */
+        ast_node *match_node = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(match_node->type, AST_NODE_MATCH);
+        cypher_match *match = (cypher_match*)match_node;
+        CU_ASSERT_TRUE(match->optional); /* OPTIONAL MATCH */
+        
+        printf("Standalone OPTIONAL MATCH parsing test passed\n");
+        
+        cypher_parser_free_result(result2);
+    }
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -934,7 +996,8 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Parser complex nesting", test_parser_complex_nesting) ||
         !CU_add_test(suite, "DELETE clause parsing", test_delete_clause_parsing) ||
         !CU_add_test(suite, "DELETE node parsing", test_delete_node_parsing) ||
-        !CU_add_test(suite, "DETACH DELETE parsing", test_detach_delete_parsing))
+        !CU_add_test(suite, "DETACH DELETE parsing", test_detach_delete_parsing) ||
+        !CU_add_test(suite, "OPTIONAL MATCH parsing", test_optional_match_parsing))
     {
         return CU_get_error();
     }

@@ -51,6 +51,23 @@ struct cypher_transform_context {
     size_t sql_size;
     size_t sql_capacity;
     
+    /* SQL builder for two-pass generation (OPTIONAL MATCH support) */
+    struct {
+        char *from_clause;          /* FROM nodes AS alias */
+        size_t from_size;
+        size_t from_capacity;
+        
+        char *join_clauses;         /* LEFT JOIN ... LEFT JOIN ... */
+        size_t join_size;
+        size_t join_capacity;
+        
+        char *where_clauses;        /* WHERE ... AND ... AND ... */
+        size_t where_size;
+        size_t where_capacity;
+        
+        bool using_builder;         /* True when using two-pass generation */
+    } sql_builder;
+    
     /* Error handling */
     bool has_error;
     char *error_message;
@@ -134,6 +151,14 @@ bool is_edge_variable(cypher_transform_context *ctx, const char *name);
 void append_sql(cypher_transform_context *ctx, const char *format, ...);
 void append_identifier(cypher_transform_context *ctx, const char *name);
 void append_string_literal(cypher_transform_context *ctx, const char *value);
+
+/* SQL builder functions for two-pass generation */
+int init_sql_builder(cypher_transform_context *ctx);
+void free_sql_builder(cypher_transform_context *ctx);
+void append_from_clause(cypher_transform_context *ctx, const char *format, ...);
+void append_join_clause(cypher_transform_context *ctx, const char *format, ...);
+void append_where_clause(cypher_transform_context *ctx, const char *format, ...);
+int finalize_sql_generation(cypher_transform_context *ctx);
 
 /* Result management */
 void cypher_free_result(cypher_query_result *result);

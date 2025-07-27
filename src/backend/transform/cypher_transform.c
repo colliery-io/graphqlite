@@ -63,6 +63,18 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->error_message = NULL;
     ctx->in_comparison = false;
     
+    /* Initialize SQL builder */
+    ctx->sql_builder.from_clause = NULL;
+    ctx->sql_builder.from_size = 0;
+    ctx->sql_builder.from_capacity = 0;
+    ctx->sql_builder.join_clauses = NULL;
+    ctx->sql_builder.join_size = 0;
+    ctx->sql_builder.join_capacity = 0;
+    ctx->sql_builder.where_clauses = NULL;
+    ctx->sql_builder.where_size = 0;
+    ctx->sql_builder.where_capacity = 0;
+    ctx->sql_builder.using_builder = false;
+    
     CYPHER_DEBUG("Created transform context %p", (void*)ctx);
     
     return ctx;
@@ -89,6 +101,11 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         free(ctx->variables[i].table_alias);
     }
     free(ctx->variables);
+    
+    /* Free SQL builder buffers */
+    free(ctx->sql_builder.from_clause);
+    free(ctx->sql_builder.join_clauses);
+    free(ctx->sql_builder.where_clauses);
     
     /* Free buffers */
     free(ctx->sql_buffer);
@@ -152,6 +169,179 @@ void append_string_literal(cypher_transform_context *ctx, const char *value)
     /* SQLite uses single quotes for strings */
     /* TODO: Proper escaping */
     append_sql(ctx, "'%s'", value);
+}
+
+/* SQL builder functions for two-pass generation */
+
+#define INITIAL_BUILDER_SIZE 256
+
+static void grow_builder_buffer(char **buffer, size_t *size, size_t *capacity, size_t needed)
+{
+    if (*size + needed + 1 > *capacity) {
+        size_t new_capacity = *capacity == 0 ? INITIAL_BUILDER_SIZE : *capacity * 2;
+        while (new_capacity < *size + needed + 1) {
+            new_capacity *= 2;
+        }
+        
+        char *new_buffer = realloc(*buffer, new_capacity);
+        if (new_buffer) {
+            *buffer = new_buffer;
+            *capacity = new_capacity;
+            if (*size == 0) {
+                (*buffer)[0] = '\0';
+            }
+        }
+    }
+}
+
+int init_sql_builder(cypher_transform_context *ctx)
+{
+    if (!ctx) return -1;
+    
+    /* Free any existing buffers */
+    free_sql_builder(ctx);
+    
+    /* Initialize builder state */
+    ctx->sql_builder.using_builder = true;
+    return 0;
+}
+
+void free_sql_builder(cypher_transform_context *ctx)
+{
+    if (!ctx) return;
+    
+    free(ctx->sql_builder.from_clause);
+    free(ctx->sql_builder.join_clauses);
+    free(ctx->sql_builder.where_clauses);
+    
+    ctx->sql_builder.from_clause = NULL;
+    ctx->sql_builder.from_size = 0;
+    ctx->sql_builder.from_capacity = 0;
+    ctx->sql_builder.join_clauses = NULL;
+    ctx->sql_builder.join_size = 0;
+    ctx->sql_builder.join_capacity = 0;
+    ctx->sql_builder.where_clauses = NULL;
+    ctx->sql_builder.where_size = 0;
+    ctx->sql_builder.where_capacity = 0;
+    ctx->sql_builder.using_builder = false;
+}
+
+void append_from_clause(cypher_transform_context *ctx, const char *format, ...)
+{
+    if (!ctx || !format) return;
+    
+    va_list args;
+    va_start(args, format);
+    
+    /* Calculate required size */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int needed = vsnprintf(NULL, 0, format, args_copy);
+    va_end(args_copy);
+    
+    /* Grow buffer if needed */
+    grow_builder_buffer(&ctx->sql_builder.from_clause, 
+                       &ctx->sql_builder.from_size, 
+                       &ctx->sql_builder.from_capacity, 
+                       needed);
+    
+    /* Append to buffer */
+    if (ctx->sql_builder.from_clause) {
+        int written = vsnprintf(ctx->sql_builder.from_clause + ctx->sql_builder.from_size,
+                               ctx->sql_builder.from_capacity - ctx->sql_builder.from_size,
+                               format, args);
+        ctx->sql_builder.from_size += written;
+    }
+    
+    va_end(args);
+}
+
+void append_join_clause(cypher_transform_context *ctx, const char *format, ...)
+{
+    if (!ctx || !format) return;
+    
+    va_list args;
+    va_start(args, format);
+    
+    /* Calculate required size */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int needed = vsnprintf(NULL, 0, format, args_copy);
+    va_end(args_copy);
+    
+    /* Grow buffer if needed */
+    grow_builder_buffer(&ctx->sql_builder.join_clauses, 
+                       &ctx->sql_builder.join_size, 
+                       &ctx->sql_builder.join_capacity, 
+                       needed);
+    
+    /* Append to buffer */
+    if (ctx->sql_builder.join_clauses) {
+        int written = vsnprintf(ctx->sql_builder.join_clauses + ctx->sql_builder.join_size,
+                               ctx->sql_builder.join_capacity - ctx->sql_builder.join_size,
+                               format, args);
+        ctx->sql_builder.join_size += written;
+    }
+    
+    va_end(args);
+}
+
+void append_where_clause(cypher_transform_context *ctx, const char *format, ...)
+{
+    if (!ctx || !format) return;
+    
+    va_list args;
+    va_start(args, format);
+    
+    /* Calculate required size */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int needed = vsnprintf(NULL, 0, format, args_copy);
+    va_end(args_copy);
+    
+    /* Grow buffer if needed */
+    grow_builder_buffer(&ctx->sql_builder.where_clauses, 
+                       &ctx->sql_builder.where_size, 
+                       &ctx->sql_builder.where_capacity, 
+                       needed);
+    
+    /* Append to buffer */
+    if (ctx->sql_builder.where_clauses) {
+        int written = vsnprintf(ctx->sql_builder.where_clauses + ctx->sql_builder.where_size,
+                               ctx->sql_builder.where_capacity - ctx->sql_builder.where_size,
+                               format, args);
+        ctx->sql_builder.where_size += written;
+    }
+    
+    va_end(args);
+}
+
+int finalize_sql_generation(cypher_transform_context *ctx)
+{
+    if (!ctx || !ctx->sql_builder.using_builder) {
+        return 0; /* Not using builder, nothing to do */
+    }
+    
+    /* Clear existing SQL buffer */
+    ctx->sql_size = 0;
+    ctx->sql_buffer[0] = '\0';
+    
+    /* Combine: SELECT + FROM + JOINs + WHERE */
+    append_sql(ctx, "SELECT * "); /* Will be replaced by RETURN clause */
+    
+    if (ctx->sql_builder.from_clause) {
+        append_sql(ctx, "%s", ctx->sql_builder.from_clause);
+    }
+    
+    if (ctx->sql_builder.join_clauses) {
+        append_sql(ctx, "%s", ctx->sql_builder.join_clauses);
+    }
+    
+    if (ctx->sql_builder.where_clauses) {
+        append_sql(ctx, " WHERE %s", ctx->sql_builder.where_clauses);
+    }
+    
+    return 0;
 }
 
 /* Variable management */
@@ -345,6 +535,33 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     }
     ctx->entity_count = 0;
     
+    /* Check if any MATCH clause is optional - if so, use SQL builder from start */
+    bool has_optional_match = false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (clause->type == AST_NODE_MATCH) {
+            cypher_match *match = (cypher_match*)clause;
+            CYPHER_DEBUG("Found MATCH clause %d, optional = %s", i, match->optional ? "true" : "false");
+            if (match->optional) {
+                has_optional_match = true;
+                break;
+            }
+        }
+    }
+    CYPHER_DEBUG("Query analysis complete: has_optional_match = %s", has_optional_match ? "true" : "false");
+    
+    if (has_optional_match) {
+        CYPHER_DEBUG("Query contains OPTIONAL MATCH - using SQL builder from start");
+        if (init_sql_builder(ctx) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to initialize SQL builder for OPTIONAL MATCH");
+            goto error;
+        }
+        /* Ensure SQL buffer starts clean for builder mode */
+        ctx->sql_size = 0;
+        ctx->sql_buffer[0] = '\0';
+    }
+    
     /* Process each clause in order */
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
@@ -382,6 +599,18 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 break;
                 
             case AST_NODE_RETURN:
+                /* If using SQL builder, finalize SQL generation before RETURN */
+                if (ctx->sql_builder.using_builder) {
+                    CYPHER_DEBUG("Finalizing SQL generation before RETURN clause");
+                    if (finalize_sql_generation(ctx) < 0) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to finalize SQL generation");
+                        goto error;
+                    }
+                } else {
+                    CYPHER_DEBUG("SQL builder NOT active before RETURN clause");
+                }
+                
                 if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
                     goto error;
                 }
