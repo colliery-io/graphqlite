@@ -408,8 +408,13 @@ int register_node_variable(cypher_transform_context *ctx, const char *name, cons
 {
     int result = register_variable(ctx, name, alias);
     if (result == 0) {
-        /* Variable was just added, it's the last one */
-        ctx->variables[ctx->variable_count - 1].type = VAR_TYPE_NODE;
+        /* Find the variable and set its type to node */
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (strcmp(ctx->variables[i].name, name) == 0) {
+                ctx->variables[i].type = VAR_TYPE_NODE;
+                break;
+            }
+        }
     }
     return result;
 }
@@ -419,8 +424,13 @@ int register_edge_variable(cypher_transform_context *ctx, const char *name, cons
 {
     int result = register_variable(ctx, name, alias);
     if (result == 0) {
-        /* Variable was just added, it's the last one */
-        ctx->variables[ctx->variable_count - 1].type = VAR_TYPE_EDGE;
+        /* Find the variable and set its type to edge */
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (strcmp(ctx->variables[i].name, name) == 0) {
+                ctx->variables[i].type = VAR_TYPE_EDGE;
+                break;
+            }
+        }
     }
     return result;
 }

@@ -281,6 +281,103 @@ null  // Returns null for non-existent nested properties
 
 ---
 
+### Issue: SET Label Operations Not Supported
+**Status**: Open  
+**Priority**: Medium  
+**AGE Compatibility**: Breaks label manipulation features
+
+**Description:**
+The `SET n:Label` syntax for adding labels to nodes is not supported.
+
+**Current Behavior:**
+```cypher
+MATCH (n) SET n:NewLabel
+Runtime error: SET label operations not implemented
+```
+
+**Expected AGE-Compatible Behavior:**
+```cypher
+MATCH (n) SET n:NewLabel
+Query executed successfully - labels added
+```
+
+**Location**: `tests/test_transform_set.c:248`
+
+**Root Cause:**
+- Label operations not implemented in SET clause transformation
+- No SQL generation for label additions
+
+**Affected Code:**
+- `src/backend/transform/transform_set.c` - Missing label operation support
+
+**Solution Approach:**
+1. Add label operation support to SET clause grammar
+2. Implement SQL generation for INSERT INTO node_labels
+3. Handle multiple label additions in single SET
+
+---
+
+### Issue: Edge Variable Type Detection Bug
+**Status**: ✅ **FIXED**  
+**Priority**: High  
+**AGE Compatibility**: ✅ **RESTORED**
+
+**Description:**
+Relationship variables in MATCH patterns were incorrectly registered as node variables instead of edge variables.
+
+**Previous Behavior:**
+```cypher
+MATCH (a)-[r:REL]->(b) DELETE r
+// Variable 'r' was incorrectly marked as VAR_TYPE_NODE
+```
+
+**Fixed Behavior:**
+```cypher
+MATCH (a)-[r:REL]->(b) DELETE r  
+// Variable 'r' is now correctly marked as VAR_TYPE_EDGE
+```
+
+**Location**: `tests/test_transform_delete.c:113`
+
+**Root Cause:**
+- `register_edge_variable` only set type for new variables
+- When a variable already existed, the type was not updated
+
+**Fix Applied:**
+- Modified `register_edge_variable` to always find and update the variable type
+- Same fix applied to `register_node_variable` for consistency
+- Both functions now correctly update variable types even for existing variables
+
+**Files Modified:**
+- `src/backend/transform/cypher_transform.c:418-431` - Fixed register_edge_variable
+- `src/backend/transform/cypher_transform.c:407-420` - Fixed register_node_variable
+
+---
+
+### Issue: Test Expectations Incorrect for Basic Executor Tests
+**Status**: Open  
+**Priority**: Low  
+**Test Issue**: Not a code bug
+
+**Description:**
+Several executor tests expect operations to fail when they actually succeed.
+
+**Affected Tests:**
+- `test_executor_basic.c:113` - CREATE expected to fail but succeeds
+- `test_executor_basic.c:123` - MATCH expected to fail but succeeds  
+- `test_executor_basic.c:280` - CREATE with WHERE expected to fail but succeeds
+
+**Root Cause:**
+- Tests may be outdated or have incorrect expectations
+- Tests might be checking for specific error conditions that no longer apply
+
+**Solution Approach:**
+1. Review test expectations and update to match current behavior
+2. Determine if tests are checking for valid error conditions
+3. Update assertions to match correct behavior
+
+---
+
 ## Future Issues Section
 
 *Additional bugs and issues will be documented here as they are discovered.*
