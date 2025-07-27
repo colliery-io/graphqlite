@@ -259,6 +259,15 @@ set_item:
         {
             $$ = make_cypher_set_item($1, $3);
         }
+    | IDENTIFIER ':' IDENTIFIER
+        {
+            /* SET n:Label syntax */
+            cypher_identifier *var = make_identifier($1, @1.first_line);
+            cypher_label_expr *label = make_label_expr((ast_node*)var, $3, @3.first_line);
+            $$ = make_cypher_set_item((ast_node*)label, NULL);
+            free($1);
+            free($3);
+        }
     ;
 
 /* CREATE clause */

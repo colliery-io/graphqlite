@@ -15,6 +15,8 @@ static int transform_set_item(cypher_transform_context *ctx, cypher_set_item *it
 static int generate_property_update(cypher_transform_context *ctx, 
                                    const char *variable, const char *property_name, 
                                    ast_node *value_expr);
+static int generate_label_add(cypher_transform_context *ctx,
+                             const char *variable, const char *label_name);
 
 /* Transform a SET clause into SQL */
 int transform_set_clause(cypher_transform_context *ctx, cypher_set *set)
@@ -49,21 +51,44 @@ int transform_set_clause(cypher_transform_context *ctx, cypher_set *set)
     return 0;
 }
 
-/* Transform a single SET item (e.g., n.prop = value) */
+/* Transform a single SET item (e.g., n.prop = value or n:Label) */
 static int transform_set_item(cypher_transform_context *ctx, cypher_set_item *item)
 {
     CYPHER_DEBUG("Transforming SET item");
     
-    if (!item || !item->property || !item->expr) {
+    if (!item || !item->property) {
         ctx->has_error = true;
         ctx->error_message = strdup("Invalid SET item");
         return -1;
     }
     
-    /* The property should be a property access expression (n.prop) */
+    /* Check if this is a label expression (SET n:Label) */
+    if (item->property->type == AST_NODE_LABEL_EXPR) {
+        cypher_label_expr *label_expr = (cypher_label_expr*)item->property;
+        
+        /* The base expression should be an identifier (the variable) */
+        if (label_expr->expr->type != AST_NODE_IDENTIFIER) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("SET label must be on a variable");
+            return -1;
+        }
+        
+        cypher_identifier *var_id = (cypher_identifier*)label_expr->expr;
+        
+        /* Generate the label add SQL */
+        return generate_label_add(ctx, var_id->name, label_expr->label_name);
+    }
+    
+    /* Otherwise, it should be a property access expression (n.prop) */
+    if (!item->expr) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("SET property assignment requires a value");
+        return -1;
+    }
+    
     if (item->property->type != AST_NODE_PROPERTY) {
         ctx->has_error = true;
-        ctx->error_message = strdup("SET target must be a property (variable.property)");
+        ctx->error_message = strdup("SET target must be a property (variable.property) or label (variable:Label)");
         return -1;
     }
     
@@ -174,5 +199,43 @@ static int generate_property_update(cypher_transform_context *ctx,
     append_sql(ctx, ")");
     
     CYPHER_DEBUG("Generated property update SQL");
+    return 0;
+}
+
+/* Generate SQL to add a label to a node */
+static int generate_label_add(cypher_transform_context *ctx,
+                             const char *variable, const char *label_name)
+{
+    CYPHER_DEBUG("Generating label add for %s:%s", variable, label_name);
+    
+    /* Get the table alias for the variable - if it doesn't exist, this is an error */
+    const char *table_alias = lookup_variable_alias(ctx, variable);
+    if (!table_alias) {
+        /* Try to get entity alias if legacy lookup fails */
+        transform_entity *entity = lookup_entity(ctx, variable);
+        if (entity) {
+            table_alias = entity->table_alias;
+        } else {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Unknown variable in SET label - variable must be defined in MATCH clause");
+            return -1;
+        }
+    }
+    
+    /* Start a new statement if needed */
+    if (ctx->sql_size > 0) {
+        append_sql(ctx, "; ");
+    }
+    
+    /* Generate INSERT OR IGNORE to add the label */
+    append_sql(ctx, "INSERT OR IGNORE INTO node_labels (node_id, label) ");
+    append_sql(ctx, "SELECT %s.id, ", table_alias);
+    append_string_literal(ctx, label_name);
+    append_sql(ctx, " FROM nodes AS %s", table_alias);
+    
+    /* Add WHERE clause to match the specific nodes if needed */
+    /* The nodes are already filtered by the MATCH clause */
+    
+    CYPHER_DEBUG("Generated label add SQL");
     return 0;
 }

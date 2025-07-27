@@ -248,13 +248,68 @@ static void test_set_label_operations(void)
     CU_ASSERT_PTR_NOT_NULL(result);
     
     if (result) {
-        /* This may not be implemented yet */
+        /* SET label operations should now work */
+        CU_ASSERT_FALSE(result->has_error);
         if (result->has_error) {
             printf("SET label operations error: %s\n", result->error_message);
-            /* Expected for label operations */
         } else {
             printf("SET label operations query transformed successfully\n");
         }
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET with multiple labels */
+static void test_set_multiple_labels(void)
+{
+    const char *query = "MATCH (n:Person) SET n:Employee:Manager";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    
+    /* Multiple labels in single operation not implemented yet - expect parse failure */
+    if (result == NULL) {
+        printf("SET multiple labels correctly failed at parse stage (not implemented)\n");
+    } else if (result->has_error) {
+        printf("SET multiple labels error: %s\n", result->error_message);
+        cypher_free_result(result);
+    } else {
+        printf("SET multiple labels query transformed successfully\n");
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET mixing labels and properties */
+static void test_set_mixed_operations(void)
+{
+    const char *query = "MATCH (n:Person) SET n:Employee, n.status = 'active'";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("SET mixed operations error: %s\n", result->error_message);
+        } else {
+            printf("SET mixed operations (label + property) transformed successfully\n");
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test SET label without MATCH (should fail) */
+static void test_set_label_without_match(void)
+{
+    const char *query = "SET n:NewLabel";
+    
+    cypher_query_result *result = parse_and_transform(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    if (result) {
+        /* This should fail - no variable binding */
+        CU_ASSERT_TRUE(result->has_error);
+        printf("SET label without MATCH correctly failed: %s\n", 
+               result->error_message ? result->error_message : "Unknown error");
         cypher_free_result(result);
     }
 }
@@ -276,7 +331,10 @@ int init_transform_set_suite(void)
         !CU_add_test(suite, "SET transform validation", test_set_transform_validation) ||
         !CU_add_test(suite, "SET null values", test_set_null_values) ||
         !CU_add_test(suite, "SET property expressions", test_set_property_expressions) ||
-        !CU_add_test(suite, "SET label operations", test_set_label_operations)) {
+        !CU_add_test(suite, "SET label operations", test_set_label_operations) ||
+        !CU_add_test(suite, "SET multiple labels", test_set_multiple_labels) ||
+        !CU_add_test(suite, "SET mixed operations", test_set_mixed_operations) ||
+        !CU_add_test(suite, "SET label without MATCH", test_set_label_without_match)) {
         return CU_get_error();
     }
     

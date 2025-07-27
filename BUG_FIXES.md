@@ -282,38 +282,42 @@ null  // Returns null for non-existent nested properties
 ---
 
 ### Issue: SET Label Operations Not Supported
-**Status**: Open  
+**Status**: ✅ **PARTIALLY FIXED**  
 **Priority**: Medium  
-**AGE Compatibility**: Breaks label manipulation features
+**AGE Compatibility**: ✅ **PARTIALLY RESTORED**
 
 **Description:**
-The `SET n:Label` syntax for adding labels to nodes is not supported.
+The `SET n:Label` syntax for adding labels to nodes is now supported at the parser and transform level.
 
-**Current Behavior:**
+**Previous Behavior:**
 ```cypher
 MATCH (n) SET n:NewLabel
 Runtime error: SET label operations not implemented
 ```
 
-**Expected AGE-Compatible Behavior:**
+**Current Behavior:**
 ```cypher
 MATCH (n) SET n:NewLabel
-Query executed successfully - labels added
+Query parses and transforms successfully - ready for execution
 ```
 
 **Location**: `tests/test_transform_set.c:248`
 
-**Root Cause:**
-- Label operations not implemented in SET clause transformation
-- No SQL generation for label additions
+**Progress Made:**
+- ✅ Added `SET n:Label` grammar support to parser
+- ✅ Implemented AST_NODE_LABEL_EXPR handling in transform
+- ✅ Added comprehensive test suite for label operations
+- ✅ Support for mixed operations: `SET n:Label, n.prop = value`
+- ⏸️ Executor support pending (labels not actually added yet)
 
-**Affected Code:**
-- `src/backend/transform/transform_set.c` - Missing label operation support
+**Files Modified:**
+- `src/backend/parser/cypher_gram.y` - Added label assignment grammar
+- `src/backend/transform/transform_set.c` - Added label expression handling
+- `tests/test_transform_set.c` - Added comprehensive label tests
 
-**Solution Approach:**
-1. Add label operation support to SET clause grammar
-2. Implement SQL generation for INSERT INTO node_labels
-3. Handle multiple label additions in single SET
+**Remaining Work:**
+- Implement executor support to actually insert labels into node_labels table
+- Support multiple labels in single operation (`SET n:Label1:Label2`)
 
 ---
 
