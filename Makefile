@@ -83,9 +83,15 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_parser_keywords.c \
 	$(TEST_DIR)/test_scanner.c \
 	$(TEST_DIR)/test_parser.c \
-	$(TEST_DIR)/test_transform.c \
+	$(TEST_DIR)/test_transform_create.c \
+	$(TEST_DIR)/test_transform_set.c \
+	$(TEST_DIR)/test_transform_delete.c \
+	$(TEST_DIR)/test_transform_functions.c \
 	$(TEST_DIR)/test_schema.c \
-	$(TEST_DIR)/test_executor.c
+	$(TEST_DIR)/test_executor_basic.c \
+	$(TEST_DIR)/test_executor_relationships.c \
+	$(TEST_DIR)/test_executor_set.c \
+	$(TEST_DIR)/test_executor_delete.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
@@ -93,7 +99,7 @@ TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 TEST_RUNNER = $(BUILD_DIR)/test_runner
 
 # Main application executable
-MAIN_APP = $(BUILD_DIR)/graphqlite
+MAIN_APP = $(BUILD_DIR)/gqlite
 MAIN_OBJ = $(BUILD_DIR)/main.o
 
 # SQLite extension - use .dylib on macOS, .so on Linux

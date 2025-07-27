@@ -6,9 +6,17 @@
 #include "test_parser_keywords.h"
 #include "test_scanner.h"
 #include "test_parser.h"
-#include "test_transform.h"
 #include "test_schema.h"
-#include "test_executor.h"
+
+/* Forward declarations for modular test suites */
+int init_transform_create_suite(void);
+int init_transform_set_suite(void);
+int init_transform_delete_suite(void);
+int init_transform_functions_suite(void);
+int init_executor_basic_suite(void);
+int init_executor_relationships_suite(void);
+int init_executor_set_suite(void);
+int init_executor_delete_suite(void);
 
 int main(void)
 {
@@ -37,8 +45,26 @@ int main(void)
         return CU_get_error();
     }
     
-    if (init_transform_suite() != CUE_SUCCESS) {
-        fprintf(stderr, "Failed to add transform suite\n");
+    if (init_transform_create_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add transform CREATE suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_transform_set_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add transform SET suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_transform_delete_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add transform DELETE suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_transform_functions_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add transform functions suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }
@@ -49,8 +75,26 @@ int main(void)
         return CU_get_error();
     }
     
-    if (init_executor_suite() != CUE_SUCCESS) {
-        fprintf(stderr, "Failed to add executor suite\n");
+    if (init_executor_basic_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor basic suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_executor_relationships_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor relationships suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_executor_set_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor SET suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    
+    if (init_executor_delete_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor DELETE suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

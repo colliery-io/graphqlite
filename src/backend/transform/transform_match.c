@@ -223,9 +223,10 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     /* Register in legacy system for compatibility */
                     register_edge_variable(ctx, rel->variable, edge_alias);
                 } else {
-                    static char temp_edge[32];
-                    snprintf(temp_edge, sizeof(temp_edge), "e_%d", j);
-                    edge_alias = temp_edge;
+                    /* This shouldn't happen with AGE pattern - anonymous rels get names assigned */
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Internal error: anonymous relationship without assigned name");
+                    return -1;
                 }
                 
                 /* Add relationship direction constraints */
@@ -361,6 +362,13 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             cypher_node_pattern *source_node = (cypher_node_pattern*)prev_element;
             cypher_node_pattern *target_node = (cypher_node_pattern*)next_element;
             
+            /* AGE pattern: Assign default name to anonymous relationships */
+            if (!rel->variable) {
+                char *default_name = get_next_default_alias(ctx);
+                rel->variable = default_name;
+                /* Note: This modifies the AST, ensuring consistent naming across passes */
+            }
+            
             /* Generate relationship match SQL */
             if (generate_relationship_match(ctx, rel, source_node, target_node, i) < 0) {
                 return -1;
@@ -450,12 +458,17 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         }
         edge_alias = entity->table_alias;
     } else {
-        char *generated_alias = get_next_default_alias(ctx);
-        static char temp_edge[64];
-        strncpy(temp_edge, generated_alias, sizeof(temp_edge) - 1);
-        temp_edge[sizeof(temp_edge) - 1] = '\0';
-        edge_alias = temp_edge;
-        free(generated_alias);
+        /* With AGE pattern, anonymous relationships should have been assigned names */
+        /* But handle legacy case or if called from other contexts */
+        char *default_name = get_next_default_alias(ctx);
+        if (add_entity(ctx, default_name, ENTITY_TYPE_EDGE, true) < 0) {
+            free(default_name);
+            return -1;
+        }
+        transform_entity *entity = lookup_entity(ctx, default_name);
+        edge_alias = entity->table_alias;
+        /* Clean up the allocated name since entity has its own copy */
+        free(default_name);
     }
     
     /* Add edges table to FROM clause */
