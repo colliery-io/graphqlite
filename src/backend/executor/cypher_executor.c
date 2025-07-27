@@ -1626,40 +1626,40 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
     
     CYPHER_DEBUG("Executing query: %s", query);
     
-    /* Parse query to AST */
+    /* Parse query to AST with extended error handling */
     CYPHER_DEBUG("Parsing query: '%s'", query);
-    ast_node *ast = parse_cypher_query(query);
-    if (!ast) {
+    cypher_parse_result *parse_result = parse_cypher_query_ext(query);
+    if (!parse_result) {
         CYPHER_DEBUG("Parser returned NULL");
         cypher_result *result = create_empty_result();
         if (result) {
-            set_result_error(result, "Failed to parse query");
+            set_result_error(result, "Internal parser error");
         }
         return result;
     }
+    
+    /* Check for parse errors */
+    if (!parse_result->ast) {
+        CYPHER_DEBUG("Parser error: %s", parse_result->error_message ? parse_result->error_message : "Unknown error");
+        cypher_result *result = create_empty_result();
+        if (result) {
+            /* Use the detailed parser error message */
+            set_result_error(result, parse_result->error_message ? parse_result->error_message : "Failed to parse query");
+        }
+        cypher_parse_result_free(parse_result);
+        return result;
+    }
+    
+    ast_node *ast = parse_result->ast;
     
     CYPHER_DEBUG("Parser returned AST with type=%d, data=%p", ast->type, ast->data);
     
-    /* Check for parser errors */
-    const char *parse_error = cypher_parser_get_error(ast);
-    if (parse_error) {
-        CYPHER_DEBUG("Parser error: %s", parse_error);
-        
-        /* If there's a parse error, treat it as a failure */
-        cypher_result *result = create_empty_result();
-        if (result) {
-            char error_msg[256];
-            snprintf(error_msg, sizeof(error_msg), "Parse error: %s", parse_error);
-            set_result_error(result, error_msg);
-        }
-        cypher_parser_free_result(ast);
-        return result;
-    } else {
-        CYPHER_DEBUG("No parser error, proceeding with execution");
-    }
-    
     /* Execute AST */
     cypher_result *result = cypher_executor_execute_ast(executor, ast);
+    
+    /* Clean up parse result (includes AST) - note: don't free AST separately */
+    parse_result->ast = NULL;  /* Prevent double-free since execute_ast may have taken ownership */
+    cypher_parse_result_free(parse_result);
     
     /* Clean up AST */
     cypher_parser_free_result(ast);

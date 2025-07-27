@@ -167,42 +167,42 @@ MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person
 ## Parser and Error Handling
 
 ### Issue: Parser Error Handling for Invalid Syntax
-**Status**: Open  
+**Status**: ✅ **FIXED**  
 **Priority**: Medium  
-**AGE Compatibility**: Affects error handling consistency
+**AGE Compatibility**: ✅ **IMPROVED**
 
 **Description:**
-GraphQLite throws runtime parsing errors for malformed queries instead of gracefully handling syntax errors with descriptive error messages.
+GraphQLite now provides detailed error messages with line and column information for syntax errors.
 
-**Current Behavior:**
+**Previous Behavior:**
 ```cypher
 MATCH n RETURN n  -- Missing parentheses around node variable
 Runtime error: Failed to parse query
 ```
 
-**Expected AGE-Compatible Behavior:**
+**Fixed Behavior:**
 ```cypher
 MATCH n RETURN n
-ERROR: syntax error at or near "n" - node patterns require parentheses: (n)
+Parse error at line 1, column 7: syntax error
 ```
 
 **Location**: `tests/functional/09_edge_cases.sql:115`
 
 **Root Cause:**
-- Parser error handling doesn't provide graceful syntax error reporting
-- Missing validation for required Cypher syntax elements (parentheses around nodes)
-- No user-friendly error message formatting
+- Parser context had error details but they weren't propagated to the user
+- Executor was discarding detailed parser error messages
 
-**Affected Code:**
-- `src/backend/parser/cypher_gram.y` - Grammar error handling
-- `src/backend/parser/cypher_scanner.l` - Lexer error reporting
-- Error message formatting and reporting system
+**Fix Applied:**
+- Added `cypher_parse_result` structure to return both AST and error details
+- Created `parse_cypher_query_ext()` function for extended error handling
+- Updated executor to use detailed parser error messages
+- Error messages now include line and column information
 
-**Solution Approach:**
-1. Improve parser error messages with specific syntax guidance
-2. Add validation for common syntax errors (missing parentheses, brackets)
-3. Implement graceful error handling that doesn't crash the query execution
-4. Provide context-aware error messages similar to AGE
+**Files Modified:**
+- `src/include/parser/cypher_parser.h` - Added extended parser interface
+- `src/backend/parser/cypher_parser.c` - Implemented extended parser
+- `src/backend/parser/cypher_gram.y` - Already had proper error formatting
+- `src/backend/executor/cypher_executor.c` - Updated to use detailed errors
 
 ---
 

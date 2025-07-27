@@ -25,6 +25,15 @@ typedef struct CYPHER_YYLTYPE CYPHER_YYLTYPE;
 ast_node* parse_cypher_query(const char *query);
 void cypher_parser_free_result(ast_node *result);
 
+/* Extended parser interface that returns error details */
+typedef struct {
+    ast_node *ast;
+    char *error_message;
+} cypher_parse_result;
+
+cypher_parse_result* parse_cypher_query_ext(const char *query);
+void cypher_parse_result_free(cypher_parse_result *result);
+
 /* Parser context management */
 cypher_parser_context* cypher_parser_context_create(void);
 void cypher_parser_context_destroy(cypher_parser_context *context);

@@ -56,41 +56,88 @@ static struct {
 
 /* Main parser interface */
 
-ast_node* parse_cypher_query(const char *query)
+/* Public extended parser interface */
+cypher_parse_result* parse_cypher_query_ext(const char *query)
 {
-    if (!query) {
+    cypher_parse_result *result = calloc(1, sizeof(cypher_parse_result));
+    if (!result) {
         return NULL;
+    }
+    
+    if (!query) {
+        result->error_message = strdup("Query string is NULL");
+        return result;
     }
     
     cypher_parser_context *context = cypher_parser_context_create();
     if (!context) {
-        return NULL;
+        result->error_message = strdup("Failed to create parser context");
+        return result;
     }
     
     /* Set up scanner with input query */
     context->scanner = cypher_scanner_create();
     if (!context->scanner) {
+        result->error_message = strdup("Failed to create scanner");
         cypher_parser_context_destroy(context);
-        return NULL;
+        return result;
     }
     
     if (cypher_scanner_set_input_string(context->scanner, query) != 0) {
+        result->error_message = strdup("Failed to set scanner input");
         cypher_parser_context_destroy(context);
-        return NULL;
+        return result;
     }
     
     /* Parse the query */
     int parse_result = cypher_yyparse(context);
     
-    ast_node *result = NULL;
     if (parse_result == 0 && !context->has_error) {
         /* Parsing succeeded */
-        result = context->result;
+        result->ast = context->result;
         context->result = NULL; /* Transfer ownership */
+    } else {
+        /* Parsing failed - copy error message */
+        if (context->error_message) {
+            result->error_message = strdup(context->error_message);
+        } else {
+            result->error_message = strdup("Parse failed with unknown error");
+        }
     }
     
     cypher_parser_context_destroy(context);
     return result;
+}
+
+ast_node* parse_cypher_query(const char *query)
+{
+    cypher_parse_result *ext_result = parse_cypher_query_ext(query);
+    if (!ext_result) {
+        return NULL;
+    }
+    
+    ast_node *ast = ext_result->ast;
+    
+    /* For backward compatibility, just return the AST and discard error */
+    free(ext_result->error_message);
+    free(ext_result);
+    
+    return ast;
+}
+
+/* Free extended parse result */
+void cypher_parse_result_free(cypher_parse_result *result)
+{
+    if (!result) {
+        return;
+    }
+    
+    if (result->ast) {
+        cypher_parser_free_result(result->ast);
+    }
+    
+    free(result->error_message);
+    free(result);
 }
 
 void cypher_parser_free_result(ast_node *result)
