@@ -388,6 +388,26 @@ static void test_function_error_handling(void)
     }
 }
 
+/* Test multiple relationship type transform */
+static void test_multiple_relationship_types_transform(void)
+{
+    const char *query = "MATCH (a)-[:WORKS_FOR|CONSULTS_FOR]->(b) RETURN a.name, b.name";
+    cypher_query_result *result = parse_and_transform(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        /* Should succeed without error - transform should handle multiple types */
+        if (result->has_error) {
+            printf("\nMultiple relationship types transform failed: %s\n", 
+                   result->error_message ? result->error_message : "Unknown error");
+        } else {
+            printf("\nMultiple relationship types transform succeeded\n");
+        }
+        CU_ASSERT_EQUAL(result->has_error, 0);
+        cypher_free_result(result);
+    }
+}
+
 /* Initialize the functions transform test suite */
 int init_transform_functions_suite(void)
 {
@@ -404,7 +424,8 @@ int init_transform_functions_suite(void)
         !CU_add_test(suite, "Aggregate functions", test_aggregate_functions) ||
         !CU_add_test(suite, "String functions", test_string_functions) ||
         !CU_add_test(suite, "Math functions", test_math_functions) ||
-        !CU_add_test(suite, "Function error handling", test_function_error_handling)) {
+        !CU_add_test(suite, "Function error handling", test_function_error_handling) ||
+        !CU_add_test(suite, "Multiple relationship types transform", test_multiple_relationship_types_transform)) {
         return CU_get_error();
     }
     

@@ -169,7 +169,8 @@ typedef struct cypher_node_pattern {
 typedef struct cypher_rel_pattern {
     ast_node base;
     char *variable;       /* Variable name (optional) */
-    char *type;           /* Relationship type (optional) */
+    char *type;           /* Single relationship type (optional) - deprecated, use types */
+    ast_list *types;      /* List of relationship types (optional) for [:TYPE1|TYPE2] syntax */
     ast_node *properties; /* Property map (optional) */
     bool left_arrow;      /* <- direction */
     bool right_arrow;     /* -> direction */
@@ -289,6 +290,7 @@ cypher_return_item* make_return_item(ast_node *expr, char *alias);
 cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending);
 cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *properties);
 cypher_rel_pattern* make_rel_pattern(char *variable, char *type, ast_node *properties, bool left_arrow, bool right_arrow);
+cypher_rel_pattern* make_rel_pattern_multi_type(char *variable, ast_list *types, ast_node *properties, bool left_arrow, bool right_arrow);
 cypher_path* make_path(ast_list *elements);
 cypher_literal* make_integer_literal(int value, int location);
 cypher_literal* make_decimal_literal(double value, int location);

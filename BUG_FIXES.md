@@ -42,49 +42,6 @@ MATCH path = (a)-[:REL]->(b) RETURN path
 
 ---
 
-
-
-### Issue: Multiple Relationship Type Syntax Not Supported
-**Status**: Open  
-**Priority**: Medium  
-**AGE Compatibility**: Breaks union-type relationship matching
-
-**Description:**
-The pipe syntax for matching multiple relationship types (`[:TYPE1|TYPE2]`) is not implemented in the parser.
-
-**Current Behavior:**
-```cypher
-MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name
-Runtime error: Failed to parse query
-```
-
-**Expected AGE-Compatible Behavior:**
-```cypher
-MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name
-["Alice", "Bob", "Charlie"]  # People with either relationship type
-```
-
-**Location**: `tests/functional/08_complex_queries.sql:135`
-
-**Root Cause:**
-- Parser grammar doesn't support pipe `|` operator in relationship type specifications
-- No AST node for union relationship types
-- Transform layer has no logic for multiple relationship type matching
-
-**Affected Code:**
-- `src/backend/parser/cypher_gram.y` - Relationship pattern grammar
-- `src/backend/transform/transform_match.c` - Relationship type handling
-
-**Solution Approach:**
-1. Add pipe operator support to relationship type grammar
-2. Create AST node for union relationship types
-3. Implement SQL generation for OR conditions on relationship types
-4. Support arbitrary number of types: `[:TYPE1|TYPE2|TYPE3]`
-
----
-
-
-
 ### Issue: Nested Property Access Not Supported
 **Status**: Open  
 **Priority**: Low  

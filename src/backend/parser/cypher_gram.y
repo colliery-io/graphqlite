@@ -101,7 +101,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 
 %type <string> label_opt variable_opt
 %type <boolean> optional_opt distinct_opt
-%type <list> order_by_opt order_by_list
+%type <list> order_by_opt order_by_list rel_type_list
 %type <node> skip_opt limit_opt where_opt
 %type <order_by_item> order_by_item
 
@@ -373,6 +373,14 @@ rel_pattern:
             $$ = make_rel_pattern($3, $5, (ast_node*)$6, false, true);
             free($5);
         }
+    | '-' '[' variable_opt ':' rel_type_list ']' '-' '>'
+        {
+            $$ = make_rel_pattern_multi_type($3, $5, NULL, false, true);
+        }
+    | '-' '[' variable_opt ':' rel_type_list properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_multi_type($3, $5, (ast_node*)$6, false, true);
+        }
     | '<' '-' '[' variable_opt ':' IDENTIFIER ']' '-'
         {
             $$ = make_rel_pattern($4, $6, NULL, true, false);
@@ -382,6 +390,14 @@ rel_pattern:
         {
             $$ = make_rel_pattern($4, $6, (ast_node*)$7, true, false);
             free($6);
+        }
+    | '<' '-' '[' variable_opt ':' rel_type_list ']' '-'
+        {
+            $$ = make_rel_pattern_multi_type($4, $6, NULL, true, false);
+        }
+    | '<' '-' '[' variable_opt ':' rel_type_list properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern_multi_type($4, $6, (ast_node*)$7, true, false);
         }
     | '-' '[' variable_opt ']' '-' '>'
         {
@@ -417,6 +433,14 @@ rel_pattern:
             $$ = make_rel_pattern($3, $5, (ast_node*)$6, false, false);
             free($5);
         }
+    | '-' '[' variable_opt ':' rel_type_list ']' '-'
+        {
+            $$ = make_rel_pattern_multi_type($3, $5, NULL, false, false);
+        }
+    | '-' '[' variable_opt ':' rel_type_list properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern_multi_type($3, $5, (ast_node*)$6, false, false);
+        }
     ;
 
 variable_opt:
@@ -427,6 +451,28 @@ variable_opt:
 label_opt:
     /* empty */         { $$ = NULL; }
     | ':' IDENTIFIER    { $$ = $2; }
+    ;
+
+rel_type_list:
+    IDENTIFIER '|' IDENTIFIER
+        {
+            $$ = ast_list_create();
+            /* Create string literal nodes for both types */
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit3 = make_string_literal($3, @3.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit3);
+            free($1);
+            free($3);
+        }
+    | rel_type_list '|' IDENTIFIER
+        {
+            /* Add another type to the list */
+            cypher_literal *type_lit = make_string_literal($3, @3.first_line);
+            ast_list_append($1, (ast_node*)type_lit);
+            $$ = $1;
+            free($3);
+        }
     ;
 
 /* Expressions */

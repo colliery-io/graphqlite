@@ -953,6 +953,79 @@ static void test_optional_match_parsing(void)
     }
 }
 
+/* Test multiple relationship type syntax */
+static void test_multiple_relationship_types(void)
+{
+    const char *query = "MATCH (a)-[:WORKS_FOR|CONSULTS_FOR]->(b) RETURN a, b";
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+    
+    cypher_query *query_ast = (cypher_query*)result;
+    CU_ASSERT_PTR_NOT_NULL(query_ast->clauses);
+    CU_ASSERT_EQUAL(query_ast->clauses->count, 2); /* MATCH and RETURN */
+    
+    /* Validate MATCH clause */
+    ast_node *match_node = query_ast->clauses->items[0];
+    CU_ASSERT_EQUAL(match_node->type, AST_NODE_MATCH);
+    
+    cypher_match *match = (cypher_match*)match_node;
+    CU_ASSERT_PTR_NOT_NULL(match->pattern);
+    CU_ASSERT_EQUAL(match->pattern->count, 1);
+    
+    /* Validate path structure */
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    CU_ASSERT_PTR_NOT_NULL(path->elements);
+    CU_ASSERT_EQUAL(path->elements->count, 3); /* node, rel, node */
+    
+    /* Validate relationship with multiple types */
+    ast_node *rel_node = path->elements->items[1];
+    CU_ASSERT_EQUAL(rel_node->type, AST_NODE_REL_PATTERN);
+    
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)rel_node;
+    CU_ASSERT_PTR_NULL(rel->type); /* Should be NULL for multi-type */
+    CU_ASSERT_PTR_NOT_NULL(rel->types); /* Should have types list */
+    CU_ASSERT_EQUAL(rel->types->count, 2);
+    
+    /* Validate the two relationship types */
+    cypher_literal *type1 = (cypher_literal*)rel->types->items[0];
+    cypher_literal *type2 = (cypher_literal*)rel->types->items[1];
+    CU_ASSERT_EQUAL(type1->literal_type, LITERAL_STRING);
+    CU_ASSERT_EQUAL(type2->literal_type, LITERAL_STRING);
+    CU_ASSERT_STRING_EQUAL(type1->value.string, "WORKS_FOR");
+    CU_ASSERT_STRING_EQUAL(type2->value.string, "CONSULTS_FOR");
+    
+    cypher_parser_free_result(result);
+}
+
+/* Test three relationship types */
+static void test_three_relationship_types(void)
+{
+    const char *query = "MATCH (a)-[:TYPE1|TYPE2|TYPE3]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+    
+    CU_ASSERT_PTR_NOT_NULL(rel->types);
+    CU_ASSERT_EQUAL(rel->types->count, 3);
+    
+    cypher_literal *type1 = (cypher_literal*)rel->types->items[0];
+    cypher_literal *type2 = (cypher_literal*)rel->types->items[1];
+    cypher_literal *type3 = (cypher_literal*)rel->types->items[2];
+    
+    CU_ASSERT_STRING_EQUAL(type1->value.string, "TYPE1");
+    CU_ASSERT_STRING_EQUAL(type2->value.string, "TYPE2");
+    CU_ASSERT_STRING_EQUAL(type3->value.string, "TYPE3");
+    
+    cypher_parser_free_result(result);
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -997,7 +1070,9 @@ int init_parser_suite(void)
         !CU_add_test(suite, "DELETE clause parsing", test_delete_clause_parsing) ||
         !CU_add_test(suite, "DELETE node parsing", test_delete_node_parsing) ||
         !CU_add_test(suite, "DETACH DELETE parsing", test_detach_delete_parsing) ||
-        !CU_add_test(suite, "OPTIONAL MATCH parsing", test_optional_match_parsing))
+        !CU_add_test(suite, "OPTIONAL MATCH parsing", test_optional_match_parsing) ||
+        !CU_add_test(suite, "Multiple relationship types", test_multiple_relationship_types) ||
+        !CU_add_test(suite, "Three relationship types", test_three_relationship_types))
     {
         return CU_get_error();
     }

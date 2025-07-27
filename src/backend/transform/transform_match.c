@@ -276,8 +276,22 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 
                 /* Add relationship type constraint if specified */
                 if (rel->type) {
+                    /* Single type (legacy support) */
                     append_sql(ctx, " AND %s.type = ", edge_alias);
                     append_string_literal(ctx, rel->type);
+                } else if (rel->types && rel->types->count > 0) {
+                    /* Multiple types - generate OR conditions */
+                    append_sql(ctx, " AND (");
+                    for (int t = 0; t < rel->types->count; t++) {
+                        if (t > 0) {
+                            append_sql(ctx, " OR ");
+                        }
+                        /* Type names are stored as string literals in the list */
+                        cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+                        append_sql(ctx, "%s.type = ", edge_alias);
+                        append_string_literal(ctx, type_lit->value.string);
+                    }
+                    append_sql(ctx, ")");
                 }
             }
         }
@@ -571,7 +585,20 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             
             /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
             if (rel->type) {
+                /* Single type (legacy support) */
                 append_join_clause(ctx, " AND %s.type = '%s'", edge_alias, rel->type);
+            } else if (rel->types && rel->types->count > 0) {
+                /* Multiple types - generate OR conditions */
+                append_join_clause(ctx, " AND (");
+                for (int t = 0; t < rel->types->count; t++) {
+                    if (t > 0) {
+                        append_join_clause(ctx, " OR ");
+                    }
+                    /* Type names are stored as string literals in the list */
+                    cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+                    append_join_clause(ctx, "%s.type = '%s'", edge_alias, type_lit->value.string);
+                }
+                append_join_clause(ctx, ")");
             }
         } else {
             append_from_clause(ctx, ", edges AS %s", edge_alias);
@@ -586,8 +613,22 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             
             /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
             if (rel->type) {
+                /* Single type (legacy support) */
                 append_sql(ctx, " AND %s.type = ", edge_alias);
                 append_string_literal(ctx, rel->type);
+            } else if (rel->types && rel->types->count > 0) {
+                /* Multiple types - generate OR conditions */
+                append_sql(ctx, " AND (");
+                for (int t = 0; t < rel->types->count; t++) {
+                    if (t > 0) {
+                        append_sql(ctx, " OR ");
+                    }
+                    /* Type names are stored as string literals in the list */
+                    cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+                    append_sql(ctx, "%s.type = ", edge_alias);
+                    append_string_literal(ctx, type_lit->value.string);
+                }
+                append_sql(ctx, ")");
             }
         } else {
             append_sql(ctx, ", edges AS %s", edge_alias);

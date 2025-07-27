@@ -184,6 +184,7 @@ void ast_node_free(ast_node *node)
                 cypher_rel_pattern *pattern = (cypher_rel_pattern*)node;
                 free(pattern->variable);
                 free(pattern->type);
+                ast_list_free(pattern->types);
                 ast_node_free(pattern->properties);
                 ast_node_free(pattern->varlen);
             }
@@ -506,6 +507,24 @@ cypher_rel_pattern* make_rel_pattern(char *variable, char *type, ast_node *prope
     
     pattern->variable = variable ? strdup(variable) : NULL;
     pattern->type = type ? strdup(type) : NULL;
+    pattern->types = NULL;  /* For single type, types list is NULL */
+    pattern->properties = properties;
+    pattern->left_arrow = left_arrow;
+    pattern->right_arrow = right_arrow;
+    pattern->varlen = NULL;
+    return pattern;
+}
+
+cypher_rel_pattern* make_rel_pattern_multi_type(char *variable, ast_list *types, ast_node *properties, bool left_arrow, bool right_arrow)
+{
+    cypher_rel_pattern *pattern = (cypher_rel_pattern*)ast_node_create(AST_NODE_REL_PATTERN, -1, sizeof(cypher_rel_pattern));
+    if (!pattern) {
+        return NULL;
+    }
+    
+    pattern->variable = variable ? strdup(variable) : NULL;
+    pattern->type = NULL;  /* For multi-type, single type is NULL */
+    pattern->types = types;
     pattern->properties = properties;
     pattern->left_arrow = left_arrow;
     pattern->right_arrow = right_arrow;
