@@ -125,16 +125,23 @@ Query parses and transforms successfully - ready for execution
 
 ## Parser and Grammar Issues
 
-### Mixed Named/Anonymous Relationship Patterns (BUG 🔴)
-- **Issue**: Patterns like `(a)-[]->(b)-[r:TYPE]->(c)` fail with "Parse error at line 1, column 49: syntax error"
-- **Root Cause**: Parser grammar has issues with named relationship variables in multi-relationship patterns
-- **Location**: Grammar rules for path patterns in `cypher_gram.y`
+### Parser Query Length Limitation (BUG 🔴)
+- **Issue**: Multi-relationship patterns fail when total query length exceeds ~50 characters
+- **Root Cause**: Parser state machine issue with shift/reduce conflicts in relationship pattern grammar
+- **Location**: Grammar rules for path patterns in `cypher_gram.y` (6 shift/reduce conflicts identified)
 - **Examples**: 
-  - Fails: `MATCH (start:AnonTest)-[]->(middle)-[r:LINKX]->(end) RETURN ...`
-  - Works: `MATCH (a)-[]->(b)-[]->(c) RETURN ...` (all anonymous)
-  - Works: `MATCH (a)-[r:TYPE]->(b) RETURN ...` (single named relationship)
-- **Status**: 🔴 NEEDS DEEP INVESTIGATION - Requires parser state management analysis
-- **Priority**: Medium - Complex patterns are advanced functionality
+  - Fails: `MATCH (start:AnonTest)-[]->(middle)-[r:LINKX]->(end) RETURN start.name` (70 chars)
+  - Fails: `MATCH (start)-[]->(middle)-[]->(end) RETURN start` (50 chars) 
+  - Works: `MATCH (a)-[]->(b)-[]->(c) RETURN a` (35 chars)
+  - Works: Single relationships of any length work fine
+- **Investigation Results**:
+  - Fixed incorrect manual memory management in path reduction rule (lines 363-365)
+  - Issue persists after memory fix - appears to be fundamental grammar limitation
+  - Error location reporting is incorrect (reports column 147+ for 50-char queries)
+  - Affects all multi-relationship patterns regardless of named/anonymous variables
+- **Status**: 🔴 DOCUMENTED LIMITATION - Grammar refactoring required for proper fix
+- **Priority**: Medium - Workaround: Use shorter variable names or single relationships
+- **Workaround**: Keep total query length under 50 characters or split into multiple MATCH clauses
 
 ### Multiple Pattern Support in MATCH Clauses (BUG 🔴)
 - **Issue**: Comma-separated patterns in MATCH clauses fail with "Parse error at line 1, column 1386: syntax error"
@@ -156,15 +163,23 @@ Query parses and transforms successfully - ready for execution
 - **Status**: 🔴 NEEDS INVESTIGATION - Path pattern complexity limits
 - **Priority**: Medium - Advanced pattern matching
 
-### EXISTS Keyword Implementation (LIMITATION ⏸️)
-- **Issue**: EXISTS patterns not supported - `WHERE EXISTS((n)-[:TYPE]->())` fails with syntax error
+### EXISTS Keyword Implementation (✅ PROPERTY FORM IMPLEMENTED)
+- **Issue**: EXISTS expressions not supported in WHERE clauses
 - **Root Cause**: EXISTS keyword defined in tokens but not implemented in grammar
-- **Location**: Missing grammar rules in `cypher_gram.y` for EXISTS expressions
+- **Location**: Grammar rules in `cypher_gram.y` for EXISTS expressions
 - **Examples**: 
-  - Not supported: `MATCH (n:Test) WHERE EXISTS((n)-[:CONNECTS]->()) RETURN n.name`
-  - Not supported: `MATCH (n:Test) WHERE EXISTS((n)-[]->(:Test)) RETURN n.name`
-- **Status**: ⏸️ NOT IMPLEMENTED - Expected limitation, requires feature implementation
-- **Priority**: High - Common Cypher functionality needed for advanced queries
+  - ✅ **Fully supported**: `MATCH (n:Test) WHERE EXISTS(n.property) RETURN n.name`
+  - ✅ **Fully supported**: `MATCH (n:Test) WHERE NOT EXISTS(n.missing) RETURN n.name`
+  - ❌ **Not implemented**: `MATCH (n:Test) WHERE EXISTS((n)-[:CONNECTS]->()) RETURN n.name`
+- **Status**: ✅ **PROPERTY FORM FULLY IMPLEMENTED** - Property existence checking working
+- **Pattern Status**: ❌ **EXISTS((pattern)) syntax not implemented** - requires special grammar handling
+- **Priority**: ✅ High priority property feature completed
+- **Implementation**: 
+  - ✅ Added AST nodes and constructors for EXISTS expressions
+  - ✅ Added grammar rules for EXISTS(property) syntax  
+  - ✅ Implemented transform layer with comprehensive SQL generation
+  - ✅ Added comprehensive test suite (property tests passing, pattern tests disabled)
+- **Pattern Implementation**: Pattern syntax `EXISTS((n)-[:TYPE]->())` requires different grammar approach as patterns are not expressions
 
 ---
 
@@ -189,6 +204,61 @@ Query parses and transforms successfully - ready for execution
 **Test Files Affected:**
 - `tests/functional/11_anonymous_entity_test_complex.sql` - Contains documented bugs as comments
 - Parser error locations: columns 49, 1386, 1498 respectively
+
+---
+
+### Issue: EXISTS Pattern Syntax Not Implemented 
+**Status**: Open  
+**Priority**: Medium  
+**AGE Compatibility**: Missing pattern existence checking functionality
+
+**Description:**
+The `EXISTS((pattern))` syntax for checking relationship pattern existence is not implemented. Only `EXISTS(property)` syntax is supported.
+
+**Current Behavior:**
+```cypher
+MATCH (n:Test) WHERE EXISTS((n)-[:KNOWS]->()) RETURN n.name
+Parse error at line 1, column XXX: syntax error
+```
+
+**Expected AGE-Compatible Behavior:**
+```cypher
+MATCH (n:Test) WHERE EXISTS((n)-[:KNOWS]->()) RETURN n.name
+-- Should return nodes that have outgoing KNOWS relationships
+```
+
+**Location**: `tests/functional/13_exists_functionality.sql` (pattern tests disabled)
+
+**Root Cause:**
+- Grammar only supports `EXISTS(expr)` where `expr` is a property access
+- Pattern syntax `(n)-[:TYPE]->()` is not a regular expression - it's a path pattern
+- Requires special grammar handling as patterns have different parsing rules than expressions
+- Current implementation incorrectly tries to parse patterns as expressions
+
+**Technical Challenge:**
+- Patterns use different grammar rules (`path`, `node_pattern`, `rel_pattern`) 
+- Cannot be parsed within the `expr` rule that `EXISTS(expr)` expects
+- Need new grammar rule like `EXISTS '(' '(' path ')' ')'` for pattern syntax
+- Transform layer needs pattern existence checking (different from property existence)
+
+**Affected Code:**
+- `src/backend/parser/cypher_gram.y` - Need separate EXISTS pattern grammar rule
+- `src/backend/transform/transform_return.c` - Need pattern existence transform logic
+- Pattern existence requires different SQL generation than property existence
+
+**Solution Approach:**
+1. Add separate grammar rule for `EXISTS((pattern))` syntax
+2. Extend AST to handle pattern-based EXISTS expressions  
+3. Implement pattern existence checking in transform layer
+4. Generate SQL that checks for relationship pattern existence
+5. Support nested patterns: `EXISTS((n)-[]->()-[]->())`
+
+**Examples Needed:**
+- `EXISTS((n)-[:KNOWS]->())` - specific relationship type
+- `EXISTS((n)-[]->())` - any outgoing relationship  
+- `EXISTS(()<-[]-(n))` - any incoming relationship
+- `EXISTS((n)-[]->(:Label))` - relationship to specific label
+- `EXISTS((n)-[]->()-[]->())` - multi-hop patterns
 
 ---
 

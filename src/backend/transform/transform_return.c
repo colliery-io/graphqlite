@@ -247,6 +247,9 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_FUNCTION_CALL:
             return transform_function_call(ctx, (cypher_function_call*)expr);
             
+        case AST_NODE_EXISTS_EXPR:
+            return transform_exists_expression(ctx, (cypher_exists_expr*)expr);
+            
         case AST_NODE_LITERAL:
             {
                 cypher_literal *lit = (cypher_literal*)expr;
@@ -643,4 +646,200 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
     append_sql(ctx, "(SELECT type FROM edges WHERE id = %s.id)", alias);
     
     return 0;
+}
+
+/* Transform EXISTS expression */
+int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
+{
+    CYPHER_DEBUG("Transforming EXISTS expression");
+    
+    if (!exists_expr) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Invalid EXISTS expression");
+        return -1;
+    }
+    
+    switch (exists_expr->expr_type) {
+        case EXISTS_TYPE_PATTERN:
+            {
+                CYPHER_DEBUG("Transforming EXISTS pattern expression");
+                
+                if (!exists_expr->expr.pattern || exists_expr->expr.pattern->count == 0) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("EXISTS pattern expression is empty");
+                    return -1;
+                }
+                
+                /* Generate SQL EXISTS subquery with pattern matching */
+                append_sql(ctx, "EXISTS (");
+                
+                /* For each pattern in the EXISTS clause, we need to generate a subquery */
+                /* that checks if the pattern exists in the database */
+                ast_node *pattern = exists_expr->expr.pattern->items[0];
+                
+                if (pattern->type == AST_NODE_PATH) {
+                    cypher_path *path = (cypher_path*)pattern;
+                    
+                    /* Simple pattern like (n)-[r]->(m) */
+                    if (path->elements && path->elements->count >= 1) {
+                        
+                        /* Start with SELECT 1 to make it an existence check */
+                        append_sql(ctx, "SELECT 1 FROM ");
+                        
+                        bool first_table = true;
+                        char node_aliases[10][32];  /* Support up to 10 nodes in pattern */
+                        int node_count = 0;
+                        
+                        /* Process each element in the path */
+                        for (int i = 0; i < path->elements->count; i++) {
+                            ast_node *element = path->elements->items[i];
+                            
+                            if (element->type == AST_NODE_NODE_PATTERN) {
+                                /* Node pattern: (variable:Label) */
+                                if (!first_table) {
+                                    append_sql(ctx, ", ");
+                                }
+                                snprintf(node_aliases[node_count], sizeof(node_aliases[node_count]), 
+                                        "n%d", node_count);
+                                append_sql(ctx, "nodes AS %s", node_aliases[node_count]);
+                                node_count++;
+                                first_table = false;
+                                
+                            } else if (element->type == AST_NODE_REL_PATTERN && i > 0) {
+                                /* Relationship pattern: -[variable:TYPE]-> */
+                                if (!first_table) {
+                                    append_sql(ctx, ", ");
+                                }
+                                append_sql(ctx, "edges AS e%d", i/2);  /* Relationships are at odd indices */
+                                first_table = false;
+                            }
+                        }
+                        
+                        /* Add WHERE clause for joins and constraints */
+                        append_sql(ctx, " WHERE ");
+                        
+                        bool first_condition = true;
+                        int rel_index = 0;
+                        
+                        /* Generate join conditions between nodes and relationships */
+                        for (int i = 0; i < path->elements->count; i++) {
+                            ast_node *element = path->elements->items[i];
+                            
+                            if (element->type == AST_NODE_REL_PATTERN && i > 0 && i < path->elements->count - 1) {
+                                cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+                                
+                                if (!first_condition) {
+                                    append_sql(ctx, " AND ");
+                                }
+                                
+                                /* Join source node with relationship */
+                                int source_node = i / 2;
+                                int target_node = source_node + 1;
+                                
+                                append_sql(ctx, "e%d.source_id = %s.id AND e%d.target_id = %s.id",
+                                          rel_index, node_aliases[source_node],
+                                          rel_index, node_aliases[target_node]);
+                                
+                                /* Add relationship type constraint if specified */
+                                if (rel->type) {
+                                    append_sql(ctx, " AND e%d.type = ", rel_index);
+                                    append_string_literal(ctx, rel->type);
+                                }
+                                
+                                rel_index++;
+                                first_condition = false;
+                            } else if (element->type == AST_NODE_NODE_PATTERN) {
+                                cypher_node_pattern *node = (cypher_node_pattern*)element;
+                                
+                                /* Add label constraint if specified */
+                                if (node->label) {
+                                    if (!first_condition) {
+                                        append_sql(ctx, " AND ");
+                                    }
+                                    
+                                    int current_node = (i == 0) ? 0 : i / 2;
+                                    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ",
+                                              node_aliases[current_node]);
+                                    append_string_literal(ctx, node->label);
+                                    append_sql(ctx, ")");
+                                    first_condition = false;
+                                }
+                            }
+                        }
+                    } else {
+                        /* Empty pattern - should not happen */
+                        append_sql(ctx, "SELECT 0");
+                    }
+                } else {
+                    /* Unsupported pattern type */
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Unsupported pattern type in EXISTS expression");
+                    return -1;
+                }
+                
+                append_sql(ctx, ")");
+                return 0;
+            }
+            
+        case EXISTS_TYPE_PROPERTY:
+            {
+                CYPHER_DEBUG("Transforming EXISTS property expression");
+                
+                if (!exists_expr->expr.property) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("EXISTS property expression is empty");
+                    return -1;
+                }
+                
+                /* Generate property existence check */
+                /* This should be a property access like n.property */
+                if (exists_expr->expr.property->type == AST_NODE_PROPERTY) {
+                    cypher_property *prop = (cypher_property*)exists_expr->expr.property;
+                    
+                    if (prop->expr->type == AST_NODE_IDENTIFIER) {
+                        cypher_identifier *id = (cypher_identifier*)prop->expr;
+                        const char *alias = lookup_variable_alias(ctx, id->name);
+                        
+                        if (!alias) {
+                            ctx->has_error = true;
+                            char error[256];
+                            snprintf(error, sizeof(error), "Unknown variable in EXISTS property: %s", id->name);
+                            ctx->error_message = strdup(error);
+                            return -1;
+                        }
+                        
+                        /* Generate SQL to check if property exists */
+                        append_sql(ctx, "(");
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
+                        append_string_literal(ctx, prop->property_name);
+                        append_sql(ctx, ") OR ");
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
+                        append_string_literal(ctx, prop->property_name);
+                        append_sql(ctx, ") OR ");
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
+                        append_string_literal(ctx, prop->property_name);
+                        append_sql(ctx, ") OR ");
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
+                        append_string_literal(ctx, prop->property_name);
+                        append_sql(ctx, ")");
+                        append_sql(ctx, ")");
+                        
+                        return 0;
+                    } else {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("EXISTS property must reference a variable");
+                        return -1;
+                    }
+                } else {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("EXISTS property expression must be a property access");
+                    return -1;
+                }
+            }
+            
+        default:
+            ctx->has_error = true;
+            ctx->error_message = strdup("Unknown EXISTS expression type");
+            return -1;
+    }
 }

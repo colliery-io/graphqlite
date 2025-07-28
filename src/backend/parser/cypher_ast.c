@@ -263,6 +263,17 @@ void ast_node_free(ast_node *node)
             }
             break;
             
+        case AST_NODE_EXISTS_EXPR:
+            {
+                cypher_exists_expr *exists_expr = (cypher_exists_expr*)node;
+                if (exists_expr->expr_type == EXISTS_TYPE_PATTERN) {
+                    ast_list_free(exists_expr->expr.pattern);
+                } else if (exists_expr->expr_type == EXISTS_TYPE_PROPERTY) {
+                    ast_node_free(exists_expr->expr.property);
+                }
+            }
+            break;
+            
         case AST_NODE_MAP:
             {
                 cypher_map *map = (cypher_map*)node;
@@ -704,6 +715,30 @@ cypher_function_call* make_function_call(char *function_name, ast_list *args, bo
     return func;
 }
 
+cypher_exists_expr* make_exists_pattern_expr(ast_list *pattern, int location)
+{
+    cypher_exists_expr *exists_expr = (cypher_exists_expr*)ast_node_create(AST_NODE_EXISTS_EXPR, location, sizeof(cypher_exists_expr));
+    if (!exists_expr) {
+        return NULL;
+    }
+    
+    exists_expr->expr_type = EXISTS_TYPE_PATTERN;
+    exists_expr->expr.pattern = pattern;
+    return exists_expr;
+}
+
+cypher_exists_expr* make_exists_property_expr(ast_node *property, int location)
+{
+    cypher_exists_expr *exists_expr = (cypher_exists_expr*)ast_node_create(AST_NODE_EXISTS_EXPR, location, sizeof(cypher_exists_expr));
+    if (!exists_expr) {
+        return NULL;
+    }
+    
+    exists_expr->expr_type = EXISTS_TYPE_PROPERTY;
+    exists_expr->expr.property = property;
+    return exists_expr;
+}
+
 cypher_map* make_map(ast_list *pairs, int location)
 {
     cypher_map *map = (cypher_map*)ast_node_create(AST_NODE_MAP, location, sizeof(cypher_map));
@@ -766,6 +801,7 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_PARAMETER:      return "PARAMETER";
         case AST_NODE_PROPERTY:       return "PROPERTY";
         case AST_NODE_FUNCTION_CALL:  return "FUNCTION_CALL";
+        case AST_NODE_EXISTS_EXPR:    return "EXISTS_EXPR";
         case AST_NODE_LIST:           return "LIST";
         case AST_NODE_MAP:            return "MAP";
         case AST_NODE_RETURN_ITEM:    return "RETURN_ITEM";

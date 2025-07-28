@@ -41,6 +41,7 @@ typedef enum ast_node_type {
     AST_NODE_NOT_EXPR,
     AST_NODE_BINARY_OP,
     AST_NODE_FUNCTION_CALL,
+    AST_NODE_EXISTS_EXPR,
     AST_NODE_LIST,
     AST_NODE_MAP,
     AST_NODE_MAP_PAIR,
@@ -67,6 +68,12 @@ typedef enum {
     BINARY_OP_MUL,
     BINARY_OP_DIV
 } binary_op_type;
+
+/* EXISTS expression types */
+typedef enum {
+    EXISTS_TYPE_PATTERN,   /* EXISTS((pattern)) */
+    EXISTS_TYPE_PROPERTY   /* EXISTS(property) */
+} exists_expr_type;
 
 /* Base AST node structure */
 typedef struct ast_node {
@@ -251,6 +258,16 @@ typedef struct cypher_function_call {
     bool distinct;        /* Function(DISTINCT ...) */
 } cypher_function_call;
 
+/* EXISTS expression: EXISTS((pattern)) or EXISTS(property) */
+typedef struct cypher_exists_expr {
+    ast_node base;
+    exists_expr_type expr_type;  /* Pattern or property */
+    union {
+        ast_list *pattern;       /* For EXISTS((pattern)) - list of path elements */
+        ast_node *property;      /* For EXISTS(property) - property access expression */
+    } expr;
+} cypher_exists_expr;
+
 /* Map literal: {key: value, ...} */
 typedef struct cypher_map {
     ast_node base;
@@ -307,6 +324,8 @@ cypher_label_expr* make_label_expr(ast_node *expr, char *label_name, int locatio
 cypher_not_expr* make_not_expr(ast_node *expr, int location);
 cypher_binary_op* make_binary_op(binary_op_type op_type, ast_node *left, ast_node *right, int location);
 cypher_function_call* make_function_call(char *function_name, ast_list *args, bool distinct, int location);
+cypher_exists_expr* make_exists_pattern_expr(ast_list *pattern, int location);
+cypher_exists_expr* make_exists_property_expr(ast_node *property, int location);
 cypher_map* make_map(ast_list *pairs, int location);
 cypher_map_pair* make_map_pair(char *key, ast_node *value, int location);
 cypher_list* make_list(ast_list *items, int location);

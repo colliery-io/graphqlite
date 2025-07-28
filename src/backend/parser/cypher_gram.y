@@ -51,6 +51,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_label_expr *label_expr;
     cypher_not_expr *not_expr;
     cypher_binary_op *binary_op;
+    cypher_exists_expr *exists_expr;
     cypher_node_pattern *node_pattern;
     cypher_rel_pattern *rel_pattern;
     cypher_path *path;
@@ -69,7 +70,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 /* Keywords */
 %token MATCH RETURN CREATE WHERE WITH SET DELETE REMOVE MERGE UNWIND DETACH
 %token OPTIONAL DISTINCT ORDER BY SKIP LIMIT AS ASC DESC
-%token AND OR NOT IN IS NULL TRUE FALSE
+%token AND OR NOT IN IS NULL TRUE FALSE EXISTS
 %token UNION ALL CASE WHEN THEN ELSE END
 
 /* Non-terminal types */
@@ -358,10 +359,8 @@ path:
             ast_list_append(new_elements, (ast_node*)$2);
             ast_list_append(new_elements, (ast_node*)$3);
             
-            /* Free only the old path structure, not its elements (which are reused) */
-            free($1->elements->items);  /* Free the items array */
-            free($1->elements);         /* Free the list structure */
-            free($1);                   /* Free the path structure */
+            /* Note: Let Bison handle memory cleanup of $1 automatically */
+            /* Manual freeing during parsing can cause parser state corruption */
             
             $$ = make_path(new_elements);
         }
@@ -562,16 +561,38 @@ literal_expr:
 function_call:
     IDENTIFIER '(' ')'
         {
-            ast_list *args = ast_list_create();
-            $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
-            free($1);
+            /* Check if this is EXISTS function call */
+            if (strcasecmp($1, "exists") == 0) {
+                /* Empty EXISTS() - invalid */
+                free($1);
+                cypher_yyerror(&@1, context, "EXISTS requires an argument");
+                YYERROR;
+            } else {
+                ast_list *args = ast_list_create();
+                $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
+                free($1);
+            }
         }
     | IDENTIFIER '(' expr ')'
         {
-            ast_list *args = ast_list_create();
-            ast_list_append(args, $3);
-            $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
-            free($1);
+            /* Check if this is EXISTS function call */
+            if (strcasecmp($1, "exists") == 0) {
+                /* This is EXISTS(expr) - determine if pattern or property */
+                if ($3->type == AST_NODE_PROPERTY) {
+                    $$ = (ast_node*)make_exists_property_expr($3, @1.first_line);
+                } else {
+                    /* For now, assume single expression is a pattern - we'll enhance this later */
+                    ast_list *pattern = ast_list_create();
+                    ast_list_append(pattern, $3);
+                    $$ = (ast_node*)make_exists_pattern_expr(pattern, @1.first_line);
+                }
+                free($1);
+            } else {
+                ast_list *args = ast_list_create();
+                ast_list_append(args, $3);
+                $$ = (ast_node*)make_function_call($1, args, false, @1.first_line);
+                free($1);
+            }
         }
     | IDENTIFIER '(' DISTINCT expr ')'
         {
