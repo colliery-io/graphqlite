@@ -129,6 +129,7 @@ typedef struct cypher_set_item {
 typedef struct cypher_delete {
     ast_node base;
     ast_list *items;      /* List of delete items (variables to delete) */
+    bool detach;          /* TRUE for DETACH DELETE, FALSE for regular DELETE */
 } cypher_delete;
 
 /* DELETE item (e.g., n or r) */
@@ -181,6 +182,7 @@ typedef struct cypher_rel_pattern {
 typedef struct cypher_path {
     ast_node base;
     ast_list *elements;   /* Alternating nodes and relationships */
+    char *var_name;       /* Variable name for path assignment (optional) */
 } cypher_path;
 
 /* Literal expression */
@@ -284,7 +286,7 @@ cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *orde
 cypher_create* make_cypher_create(ast_list *pattern);
 cypher_set* make_cypher_set(ast_list *items);
 cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr);
-cypher_delete* make_cypher_delete(ast_list *items);
+cypher_delete* make_cypher_delete(ast_list *items, bool detach);
 cypher_delete_item* make_delete_item(char *variable);
 cypher_return_item* make_return_item(ast_node *expr, char *alias);
 cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending);
@@ -292,6 +294,7 @@ cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *pr
 cypher_rel_pattern* make_rel_pattern(char *variable, char *type, ast_node *properties, bool left_arrow, bool right_arrow);
 cypher_rel_pattern* make_rel_pattern_multi_type(char *variable, ast_list *types, ast_node *properties, bool left_arrow, bool right_arrow);
 cypher_path* make_path(ast_list *elements);
+cypher_path* make_path_with_var(char *var_name, ast_list *elements);
 cypher_literal* make_integer_literal(int value, int location);
 cypher_literal* make_decimal_literal(double value, int location);
 cypher_literal* make_string_literal(char *value, int location);

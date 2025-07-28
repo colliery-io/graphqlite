@@ -332,6 +332,19 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
     
     CYPHER_DEBUG("Transforming %s path with %d elements", optional ? "OPTIONAL" : "regular", path->elements->count);
     
+    /* If path has a variable name, register it as a path variable */
+    if (path->var_name) {
+        CYPHER_DEBUG("Registering path variable: %s with %d elements", path->var_name, path->elements->count);
+        if (register_path_variable(ctx, path->var_name, path) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to register path variable");
+            return -1;
+        }
+        CYPHER_DEBUG("Successfully registered path variable: %s", path->var_name);
+    } else {
+        CYPHER_DEBUG("Path has no variable name - skipping registration");
+    }
+    
     /* For now, handle simple node patterns */
     /* TODO: Handle relationship patterns */
     

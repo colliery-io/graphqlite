@@ -1,7 +1,7 @@
 # GraphQLite Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -g -I./src/include -I/opt/local/include
+CFLAGS = -Wall -Wextra -g -I./src/include -I/opt/local/include -DGRAPHQLITE_DEBUG
 LDFLAGS = -L/opt/local/lib -lcunit -lsqlite3
 
 # Coverage flags

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "executor/agtype.h"
+#include "parser/cypher_debug.h"
 
 /* Forward declarations */
 static int load_node_properties(sqlite3 *db, int64_t node_id, agtype_pair **pairs, int *num_pairs);
@@ -141,10 +142,98 @@ agtype_value* agtype_value_create_edge_with_properties(sqlite3 *db, int64_t id, 
     return val;
 }
 
+/* Create a path agtype value from array of vertex/edge values */
+agtype_value* agtype_value_create_path(agtype_value **elements, int num_elements)
+{
+    CYPHER_DEBUG("agtype_value_create_path: Called with %d elements", num_elements);
+    if (!elements || num_elements < 1) return NULL;
+    
+    /* Validate path structure: must start with vertex, alternate edge/vertex */
+    CYPHER_DEBUG("agtype_value_create_path: First element type: %d", elements[0] ? elements[0]->type : -1);
+    if (num_elements % 2 == 0 || elements[0]->type != AGTV_VERTEX) {
+        CYPHER_DEBUG("agtype_value_create_path: Invalid path structure - odd elements: %s, starts with vertex: %s",
+                     num_elements % 2 == 1 ? "yes" : "no",
+                     elements[0] && elements[0]->type == AGTV_VERTEX ? "yes" : "no");
+        return NULL; /* Invalid path structure */
+    }
+    
+    for (int i = 1; i < num_elements; i++) {
+        if (i % 2 == 1) {
+            /* Odd positions should be edges */
+            if (elements[i]->type != AGTV_EDGE) return NULL;
+        } else {
+            /* Even positions should be vertices */
+            if (elements[i]->type != AGTV_VERTEX) return NULL;
+        }
+    }
+    
+    CYPHER_DEBUG("agtype_value_create_path: Path validation passed, allocating memory");
+    
+    agtype_value *val = malloc(sizeof(agtype_value));
+    if (!val) {
+        CYPHER_DEBUG("agtype_value_create_path: Failed to allocate path value");
+        return NULL;
+    }
+    
+    val->type = AGTV_PATH;
+    val->val.array.num_elems = num_elements;
+    
+    CYPHER_DEBUG("agtype_value_create_path: Allocating array for %d elements, size = %zu", 
+                 num_elements, num_elements * sizeof(agtype_value));
+    
+    val->val.array.elems = malloc(num_elements * sizeof(agtype_value));
+    if (!val->val.array.elems) {
+        CYPHER_DEBUG("agtype_value_create_path: Failed to allocate elements array");
+        free(val);
+        return NULL;
+    }
+    
+    /* Deep copy the elements */
+    for (int i = 0; i < num_elements; i++) {
+        if (!elements[i]) {
+            free(val->val.array.elems);
+            free(val);
+            return NULL;
+        }
+        
+        /* Copy the structure */
+        val->val.array.elems[i] = *elements[i];
+        
+        /* Deep copy strings and other allocated data */
+        if (elements[i]->type == AGTV_VERTEX) {
+            /* Deep copy vertex label string */
+            if (elements[i]->val.entity.label) {
+                val->val.array.elems[i].val.entity.label = strdup(elements[i]->val.entity.label);
+            }
+            /* TODO: Deep copy properties if needed */
+        } else if (elements[i]->type == AGTV_EDGE) {
+            /* Deep copy edge label string */
+            if (elements[i]->val.edge.label) {
+                val->val.array.elems[i].val.edge.label = strdup(elements[i]->val.edge.label);
+            }
+            /* TODO: Deep copy properties if needed */
+        }
+    }
+    
+    return val;
+}
+
+/* Build a path from collected vertex and edge values during query execution */
+agtype_value* agtype_build_path(agtype_value **path_elements, int num_elements)
+{
+    if (!path_elements || num_elements < 1) {
+        return agtype_value_create_null();
+    }
+    
+    return agtype_value_create_path(path_elements, num_elements);
+}
+
 /* Free an agtype value */
 void agtype_value_free(agtype_value *val)
 {
     if (!val) return;
+    
+    CYPHER_DEBUG("agtype_value_free: Freeing agtype value %p of type %d", (void*)val, val->type);
     
     switch (val->type) {
         case AGTV_STRING:
@@ -171,9 +260,25 @@ void agtype_value_free(agtype_value *val)
             }
             break;
         case AGTV_ARRAY:
+        case AGTV_PATH:
+            CYPHER_DEBUG("agtype_value_free: Freeing PATH with %d elements", val->val.array.num_elems);
             if (val->val.array.elems) {
                 for (int i = 0; i < val->val.array.num_elems; i++) {
-                    agtype_value_free(&val->val.array.elems[i]);
+                    CYPHER_DEBUG("agtype_value_free: Freeing path element %d of type %d", i, val->val.array.elems[i].type);
+                    /* Free allocated strings in each element */
+                    if (val->val.array.elems[i].type == AGTV_VERTEX) {
+                        free(val->val.array.elems[i].val.entity.label);
+                        if (val->val.array.elems[i].val.entity.pairs) {
+                            /* TODO: Free properties properly */
+                            free(val->val.array.elems[i].val.entity.pairs);
+                        }
+                    } else if (val->val.array.elems[i].type == AGTV_EDGE) {
+                        free(val->val.array.elems[i].val.edge.label);
+                        if (val->val.array.elems[i].val.edge.pairs) {
+                            /* TODO: Free properties properly */
+                            free(val->val.array.elems[i].val.edge.pairs);
+                        }
+                    }
                 }
                 free(val->val.array.elems);
             }
@@ -529,6 +634,38 @@ char* agtype_value_to_string(agtype_value *val)
                 }
                 
                 strcat(result, "}}::edge");
+            }
+            break;
+        }
+        
+        case AGTV_PATH: {
+            /* Format: [vertex, edge, vertex, ...]::path */
+            int base_size = 50; /* for brackets and ::path */
+            
+            /* Calculate size needed for all elements */
+            for (int i = 0; i < val->val.array.num_elems; i++) {
+                char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
+                if (elem_str) {
+                    base_size += strlen(elem_str) + 2; /* element + comma/space */
+                    free(elem_str);
+                }
+            }
+            
+            result = malloc(base_size);
+            if (result) {
+                strcpy(result, "[");
+                
+                for (int i = 0; i < val->val.array.num_elems; i++) {
+                    if (i > 0) strcat(result, ", ");
+                    
+                    char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
+                    if (elem_str) {
+                        strcat(result, elem_str);
+                        free(elem_str);
+                    }
+                }
+                
+                strcat(result, "]::path");
             }
             break;
         }

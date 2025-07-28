@@ -104,6 +104,8 @@ agtype_value* agtype_value_create_vertex(int64_t id, const char* label);
 agtype_value* agtype_value_create_edge(int64_t id, const char* label, int64_t start_id, int64_t end_id);
 agtype_value* agtype_value_create_vertex_with_properties(sqlite3 *db, int64_t id, const char* label);
 agtype_value* agtype_value_create_edge_with_properties(sqlite3 *db, int64_t id, const char* label, int64_t start_id, int64_t end_id);
+agtype_value* agtype_value_create_path(agtype_value **elements, int num_elements);
+agtype_value* agtype_build_path(agtype_value **path_elements, int num_elements);
 
 void agtype_value_free(agtype_value *val);
 char* agtype_value_to_string(agtype_value *val);

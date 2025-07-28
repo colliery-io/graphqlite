@@ -78,9 +78,12 @@ static int generate_delete_operations(cypher_transform_context *ctx, cypher_dele
                 return -1;
             }
         } else {
-            /* Check constraints before deleting node */
-            if (check_node_constraints(ctx, item->variable) < 0) {
-                return -1;
+            /* For DETACH DELETE, skip constraint checks and always cascade delete */
+            if (!delete_clause->detach) {
+                /* Check constraints before deleting node (only for regular DELETE) */
+                if (check_node_constraints(ctx, item->variable) < 0) {
+                    return -1;
+                }
             }
             
             /* Delete node and cascade delete relationships */

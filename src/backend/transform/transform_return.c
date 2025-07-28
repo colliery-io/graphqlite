@@ -173,7 +173,48 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 cypher_identifier *id = (cypher_identifier*)expr;
                 const char *alias = lookup_variable_alias(ctx, id->name);
                 if (alias) {
-                    if (is_edge_variable(ctx, id->name)) {
+                    if (is_path_variable(ctx, id->name)) {
+                        CYPHER_DEBUG("Processing path variable '%s' in RETURN", id->name);
+                        /* This is a path variable - generate JSON with element IDs */
+                        path_variable *path_var = get_path_variable(ctx, id->name);
+                        if (path_var && path_var->elements) {
+                            CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->elements->count);
+                            append_sql(ctx, "'[");
+                            for (int i = 0; i < path_var->elements->count; i++) {
+                                if (i > 0) append_sql(ctx, ",");
+                                
+                                ast_node *element = path_var->elements->items[i];
+                                if (element->type == AST_NODE_NODE_PATTERN) {
+                                    cypher_node_pattern *node = (cypher_node_pattern*)element;
+                                    if (node->variable) {
+                                        const char *node_alias = lookup_variable_alias(ctx, node->variable);
+                                        if (node_alias) {
+                                            append_sql(ctx, "' || %s.id || '", node_alias);
+                                        } else {
+                                            append_sql(ctx, "null");
+                                        }
+                                    } else {
+                                        append_sql(ctx, "null");
+                                    }
+                                } else if (element->type == AST_NODE_REL_PATTERN) {
+                                    cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+                                    if (rel->variable) {
+                                        const char *rel_alias = lookup_variable_alias(ctx, rel->variable);
+                                        if (rel_alias) {
+                                            append_sql(ctx, "' || %s.id || '", rel_alias);
+                                        } else {
+                                            append_sql(ctx, "null");
+                                        }
+                                    } else {
+                                        append_sql(ctx, "null");
+                                    }
+                                }
+                            }
+                            append_sql(ctx, "]'");
+                        } else {
+                            append_sql(ctx, "'[]'");
+                        }
+                    } else if (is_edge_variable(ctx, id->name)) {
                         /* This is an edge variable - return the edge ID */
                         append_sql(ctx, "%s.id", alias);
                     } else {

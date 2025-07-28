@@ -4,43 +4,7 @@ This document tracks bugs, issues, and areas for improvement in GraphQLite's AGE
 
 ## Unimplemented Cypher Clauses
 
-### Issue: Path Variable Assignment Not Supported
-**Status**: Open  
-**Priority**: Medium  
-**AGE Compatibility**: Breaks path-based query patterns
 
-**Description:**
-The `path = ` syntax for assigning path expressions to variables is not supported.
-
-**Current Behavior:**
-```cypher
-MATCH path = (a)-[:REL]->(b) RETURN path
-Runtime error: Failed to parse query
-```
-
-**Expected AGE-Compatible Behavior:**
-```cypher
-MATCH path = (a)-[:REL]->(b) RETURN path
-[path object with nodes and relationships]
-```
-
-**Location**: `tests/functional/08_complex_queries.sql:149`
-
-**Root Cause:**
-- Path variable assignment not implemented in grammar
-- No path data type support in AGType system
-- Missing path manipulation functions
-
-**Affected Code:**
-- `src/backend/parser/cypher_gram.y` - Path assignment grammar
-- `src/backend/executor/agtype.c` - Path data type support
-
-**Solution Approach:**
-1. Add path variable assignment to grammar
-2. Implement path data type in AGType system
-3. Add path manipulation functions (length, nodes, relationships)
-
----
 
 ### Issue: Nested Property Access Not Supported
 **Status**: Open  
@@ -157,64 +121,74 @@ Query parses and transforms successfully - ready for execution
 
 ---
 
-### Issue: Edge Variable Type Detection Bug
-**Status**: ✅ **FIXED**  
-**Priority**: High  
-**AGE Compatibility**: ✅ **RESTORED**
 
-**Description:**
-Relationship variables in MATCH patterns were incorrectly registered as node variables instead of edge variables.
 
-**Previous Behavior:**
-```cypher
-MATCH (a)-[r:REL]->(b) DELETE r
-// Variable 'r' was incorrectly marked as VAR_TYPE_NODE
-```
+## Parser and Grammar Issues
 
-**Fixed Behavior:**
-```cypher
-MATCH (a)-[r:REL]->(b) DELETE r  
-// Variable 'r' is now correctly marked as VAR_TYPE_EDGE
-```
+### Mixed Named/Anonymous Relationship Patterns (BUG 🔴)
+- **Issue**: Patterns like `(a)-[]->(b)-[r:TYPE]->(c)` fail with "Parse error at line 1, column 49: syntax error"
+- **Root Cause**: Parser grammar has issues with named relationship variables in multi-relationship patterns
+- **Location**: Grammar rules for path patterns in `cypher_gram.y`
+- **Examples**: 
+  - Fails: `MATCH (start:AnonTest)-[]->(middle)-[r:LINKX]->(end) RETURN ...`
+  - Works: `MATCH (a)-[]->(b)-[]->(c) RETURN ...` (all anonymous)
+  - Works: `MATCH (a)-[r:TYPE]->(b) RETURN ...` (single named relationship)
+- **Status**: 🔴 NEEDS DEEP INVESTIGATION - Requires parser state management analysis
+- **Priority**: Medium - Complex patterns are advanced functionality
 
-**Location**: `tests/test_transform_delete.c:113`
+### Multiple Pattern Support in MATCH Clauses (BUG 🔴)
+- **Issue**: Comma-separated patterns in MATCH clauses fail with "Parse error at line 1, column 1386: syntax error"
+- **Root Cause**: Parser grammar cannot handle multiple patterns separated by commas in single MATCH clause
+- **Location**: Grammar rules for pattern lists in `cypher_gram.y`
+- **Examples**: 
+  - Fails: `MATCH (start)-[]->(end), (other)-[]->(end) WHERE start.name = "X" RETURN ...`
+  - Works: `MATCH (start)-[]->(end) WHERE start.name = "X" RETURN ...` (single pattern)
+- **Status**: 🔴 NEEDS INVESTIGATION - Grammar support for comma-separated patterns
+- **Priority**: Medium - Advanced querying functionality
 
-**Root Cause:**
-- `register_edge_variable` only set type for new variables
-- When a variable already existed, the type was not updated
+### Long Relationship Chains (3+ relationships) (BUG 🔴)
+- **Issue**: Complex chains with 3+ relationships fail with "Parse error at line 1, column 1498: syntax error"
+- **Root Cause**: Path pattern complexity handling in grammar becomes problematic with longer chains
+- **Location**: Grammar rules for path patterns in `cypher_gram.y`
+- **Examples**: 
+  - Fails: `MATCH (start)-[]->(n1)-[]->(n2)-[]->(end) WHERE start.name = "Chain1" RETURN ...`
+  - Works: `MATCH (a)-[]->(b)-[]->(c) RETURN ...` (3 nodes, 2 relationships)
+- **Status**: 🔴 NEEDS INVESTIGATION - Path pattern complexity limits
+- **Priority**: Medium - Advanced pattern matching
 
-**Fix Applied:**
-- Modified `register_edge_variable` to always find and update the variable type
-- Same fix applied to `register_node_variable` for consistency
-- Both functions now correctly update variable types even for existing variables
-
-**Files Modified:**
-- `src/backend/transform/cypher_transform.c:418-431` - Fixed register_edge_variable
-- `src/backend/transform/cypher_transform.c:407-420` - Fixed register_node_variable
+### EXISTS Keyword Implementation (LIMITATION ⏸️)
+- **Issue**: EXISTS patterns not supported - `WHERE EXISTS((n)-[:TYPE]->())` fails with syntax error
+- **Root Cause**: EXISTS keyword defined in tokens but not implemented in grammar
+- **Location**: Missing grammar rules in `cypher_gram.y` for EXISTS expressions
+- **Examples**: 
+  - Not supported: `MATCH (n:Test) WHERE EXISTS((n)-[:CONNECTS]->()) RETURN n.name`
+  - Not supported: `MATCH (n:Test) WHERE EXISTS((n)-[]->(:Test)) RETURN n.name`
+- **Status**: ⏸️ NOT IMPLEMENTED - Expected limitation, requires feature implementation
+- **Priority**: High - Common Cypher functionality needed for advanced queries
 
 ---
 
-### Issue: Test Expectations Incorrect for Basic Executor Tests
-**Status**: Open  
-**Priority**: Low  
-**Test Issue**: Not a code bug
+## Test Coverage Summary
 
-**Description:**
-Several executor tests expect operations to fail when they actually succeed.
+### ✅ Successfully Working Anonymous Entity Features:
+- Anonymous node creation and matching: `CREATE ()`, `MATCH () RETURN COUNT(*)`
+- Anonymous relationship creation: `CREATE (a)-[]->(b)`
+- Simple chained anonymous relationships: `MATCH (a)-[]->(b)-[]->(c) RETURN ...`
+- Self-referencing patterns: `MATCH (n)-[]->(n) WHERE n.name = "Self" RETURN n.name`
+- Basic entity aliasing verification
+- Database state analysis queries
 
-**Affected Tests:**
-- `test_executor_basic.c:113` - CREATE expected to fail but succeeds
-- `test_executor_basic.c:123` - MATCH expected to fail but succeeds  
-- `test_executor_basic.c:280` - CREATE with WHERE expected to fail but succeeds
+### 🔴 Documented as Parser Bugs:
+- Mixed named/anonymous patterns: `(start)-[]->(middle)-[r:LINKX]->(end)`
+- Multiple patterns in single MATCH: `(start)-[]->(end), (other)-[]->(end)`
+- Long relationship chains: `(start)-[]->(n1)-[]->(n2)-[]->(end)`
 
-**Root Cause:**
-- Tests may be outdated or have incorrect expectations
-- Tests might be checking for specific error conditions that no longer apply
+### ⏸️ Expected Limitations:
+- EXISTS patterns: `WHERE EXISTS((n)-[:TYPE]->())` - Not yet implemented
 
-**Solution Approach:**
-1. Review test expectations and update to match current behavior
-2. Determine if tests are checking for valid error conditions
-3. Update assertions to match correct behavior
+**Test Files Affected:**
+- `tests/functional/11_anonymous_entity_test_complex.sql` - Contains documented bugs as comments
+- Parser error locations: columns 49, 1386, 1498 respectively
 
 ---
 

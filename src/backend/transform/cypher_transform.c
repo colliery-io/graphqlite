@@ -57,6 +57,11 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->variable_capacity = INITIAL_VARIABLE_CAPACITY;
     ctx->variable_count = 0;
     
+    /* Initialize path variable tracking */
+    ctx->path_variables = NULL;
+    ctx->path_variable_count = 0;
+    ctx->path_variable_capacity = 0;
+    
     ctx->query_type = QUERY_TYPE_UNKNOWN;
     ctx->has_error = false;
     ctx->global_alias_counter = 0;
@@ -101,6 +106,13 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         free(ctx->variables[i].table_alias);
     }
     free(ctx->variables);
+    
+    /* Free path variables */
+    for (int i = 0; i < ctx->path_variable_count; i++) {
+        free(ctx->path_variables[i].name);
+        /* Note: elements list is owned by AST, don't free it */
+    }
+    free(ctx->path_variables);
     
     /* Free SQL builder buffers */
     free(ctx->sql_builder.from_clause);
@@ -435,6 +447,41 @@ int register_edge_variable(cypher_transform_context *ctx, const char *name, cons
     return result;
 }
 
+/* Register a path variable */
+int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path)
+{
+    /* For path variables, we use a special alias that references the path elements */
+    char alias[64];
+    snprintf(alias, sizeof(alias), "_path_%s", name);
+    
+    int result = register_variable(ctx, name, alias);
+    if (result == 0) {
+        /* Find the variable and set its type to path */
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (strcmp(ctx->variables[i].name, name) == 0) {
+                ctx->variables[i].type = VAR_TYPE_PATH;
+                break;
+            }
+        }
+        
+        /* Store path variable metadata */
+        if (ctx->path_variable_count >= ctx->path_variable_capacity) {
+            int new_capacity = ctx->path_variable_capacity == 0 ? 4 : ctx->path_variable_capacity * 2;
+            path_variable *new_path_vars = realloc(ctx->path_variables, new_capacity * sizeof(path_variable));
+            if (!new_path_vars) {
+                return -1;
+            }
+            ctx->path_variables = new_path_vars;
+            ctx->path_variable_capacity = new_capacity;
+        }
+        
+        ctx->path_variables[ctx->path_variable_count].name = strdup(name);
+        ctx->path_variables[ctx->path_variable_count].elements = path->elements;
+        ctx->path_variable_count++;
+    }
+    return result;
+}
+
 /* Check if a variable is an edge variable */
 bool is_edge_variable(cypher_transform_context *ctx, const char *name)
 {
@@ -444,6 +491,28 @@ bool is_edge_variable(cypher_transform_context *ctx, const char *name)
         }
     }
     return false;
+}
+
+/* Check if a variable is a path variable */
+bool is_path_variable(cypher_transform_context *ctx, const char *name)
+{
+    for (int i = 0; i < ctx->variable_count; i++) {
+        if (strcmp(ctx->variables[i].name, name) == 0) {
+            return ctx->variables[i].type == VAR_TYPE_PATH;
+        }
+    }
+    return false;
+}
+
+/* Get path variable metadata */
+path_variable* get_path_variable(cypher_transform_context *ctx, const char *name)
+{
+    for (int i = 0; i < ctx->path_variable_count; i++) {
+        if (strcmp(ctx->path_variables[i].name, name) == 0) {
+            return &ctx->path_variables[i];
+        }
+    }
+    return NULL;
 }
 
 /* Entity management (AGE-style) */

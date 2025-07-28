@@ -66,10 +66,11 @@ static int execute_match_create_return_query(cypher_executor *executor, cypher_m
 static int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
 static int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result);
 static int delete_edge_by_id(cypher_executor *executor, int64_t edge_id);
-static int delete_node_by_id(cypher_executor *executor, int64_t node_id);
+static int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach);
 static int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result);
 static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result, cypher_transform_context *ctx);
 static agtype_value* create_property_agtype_value(const char* value);
+static agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_context *ctx, const char *path_name, const char *json_ids);
 
 /* Create empty result */
 static cypher_result* create_empty_result(void)
@@ -718,8 +719,12 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
                     if (item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
                         cypher_identifier *ident = (cypher_identifier*)item->expr;
                         
-                        /* Check if this is an edge variable */
-                        if (ctx && is_edge_variable(ctx, ident->name)) {
+                        /* Check if this is a path variable */
+                        if (ctx && is_path_variable(ctx, ident->name)) {
+                            CYPHER_DEBUG("Executor: Processing path variable '%s' with value: %s", ident->name, value);
+                            /* Parse the JSON array of element IDs and build path object */
+                            result->agtype_data[current_row][col] = build_path_from_ids(executor, ctx, ident->name, value);
+                        } else if (ctx && is_edge_variable(ctx, ident->name)) {
                             /* Parse the edge ID from the SQL result */
                             int64_t edge_id = atoll(value);
                             
@@ -836,6 +841,188 @@ static agtype_value* create_property_agtype_value(const char* value)
     
     /* Default to string */
     return agtype_value_create_string(value);
+}
+
+/* Build a path agtype value from JSON array of element IDs */
+static agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_context *ctx, const char *path_name, const char *json_ids)
+{
+    CYPHER_DEBUG("build_path_from_ids called: path_name='%s', json_ids='%s'", 
+                 path_name ? path_name : "NULL", json_ids ? json_ids : "NULL");
+    
+    if (!executor || !ctx || !path_name || !json_ids) {
+        CYPHER_DEBUG("build_path_from_ids: Missing required parameters");
+        return agtype_value_create_null();
+    }
+    
+    /* Get path variable metadata */
+    path_variable *path_var = get_path_variable(ctx, path_name);
+    if (!path_var || !path_var->elements) {
+        CYPHER_DEBUG("build_path_from_ids: Failed to get path variable metadata for '%s'", path_name);
+        return agtype_value_create_null();
+    }
+    CYPHER_DEBUG("build_path_from_ids: Found path metadata with %d elements", path_var->elements->count);
+    
+    /* Parse the JSON array of IDs (simple parsing for "[id1,id2,id3]" format) */
+    if (json_ids[0] != '[') {
+        CYPHER_DEBUG("build_path_from_ids: JSON doesn't start with '[': %s", json_ids);
+        return agtype_value_create_null();
+    }
+    CYPHER_DEBUG("build_path_from_ids: Starting JSON parsing");
+    
+    /* Count elements in the JSON array */
+    int id_count = 0;
+    for (const char *p = json_ids + 1; *p && *p != ']'; p++) {
+        if (*p == ',' || (*p >= '0' && *p <= '9')) {
+            if (*p != ',' && (p == json_ids + 1 || *(p-1) == ',' || *(p-1) == '[')) {
+                id_count++;
+            }
+        }
+    }
+    
+    CYPHER_DEBUG("build_path_from_ids: Counted %d IDs in JSON", id_count);
+    
+    if (id_count != path_var->elements->count) {
+        /* Mismatch between expected elements and actual IDs */
+        CYPHER_DEBUG("build_path_from_ids: Mismatch - expected %d elements, got %d IDs", 
+                     path_var->elements->count, id_count);
+        return agtype_value_create_null();
+    }
+    
+    /* Extract IDs and create agtype values for each element */
+    agtype_value **path_elements = malloc(id_count * sizeof(agtype_value*));
+    if (!path_elements) {
+        return agtype_value_create_null();
+    }
+    
+    /* Parse IDs from JSON array */
+    const char *p = json_ids + 1; /* Skip opening bracket */
+    int elem_index = 0;
+    char id_buffer[32];
+    int id_pos = 0;
+    
+    CYPHER_DEBUG("build_path_from_ids: Parsing JSON array: %s", json_ids);
+    while (*p && *p != ']' && elem_index < id_count) {
+        if (*p >= '0' && *p <= '9') {
+            if (id_pos < sizeof(id_buffer) - 1) {
+                id_buffer[id_pos++] = *p;
+            }
+        } else if (*p == ',') {
+            if (id_pos > 0) {
+                id_buffer[id_pos] = '\0';
+                int64_t element_id = atoll(id_buffer);
+                
+                /* Create agtype value based on element type */
+                ast_node *element = path_var->elements->items[elem_index];
+                if (element->type == AST_NODE_NODE_PATTERN) {
+                    /* Create vertex */
+                    cypher_node_pattern *node = (cypher_node_pattern*)element;
+                    CYPHER_DEBUG("build_path_from_ids: Creating vertex for element %d with ID %lld", elem_index, (long long)element_id);
+                    path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, node->label);
+                    CYPHER_DEBUG("build_path_from_ids: Created vertex %p", (void*)path_elements[elem_index]);
+                } else if (element->type == AST_NODE_REL_PATTERN) {
+                    /* Create edge - need to query for edge details */
+                    CYPHER_DEBUG("build_path_from_ids: Creating edge for element %d with ID %lld", elem_index, (long long)element_id);
+                    sqlite3_stmt *edge_stmt;
+                    const char *edge_sql = "SELECT source_id, target_id, type FROM edges WHERE id = ?";
+                    if (sqlite3_prepare_v2(executor->db, edge_sql, -1, &edge_stmt, NULL) == SQLITE_OK) {
+                        sqlite3_bind_int64(edge_stmt, 1, element_id);
+                        if (sqlite3_step(edge_stmt) == SQLITE_ROW) {
+                            int64_t source_id = sqlite3_column_int64(edge_stmt, 0);
+                            int64_t target_id = sqlite3_column_int64(edge_stmt, 1);
+                            const char *type = (const char*)sqlite3_column_text(edge_stmt, 2);
+                            path_elements[elem_index] = agtype_value_create_edge_with_properties(executor->db, element_id, type, source_id, target_id);
+                            CYPHER_DEBUG("build_path_from_ids: Created edge %p", (void*)path_elements[elem_index]);
+                        } else {
+                            CYPHER_DEBUG("build_path_from_ids: No edge found for ID %lld", (long long)element_id);
+                            path_elements[elem_index] = agtype_value_create_null();
+                        }
+                        sqlite3_finalize(edge_stmt);
+                    } else {
+                        CYPHER_DEBUG("build_path_from_ids: Failed to prepare edge query");
+                        path_elements[elem_index] = agtype_value_create_null();
+                    }
+                } else {
+                    CYPHER_DEBUG("build_path_from_ids: Unknown element type at index %d", elem_index);
+                    path_elements[elem_index] = agtype_value_create_null();
+                }
+                
+                elem_index++;
+                id_pos = 0;
+                CYPHER_DEBUG("build_path_from_ids: Finished element %d, moving to next", elem_index - 1);
+            }
+        }
+        p++;
+    }
+    
+    /* Handle the last element if there's still data in the buffer */
+    if (id_pos > 0 && elem_index < id_count) {
+        id_buffer[id_pos] = '\0';
+        int64_t element_id = atoll(id_buffer);
+        
+        CYPHER_DEBUG("build_path_from_ids: Processing final element %d with ID %lld", elem_index, (long long)element_id);
+        
+        /* Create agtype value based on element type */
+        ast_node *element = path_var->elements->items[elem_index];
+        if (element->type == AST_NODE_NODE_PATTERN) {
+            /* Create vertex */
+            cypher_node_pattern *node = (cypher_node_pattern*)element;
+            CYPHER_DEBUG("build_path_from_ids: Creating vertex for element %d with ID %lld", elem_index, (long long)element_id);
+            path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, node->label);
+            CYPHER_DEBUG("build_path_from_ids: Created vertex %p", (void*)path_elements[elem_index]);
+        } else if (element->type == AST_NODE_REL_PATTERN) {
+            /* Create edge - need to query for edge details */
+            CYPHER_DEBUG("build_path_from_ids: Creating edge for element %d with ID %lld", elem_index, (long long)element_id);
+            sqlite3_stmt *edge_stmt;
+            const char *edge_sql = "SELECT source_id, target_id, type FROM edges WHERE id = ?";
+            if (sqlite3_prepare_v2(executor->db, edge_sql, -1, &edge_stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_int64(edge_stmt, 1, element_id);
+                if (sqlite3_step(edge_stmt) == SQLITE_ROW) {
+                    int64_t source_id = sqlite3_column_int64(edge_stmt, 0);
+                    int64_t target_id = sqlite3_column_int64(edge_stmt, 1);
+                    const char *type = (const char*)sqlite3_column_text(edge_stmt, 2);
+                    path_elements[elem_index] = agtype_value_create_edge_with_properties(executor->db, element_id, type, source_id, target_id);
+                    CYPHER_DEBUG("build_path_from_ids: Created edge %p", (void*)path_elements[elem_index]);
+                } else {
+                    CYPHER_DEBUG("build_path_from_ids: No edge found for ID %lld", (long long)element_id);
+                    path_elements[elem_index] = agtype_value_create_null();
+                }
+                sqlite3_finalize(edge_stmt);
+            } else {
+                CYPHER_DEBUG("build_path_from_ids: Failed to prepare edge query");
+                path_elements[elem_index] = agtype_value_create_null();
+            }
+        } else {
+            CYPHER_DEBUG("build_path_from_ids: Unknown element type at index %d", elem_index);
+            path_elements[elem_index] = agtype_value_create_null();
+        }
+        elem_index++;
+    }
+    
+    CYPHER_DEBUG("build_path_from_ids: Parsed all elements, elem_index = %d, expected = %d", elem_index, id_count);
+    
+    /* Check if we parsed all elements */
+    if (elem_index != id_count) {
+        CYPHER_DEBUG("build_path_from_ids: ERROR - only parsed %d elements but expected %d", elem_index, id_count);
+        for (int i = 0; i < elem_index; i++) {
+            /* Free already allocated elements */
+            agtype_value_free(path_elements[i]);
+        }
+        free(path_elements);
+        return agtype_value_create_null();
+    }
+    
+    CYPHER_DEBUG("build_path_from_ids: About to create path agtype value with %d elements", id_count);
+    
+    /* Create path agtype value */
+    agtype_value *path_value = agtype_build_path(path_elements, id_count);
+    
+    CYPHER_DEBUG("build_path_from_ids: Created path agtype value: %p", (void*)path_value);
+    
+    /* Cleanup */
+    free(path_elements);
+    
+    CYPHER_DEBUG("build_path_from_ids: Returning path value");
+    return path_value ? path_value : agtype_value_create_null();
 }
 
 /* Execute MATCH+CREATE query combination */
@@ -1325,7 +1512,7 @@ static int execute_match_delete_query(cypher_executor *executor, cypher_match *m
                             
                             CYPHER_DEBUG("Deleting node '%s' with ID %lld", item->variable, entity_id);
                             
-                            int delete_result = delete_node_by_id(executor, entity_id);
+                            int delete_result = delete_node_by_id(executor, entity_id, delete_clause->detach);
                             if (delete_result == 0) {
                                 deleted_nodes++;
                             } else {
@@ -1432,30 +1619,46 @@ static int delete_edge_by_id(cypher_executor *executor, int64_t edge_id)
 }
 
 /* Delete a node by ID */
-static int delete_node_by_id(cypher_executor *executor, int64_t node_id)
+static int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach)
 {
     if (!executor || !executor->db) {
         return -1;
     }
     
-    CYPHER_DEBUG("Deleting node with ID %lld", node_id);
+    CYPHER_DEBUG("Deleting node with ID %lld (detach: %s)", node_id, detach ? "true" : "false");
     
-    /* Check for connected edges (constraint enforcement) */
-    char check_sql[256];
-    snprintf(check_sql, sizeof(check_sql), "SELECT COUNT(*) FROM edges WHERE source_id = %lld OR target_id = %lld", node_id, node_id);
-    
-    sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(executor->db, check_sql, -1, &stmt, NULL);
-    if (rc == SQLITE_OK) {
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            int edge_count = sqlite3_column_int(stmt, 0);
-            if (edge_count > 0) {
-                sqlite3_finalize(stmt);
-                CYPHER_DEBUG("Cannot delete node with ID %lld: has %d connected edges", node_id, edge_count);
-                return -1; /* Node has connected edges */
-            }
+    if (detach) {
+        /* DETACH DELETE: First delete all connected edges */
+        char delete_edges_sql[256];
+        snprintf(delete_edges_sql, sizeof(delete_edges_sql), 
+                 "DELETE FROM edges WHERE source_id = %lld OR target_id = %lld", node_id, node_id);
+        
+        char *err_msg = NULL;
+        int rc = sqlite3_exec(executor->db, delete_edges_sql, NULL, NULL, &err_msg);
+        if (rc != SQLITE_OK) {
+            CYPHER_DEBUG("Failed to delete connected edges for node %lld: %s", node_id, err_msg ? err_msg : "unknown error");
+            if (err_msg) sqlite3_free(err_msg);
+            return -1;
         }
-        sqlite3_finalize(stmt);
+        CYPHER_DEBUG("Deleted all connected edges for node %lld", node_id);
+    } else {
+        /* Regular DELETE: Check for connected edges (constraint enforcement) */
+        char check_sql[256];
+        snprintf(check_sql, sizeof(check_sql), "SELECT COUNT(*) FROM edges WHERE source_id = %lld OR target_id = %lld", node_id, node_id);
+        
+        sqlite3_stmt *stmt;
+        int rc = sqlite3_prepare_v2(executor->db, check_sql, -1, &stmt, NULL);
+        if (rc == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                int edge_count = sqlite3_column_int(stmt, 0);
+                if (edge_count > 0) {
+                    sqlite3_finalize(stmt);
+                    CYPHER_DEBUG("Cannot delete node with ID %lld: has %d connected edges", node_id, edge_count);
+                    return -1; /* Node has connected edges */
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
     }
     
     /* Delete node properties first */
@@ -1464,6 +1667,7 @@ static int delete_node_by_id(cypher_executor *executor, int64_t node_id)
     };
     
     char sql[256];
+    int rc;
     for (int i = 0; i < 4; i++) {
         snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE node_id = %lld", prop_tables[i], node_id);
         char *err_msg = NULL;

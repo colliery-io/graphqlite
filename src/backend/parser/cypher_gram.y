@@ -67,7 +67,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %token NOT_EQ LT_EQ GT_EQ DOT_DOT TYPECAST PLUS_EQ
 
 /* Keywords */
-%token MATCH RETURN CREATE WHERE WITH SET DELETE REMOVE MERGE UNWIND
+%token MATCH RETURN CREATE WHERE WITH SET DELETE REMOVE MERGE UNWIND DETACH
 %token OPTIONAL DISTINCT ORDER BY SKIP LIMIT AS ASC DESC
 %token AND OR NOT IN IS NULL TRUE FALSE
 %token UNION ALL CASE WHEN THEN ELSE END
@@ -86,6 +86,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <list> pattern_list return_item_list set_item_list delete_item_list
 %type <set_item> set_item
 %type <delete_item> delete_item
+%type <boolean> detach_opt
 %type <path> path
 %type <node_pattern> node_pattern
 %type <rel_pattern> rel_pattern
@@ -288,9 +289,9 @@ set_clause:
 
 /* DELETE clause */
 delete_clause:
-    DELETE delete_item_list
+    detach_opt DELETE delete_item_list
         {
-            $$ = make_cypher_delete($2);
+            $$ = make_cypher_delete($3, $1);
         }
     ;
 
@@ -312,6 +313,17 @@ delete_item:
         {
             $$ = make_delete_item($1);
             free($1);
+        }
+    ;
+
+detach_opt:
+    DETACH
+        {
+            $$ = true;
+        }
+    | /* EMPTY */
+        {
+            $$ = false;
         }
     ;
 
@@ -352,6 +364,12 @@ path:
             free($1);                   /* Free the path structure */
             
             $$ = make_path(new_elements);
+        }
+    | IDENTIFIER '=' path
+        {
+            $$ = make_path_with_var($1, $3->elements);
+            /* Free the anonymous path structure, but keep its elements */
+            free($3);
         }
     ;
 

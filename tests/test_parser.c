@@ -1026,6 +1026,58 @@ static void test_three_relationship_types(void)
     cypher_parser_free_result(result);
 }
 
+static void test_path_variable_assignment(void)
+{
+    const char *query = "MATCH path = (a)-[r]->(b) RETURN path";
+    ast_node *result = parse_cypher_query(query);
+    
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+    
+    cypher_query *query_ast = (cypher_query*)result;
+    CU_ASSERT_PTR_NOT_NULL(query_ast->clauses);
+    CU_ASSERT_EQUAL(query_ast->clauses->count, 2); /* MATCH and RETURN */
+    
+    /* Validate MATCH clause */
+    ast_node *match_node = query_ast->clauses->items[0];
+    CU_ASSERT_EQUAL(match_node->type, AST_NODE_MATCH);
+    
+    cypher_match *match = (cypher_match*)match_node;
+    CU_ASSERT_PTR_NOT_NULL(match->pattern);
+    CU_ASSERT_EQUAL(match->pattern->count, 1);
+    
+    /* Validate path has variable name assigned */
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    CU_ASSERT_PTR_NOT_NULL(path);
+    CU_ASSERT_EQUAL(path->base.type, AST_NODE_PATH);
+    CU_ASSERT_PTR_NOT_NULL(path->var_name);
+    CU_ASSERT_STRING_EQUAL(path->var_name, "path");
+    
+    /* Validate path structure: node, rel, node */
+    CU_ASSERT_PTR_NOT_NULL(path->elements);
+    CU_ASSERT_EQUAL(path->elements->count, 3);
+    
+    /* Validate first node */
+    ast_node *node1 = path->elements->items[0];
+    CU_ASSERT_EQUAL(node1->type, AST_NODE_NODE_PATTERN);
+    cypher_node_pattern *np1 = (cypher_node_pattern*)node1;
+    CU_ASSERT_STRING_EQUAL(np1->variable, "a");
+    
+    /* Validate relationship */
+    ast_node *rel_node = path->elements->items[1];
+    CU_ASSERT_EQUAL(rel_node->type, AST_NODE_REL_PATTERN);
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)rel_node;
+    CU_ASSERT_STRING_EQUAL(rel->variable, "r");
+    
+    /* Validate second node */
+    ast_node *node2 = path->elements->items[2];
+    CU_ASSERT_EQUAL(node2->type, AST_NODE_NODE_PATTERN);
+    cypher_node_pattern *np2 = (cypher_node_pattern*)node2;
+    CU_ASSERT_STRING_EQUAL(np2->variable, "b");
+    
+    cypher_parser_free_result(result);
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -1072,7 +1124,8 @@ int init_parser_suite(void)
         !CU_add_test(suite, "DETACH DELETE parsing", test_detach_delete_parsing) ||
         !CU_add_test(suite, "OPTIONAL MATCH parsing", test_optional_match_parsing) ||
         !CU_add_test(suite, "Multiple relationship types", test_multiple_relationship_types) ||
-        !CU_add_test(suite, "Three relationship types", test_three_relationship_types))
+        !CU_add_test(suite, "Three relationship types", test_three_relationship_types) ||
+        !CU_add_test(suite, "Path variable assignment", test_path_variable_assignment))
     {
         return CU_get_error();
     }

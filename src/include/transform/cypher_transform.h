@@ -23,6 +23,12 @@ struct transform_entity {
     bool is_current_clause;         /* True if declared in current clause, false if inherited */
 };
 
+/* Path variable metadata */
+typedef struct path_variable {
+    char *name;                     /* Path variable name */
+    ast_list *elements;             /* AST nodes in the path (nodes and relationships) */
+} path_variable;
+
 /* Transform context - tracks state during AST transformation */
 struct cypher_transform_context {
     sqlite3 *db;                    /* SQLite database connection */
@@ -32,6 +38,11 @@ struct cypher_transform_context {
     int entity_count;
     int entity_capacity;
     
+    /* Path variable tracking */
+    path_variable *path_variables;  /* List of path variables */
+    int path_variable_count;
+    int path_variable_capacity;
+    
     /* Legacy variable tracking (will be phased out) */
     struct {
         char *name;                 /* Variable name (e.g., "n", "m") */
@@ -40,7 +51,8 @@ struct cypher_transform_context {
         bool is_bound;              /* Whether variable has a value */
         enum {
             VAR_TYPE_NODE,          /* Node variable */
-            VAR_TYPE_EDGE           /* Edge/relationship variable */
+            VAR_TYPE_EDGE,          /* Edge/relationship variable */
+            VAR_TYPE_PATH           /* Path variable */
         } type;                     /* Variable type */
     } *variables;
     int variable_count;
@@ -143,9 +155,12 @@ char* get_next_default_alias(cypher_transform_context *ctx);
 int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias);
+int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path);
 const char* lookup_variable_alias(cypher_transform_context *ctx, const char *name);
 bool is_variable_bound(cypher_transform_context *ctx, const char *name);
 bool is_edge_variable(cypher_transform_context *ctx, const char *name);
+bool is_path_variable(cypher_transform_context *ctx, const char *name);
+path_variable* get_path_variable(cypher_transform_context *ctx, const char *name);
 
 /* SQL generation helpers */
 void append_sql(cypher_transform_context *ctx, const char *format, ...);

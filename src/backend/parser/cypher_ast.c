@@ -194,6 +194,10 @@ void ast_node_free(ast_node *node)
             {
                 cypher_path *path = (cypher_path*)node;
                 ast_list_free(path->elements);
+                if (path->var_name) {
+                    free(path->var_name);
+                    path->var_name = NULL;
+                }
             }
             break;
             
@@ -428,7 +432,7 @@ cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr)
     return item;
 }
 
-cypher_delete* make_cypher_delete(ast_list *items)
+cypher_delete* make_cypher_delete(ast_list *items, bool detach)
 {
     cypher_delete *del = (cypher_delete*)ast_node_create(AST_NODE_DELETE, -1, sizeof(cypher_delete));
     if (!del) {
@@ -436,6 +440,7 @@ cypher_delete* make_cypher_delete(ast_list *items)
     }
     
     del->items = items;
+    del->detach = detach;
     return del;
 }
 
@@ -540,6 +545,20 @@ cypher_path* make_path(ast_list *elements)
     }
     
     path->elements = elements;
+    path->var_name = NULL;
+    return path;
+}
+
+cypher_path* make_path_with_var(char *var_name, ast_list *elements)
+{
+    cypher_path *path = make_path(elements);
+    if (!path) {
+        return NULL;
+    }
+    
+    path->var_name = var_name;
+    CYPHER_DEBUG("Created path variable: %s with %d elements", 
+                 var_name ? var_name : "NULL", elements ? elements->count : 0);
     return path;
 }
 

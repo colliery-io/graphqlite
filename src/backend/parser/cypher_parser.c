@@ -26,6 +26,7 @@ static struct {
     {"create", CYPHER_CREATE},
     {"delete", CYPHER_DELETE},
     {"desc", CYPHER_DESC},
+    {"detach", CYPHER_DETACH},
     {"distinct", CYPHER_DISTINCT},
     {"else", CYPHER_ELSE},
     {"end", CYPHER_END},
