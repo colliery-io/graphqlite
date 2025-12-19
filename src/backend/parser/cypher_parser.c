@@ -167,13 +167,14 @@ cypher_parser_context* cypher_parser_context_create(void)
     if (!context) {
         return NULL;
     }
-    
+
     context->scanner = NULL;
     context->result = NULL;
     context->error_message = NULL;
     context->error_location = -1;
     context->has_error = false;
-    
+    context->last_token_text = NULL;
+
     return context;
 }
 
@@ -182,16 +183,17 @@ void cypher_parser_context_destroy(cypher_parser_context *context)
     if (!context) {
         return;
     }
-    
+
     if (context->scanner) {
         cypher_scanner_destroy(context->scanner);
     }
-    
+
     if (context->result) {
         ast_node_free(context->result);
     }
-    
+
     free(context->error_message);
+    free(context->last_token_text);
     free(context);
 }
 

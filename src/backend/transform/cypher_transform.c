@@ -68,6 +68,12 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->error_message = NULL;
     ctx->in_comparison = false;
     
+    /* Initialize CTE prefix buffer (for variable-length relationships) */
+    ctx->cte_prefix = NULL;
+    ctx->cte_prefix_size = 0;
+    ctx->cte_prefix_capacity = 0;
+    ctx->cte_count = 0;
+
     /* Initialize SQL builder */
     ctx->sql_builder.from_clause = NULL;
     ctx->sql_builder.from_size = 0;
@@ -78,6 +84,10 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->sql_builder.where_clauses = NULL;
     ctx->sql_builder.where_size = 0;
     ctx->sql_builder.where_capacity = 0;
+    ctx->sql_builder.cte_clause = NULL;
+    ctx->sql_builder.cte_size = 0;
+    ctx->sql_builder.cte_capacity = 0;
+    ctx->sql_builder.cte_count = 0;
     ctx->sql_builder.using_builder = false;
     
     CYPHER_DEBUG("Created transform context %p", (void*)ctx);
@@ -114,11 +124,15 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     }
     free(ctx->path_variables);
     
+    /* Free CTE prefix buffer */
+    free(ctx->cte_prefix);
+
     /* Free SQL builder buffers */
     free(ctx->sql_builder.from_clause);
     free(ctx->sql_builder.join_clauses);
     free(ctx->sql_builder.where_clauses);
-    
+    free(ctx->sql_builder.cte_clause);
+
     /* Free buffers */
     free(ctx->sql_buffer);
     free(ctx->error_message);
@@ -221,11 +235,12 @@ int init_sql_builder(cypher_transform_context *ctx)
 void free_sql_builder(cypher_transform_context *ctx)
 {
     if (!ctx) return;
-    
+
     free(ctx->sql_builder.from_clause);
     free(ctx->sql_builder.join_clauses);
     free(ctx->sql_builder.where_clauses);
-    
+    free(ctx->sql_builder.cte_clause);
+
     ctx->sql_builder.from_clause = NULL;
     ctx->sql_builder.from_size = 0;
     ctx->sql_builder.from_capacity = 0;
@@ -235,6 +250,10 @@ void free_sql_builder(cypher_transform_context *ctx)
     ctx->sql_builder.where_clauses = NULL;
     ctx->sql_builder.where_size = 0;
     ctx->sql_builder.where_capacity = 0;
+    ctx->sql_builder.cte_clause = NULL;
+    ctx->sql_builder.cte_size = 0;
+    ctx->sql_builder.cte_capacity = 0;
+    ctx->sql_builder.cte_count = 0;
     ctx->sql_builder.using_builder = false;
 }
 
@@ -301,22 +320,22 @@ void append_join_clause(cypher_transform_context *ctx, const char *format, ...)
 void append_where_clause(cypher_transform_context *ctx, const char *format, ...)
 {
     if (!ctx || !format) return;
-    
+
     va_list args;
     va_start(args, format);
-    
+
     /* Calculate required size */
     va_list args_copy;
     va_copy(args_copy, args);
     int needed = vsnprintf(NULL, 0, format, args_copy);
     va_end(args_copy);
-    
+
     /* Grow buffer if needed */
-    grow_builder_buffer(&ctx->sql_builder.where_clauses, 
-                       &ctx->sql_builder.where_size, 
-                       &ctx->sql_builder.where_capacity, 
+    grow_builder_buffer(&ctx->sql_builder.where_clauses,
+                       &ctx->sql_builder.where_size,
+                       &ctx->sql_builder.where_capacity,
                        needed);
-    
+
     /* Append to buffer */
     if (ctx->sql_builder.where_clauses) {
         int written = vsnprintf(ctx->sql_builder.where_clauses + ctx->sql_builder.where_size,
@@ -324,7 +343,37 @@ void append_where_clause(cypher_transform_context *ctx, const char *format, ...)
                                format, args);
         ctx->sql_builder.where_size += written;
     }
-    
+
+    va_end(args);
+}
+
+void append_cte_clause(cypher_transform_context *ctx, const char *format, ...)
+{
+    if (!ctx || !format) return;
+
+    va_list args;
+    va_start(args, format);
+
+    /* Calculate required size */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int needed = vsnprintf(NULL, 0, format, args_copy);
+    va_end(args_copy);
+
+    /* Grow buffer if needed */
+    grow_builder_buffer(&ctx->sql_builder.cte_clause,
+                       &ctx->sql_builder.cte_size,
+                       &ctx->sql_builder.cte_capacity,
+                       needed);
+
+    /* Append to buffer */
+    if (ctx->sql_builder.cte_clause) {
+        int written = vsnprintf(ctx->sql_builder.cte_clause + ctx->sql_builder.cte_size,
+                               ctx->sql_builder.cte_capacity - ctx->sql_builder.cte_size,
+                               format, args);
+        ctx->sql_builder.cte_size += written;
+    }
+
     va_end(args);
 }
 
@@ -333,27 +382,97 @@ int finalize_sql_generation(cypher_transform_context *ctx)
     if (!ctx || !ctx->sql_builder.using_builder) {
         return 0; /* Not using builder, nothing to do */
     }
-    
+
     /* Clear existing SQL buffer */
     ctx->sql_size = 0;
     ctx->sql_buffer[0] = '\0';
-    
-    /* Combine: SELECT + FROM + JOINs + WHERE */
+
+    /* Combine: CTE + SELECT + FROM + JOINs + WHERE */
+
+    /* Add CTE clause if present (for variable-length relationships) */
+    if (ctx->sql_builder.cte_clause && ctx->sql_builder.cte_size > 0) {
+        append_sql(ctx, "%s ", ctx->sql_builder.cte_clause);
+    }
+
     append_sql(ctx, "SELECT * "); /* Will be replaced by RETURN clause */
-    
+
     if (ctx->sql_builder.from_clause) {
         append_sql(ctx, "%s", ctx->sql_builder.from_clause);
     }
-    
+
     if (ctx->sql_builder.join_clauses) {
         append_sql(ctx, "%s", ctx->sql_builder.join_clauses);
     }
-    
+
     if (ctx->sql_builder.where_clauses) {
         append_sql(ctx, " WHERE %s", ctx->sql_builder.where_clauses);
     }
-    
+
     return 0;
+}
+
+/* CTE prefix functions for variable-length relationships */
+/* These work with both builder and non-builder SQL generation modes */
+
+void append_cte_prefix(cypher_transform_context *ctx, const char *format, ...)
+{
+    if (!ctx || !format) return;
+
+    va_list args;
+    va_start(args, format);
+
+    /* Calculate required size */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int needed = vsnprintf(NULL, 0, format, args_copy);
+    va_end(args_copy);
+
+    /* Grow buffer if needed */
+    grow_builder_buffer(&ctx->cte_prefix,
+                       &ctx->cte_prefix_size,
+                       &ctx->cte_prefix_capacity,
+                       needed);
+
+    /* Append to buffer */
+    if (ctx->cte_prefix) {
+        int written = vsnprintf(ctx->cte_prefix + ctx->cte_prefix_size,
+                               ctx->cte_prefix_capacity - ctx->cte_prefix_size,
+                               format, args);
+        ctx->cte_prefix_size += written;
+    }
+
+    va_end(args);
+}
+
+void prepend_cte_to_sql(cypher_transform_context *ctx)
+{
+    if (!ctx || !ctx->cte_prefix || ctx->cte_prefix_size == 0) {
+        return;
+    }
+
+    CYPHER_DEBUG("Prepending CTE prefix (%zu bytes) to SQL", ctx->cte_prefix_size);
+
+    /* Calculate new size needed */
+    size_t new_size = ctx->cte_prefix_size + ctx->sql_size + 2; /* +2 for space and null */
+
+    /* Allocate new buffer */
+    char *new_buffer = malloc(new_size);
+    if (!new_buffer) {
+        return;
+    }
+
+    /* Copy CTE prefix, then space, then original SQL */
+    memcpy(new_buffer, ctx->cte_prefix, ctx->cte_prefix_size);
+    new_buffer[ctx->cte_prefix_size] = ' ';
+    memcpy(new_buffer + ctx->cte_prefix_size + 1, ctx->sql_buffer, ctx->sql_size + 1);
+
+    /* Replace old buffer */
+    free(ctx->sql_buffer);
+    ctx->sql_buffer = new_buffer;
+    ctx->sql_size = ctx->cte_prefix_size + 1 + ctx->sql_size;
+    ctx->sql_capacity = new_size;
+
+    CYPHER_DEBUG("New SQL after CTE prepend: %s", ctx->sql_buffer);
 }
 
 /* Variable management */
@@ -707,7 +826,10 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     if (!result) {
         goto error;
     }
-    
+
+    /* Prepend CTE prefix if we have variable-length relationships */
+    prepend_cte_to_sql(ctx);
+
     /* Prepare the SQL statement */
     CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
     
@@ -728,6 +850,140 @@ error:
         error_result->error_message = strdup(ctx->error_message ? ctx->error_message : "Transform failed");
     }
     return error_result;
+}
+
+/* Variable-length relationship CTE generation */
+
+/**
+ * Generate a recursive CTE for variable-length relationship traversal.
+ *
+ * For a query like MATCH (a)-[*1..5]->(b), generates:
+ *
+ * WITH RECURSIVE varlen_cte_N(start_id, end_id, depth, path_ids, visited) AS (
+ *     -- Base case: direct edges
+ *     SELECT e.source_id, e.target_id, 1,
+ *            CAST(e.source_id || ',' || e.target_id AS TEXT),
+ *            ',' || e.source_id || ',' || e.target_id || ','
+ *     FROM edges e
+ *     WHERE e.type = 'TYPE'  -- if type specified
+ *
+ *     UNION ALL
+ *
+ *     -- Recursive case: extend paths
+ *     SELECT cte.start_id, e.target_id, cte.depth + 1,
+ *            cte.path_ids || ',' || e.target_id,
+ *            cte.visited || e.target_id || ','
+ *     FROM varlen_cte_N cte
+ *     JOIN edges e ON e.source_id = cte.end_id
+ *     WHERE cte.depth < max_hops
+ *       AND cte.visited NOT LIKE '%,' || e.target_id || ',%'  -- cycle prevention
+ *       AND e.type = 'TYPE'  -- if type specified
+ * )
+ */
+int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
+                       const char *source_alias, const char *target_alias,
+                       const char *cte_name)
+{
+    (void)source_alias; /* Mark as intentionally unused for now */
+    (void)target_alias; /* Mark as intentionally unused for now */
+
+    if (!ctx || !rel || !rel->varlen || !cte_name) {
+        return -1;
+    }
+
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    int min_hops = range->min_hops > 0 ? range->min_hops : 1;
+    int max_hops = range->max_hops > 0 ? range->max_hops : 100; /* Default max for unbounded */
+
+    CYPHER_DEBUG("Generating varlen CTE %s: min=%d, max=%d, type=%s",
+                 cte_name, min_hops, max_hops, rel->type ? rel->type : "<any>");
+
+    /* Build CTE header - use cte_prefix which works with both builder and non-builder modes */
+    if (ctx->cte_count == 0) {
+        append_cte_prefix(ctx, "WITH RECURSIVE ");
+    } else {
+        append_cte_prefix(ctx, ", ");
+    }
+
+    /* CTE column definitions */
+    append_cte_prefix(ctx, "%s(start_id, end_id, depth, path_ids, visited) AS (", cte_name);
+
+    /* Base case: direct edges (depth = 1) */
+    /* Handle relationship direction */
+    const char *src_col = "source_id";
+    const char *tgt_col = "target_id";
+    if (rel->left_arrow && !rel->right_arrow) {
+        /* <-[*]- reversed direction */
+        src_col = "target_id";
+        tgt_col = "source_id";
+    }
+
+    append_cte_prefix(ctx,
+        "SELECT e.%s, e.%s, 1, "
+        "CAST(e.%s || ',' || e.%s AS TEXT), "
+        "','|| e.%s || ',' || e.%s || ','  "
+        "FROM edges e",
+        src_col, tgt_col,
+        src_col, tgt_col,
+        src_col, tgt_col);
+
+    /* Add type constraint if specified */
+    if (rel->type) {
+        append_cte_prefix(ctx, " WHERE e.type = '%s'", rel->type);
+    } else if (rel->types && rel->types->count > 0) {
+        append_cte_prefix(ctx, " WHERE (");
+        for (int t = 0; t < rel->types->count; t++) {
+            if (t > 0) {
+                append_cte_prefix(ctx, " OR ");
+            }
+            cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+            append_cte_prefix(ctx, "e.type = '%s'", type_lit->value.string);
+        }
+        append_cte_prefix(ctx, ")");
+    }
+
+    /* Recursive case */
+    append_cte_prefix(ctx, " UNION ALL ");
+    append_cte_prefix(ctx,
+        "SELECT cte.start_id, e.%s, cte.depth + 1, "
+        "cte.path_ids || ',' || e.%s, "
+        "cte.visited || e.%s || ',' "
+        "FROM %s cte "
+        "JOIN edges e ON e.%s = cte.end_id "
+        "WHERE cte.depth < %d",
+        tgt_col, tgt_col, tgt_col,
+        cte_name,
+        src_col,
+        max_hops);
+
+    /* Add cycle detection */
+    append_cte_prefix(ctx,
+        " AND cte.visited NOT LIKE '%%,' || CAST(e.%s AS TEXT) || ',%%'",
+        tgt_col);
+
+    /* Add type constraint to recursive case */
+    if (rel->type) {
+        append_cte_prefix(ctx, " AND e.type = '%s'", rel->type);
+    } else if (rel->types && rel->types->count > 0) {
+        append_cte_prefix(ctx, " AND (");
+        for (int t = 0; t < rel->types->count; t++) {
+            if (t > 0) {
+                append_cte_prefix(ctx, " OR ");
+            }
+            cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+            append_cte_prefix(ctx, "e.type = '%s'", type_lit->value.string);
+        }
+        append_cte_prefix(ctx, ")");
+    }
+
+    /* Close CTE */
+    append_cte_prefix(ctx, ")");
+
+    ctx->cte_count++;
+
+    CYPHER_DEBUG("Generated CTE prefix: %s", ctx->cte_prefix);
+
+    return 0;
 }
 
 /* Result management */

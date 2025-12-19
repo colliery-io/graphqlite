@@ -197,7 +197,12 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
                 cypher_node_pattern *source_node = (cypher_node_pattern*)prev_element;
                 cypher_node_pattern *target_node = (cypher_node_pattern*)next_element;
-                
+
+                /* Skip variable-length relationships - they're handled in generate_relationship_match */
+                if (rel->varlen) {
+                    continue;
+                }
+
                 /* Get aliases using entity system (AGE-style) */
                 const char *source_alias, *target_alias, *edge_alias;
                 
@@ -506,10 +511,11 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node, int rel_index, bool optional)
 {
-    CYPHER_DEBUG("Generating %s match for relationship %s between nodes", 
+    CYPHER_DEBUG("Generating %s match for relationship %s between nodes (varlen=%s)",
                  optional ? "OPTIONAL" : "regular",
-                 rel->type ? rel->type : "<no type>");
-    
+                 rel->type ? rel->type : "<no type>",
+                 rel->varlen ? "yes" : "no");
+
     /* Get aliases using entity system (AGE-style) */
     const char *source_alias, *target_alias, *edge_alias;
     
@@ -574,8 +580,62 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         free(default_name);
     }
     
+    /* Handle variable-length relationships differently - use recursive CTE */
+    if (rel->varlen) {
+        CYPHER_DEBUG("Handling variable-length relationship");
+
+        /* Generate unique CTE name */
+        char cte_name[64];
+        snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", rel_index);
+
+        /* Generate the recursive CTE (appended to cte_prefix) */
+        if (generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to generate variable-length CTE");
+            return -1;
+        }
+
+        /* Get min/max hops for filtering */
+        cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+        int min_hops = range->min_hops > 0 ? range->min_hops : 1;
+
+        /* Join the main query with the CTE result */
+        /* The CTE gives us (start_id, end_id, depth, path_ids, visited) */
+        append_sql(ctx, ", %s AS %s", cte_name, edge_alias);
+
+        /* Add target node to FROM clause - needed for the CTE join */
+        /* This must be done BEFORE adding WHERE constraints that reference target_alias */
+        append_sql(ctx, ", nodes AS %s", target_alias);
+
+        CYPHER_DEBUG("Added varlen CTE join: %s for relationship between %s and %s",
+                     cte_name, source_alias, target_alias);
+
+        /* Store info for WHERE clause generation later */
+        /* We'll add the join conditions in the relationship constraint phase */
+        if (rel->variable) {
+            register_edge_variable(ctx, rel->variable, edge_alias);
+        }
+
+        /* We need to add WHERE constraints for the CTE join */
+        /* Check if this is the first constraint */
+        bool has_where = (strstr(ctx->sql_buffer, " WHERE ") != NULL);
+        if (!has_where) {
+            append_sql(ctx, " WHERE ");
+        } else {
+            append_sql(ctx, " AND ");
+        }
+        append_sql(ctx, "%s.start_id = %s.id AND %s.end_id = %s.id",
+                   edge_alias, source_alias, edge_alias, target_alias);
+
+        /* Add minimum depth constraint if > 1 */
+        if (min_hops > 1) {
+            append_sql(ctx, " AND %s.depth >= %d", edge_alias, min_hops);
+        }
+
+        return 0; /* Skip the rest of the relationship handling */
+    }
     /* Add edges table - use LEFT JOIN for optional relationships */
-    if (ctx->sql_builder.using_builder) {
+    else if (ctx->sql_builder.using_builder) {
         /* Using SQL builder */
         if (optional) {
             /* For OPTIONAL MATCH, we need to LEFT JOIN both the target node and the edge */
@@ -587,15 +647,15 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             if (!target_already_added && ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, target_alias)) {
                 target_already_added = true;
             }
-            
+
             if (!target_already_added) {
                 append_join_clause(ctx, " LEFT JOIN nodes AS %s ON 1=1", target_alias);
             }
-            
+
             /* Always add the edge JOIN as each relationship is unique */
-            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id", 
+            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id",
                               edge_alias, edge_alias, source_alias, edge_alias, target_alias);
-            
+
             /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
             if (rel->type) {
                 /* Single type (legacy support) */
@@ -621,9 +681,9 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         if (optional) {
             /* For OPTIONAL MATCH, we need to LEFT JOIN both the target node and the edge */
             append_sql(ctx, " LEFT JOIN nodes AS %s ON 1=1", target_alias);
-            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id", 
+            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id",
                        edge_alias, edge_alias, source_alias, edge_alias, target_alias);
-            
+
             /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
             if (rel->type) {
                 /* Single type (legacy support) */

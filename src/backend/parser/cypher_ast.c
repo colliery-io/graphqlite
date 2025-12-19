@@ -548,6 +548,35 @@ cypher_rel_pattern* make_rel_pattern_multi_type(char *variable, ast_list *types,
     return pattern;
 }
 
+cypher_rel_pattern* make_rel_pattern_varlen(char *variable, char *type, ast_node *properties, bool left_arrow, bool right_arrow, ast_node *varlen)
+{
+    cypher_rel_pattern *pattern = (cypher_rel_pattern*)ast_node_create(AST_NODE_REL_PATTERN, -1, sizeof(cypher_rel_pattern));
+    if (!pattern) {
+        return NULL;
+    }
+
+    pattern->variable = variable ? strdup(variable) : NULL;
+    pattern->type = type ? strdup(type) : NULL;
+    pattern->types = NULL;
+    pattern->properties = properties;
+    pattern->left_arrow = left_arrow;
+    pattern->right_arrow = right_arrow;
+    pattern->varlen = varlen;
+    return pattern;
+}
+
+cypher_varlen_range* make_varlen_range(int min_hops, int max_hops)
+{
+    cypher_varlen_range *range = (cypher_varlen_range*)ast_node_create(AST_NODE_VARLEN_RANGE, -1, sizeof(cypher_varlen_range));
+    if (!range) {
+        return NULL;
+    }
+
+    range->min_hops = min_hops;
+    range->max_hops = max_hops;
+    return range;
+}
+
 cypher_path* make_path(ast_list *elements)
 {
     cypher_path *path = (cypher_path*)ast_node_create(AST_NODE_PATH, -1, sizeof(cypher_path));

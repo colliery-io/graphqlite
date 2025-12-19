@@ -581,7 +581,10 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
         cypher_transform_free_context(ctx);
         return -1;
     }
-    
+
+    /* Prepend any CTE (Common Table Expression) for variable-length relationships */
+    prepend_cte_to_sql(ctx);
+
     CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
     
     /* Execute the SQL query */

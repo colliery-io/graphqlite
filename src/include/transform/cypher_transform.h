@@ -62,21 +62,33 @@ struct cypher_transform_context {
     char *sql_buffer;               /* Generated SQL query */
     size_t sql_size;
     size_t sql_capacity;
+
+    /* CTE prefix for recursive queries (variable-length relationships) */
+    /* This is separate from sql_builder to work with both builder and non-builder modes */
+    char *cte_prefix;
+    size_t cte_prefix_size;
+    size_t cte_prefix_capacity;
+    int cte_count;
     
     /* SQL builder for two-pass generation (OPTIONAL MATCH support) */
     struct {
         char *from_clause;          /* FROM nodes AS alias */
         size_t from_size;
         size_t from_capacity;
-        
+
         char *join_clauses;         /* LEFT JOIN ... LEFT JOIN ... */
         size_t join_size;
         size_t join_capacity;
-        
+
         char *where_clauses;        /* WHERE ... AND ... AND ... */
         size_t where_size;
         size_t where_capacity;
-        
+
+        char *cte_clause;           /* WITH RECURSIVE ... for variable-length paths */
+        size_t cte_size;
+        size_t cte_capacity;
+        int cte_count;              /* Number of CTEs generated */
+
         bool using_builder;         /* True when using two-pass generation */
     } sql_builder;
     
@@ -174,7 +186,15 @@ void free_sql_builder(cypher_transform_context *ctx);
 void append_from_clause(cypher_transform_context *ctx, const char *format, ...);
 void append_join_clause(cypher_transform_context *ctx, const char *format, ...);
 void append_where_clause(cypher_transform_context *ctx, const char *format, ...);
+void append_cte_clause(cypher_transform_context *ctx, const char *format, ...);
 int finalize_sql_generation(cypher_transform_context *ctx);
+
+/* Variable-length relationship SQL generation */
+int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
+                       const char *source_alias, const char *target_alias,
+                       const char *cte_name);
+void append_cte_prefix(cypher_transform_context *ctx, const char *format, ...);
+void prepend_cte_to_sql(cypher_transform_context *ctx);
 
 /* Result management */
 void cypher_free_result(cypher_query_result *result);

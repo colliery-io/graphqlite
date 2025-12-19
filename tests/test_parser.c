@@ -1078,6 +1078,237 @@ static void test_path_variable_assignment(void)
     cypher_parser_free_result(result);
 }
 
+/* Variable-length relationship tests */
+static void test_varlen_basic(void)
+{
+    const char *query = "MATCH (a)-[*]->(b) RETURN a, b";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+
+    /* Validate relationship has varlen */
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 1);  /* Default min */
+    CU_ASSERT_EQUAL(range->max_hops, -1); /* Unbounded */
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_bounded(void)
+{
+    const char *query = "MATCH (a)-[*1..5]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 1);
+    CU_ASSERT_EQUAL(range->max_hops, 5);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_min_bounded(void)
+{
+    const char *query = "MATCH (a)-[*2..]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 2);
+    CU_ASSERT_EQUAL(range->max_hops, -1); /* Unbounded max */
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_max_bounded(void)
+{
+    const char *query = "MATCH (a)-[*..3]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 1);  /* Default min */
+    CU_ASSERT_EQUAL(range->max_hops, 3);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_exact_hops(void)
+{
+    const char *query = "MATCH (a)-[*3]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 3);
+    CU_ASSERT_EQUAL(range->max_hops, 3); /* Exact: min == max */
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_with_type(void)
+{
+    const char *query = "MATCH (a)-[:KNOWS*]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    CU_ASSERT_PTR_NOT_NULL(rel->type);
+    CU_ASSERT_STRING_EQUAL(rel->type, "KNOWS");
+
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 1);
+    CU_ASSERT_EQUAL(range->max_hops, -1);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_type_and_range(void)
+{
+    const char *query = "MATCH (a)-[:KNOWS*1..3]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    CU_ASSERT_PTR_NOT_NULL(rel->type);
+    CU_ASSERT_STRING_EQUAL(rel->type, "KNOWS");
+
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 1);
+    CU_ASSERT_EQUAL(range->max_hops, 3);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_with_variable(void)
+{
+    const char *query = "MATCH (a)-[r*1..5]->(b) RETURN r";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    CU_ASSERT_PTR_NOT_NULL(rel->variable);
+    CU_ASSERT_STRING_EQUAL(rel->variable, "r");
+
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    CU_ASSERT_EQUAL(range->min_hops, 1);
+    CU_ASSERT_EQUAL(range->max_hops, 5);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_incoming_direction(void)
+{
+    const char *query = "MATCH (a)<-[*]-(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    CU_ASSERT_TRUE(rel->left_arrow);
+    CU_ASSERT_FALSE(rel->right_arrow);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_undirected(void)
+{
+    const char *query = "MATCH (a)-[*]-(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NOT_NULL(rel->varlen);
+    CU_ASSERT_FALSE(rel->left_arrow);
+    CU_ASSERT_FALSE(rel->right_arrow);
+
+    cypher_parser_free_result(result);
+}
+
+static void test_varlen_no_varlen(void)
+{
+    /* Verify regular relationships don't have varlen set */
+    const char *query = "MATCH (a)-[:KNOWS]->(b) RETURN a";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    cypher_query *query_ast = (cypher_query*)result;
+    cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+    cypher_path *path = (cypher_path*)match->pattern->items[0];
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)path->elements->items[1];
+
+    CU_ASSERT_PTR_NULL(rel->varlen); /* Should NOT have varlen */
+    CU_ASSERT_PTR_NOT_NULL(rel->type);
+    CU_ASSERT_STRING_EQUAL(rel->type, "KNOWS");
+
+    cypher_parser_free_result(result);
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -1125,7 +1356,18 @@ int init_parser_suite(void)
         !CU_add_test(suite, "OPTIONAL MATCH parsing", test_optional_match_parsing) ||
         !CU_add_test(suite, "Multiple relationship types", test_multiple_relationship_types) ||
         !CU_add_test(suite, "Three relationship types", test_three_relationship_types) ||
-        !CU_add_test(suite, "Path variable assignment", test_path_variable_assignment))
+        !CU_add_test(suite, "Path variable assignment", test_path_variable_assignment) ||
+        !CU_add_test(suite, "Variable-length basic [*]", test_varlen_basic) ||
+        !CU_add_test(suite, "Variable-length bounded [*1..5]", test_varlen_bounded) ||
+        !CU_add_test(suite, "Variable-length min bounded [*2..]", test_varlen_min_bounded) ||
+        !CU_add_test(suite, "Variable-length max bounded [*..3]", test_varlen_max_bounded) ||
+        !CU_add_test(suite, "Variable-length exact hops [*3]", test_varlen_exact_hops) ||
+        !CU_add_test(suite, "Variable-length with type [:TYPE*]", test_varlen_with_type) ||
+        !CU_add_test(suite, "Variable-length type and range", test_varlen_type_and_range) ||
+        !CU_add_test(suite, "Variable-length with variable [r*]", test_varlen_with_variable) ||
+        !CU_add_test(suite, "Variable-length incoming direction", test_varlen_incoming_direction) ||
+        !CU_add_test(suite, "Variable-length undirected", test_varlen_undirected) ||
+        !CU_add_test(suite, "Regular relationship no varlen", test_varlen_no_varlen))
     {
         return CU_get_error();
     }

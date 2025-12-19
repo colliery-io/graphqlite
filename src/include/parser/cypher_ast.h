@@ -30,7 +30,8 @@ typedef enum ast_node_type {
     AST_NODE_PATH,
     AST_NODE_NODE_PATTERN,
     AST_NODE_REL_PATTERN,
-    
+    AST_NODE_VARLEN_RANGE,
+
     /* Expressions */
     AST_NODE_EXPR,
     AST_NODE_LITERAL,
@@ -185,6 +186,13 @@ typedef struct cypher_rel_pattern {
     ast_node *varlen;     /* Variable length range (optional) */
 } cypher_rel_pattern;
 
+/* Variable-length range: [*1..5], [*], [*2..], [*..3] */
+typedef struct cypher_varlen_range {
+    ast_node base;
+    int min_hops;         /* Minimum hops (-1 = unbounded/default to 1) */
+    int max_hops;         /* Maximum hops (-1 = unbounded) */
+} cypher_varlen_range;
+
 /* Path pattern */
 typedef struct cypher_path {
     ast_node base;
@@ -310,6 +318,8 @@ cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending);
 cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *properties);
 cypher_rel_pattern* make_rel_pattern(char *variable, char *type, ast_node *properties, bool left_arrow, bool right_arrow);
 cypher_rel_pattern* make_rel_pattern_multi_type(char *variable, ast_list *types, ast_node *properties, bool left_arrow, bool right_arrow);
+cypher_rel_pattern* make_rel_pattern_varlen(char *variable, char *type, ast_node *properties, bool left_arrow, bool right_arrow, ast_node *varlen);
+cypher_varlen_range* make_varlen_range(int min_hops, int max_hops);
 cypher_path* make_path(ast_list *elements);
 cypher_path* make_path_with_var(char *var_name, ast_list *elements);
 cypher_literal* make_integer_literal(int value, int location);

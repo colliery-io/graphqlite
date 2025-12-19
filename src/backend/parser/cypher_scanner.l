@@ -59,6 +59,9 @@ static CypherToken current_token;
 %option noinput
 %option nounput
 
+/* Exclusive start condition for block comments */
+%x BLOCK_COMMENT
+
 /* Define character classes */
 digit       [0-9]
 hexdigit    [0-9A-Fa-f]
@@ -91,6 +94,7 @@ plus_eq     \+=
 /* Single-line comments */
 comment     "//"[^\n\r]*
 
+
 /* Multi-character operators that need special handling */
 /* Note: < and > are handled as individual chars for relationship arrows */
 operator    [+\-*/%^=!&|~]+
@@ -110,8 +114,28 @@ operator    [+\-*/%^=!&|~]+
                 }
 
 {comment}       {
-                    /* Skip comments */
+                    /* Skip line comments */
                     continue;
+                }
+
+"/*"            {
+                    /* Start of block comment */
+                    BEGIN(BLOCK_COMMENT);
+                }
+
+<BLOCK_COMMENT>"*/" {
+                    /* End of block comment */
+                    BEGIN(INITIAL);
+                }
+
+<BLOCK_COMMENT>\n {
+                    /* Count newlines in block comments */
+                    current_line++;
+                    current_column = 1;
+                }
+
+<BLOCK_COMMENT>.  {
+                    /* Consume any character in block comment */
                 }
 
 {not_eq}        { RETURN_TOKEN(CYPHER_TOKEN_NOT_EQ); }
@@ -154,8 +178,28 @@ operator    [+\-*/%^=!&|~]+
                 }
 
 \$[A-Za-z_][A-Za-z0-9_]* {
-                    /* Parameters start with $ */
+                    /* Named parameters: $name, $param1 */
                     prepare_string_token(CYPHER_TOKEN_PARAMETER, yytext, yytext + 1);
+                    return CYPHER_TOKEN_PARAMETER;
+                }
+
+\$[0-9]+        {
+                    /* Numeric parameters: $0, $1, $2, ... */
+                    prepare_string_token(CYPHER_TOKEN_PARAMETER, yytext, yytext + 1);
+                    return CYPHER_TOKEN_PARAMETER;
+                }
+
+\$\{[A-Za-z_][A-Za-z0-9_]*\} {
+                    /* Braced parameters: ${name}, ${param1} */
+                    /* Extract name without ${ and } */
+                    int len = yyleng - 3; /* Remove ${ and } */
+                    char *value = malloc(len + 1);
+                    if (value) {
+                        strncpy(value, yytext + 2, len);
+                        value[len] = '\0';
+                        prepare_string_token(CYPHER_TOKEN_PARAMETER, yytext, value);
+                        free(value);
+                    }
                     return CYPHER_TOKEN_PARAMETER;
                 }
 
@@ -177,13 +221,15 @@ operator    [+\-*/%^=!&|~]+
                 }
 
 {identifier}    {
-                    /* Check if this is a keyword */
-                    int keyword_token = cypher_keyword_lookup(yytext);
-                    if (keyword_token >= 0) {
+                    /* Check if this is a reserved keyword */
+                    const CypherKeywordToken *kw = cypher_keyword_lookup_full(yytext);
+                    if (kw && kw->category == RESERVED_KEYWORD) {
+                        /* Only reserved keywords are treated as keywords */
                         prepare_string_token(CYPHER_TOKEN_KEYWORD, yytext, yytext);
-                        current_token.token_id = keyword_token;
+                        current_token.token_id = kw->token;
                         return CYPHER_TOKEN_KEYWORD;
                     } else {
+                        /* Unreserved keywords and non-keywords are identifiers */
                         prepare_string_token(CYPHER_TOKEN_IDENTIFIER, yytext, yytext);
                         return CYPHER_TOKEN_IDENTIFIER;
                     }

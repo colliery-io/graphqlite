@@ -17,6 +17,7 @@ int init_executor_basic_suite(void);
 int init_executor_relationships_suite(void);
 int init_executor_set_suite(void);
 int init_executor_delete_suite(void);
+int init_executor_varlen_suite(void);
 
 int main(void)
 {
@@ -98,7 +99,13 @@ int main(void)
         CU_cleanup_registry();
         return CU_get_error();
     }
-    
+
+    if (init_executor_varlen_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor varlen suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
     /* Run tests */
     CU_basic_set_mode(CU_BRM_VERBOSE);
     CU_basic_run_tests();

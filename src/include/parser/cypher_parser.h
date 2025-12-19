@@ -11,6 +11,7 @@ typedef struct cypher_parser_context {
     char *error_message;
     int error_location;
     bool has_error;
+    char *last_token_text;  /* For better error messages */
 } cypher_parser_context;
 
 /* Forward declaration of Bison-generated types */

@@ -21,6 +21,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %define api.pure full
 %define api.prefix {cypher_yy}
 %define api.token.prefix {CYPHER_}
+%define parse.error detailed
 %parse-param {cypher_parser_context *context}
 %lex-param {cypher_parser_context *context}
 
@@ -54,6 +55,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     cypher_exists_expr *exists_expr;
     cypher_node_pattern *node_pattern;
     cypher_rel_pattern *rel_pattern;
+    cypher_varlen_range *varlen_range;
     cypher_path *path;
     cypher_map *map;
     cypher_map_pair *map_pair;
@@ -91,13 +93,14 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <path> path
 %type <node_pattern> node_pattern
 %type <rel_pattern> rel_pattern
+%type <varlen_range> varlen_range_opt
 %type <return_item> return_item
 
 %type <node> expr primary_expr literal_expr function_call
 %type <literal> literal
 %type <identifier> identifier
 %type <parameter> parameter
-%type <map> map_literal properties_opt
+%type <map> properties_opt
 %type <map_pair> map_pair
 %type <list> map_pair_list
 
@@ -379,90 +382,83 @@ node_pattern:
         }
     ;
 
+/* Relationship patterns - supports fixed and variable-length relationships
+ * Each direction (outgoing ->, incoming <-, undirected -) has variants for:
+ * - No type: -[var *1..5]->, -[*]->
+ * - Single type: -[:TYPE*1..5]->
+ * - Multiple types: -[:TYPE1|TYPE2]->
+ * Variable-length syntax: *, *N, *N..M, *N.., *..M
+ */
 rel_pattern:
-    '-' '[' variable_opt ':' IDENTIFIER ']' '-' '>'
+    /* Outgoing relationships: -[...]-> */
+    '-' '[' variable_opt varlen_range_opt properties_opt ']' '-' '>'
         {
-            $$ = make_rel_pattern($3, $5, NULL, false, true);
+            $$ = make_rel_pattern_varlen($3, NULL, (ast_node*)$5, false, true, (ast_node*)$4);
+        }
+    | '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
             free($5);
         }
-    | '-' '[' variable_opt ':' IDENTIFIER properties_opt ']' '-' '>'
+    | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-' '>'
         {
-            $$ = make_rel_pattern($3, $5, (ast_node*)$6, false, true);
-            free($5);
+            cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, true);
+            if (p) p->varlen = (ast_node*)$6;
+            $$ = p;
         }
-    | '-' '[' variable_opt ':' rel_type_list ']' '-' '>'
+    /* Incoming relationships: <-[...]- */
+    | '<' '-' '[' variable_opt varlen_range_opt properties_opt ']' '-'
         {
-            $$ = make_rel_pattern_multi_type($3, $5, NULL, false, true);
+            $$ = make_rel_pattern_varlen($4, NULL, (ast_node*)$6, true, false, (ast_node*)$5);
         }
-    | '-' '[' variable_opt ':' rel_type_list properties_opt ']' '-' '>'
+    | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-'
         {
-            $$ = make_rel_pattern_multi_type($3, $5, (ast_node*)$6, false, true);
-        }
-    | '<' '-' '[' variable_opt ':' IDENTIFIER ']' '-'
-        {
-            $$ = make_rel_pattern($4, $6, NULL, true, false);
+            $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
             free($6);
         }
-    | '<' '-' '[' variable_opt ':' IDENTIFIER properties_opt ']' '-'
+    | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-'
         {
-            $$ = make_rel_pattern($4, $6, (ast_node*)$7, true, false);
-            free($6);
+            cypher_rel_pattern *p = make_rel_pattern_multi_type($4, $6, (ast_node*)$8, true, false);
+            if (p) p->varlen = (ast_node*)$7;
+            $$ = p;
         }
-    | '<' '-' '[' variable_opt ':' rel_type_list ']' '-'
+    /* Undirected relationships: -[...]- */
+    | '-' '[' variable_opt varlen_range_opt properties_opt ']' '-'
         {
-            $$ = make_rel_pattern_multi_type($4, $6, NULL, true, false);
+            $$ = make_rel_pattern_varlen($3, NULL, (ast_node*)$5, false, false, (ast_node*)$4);
         }
-    | '<' '-' '[' variable_opt ':' rel_type_list properties_opt ']' '-'
+    | '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-'
         {
-            $$ = make_rel_pattern_multi_type($4, $6, (ast_node*)$7, true, false);
-        }
-    | '-' '[' variable_opt ']' '-' '>'
-        {
-            $$ = make_rel_pattern($3, NULL, NULL, false, true);
-        }
-    | '-' '[' variable_opt properties_opt ']' '-' '>'
-        {
-            $$ = make_rel_pattern($3, NULL, (ast_node*)$4, false, true);
-        }
-    | '<' '-' '[' variable_opt ']' '-'
-        {
-            $$ = make_rel_pattern($4, NULL, NULL, true, false);
-        }
-    | '<' '-' '[' variable_opt properties_opt ']' '-'
-        {
-            $$ = make_rel_pattern($4, NULL, (ast_node*)$5, true, false);
-        }
-    | '-' '[' variable_opt ']' '-'
-        {
-            $$ = make_rel_pattern($3, NULL, NULL, false, false);
-        }
-    | '-' '[' variable_opt properties_opt ']' '-'
-        {
-            $$ = make_rel_pattern($3, NULL, (ast_node*)$4, false, false);
-        }
-    | '-' '[' variable_opt ':' IDENTIFIER ']' '-'
-        {
-            $$ = make_rel_pattern($3, $5, NULL, false, false);
+            $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
             free($5);
         }
-    | '-' '[' variable_opt ':' IDENTIFIER properties_opt ']' '-'
+    | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-'
         {
-            $$ = make_rel_pattern($3, $5, (ast_node*)$6, false, false);
-            free($5);
-        }
-    | '-' '[' variable_opt ':' rel_type_list ']' '-'
-        {
-            $$ = make_rel_pattern_multi_type($3, $5, NULL, false, false);
-        }
-    | '-' '[' variable_opt ':' rel_type_list properties_opt ']' '-'
-        {
-            $$ = make_rel_pattern_multi_type($3, $5, (ast_node*)$6, false, false);
+            cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, false);
+            if (p) p->varlen = (ast_node*)$6;
+            $$ = p;
         }
     ;
 
 variable_opt:
     /* empty */     { $$ = NULL; }
     | IDENTIFIER    { $$ = $1; }
+    ;
+
+/* Variable-length range for relationships: *, *1..5, *2.., *..3 */
+varlen_range_opt:
+    /* empty - not variable length */
+        { $$ = NULL; }
+    | '*'
+        { $$ = make_varlen_range(1, -1); }  /* unbounded: 1 to infinity */
+    | '*' INTEGER
+        { $$ = make_varlen_range($2, $2); }  /* exact: *3 means exactly 3 hops */
+    | '*' INTEGER DOT_DOT INTEGER
+        { $$ = make_varlen_range($2, $4); }  /* bounded: *1..5 */
+    | '*' INTEGER DOT_DOT
+        { $$ = make_varlen_range($2, -1); }  /* min bounded: *2.. */
+    | '*' DOT_DOT INTEGER
+        { $$ = make_varlen_range(1, $3); }   /* max bounded: *..3 */
     ;
 
 label_opt:
@@ -670,17 +666,6 @@ properties_opt:
         }
     ;
 
-map_literal:
-    '{' '}'
-        {
-            $$ = make_map(ast_list_create(), @1.first_line);
-        }
-    | '{' map_pair_list '}'
-        {
-            $$ = make_map($2, @1.first_line);
-        }
-    ;
-
 map_pair_list:
     map_pair
         {
@@ -729,21 +714,20 @@ void cypher_yyerror(CYPHER_YYLTYPE *yylloc, cypher_parser_context *context, cons
     if (!context || !msg) {
         return;
     }
-    
-    
+
     context->has_error = true;
     context->error_location = yylloc ? yylloc->first_line : -1;
-    
-    /* Create detailed error message */
+
+    /* Create error message with line number - Bison's detailed error mode
+     * provides good context about what was expected */
     char error_buffer[512];
     if (yylloc && yylloc->first_line > 0) {
-        snprintf(error_buffer, sizeof(error_buffer), 
-                 "Parse error at line %d, column %d: %s",
-                 yylloc->first_line, yylloc->first_column, msg);
+        snprintf(error_buffer, sizeof(error_buffer),
+                 "Line %d: %s", yylloc->first_line, msg);
     } else {
-        snprintf(error_buffer, sizeof(error_buffer), "Parse error: %s", msg);
+        snprintf(error_buffer, sizeof(error_buffer), "%s", msg);
     }
-    
+
     free(context->error_message);
     context->error_message = strdup(error_buffer);
 }

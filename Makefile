@@ -1,6 +1,8 @@
 # GraphQLite Makefile
 
 CC = gcc
+BISON = /opt/local/bin/bison
+FLEX = flex
 CFLAGS = -Wall -Wextra -g -I./src/include -I/opt/local/include -DGRAPHQLITE_DEBUG
 LDFLAGS = -L/opt/local/lib -lcunit -lsqlite3
 
@@ -91,7 +93,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_basic.c \
 	$(TEST_DIR)/test_executor_relationships.c \
 	$(TEST_DIR)/test_executor_set.c \
-	$(TEST_DIR)/test_executor_delete.c
+	$(TEST_DIR)/test_executor_delete.c \
+	$(TEST_DIR)/test_executor_varlen.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
@@ -181,11 +184,11 @@ $(BUILD_PARSER_DIR)/%.cov.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
 
 # Generate scanner from Flex specification
 $(SCANNER_SRC): $(SCANNER_L) | dirs
-	flex -o $@ $<
+	$(FLEX) -o $@ $<
 
 # Generate parser from Bison grammar
 $(GRAMMAR_SRC) $(GRAMMAR_HDR): $(GRAMMAR_Y) | dirs
-	bison -d -o $(GRAMMAR_SRC) $<
+	$(BISON) -d -o $(GRAMMAR_SRC) $<
 
 # Scanner objects (regular build)
 $(BUILD_PARSER_DIR)/cypher_scanner.o: $(SCANNER_SRC) | dirs
