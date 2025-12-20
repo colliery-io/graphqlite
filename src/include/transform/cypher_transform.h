@@ -151,6 +151,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr);
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop);
 int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr);
 int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr);
+int transform_null_check(cypher_transform_context *ctx, cypher_null_check *null_check);
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op);
 int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr);
 int transform_function_call(cypher_transform_context *ctx, cypher_function_call *func_call);

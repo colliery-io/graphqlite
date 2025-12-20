@@ -1309,6 +1309,103 @@ static void test_varlen_no_varlen(void)
     cypher_parser_free_result(result);
 }
 
+/* Test IS NULL parsing */
+static void test_is_null_parsing(void)
+{
+    const char *query = "MATCH (n) WHERE n.name IS NULL RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+
+        /* Check WHERE clause exists */
+        CU_ASSERT_PTR_NOT_NULL(match->where);
+
+        /* Check WHERE expression is NULL_CHECK */
+        CU_ASSERT_EQUAL(match->where->type, AST_NODE_NULL_CHECK);
+
+        cypher_null_check *null_check = (cypher_null_check*)match->where;
+        CU_ASSERT_FALSE(null_check->is_not_null); /* IS NULL, not IS NOT NULL */
+
+        /* Check the expression is a property access */
+        CU_ASSERT_EQUAL(null_check->expr->type, AST_NODE_PROPERTY);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("IS NULL parsing test passed\n");
+}
+
+/* Test IS NOT NULL parsing */
+static void test_is_not_null_parsing(void)
+{
+    const char *query = "MATCH (n) WHERE n.age IS NOT NULL RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+
+        /* Check WHERE clause exists */
+        CU_ASSERT_PTR_NOT_NULL(match->where);
+
+        /* Check WHERE expression is NULL_CHECK */
+        CU_ASSERT_EQUAL(match->where->type, AST_NODE_NULL_CHECK);
+
+        cypher_null_check *null_check = (cypher_null_check*)match->where;
+        CU_ASSERT_TRUE(null_check->is_not_null); /* IS NOT NULL */
+
+        /* Check the expression is a property access */
+        CU_ASSERT_EQUAL(null_check->expr->type, AST_NODE_PROPERTY);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("IS NOT NULL parsing test passed\n");
+}
+
+/* Test IS NULL with combined conditions */
+static void test_is_null_combined(void)
+{
+    const char *query = "MATCH (n:Person) WHERE n.name IS NOT NULL AND n.age IS NULL RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+
+        /* Check WHERE clause exists */
+        CU_ASSERT_PTR_NOT_NULL(match->where);
+
+        /* Check WHERE expression is a binary AND operation */
+        CU_ASSERT_EQUAL(match->where->type, AST_NODE_BINARY_OP);
+
+        cypher_binary_op *and_op = (cypher_binary_op*)match->where;
+        CU_ASSERT_EQUAL(and_op->op_type, BINARY_OP_AND);
+
+        /* Left side should be IS NOT NULL */
+        CU_ASSERT_EQUAL(and_op->left->type, AST_NODE_NULL_CHECK);
+        cypher_null_check *left_check = (cypher_null_check*)and_op->left;
+        CU_ASSERT_TRUE(left_check->is_not_null);
+
+        /* Right side should be IS NULL */
+        CU_ASSERT_EQUAL(and_op->right->type, AST_NODE_NULL_CHECK);
+        cypher_null_check *right_check = (cypher_null_check*)and_op->right;
+        CU_ASSERT_FALSE(right_check->is_not_null);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("IS NULL combined conditions test passed\n");
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -1367,7 +1464,10 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Variable-length with variable [r*]", test_varlen_with_variable) ||
         !CU_add_test(suite, "Variable-length incoming direction", test_varlen_incoming_direction) ||
         !CU_add_test(suite, "Variable-length undirected", test_varlen_undirected) ||
-        !CU_add_test(suite, "Regular relationship no varlen", test_varlen_no_varlen))
+        !CU_add_test(suite, "Regular relationship no varlen", test_varlen_no_varlen) ||
+        !CU_add_test(suite, "IS NULL parsing", test_is_null_parsing) ||
+        !CU_add_test(suite, "IS NOT NULL parsing", test_is_not_null_parsing) ||
+        !CU_add_test(suite, "IS NULL combined conditions", test_is_null_combined))
     {
         return CU_get_error();
     }

@@ -40,6 +40,7 @@ typedef enum ast_node_type {
     AST_NODE_PROPERTY,
     AST_NODE_LABEL_EXPR,
     AST_NODE_NOT_EXPR,
+    AST_NODE_NULL_CHECK,
     AST_NODE_BINARY_OP,
     AST_NODE_FUNCTION_CALL,
     AST_NODE_EXISTS_EXPR,
@@ -250,6 +251,13 @@ typedef struct cypher_not_expr {
     ast_node *expr;       /* Expression to negate */
 } cypher_not_expr;
 
+/* NULL check expression: expr IS NULL / expr IS NOT NULL */
+typedef struct cypher_null_check {
+    ast_node base;
+    ast_node *expr;       /* Expression to check for NULL */
+    bool is_not_null;     /* true for IS NOT NULL, false for IS NULL */
+} cypher_null_check;
+
 /* Binary operation: expr OP expr */
 typedef struct cypher_binary_op {
     ast_node base;
@@ -332,6 +340,7 @@ cypher_parameter* make_parameter(char *name, int location);
 cypher_property* make_property(ast_node *expr, char *property_name, int location);
 cypher_label_expr* make_label_expr(ast_node *expr, char *label_name, int location);
 cypher_not_expr* make_not_expr(ast_node *expr, int location);
+cypher_null_check* make_null_check(ast_node *expr, bool is_not_null, int location);
 cypher_binary_op* make_binary_op(binary_op_type op_type, ast_node *left, ast_node *right, int location);
 cypher_function_call* make_function_call(char *function_name, ast_list *args, bool distinct, int location);
 cypher_exists_expr* make_exists_pattern_expr(ast_list *pattern, int location);

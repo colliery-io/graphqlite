@@ -246,7 +246,14 @@ void ast_node_free(ast_node *node)
                 ast_node_free(not_expr->expr);
             }
             break;
-            
+
+        case AST_NODE_NULL_CHECK:
+            {
+                cypher_null_check *null_check = (cypher_null_check*)node;
+                ast_node_free(null_check->expr);
+            }
+            break;
+
         case AST_NODE_BINARY_OP:
             {
                 cypher_binary_op *binary_op = (cypher_binary_op*)node;
@@ -713,9 +720,21 @@ cypher_not_expr* make_not_expr(ast_node *expr, int location)
     if (!not_expr) {
         return NULL;
     }
-    
+
     not_expr->expr = expr;
     return not_expr;
+}
+
+cypher_null_check* make_null_check(ast_node *expr, bool is_not_null, int location)
+{
+    cypher_null_check *null_check = (cypher_null_check*)ast_node_create(AST_NODE_NULL_CHECK, location, sizeof(cypher_null_check));
+    if (!null_check) {
+        return NULL;
+    }
+
+    null_check->expr = expr;
+    null_check->is_not_null = is_not_null;
+    return null_check;
 }
 
 cypher_binary_op* make_binary_op(binary_op_type op_type, ast_node *left, ast_node *right, int location)
@@ -829,10 +848,15 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_IDENTIFIER:     return "IDENTIFIER";
         case AST_NODE_PARAMETER:      return "PARAMETER";
         case AST_NODE_PROPERTY:       return "PROPERTY";
+        case AST_NODE_LABEL_EXPR:     return "LABEL_EXPR";
+        case AST_NODE_NOT_EXPR:       return "NOT_EXPR";
+        case AST_NODE_NULL_CHECK:     return "NULL_CHECK";
+        case AST_NODE_BINARY_OP:      return "BINARY_OP";
         case AST_NODE_FUNCTION_CALL:  return "FUNCTION_CALL";
         case AST_NODE_EXISTS_EXPR:    return "EXISTS_EXPR";
         case AST_NODE_LIST:           return "LIST";
         case AST_NODE_MAP:            return "MAP";
+        case AST_NODE_VARLEN_RANGE:   return "VARLEN_RANGE";
         case AST_NODE_RETURN_ITEM:    return "RETURN_ITEM";
         case AST_NODE_ORDER_BY:       return "ORDER_BY";
         case AST_NODE_SKIP:           return "SKIP";

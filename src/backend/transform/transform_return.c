@@ -240,7 +240,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
             
         case AST_NODE_NOT_EXPR:
             return transform_not_expression(ctx, (cypher_not_expr*)expr);
-            
+
+        case AST_NODE_NULL_CHECK:
+            return transform_null_check(ctx, (cypher_null_check*)expr);
+
         case AST_NODE_BINARY_OP:
             return transform_binary_operation(ctx, (cypher_binary_op*)expr);
             
@@ -385,15 +388,35 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
 int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr)
 {
     CYPHER_DEBUG("Transforming NOT expression");
-    
+
     append_sql(ctx, "NOT (");
-    
+
     if (transform_expression(ctx, not_expr->expr) < 0) {
         return -1;
     }
-    
+
     append_sql(ctx, ")");
-    
+
+    return 0;
+}
+
+/* Transform null check expression (e.g., n.name IS NULL, n.age IS NOT NULL) */
+int transform_null_check(cypher_transform_context *ctx, cypher_null_check *null_check)
+{
+    CYPHER_DEBUG("Transforming NULL check expression: is_not_null=%d", null_check->is_not_null);
+
+    /* Transform the expression being checked */
+    if (transform_expression(ctx, null_check->expr) < 0) {
+        return -1;
+    }
+
+    /* Append IS NULL or IS NOT NULL */
+    if (null_check->is_not_null) {
+        append_sql(ctx, " IS NOT NULL");
+    } else {
+        append_sql(ctx, " IS NULL");
+    }
+
     return 0;
 }
 

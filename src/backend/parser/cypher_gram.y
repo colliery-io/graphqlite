@@ -524,8 +524,8 @@ expr:
     | expr AND expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_AND, $1, $3, @2.first_line); }
     | expr OR expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_OR, $1, $3, @2.first_line); }
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
-    | expr IS NULL      { /* TODO: implement IS NULL */ $$ = $1; }
-    | expr IS NOT NULL  { /* TODO: implement IS NOT NULL */ $$ = $1; }
+    | expr IS NULL      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
+    | expr IS NOT NULL  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
     | '(' expr ')'      { $$ = $2; }
     ;
 
