@@ -14,7 +14,13 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-EXTENSION="$PROJECT_DIR/build/graphqlite.dylib"
+
+# Detect extension based on platform
+case "$(uname -s)" in
+    Darwin) EXTENSION="$PROJECT_DIR/build/graphqlite.dylib" ;;
+    MINGW*|MSYS*) EXTENSION="$PROJECT_DIR/build/graphqlite.dll" ;;
+    *) EXTENSION="$PROJECT_DIR/build/graphqlite.so" ;;
+esac
 
 # Size to run (default: all)
 SIZE_FILTER="${1:-all}"

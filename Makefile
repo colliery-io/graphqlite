@@ -141,10 +141,14 @@ TEST_RUNNER = $(BUILD_DIR)/test_runner
 MAIN_APP = $(BUILD_DIR)/gqlite
 MAIN_OBJ = $(BUILD_DIR)/main.o
 
-# SQLite extension - use .dylib on macOS, .so on Linux
+# SQLite extension - use .dylib on macOS, .dll on Windows, .so on Linux
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
     EXTENSION_LIB = $(BUILD_DIR)/graphqlite.dylib
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    EXTENSION_LIB = $(BUILD_DIR)/graphqlite.dll
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+    EXTENSION_LIB = $(BUILD_DIR)/graphqlite.dll
 else
     EXTENSION_LIB = $(BUILD_DIR)/graphqlite.so
 endif
@@ -168,6 +172,10 @@ $(MAIN_APP): $(MAIN_OBJ) $(PARSER_OBJS) $(TRANSFORM_OBJS) $(EXECUTOR_OBJS) | dir
 $(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) | dirs $(GRAMMAR_HDR)
 ifeq ($(UNAME_S),Darwin)
 	$(CC) -g -fPIC -dynamiclib $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -undefined dynamic_lookup
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3
 else
 	$(CC) -shared -fPIC $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@
 endif
