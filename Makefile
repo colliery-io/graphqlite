@@ -14,8 +14,14 @@ PYTHON ?= python3.11
 EXTRA_INCLUDES ?=
 EXTRA_LIBS ?=
 
+# Build mode: debug (default) or release
+# Use: make extension RELEASE=1
+ifdef RELEASE
+CFLAGS = -Wall -Wextra -O2 -I./src/include $(EXTRA_INCLUDES)
+else
 # Add -DGRAPHQLITE_PERF_TIMING for detailed query timing instrumentation
 CFLAGS = -Wall -Wextra -g -I./src/include $(EXTRA_INCLUDES) -DGRAPHQLITE_DEBUG
+endif
 LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3
 
 # Extension-specific flags: enable sqlite3ext.h API pointer redirection
@@ -173,9 +179,9 @@ $(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EX
 ifeq ($(UNAME_S),Darwin)
 	$(CC) -g -fPIC -dynamiclib $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -undefined dynamic_lookup
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
-	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3
+	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3 -lsystre
 else ifneq (,$(findstring MSYS,$(UNAME_S)))
-	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3
+	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3 -lsystre
 else
 	$(CC) -shared -fPIC $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@
 endif

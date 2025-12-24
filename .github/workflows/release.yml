@@ -6,20 +6,48 @@ on:
       - 'v*'
 
 jobs:
-  build-extension:
+  build-and-test:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             artifact: graphqlite.so
-          - os: macos-latest
+            artifact-name: graphqlite-linux-x86_64.so
+          - os: macos-14
+            arch: arm64
             artifact: graphqlite.dylib
+            artifact-name: graphqlite-macos-arm64.dylib
+          - os: macos-14
+            arch: x86_64
+            artifact: graphqlite.dylib
+            artifact-name: graphqlite-macos-x86_64.dylib
+          - os: windows-latest
+            artifact: graphqlite.dll
+            artifact-name: graphqlite-windows-x86_64.dll
 
     runs-on: ${{ matrix.os }}
 
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-libsystre
+            bison
+            flex
+            make
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -34,23 +62,74 @@ jobs:
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
           echo "HOMEBREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
+          echo "SQLITE_PREFIX=$(brew --prefix sqlite)" >> $GITHUB_ENV
 
       - name: Build extension (Linux)
         if: runner.os == 'Linux'
-        run: make extension
+        run: make extension RELEASE=1
 
-      - name: Build extension (macOS)
-        if: runner.os == 'macOS'
-        run: make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+      - name: Build extension (macOS arm64)
+        if: runner.os == 'macOS' && matrix.arch == 'arm64'
+        run: make extension RELEASE=1 EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Build extension (macOS x86_64 cross-compile)
+        if: runner.os == 'macOS' && matrix.arch == 'x86_64'
+        run: make extension RELEASE=1 CC="clang -arch x86_64" EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Build extension (Windows)
+        if: runner.os == 'Windows'
+        run: make extension RELEASE=1
+
+      # Python binding tests
+      - name: Set up Python (Linux/Windows)
+        if: runner.os != 'macOS'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install and test Python bindings (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          pip install -e "./bindings/python[dev]"
+          cd bindings/python && pytest tests/ -v
+
+      - name: Install and test Python bindings (macOS)
+        if: runner.os == 'macOS' && matrix.arch == 'arm64'
+        run: |
+          # Use Homebrew Python which supports extension loading
+          brew install python@3.11
+          $(brew --prefix python@3.11)/libexec/bin/python -m pip install -e "./bindings/python[dev]"
+          DYLD_LIBRARY_PATH="$SQLITE_PREFIX/lib:$DYLD_LIBRARY_PATH" $(brew --prefix python@3.11)/libexec/bin/python -m pytest bindings/python/tests/ -v
+
+      - name: Install and test Python bindings (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pip install -e "./bindings/python[dev]"
+          cd bindings/python && pytest tests/ -v
+
+      # Rust binding tests (skip for cross-compiled x86_64)
+      - name: Install Rust toolchain
+        if: matrix.arch != 'x86_64'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test Rust bindings
+        if: matrix.arch != 'x86_64'
+        working-directory: bindings/rust
+        shell: bash
+        run: cargo test -- --test-threads=1
+
+      - name: Rename artifact
+        run: cp build/${{ matrix.artifact }} build/${{ matrix.artifact-name }}
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@v4
         with:
-          name: extension-${{ matrix.os }}
-          path: build/${{ matrix.artifact }}
+          name: ${{ matrix.artifact-name }}
+          path: build/${{ matrix.artifact-name }}
 
   publish-python:
-    needs: build-extension
+    needs: build-and-test
     runs-on: ubuntu-latest
 
     steps:
@@ -76,6 +155,7 @@ jobs:
         run: twine upload dist/*
 
   publish-rust:
+    needs: build-and-test
     runs-on: ubuntu-latest
 
     steps:
@@ -91,7 +171,7 @@ jobs:
         run: cargo publish --allow-dirty
 
   create-release:
-    needs: [build-extension, publish-python, publish-rust]
+    needs: [build-and-test, publish-python, publish-rust]
     runs-on: ubuntu-latest
 
     steps:
@@ -106,6 +186,5 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/extension-ubuntu-latest/*
-            artifacts/extension-macos-latest/*
+            artifacts/**/*
           generate_release_notes: true

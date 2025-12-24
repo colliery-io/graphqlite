@@ -146,7 +146,7 @@ test_pagerank_scale() {
     local size=$1
     local edges_per_node=$2
     local pr_iterations=${3:-20}
-    local db=$(mktemp /tmp/gql_pagerank_$$.db)
+    local db=$(mktemp /tmp/gql_pagerank_XXXXXX.db)
 
     echo "=== PageRank Test (n=$size, edges/node=$edges_per_node, pr_iter=$pr_iterations) ==="
 
@@ -185,7 +185,7 @@ test_pagerank_scale() {
 # ============================================
 test_iteration_impact() {
     local size=$1
-    local db=$(mktemp /tmp/gql_pagerank_iter_$$.db)
+    local db=$(mktemp /tmp/gql_pagerank_iter_XXXXXX.db)
 
     echo "=== Iteration Impact (n=$size) ==="
 

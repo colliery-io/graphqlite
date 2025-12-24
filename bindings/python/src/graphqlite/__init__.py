@@ -2,5 +2,5 @@
 
 from .connection import Connection, connect, wrap
 
-__version__ = "0.0.0a1"
+__version__ = "0.0.0a2"
 __all__ = ["Connection", "connect", "wrap"]

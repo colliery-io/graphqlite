@@ -97,6 +97,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-libsystre
             bison
             flex
             make

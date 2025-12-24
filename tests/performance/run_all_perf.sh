@@ -192,7 +192,7 @@ run_tests_for_size() {
     local size_label=$(fmt_num $size)
     echo "Building ${size_label} node graph..."
 
-    db=$(mktemp /tmp/gql_perf_$$.db)
+    db=$(mktemp /tmp/gql_perf_XXXXXX.db)
 
     # Build graph once
     start=$(get_time_ms)

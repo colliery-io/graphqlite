@@ -173,6 +173,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-libsystre
             bison
             flex
             make
@@ -182,6 +183,27 @@ jobs:
 
       - name: Run functional tests
         run: make test-functional
+
+      # Python binding tests (native Windows Python)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install and test Python bindings
+        shell: bash
+        run: |
+          pip install -e "./bindings/python[dev]"
+          cd bindings/python && pytest tests/ -v
+
+      # Rust binding tests (native Windows Rust)
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test Rust bindings
+        shell: bash
+        working-directory: bindings/rust
+        run: cargo test -- --test-threads=1
 
   performance-tests:
     runs-on: ubuntu-latest
@@ -197,8 +219,5 @@ jobs:
       - name: Build extension
         run: make extension
 
-      - name: Run quick performance tests
-        run: make test-perf-quick
-
-      - name: Run performance summary
-        run: make performance 100k
+      - name: Run performance tests
+        run: make performance

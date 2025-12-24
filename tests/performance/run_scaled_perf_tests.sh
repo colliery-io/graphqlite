@@ -192,7 +192,7 @@ EOF
 # ============================================
 test_linear_chain() {
     local size=$1
-    local db=$(mktemp /tmp/gql_linear_$$.db)
+    local db=$(mktemp /tmp/gql_linear_XXXXXX.db)
 
     echo "=== Linear Chain Graph (n=$size) ==="
     echo "Structure: 1->2->3->...->$size"
@@ -234,7 +234,7 @@ test_linear_chain() {
 # ============================================
 test_hub_spoke() {
     local size=$1
-    local db=$(mktemp /tmp/gql_hub_$$.db)
+    local db=$(mktemp /tmp/gql_hub_XXXXXX.db)
 
     echo "=== Hub-and-Spoke Graph (n=$size) ==="
     echo "Structure: Hub connected to $((size-1)) spokes"
@@ -299,7 +299,7 @@ EOF
 test_dense_mesh() {
     local size=$1
     local conn=$2
-    local db=$(mktemp /tmp/gql_mesh_$$.db)
+    local db=$(mktemp /tmp/gql_mesh_XXXXXX.db)
 
     echo "=== Dense Mesh Graph (n=$size, connectivity=$conn) ==="
     echo "Structure: Each node connects to next $conn nodes"
@@ -341,7 +341,7 @@ test_dense_mesh() {
 # ============================================
 test_tree() {
     local depth=$1
-    local db=$(mktemp /tmp/gql_tree_$$.db)
+    local db=$(mktemp /tmp/gql_tree_XXXXXX.db)
     local total=$(( (1 << (depth + 1)) - 1 ))
 
     echo "=== Binary Tree Graph (depth=$depth) ==="
