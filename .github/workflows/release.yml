@@ -70,11 +70,11 @@ jobs:
 
       - name: Build extension (macOS arm64)
         if: runner.os == 'macOS' && matrix.arch == 'arm64'
-        run: make extension RELEASE=1 EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+        run: make extension RELEASE=1
 
       - name: Build extension (macOS x86_64 cross-compile)
         if: runner.os == 'macOS' && matrix.arch == 'x86_64'
-        run: make extension RELEASE=1 CC="clang -arch x86_64" EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+        run: make extension RELEASE=1 CC="clang -arch x86_64"
 
       - name: Build extension (Windows)
         if: runner.os == 'Windows'
@@ -128,7 +128,7 @@ jobs:
           name: ${{ matrix.artifact-name }}
           path: build/${{ matrix.artifact-name }}
 
-  # Build platform-specific wheels with bundled extensions
+  # Build platform-specific Python wheels
   build-wheels:
     needs: build-and-test
     strategy:
@@ -137,13 +137,15 @@ jobs:
           - os: ubuntu-latest
             artifact: graphqlite-linux-x86_64.so
             extension: graphqlite.so
+            wheel_tag: manylinux_2_17_x86_64.manylinux2014_x86_64
           - os: macos-14
             artifact: graphqlite-macos-arm64.dylib
             extension: graphqlite.dylib
-          # Note: macos-x86_64 wheel built on arm64 with universal tag
+            wheel_tag: macosx_11_0_arm64
           - os: windows-latest
             artifact: graphqlite-windows-x86_64.dll
             extension: graphqlite.dll
+            wheel_tag: win_amd64
 
     runs-on: ${{ matrix.os }}
 
@@ -173,10 +175,23 @@ jobs:
         working-directory: bindings/python
         run: python -m build --wheel
 
+      - name: Retag wheel with platform
+        working-directory: bindings/python/dist
+        run: |
+          for whl in *.whl; do
+            python -m wheel tags --platform-tag=${{ matrix.wheel_tag }} "$whl"
+            rm "$whl"
+          done
+        shell: bash
+
+      - name: List wheels
+        run: ls -la bindings/python/dist/
+        shell: bash
+
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}
+          name: wheel-${{ matrix.wheel_tag }}
           path: bindings/python/dist/*.whl
 
   publish-python:
@@ -198,15 +213,15 @@ jobs:
           path: dist/
           merge-multiple: true
 
-      - name: Install twine
-        run: pip install twine
+      - name: Install build tools
+        run: pip install build twine
 
       - name: Build source distribution
         working-directory: bindings/python
-        run: |
-          pip install build
-          python -m build --sdist
-          cp dist/*.tar.gz ../../dist/
+        run: python -m build --sdist
+
+      - name: Copy sdist to dist
+        run: cp bindings/python/dist/*.tar.gz dist/
 
       - name: List distributions
         run: ls -la dist/
