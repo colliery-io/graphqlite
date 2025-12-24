@@ -102,6 +102,11 @@ struct cypher_transform_context {
         bool using_builder;         /* True when using two-pass generation */
     } sql_builder;
     
+    /* Parameter tracking for parameterized queries */
+    char **param_names;             /* Parameter names in order of appearance */
+    int param_count;
+    int param_capacity;
+
     /* Error handling */
     bool has_error;
     char *error_message;
@@ -200,6 +205,9 @@ path_variable* get_path_variable(cypher_transform_context *ctx, const char *name
 void append_sql(cypher_transform_context *ctx, const char *format, ...);
 void append_identifier(cypher_transform_context *ctx, const char *name);
 void append_string_literal(cypher_transform_context *ctx, const char *value);
+
+/* Parameter tracking */
+int register_parameter(cypher_transform_context *ctx, const char *name);
 
 /* SQL builder functions for two-pass generation */
 int init_sql_builder(cypher_transform_context *ctx);

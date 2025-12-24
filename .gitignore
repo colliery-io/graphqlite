@@ -105,3 +105,22 @@ docs/build/
 .env
 .env.local
 config.local.h
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+.eggs/
+*.whl
+
+# Rust
+target/
+Cargo.lock
+!bindings/rust/Cargo.lock
+
+# Metis database (auto-generated)
+.metis/metis.db
+bindings/python/src/graphqlite.egg-info/

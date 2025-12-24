@@ -463,6 +463,95 @@ static void test_set_label_operations(void)
     }
 }
 
+/* Test SET relationship property */
+static void test_set_relationship_property(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* Create nodes and a relationship */
+        const char *create_query = "CREATE (a:Person {name: \"Alice\"})-[r:KNOWS {since: 2020}]->(b:Person {name: \"Bob\"})";
+        execute_and_verify(executor, create_query, true, "CREATE for relationship SET test");
+
+        /* Update relationship property */
+        const char *set_query = "MATCH (a:Person)-[r:KNOWS]->(b:Person) SET r.since = 2024, r.strength = 0.9";
+        cypher_result *result = cypher_executor_execute(executor, set_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("SET relationship property error: %s\n", result->error_message);
+            } else {
+                printf("SET relationship result: success=%d, properties_set=%d\n",
+                       result->success, result->properties_set);
+                CU_ASSERT_TRUE(result->properties_set >= 2); /* since and strength */
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify the change */
+        const char *verify_query = "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN r.since, r.strength";
+        cypher_result *verify_result = cypher_executor_execute(executor, verify_query);
+        CU_ASSERT_PTR_NOT_NULL(verify_result);
+
+        if (verify_result) {
+            CU_ASSERT_TRUE(verify_result->success);
+            if (verify_result->success && verify_result->row_count > 0) {
+                printf("Verify relationship: since='%s', strength='%s'\n",
+                       verify_result->data[0][0] ? verify_result->data[0][0] : "NULL",
+                       verify_result->data[0][1] ? verify_result->data[0][1] : "NULL");
+
+                /* Check that since was updated to 2024 */
+                if (verify_result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(verify_result->data[0][0], "2024");
+                }
+            }
+            cypher_result_free(verify_result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test SET relationship property with WHERE clause */
+static void test_set_relationship_with_where(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* Create nodes with multiple relationships */
+        execute_and_verify(executor,
+            "CREATE (a:Person {name: \"Carol\"})-[r1:FRIENDS {weight: 1}]->(b:Person {name: \"Dave\"})",
+            true, "CREATE first relationship");
+        execute_and_verify(executor,
+            "CREATE (c:Person {name: \"Eve\"})-[r2:FRIENDS {weight: 5}]->(d:Person {name: \"Frank\"})",
+            true, "CREATE second relationship");
+
+        /* Update only relationships with weight > 2 */
+        const char *set_query = "MATCH (a:Person)-[r:FRIENDS]->(b:Person) WHERE r.weight > 2 SET r.strong = true";
+        cypher_result *result = cypher_executor_execute(executor, set_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("SET relationship WHERE error: %s\n", result->error_message);
+            } else {
+                printf("SET relationship WHERE result: success=%d, properties_set=%d\n",
+                       result->success, result->properties_set);
+                /* Should only update 1 relationship (Eve->Frank with weight=5) */
+                CU_ASSERT_EQUAL(result->properties_set, 1);
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the SET executor test suite */
 int init_executor_set_suite(void)
 {
@@ -484,7 +573,9 @@ int init_executor_set_suite(void)
         !CU_add_test(suite, "SET string types", test_set_string_types) ||
         !CU_add_test(suite, "SET mixed types", test_set_mixed_types) ||
         !CU_add_test(suite, "SET type overwrite", test_set_type_overwrite) ||
-        !CU_add_test(suite, "SET label operations", test_set_label_operations)) {
+        !CU_add_test(suite, "SET label operations", test_set_label_operations) ||
+        !CU_add_test(suite, "SET relationship property", test_set_relationship_property) ||
+        !CU_add_test(suite, "SET relationship with WHERE", test_set_relationship_with_where)) {
         return CU_get_error();
     }
     

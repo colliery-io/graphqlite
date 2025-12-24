@@ -325,10 +325,18 @@ static void test_label_propagation_correctness(void)
             const char *p = json;
             while ((p = strstr(p, "node_id")) != NULL) {
                 int node_id = 0, community = 0;
-                if (sscanf(p, "node_id\":%d,\"community\":%d", &node_id, &community) == 2 ||
-                    sscanf(p, "node_id\": %d, \"community\": %d", &node_id, &community) == 2) {
-                    if (node_id >= 1 && node_id <= 6) {
-                        communities[node_id] = community;
+                /* Parse node_id first */
+                if (sscanf(p, "node_id\":%d", &node_id) == 1 ||
+                    sscanf(p, "node_id\": %d", &node_id) == 1) {
+                    /* Find and parse community (may have user_id field in between) */
+                    const char *comm_ptr = strstr(p, "community");
+                    if (comm_ptr) {
+                        if (sscanf(comm_ptr, "community\":%d", &community) == 1 ||
+                            sscanf(comm_ptr, "community\": %d", &community) == 1) {
+                            if (node_id >= 1 && node_id <= 6) {
+                                communities[node_id] = community;
+                            }
+                        }
                     }
                 }
                 p++;

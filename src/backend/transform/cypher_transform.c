@@ -67,6 +67,11 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->global_alias_counter = 0;
     ctx->error_message = NULL;
     ctx->in_comparison = false;
+
+    /* Initialize parameter tracking */
+    ctx->param_names = NULL;
+    ctx->param_count = 0;
+    ctx->param_capacity = 0;
     
     /* Initialize CTE prefix buffer (for variable-length relationships) */
     ctx->cte_prefix = NULL;
@@ -123,7 +128,13 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         /* Note: elements list is owned by AST, don't free it */
     }
     free(ctx->path_variables);
-    
+
+    /* Free parameter names */
+    for (int i = 0; i < ctx->param_count; i++) {
+        free(ctx->param_names[i]);
+    }
+    free(ctx->param_names);
+
     /* Free CTE prefix buffer */
     free(ctx->cte_prefix);
 
@@ -195,6 +206,41 @@ void append_string_literal(cypher_transform_context *ctx, const char *value)
     /* SQLite uses single quotes for strings */
     /* TODO: Proper escaping */
     append_sql(ctx, "'%s'", value);
+}
+
+/* Parameter tracking */
+
+int register_parameter(cypher_transform_context *ctx, const char *name)
+{
+    /* Check if parameter already registered */
+    for (int i = 0; i < ctx->param_count; i++) {
+        if (strcmp(ctx->param_names[i], name) == 0) {
+            return i;  /* Already registered, return existing index */
+        }
+    }
+
+    /* Grow capacity if needed */
+    if (ctx->param_count >= ctx->param_capacity) {
+        int new_capacity = ctx->param_capacity == 0 ? 8 : ctx->param_capacity * 2;
+        char **new_names = realloc(ctx->param_names, new_capacity * sizeof(char*));
+        if (!new_names) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Out of memory registering parameter");
+            return -1;
+        }
+        ctx->param_names = new_names;
+        ctx->param_capacity = new_capacity;
+    }
+
+    /* Register new parameter */
+    ctx->param_names[ctx->param_count] = strdup(name);
+    if (!ctx->param_names[ctx->param_count]) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Out of memory registering parameter");
+        return -1;
+    }
+
+    return ctx->param_count++;
 }
 
 /* SQL builder functions for two-pass generation */
@@ -597,9 +643,13 @@ int register_edge_variable(cypher_transform_context *ctx, const char *name, cons
 /* Register a projected variable (from WITH clause - value is direct, no .id needed) */
 int register_projected_variable(cypher_transform_context *ctx, const char *name, const char *cte_name, const char *column_name)
 {
-    /* Build the full column reference: cte_name.column_name */
+    /* Build the full column reference: cte_name.column_name or just column_name */
     char alias[128];
-    snprintf(alias, sizeof(alias), "%s.%s", cte_name, column_name);
+    if (cte_name) {
+        snprintf(alias, sizeof(alias), "%s.%s", cte_name, column_name);
+    } else {
+        snprintf(alias, sizeof(alias), "%s", column_name);
+    }
 
     int result = register_variable(ctx, name, alias);
     if (result == 0) {

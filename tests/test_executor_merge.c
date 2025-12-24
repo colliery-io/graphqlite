@@ -523,6 +523,186 @@ static void test_merge_on_create_multiple_props(void)
     }
 }
 
+/* Test MERGE creates relationship when not exists */
+static void test_merge_create_relationship(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* First create the source and target nodes */
+        execute_and_verify(executor, "CREATE (a:RelMergeTest {name: 'Alice'})", true, "Create source");
+        execute_and_verify(executor, "CREATE (b:RelMergeTest {name: 'Bob'})", true, "Create target");
+
+        /* MERGE should create the relationship since it doesn't exist */
+        const char *merge_query = "MATCH (a:RelMergeTest {name: 'Alice'}), (b:RelMergeTest {name: 'Bob'}) MERGE (a)-[r:KNOWS]->(b)";
+        cypher_result *result = cypher_executor_execute(executor, merge_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE relationship create error: %s\n", result->error_message);
+            } else {
+                printf("MERGE relationship create result: relationships_created=%d\n", result->relationships_created);
+                CU_ASSERT_EQUAL(result->relationships_created, 1);
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify relationship was created */
+        const char *verify_query = "MATCH (a:RelMergeTest)-[r:KNOWS]->(b:RelMergeTest) RETURN a.name, b.name";
+        cypher_result *verify_result = cypher_executor_execute(executor, verify_query);
+        CU_ASSERT_PTR_NOT_NULL(verify_result);
+
+        if (verify_result) {
+            CU_ASSERT_TRUE(verify_result->success);
+            CU_ASSERT_EQUAL(verify_result->row_count, 1);
+            if (verify_result->row_count > 0 && verify_result->data) {
+                printf("Verify rel MERGE: %s -> %s\n", verify_result->data[0][0], verify_result->data[0][1]);
+            }
+            cypher_result_free(verify_result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test MERGE matches existing relationship */
+static void test_merge_match_relationship(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* Create nodes and relationship */
+        execute_and_verify(executor, "CREATE (a:MatchRelTest {name: 'Carol'})-[:FRIENDS]->(b:MatchRelTest {name: 'Dan'})", true, "Create path");
+
+        /* MERGE should match the existing relationship, not create new one */
+        const char *merge_query = "MATCH (a:MatchRelTest {name: 'Carol'}), (b:MatchRelTest {name: 'Dan'}) MERGE (a)-[r:FRIENDS]->(b)";
+        cypher_result *result = cypher_executor_execute(executor, merge_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE relationship match error: %s\n", result->error_message);
+            } else {
+                printf("MERGE relationship match result: relationships_created=%d\n", result->relationships_created);
+                CU_ASSERT_EQUAL(result->relationships_created, 0);  /* Should not create new relationship */
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify only one relationship exists */
+        const char *verify_query = "MATCH (a:MatchRelTest)-[r:FRIENDS]->(b:MatchRelTest) RETURN count(r)";
+        cypher_result *verify_result = cypher_executor_execute(executor, verify_query);
+        CU_ASSERT_PTR_NOT_NULL(verify_result);
+
+        if (verify_result) {
+            CU_ASSERT_TRUE(verify_result->success);
+            if (verify_result->row_count > 0 && verify_result->data) {
+                printf("Relationship count after MERGE: %s\n", verify_result->data[0][0]);
+                CU_ASSERT_STRING_EQUAL(verify_result->data[0][0], "1");
+            }
+            cypher_result_free(verify_result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test MERGE creates both nodes and relationship in single pattern */
+static void test_merge_full_path(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* MERGE a complete path - should create nodes and relationship */
+        const char *merge_query = "MERGE (a:FullPath {name: 'Eve'})-[r:LIKES]->(b:FullPath {name: 'Frank'})";
+        cypher_result *result = cypher_executor_execute(executor, merge_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE full path error: %s\n", result->error_message);
+            } else {
+                printf("MERGE full path result: nodes_created=%d, relationships_created=%d\n",
+                       result->nodes_created, result->relationships_created);
+                CU_ASSERT_EQUAL(result->nodes_created, 2);
+                CU_ASSERT_EQUAL(result->relationships_created, 1);
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify path was created */
+        const char *verify_query = "MATCH (a:FullPath)-[r:LIKES]->(b:FullPath) RETURN a.name, b.name";
+        cypher_result *verify_result = cypher_executor_execute(executor, verify_query);
+        CU_ASSERT_PTR_NOT_NULL(verify_result);
+
+        if (verify_result) {
+            CU_ASSERT_TRUE(verify_result->success);
+            CU_ASSERT_EQUAL(verify_result->row_count, 1);
+            if (verify_result->row_count > 0 && verify_result->data) {
+                CU_ASSERT_STRING_EQUAL(verify_result->data[0][0], "Eve");
+                CU_ASSERT_STRING_EQUAL(verify_result->data[0][1], "Frank");
+            }
+            cypher_result_free(verify_result);
+        }
+
+        /* Second MERGE should match all, create nothing */
+        cypher_result *result2 = cypher_executor_execute(executor, merge_query);
+        CU_ASSERT_PTR_NOT_NULL(result2);
+
+        if (result2) {
+            CU_ASSERT_TRUE(result2->success);
+            if (result2->success) {
+                printf("MERGE full path (second): nodes=%d, rels=%d\n",
+                       result2->nodes_created, result2->relationships_created);
+                CU_ASSERT_EQUAL(result2->nodes_created, 0);
+                CU_ASSERT_EQUAL(result2->relationships_created, 0);
+            }
+            cypher_result_free(result2);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test MERGE relationship with properties */
+static void test_merge_relationship_with_props(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* Create nodes first */
+        execute_and_verify(executor, "CREATE (a:PropRelTest {name: 'Grace'})", true, "Create source");
+        execute_and_verify(executor, "CREATE (b:PropRelTest {name: 'Henry'})", true, "Create target");
+
+        /* MERGE relationship with properties */
+        const char *merge_query = "MATCH (a:PropRelTest {name: 'Grace'}), (b:PropRelTest {name: 'Henry'}) MERGE (a)-[r:WORKS_WITH {since: 2020}]->(b)";
+        cypher_result *result = cypher_executor_execute(executor, merge_query);
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE rel with props error: %s\n", result->error_message);
+            } else {
+                printf("MERGE rel with props: relationships_created=%d, properties_set=%d\n",
+                       result->relationships_created, result->properties_set);
+                CU_ASSERT_EQUAL(result->relationships_created, 1);
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the MERGE executor test suite */
 int init_executor_merge_suite(void)
 {
@@ -541,7 +721,11 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE label only", test_merge_label_only) ||
         !CU_add_test(suite, "MERGE multiple", test_merge_multiple) ||
         !CU_add_test(suite, "MERGE multiple properties", test_merge_multiple_properties) ||
-        !CU_add_test(suite, "MERGE ON CREATE multiple props", test_merge_on_create_multiple_props)) {
+        !CU_add_test(suite, "MERGE ON CREATE multiple props", test_merge_on_create_multiple_props) ||
+        !CU_add_test(suite, "MERGE create relationship", test_merge_create_relationship) ||
+        !CU_add_test(suite, "MERGE match relationship", test_merge_match_relationship) ||
+        !CU_add_test(suite, "MERGE full path", test_merge_full_path) ||
+        !CU_add_test(suite, "MERGE relationship with props", test_merge_relationship_with_props)) {
         return CU_get_error();
     }
 

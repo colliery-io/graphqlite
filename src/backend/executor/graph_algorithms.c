@@ -35,6 +35,12 @@ void csr_graph_free(csr_graph *graph)
     free(graph->row_ptr);
     free(graph->col_idx);
     free(graph->node_ids);
+    if (graph->user_ids) {
+        for (int i = 0; i < graph->node_count; i++) {
+            free(graph->user_ids[i]);
+        }
+        free(graph->user_ids);
+    }
     free(graph->node_idx);
     free(graph->in_row_ptr);
     free(graph->in_col_idx);
@@ -113,6 +119,33 @@ csr_graph* csr_graph_load(sqlite3 *db)
             h = (h + 1) % graph->node_idx_size;
         }
         graph->node_idx[h] = i;  /* Store index, not node_id */
+    }
+
+    /* Step 1b: Load user-defined 'id' property for each node */
+    graph->user_ids = calloc(graph->node_count, sizeof(char*));
+    if (graph->user_ids) {
+        rc = sqlite3_prepare_v2(db,
+            "SELECT np.node_id, np.value FROM node_props_text np "
+            "JOIN property_keys pk ON pk.id = np.key_id AND pk.key = 'id'",
+            -1, &stmt, NULL);
+        if (rc == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                int node_id = sqlite3_column_int(stmt, 0);
+                const char *user_id = (const char*)sqlite3_column_text(stmt, 1);
+
+                /* Find internal index for this node_id */
+                int h = hash_int(node_id, graph->node_idx_size);
+                while (graph->node_idx[h] != -1) {
+                    int idx = graph->node_idx[h];
+                    if (graph->node_ids[idx] == node_id) {
+                        graph->user_ids[idx] = user_id ? strdup(user_id) : NULL;
+                        break;
+                    }
+                    h = (h + 1) % graph->node_idx_size;
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
     }
 
     /* Step 2: Count edges per node (for row_ptr) */
@@ -350,6 +383,7 @@ void graph_algo_result_free(graph_algo_result *result)
 /* Comparison function for sorting PageRank results */
 typedef struct {
     int node_id;
+    const char *user_id;  /* User-defined 'id' property (may be NULL) */
     double score;
 } pr_result;
 
@@ -480,6 +514,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations,
 
     for (int i = 0; i < n; i++) {
         results[i].node_id = graph->node_ids[i];
+        results[i].user_id = graph->user_ids ? graph->user_ids[i] : NULL;
         results[i].score = (double)pr[i];  /* Convert back to double for output */
     }
 
@@ -507,12 +542,22 @@ graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations,
     size_t json_len = 1;
 
     for (int i = 0; i < result_count; i++) {
-        char entry[128];
-        int entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"score\":%.10g}",
+        char entry[512];
+        int entry_len;
+        if (results[i].user_id) {
+            entry_len = snprintf(entry, sizeof(entry),
+                                 "%s{\"node_id\":%d,\"user_id\":\"%s\",\"score\":%.10g}",
+                                 (i > 0) ? "," : "",
+                                 results[i].node_id,
+                                 results[i].user_id,
+                                 results[i].score);
+        } else {
+            entry_len = snprintf(entry, sizeof(entry),
+                                 "%s{\"node_id\":%d,\"user_id\":null,\"score\":%.10g}",
                                  (i > 0) ? "," : "",
                                  results[i].node_id,
                                  results[i].score);
+        }
 
         if (json_len + entry_len >= json_capacity - 2) {
             json_capacity *= 2;
@@ -726,13 +771,25 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
     size_t json_len = 1;
 
     for (int i = 0; i < n; i++) {
-        char entry[96];
+        char entry[512];
         int community_id = label_to_community[labels[i]];
-        int entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"community\":%d}",
+        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        int entry_len;
+
+        if (user_id) {
+            entry_len = snprintf(entry, sizeof(entry),
+                                 "%s{\"node_id\":%d,\"user_id\":\"%s\",\"community\":%d}",
+                                 (i > 0) ? "," : "",
+                                 graph->node_ids[i],
+                                 user_id,
+                                 community_id);
+        } else {
+            entry_len = snprintf(entry, sizeof(entry),
+                                 "%s{\"node_id\":%d,\"user_id\":null,\"community\":%d}",
                                  (i > 0) ? "," : "",
                                  graph->node_ids[i],
                                  community_id);
+        }
 
         if (json_len + entry_len >= json_capacity - 2) {
             json_capacity *= 2;

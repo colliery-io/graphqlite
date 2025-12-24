@@ -341,6 +341,70 @@ static void test_database_consistency(void)
     }
 }
 
+/* Test backtick-quoted identifiers for reserved words and special chars */
+static void test_backtick_quoted_identifiers(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* Test backtick-quoted label (reserved word) */
+        const char *q1 = "CREATE (n:`Match` {name: \"test\"})";
+        cypher_result *r1 = cypher_executor_execute(executor, q1);
+        CU_ASSERT_PTR_NOT_NULL(r1);
+        if (r1) {
+            CU_ASSERT_TRUE(r1->success);
+            if (!r1->success) printf("Backtick label failed: %s\n", r1->error_message);
+            cypher_result_free(r1);
+        }
+
+        /* Test backtick-quoted relationship type (reserved word) */
+        const char *q2 = "CREATE (a:BQ1)-[:`IN`]->(b:BQ2)";
+        cypher_result *r2 = cypher_executor_execute(executor, q2);
+        CU_ASSERT_PTR_NOT_NULL(r2);
+        if (r2) {
+            CU_ASSERT_TRUE(r2->success);
+            if (!r2->success) printf("Backtick rel type failed: %s\n", r2->error_message);
+            cypher_result_free(r2);
+        }
+
+        /* Test backtick-quoted property name */
+        const char *q3 = "CREATE (n:BQ3 {`full name`: \"John Doe\"})";
+        cypher_result *r3 = cypher_executor_execute(executor, q3);
+        CU_ASSERT_PTR_NOT_NULL(r3);
+        if (r3) {
+            CU_ASSERT_TRUE(r3->success);
+            if (!r3->success) printf("Backtick property failed: %s\n", r3->error_message);
+            cypher_result_free(r3);
+        }
+
+        /* Test backtick-quoted label with special chars */
+        const char *q4 = "CREATE (n:`My-Label` {name: \"test\"})";
+        cypher_result *r4 = cypher_executor_execute(executor, q4);
+        CU_ASSERT_PTR_NOT_NULL(r4);
+        if (r4) {
+            CU_ASSERT_TRUE(r4->success);
+            if (!r4->success) printf("Backtick special label failed: %s\n", r4->error_message);
+            cypher_result_free(r4);
+        }
+
+        /* Verify backtick-quoted label can be matched */
+        const char *q5 = "MATCH (n:`Match`) RETURN n.name";
+        cypher_result *r5 = cypher_executor_execute(executor, q5);
+        CU_ASSERT_PTR_NOT_NULL(r5);
+        if (r5) {
+            CU_ASSERT_TRUE(r5->success);
+            if (r5->success && r5->row_count > 0) {
+                printf("Backtick match result: %s\n", r5->data[0][0]);
+                CU_ASSERT_STRING_EQUAL(r5->data[0][0], "test");
+            }
+            cypher_result_free(r5);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the basic executor test suite */
 int init_executor_basic_suite(void)
 {
@@ -359,7 +423,8 @@ int init_executor_basic_suite(void)
         !CU_add_test(suite, "CREATE data types", test_create_data_types) ||
         !CU_add_test(suite, "CREATE multiple nodes", test_create_multiple_nodes) ||
         !CU_add_test(suite, "MATCH with WHERE", test_match_with_where) ||
-        !CU_add_test(suite, "Database consistency", test_database_consistency)) {
+        !CU_add_test(suite, "Database consistency", test_database_consistency) ||
+        !CU_add_test(suite, "Backtick quoted identifiers", test_backtick_quoted_identifiers)) {
         return CU_get_error();
     }
     

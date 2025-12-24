@@ -85,6 +85,10 @@ db = connect("graph.db", extension_path="/path/to/graphqlite.dylib")
 
 Or set the `GRAPHQLITE_EXTENSION_PATH` environment variable.
 
+## Troubleshooting
+
+See [FAQ.md](FAQ.md) for common issues and solutions.
+
 ## License
 
 MIT

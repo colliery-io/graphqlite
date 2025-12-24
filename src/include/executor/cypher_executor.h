@@ -41,6 +41,7 @@ struct cypher_executor {
     sqlite3 *db;
     cypher_schema_manager *schema_mgr;
     bool schema_initialized;
+    const char *params_json;  /* Current query parameters (NULL if no params) */
 };
 
 /* Executor lifecycle */
@@ -49,7 +50,9 @@ void cypher_executor_free(cypher_executor *executor);
 
 /* Query execution */
 cypher_result* cypher_executor_execute(cypher_executor *executor, const char *query);
+cypher_result* cypher_executor_execute_params(cypher_executor *executor, const char *query, const char *params_json);
 cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *ast);
+cypher_result* cypher_executor_execute_ast_params(cypher_executor *executor, ast_node *ast, const char *params_json);
 
 /* Result management */
 void cypher_result_free(cypher_result *result);

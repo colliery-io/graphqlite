@@ -142,6 +142,174 @@ agtype_value* agtype_value_create_edge_with_properties(sqlite3 *db, int64_t id, 
     return val;
 }
 
+/* Parse a JSON string like {"id":1,"labels":["L"],"properties":{"k":"v"}} into a vertex agtype */
+agtype_value* agtype_value_from_vertex_json(sqlite3 *db, const char *json)
+{
+    if (!json || json[0] != '{') return NULL;
+
+    /* Use SQLite's JSON functions to extract values */
+    sqlite3_stmt *stmt;
+    int64_t id = 0;
+    char *label = NULL;
+    agtype_pair *pairs = NULL;
+    int num_pairs = 0;
+
+    /* Extract id */
+    const char *id_sql = "SELECT json_extract(?, '$.id')";
+    if (sqlite3_prepare_v2(db, id_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            id = sqlite3_column_int64(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    /* Extract first label from labels array */
+    const char *label_sql = "SELECT json_extract(?, '$.labels[0]')";
+    if (sqlite3_prepare_v2(db, label_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *label_text = (const char*)sqlite3_column_text(stmt, 0);
+            if (label_text) {
+                label = strdup(label_text);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    /* Extract properties as key/value pairs */
+    const char *props_sql = "SELECT key, value FROM json_each(json_extract(?, '$.properties'))";
+    if (sqlite3_prepare_v2(db, props_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+
+        /* Count pairs first */
+        int count = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW) count++;
+        sqlite3_reset(stmt);
+
+        if (count > 0) {
+            pairs = malloc(count * sizeof(agtype_pair));
+            num_pairs = 0;
+
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char *key = (const char*)sqlite3_column_text(stmt, 0);
+                const char *val_text = (const char*)sqlite3_column_text(stmt, 1);
+                int val_type = sqlite3_column_type(stmt, 1);
+
+                pairs[num_pairs].key = agtype_value_create_string(key);
+
+                if (val_type == SQLITE_INTEGER) {
+                    pairs[num_pairs].value = agtype_value_create_integer(sqlite3_column_int64(stmt, 1));
+                } else if (val_type == SQLITE_FLOAT) {
+                    pairs[num_pairs].value = agtype_value_create_float(sqlite3_column_double(stmt, 1));
+                } else if (val_type == SQLITE_NULL) {
+                    pairs[num_pairs].value = agtype_value_create_null();
+                } else {
+                    pairs[num_pairs].value = agtype_value_create_string(val_text);
+                }
+                num_pairs++;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    /* Create the vertex value */
+    agtype_value *val = agtype_value_create_vertex(id, label);
+    if (val && num_pairs > 0) {
+        val->val.entity.pairs = pairs;
+        val->val.entity.num_pairs = num_pairs;
+    } else if (pairs) {
+        /* Clean up if vertex creation failed */
+        for (int i = 0; i < num_pairs; i++) {
+            agtype_value_free(pairs[i].key);
+            agtype_value_free(pairs[i].value);
+        }
+        free(pairs);
+    }
+
+    free(label);
+    return val;
+}
+
+/* Parse a JSON string like {"id":1,"type":"T","startNodeId":1,"endNodeId":2,"properties":{}} into an edge agtype */
+agtype_value* agtype_value_from_edge_json(sqlite3 *db, const char *json)
+{
+    if (!json || json[0] != '{') return NULL;
+
+    sqlite3_stmt *stmt;
+    int64_t id = 0, start_id = 0, end_id = 0;
+    char *type = NULL;
+    agtype_pair *pairs = NULL;
+    int num_pairs = 0;
+
+    /* Extract id, type, startNodeId, endNodeId */
+    const char *edge_sql = "SELECT json_extract(?, '$.id'), json_extract(?, '$.type'), "
+                          "json_extract(?, '$.startNodeId'), json_extract(?, '$.endNodeId')";
+    if (sqlite3_prepare_v2(db, edge_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, json, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, json, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, json, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            id = sqlite3_column_int64(stmt, 0);
+            const char *type_text = (const char*)sqlite3_column_text(stmt, 1);
+            if (type_text) type = strdup(type_text);
+            start_id = sqlite3_column_int64(stmt, 2);
+            end_id = sqlite3_column_int64(stmt, 3);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    /* Extract properties */
+    const char *props_sql = "SELECT key, value FROM json_each(json_extract(?, '$.properties'))";
+    if (sqlite3_prepare_v2(db, props_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+
+        int count = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW) count++;
+        sqlite3_reset(stmt);
+
+        if (count > 0) {
+            pairs = malloc(count * sizeof(agtype_pair));
+            num_pairs = 0;
+
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char *key = (const char*)sqlite3_column_text(stmt, 0);
+                int val_type = sqlite3_column_type(stmt, 1);
+
+                pairs[num_pairs].key = agtype_value_create_string(key);
+
+                if (val_type == SQLITE_INTEGER) {
+                    pairs[num_pairs].value = agtype_value_create_integer(sqlite3_column_int64(stmt, 1));
+                } else if (val_type == SQLITE_FLOAT) {
+                    pairs[num_pairs].value = agtype_value_create_float(sqlite3_column_double(stmt, 1));
+                } else if (val_type == SQLITE_NULL) {
+                    pairs[num_pairs].value = agtype_value_create_null();
+                } else {
+                    pairs[num_pairs].value = agtype_value_create_string((const char*)sqlite3_column_text(stmt, 1));
+                }
+                num_pairs++;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    agtype_value *val = agtype_value_create_edge(id, type, start_id, end_id);
+    if (val && num_pairs > 0) {
+        val->val.edge.pairs = pairs;
+        val->val.edge.num_pairs = num_pairs;
+    } else if (pairs) {
+        for (int i = 0; i < num_pairs; i++) {
+            agtype_value_free(pairs[i].key);
+            agtype_value_free(pairs[i].value);
+        }
+        free(pairs);
+    }
+
+    free(type);
+    return val;
+}
+
 /* Create a path agtype value from array of vertex/edge values */
 agtype_value* agtype_value_create_path(agtype_value **elements, int num_elements)
 {
@@ -510,13 +678,54 @@ char* agtype_value_to_string(agtype_value *val)
             result = strdup("null");
             break;
             
-        case AGTV_STRING:
-            /* Quote the string */
-            result = malloc(val->val.string.len + 3);
+        case AGTV_STRING: {
+            /* Quote the string with proper JSON escaping */
+            const char *src = val->val.string.val;
+            int src_len = val->val.string.len;
+
+            /* Count how many characters need escaping */
+            int escape_count = 0;
+            for (int i = 0; i < src_len; i++) {
+                unsigned char c = (unsigned char)src[i];
+                if (c == '"' || c == '\\' || c < 32) {
+                    escape_count++;
+                }
+            }
+
+            /* Allocate: original + escapes + quotes + null */
+            result = malloc(src_len + escape_count + 3);
             if (result) {
-                snprintf(result, val->val.string.len + 3, "\"%s\"", val->val.string.val);
+                char *dst = result;
+                *dst++ = '"';
+                for (int i = 0; i < src_len; i++) {
+                    unsigned char c = (unsigned char)src[i];
+                    if (c == '"') {
+                        *dst++ = '\\';
+                        *dst++ = '"';
+                    } else if (c == '\\') {
+                        *dst++ = '\\';
+                        *dst++ = '\\';
+                    } else if (c == '\n') {
+                        *dst++ = '\\';
+                        *dst++ = 'n';
+                    } else if (c == '\r') {
+                        *dst++ = '\\';
+                        *dst++ = 'r';
+                    } else if (c == '\t') {
+                        *dst++ = '\\';
+                        *dst++ = 't';
+                    } else if (c < 32) {
+                        /* Skip other control characters */
+                        *dst++ = ' ';
+                    } else {
+                        *dst++ = c;
+                    }
+                }
+                *dst++ = '"';
+                *dst = '\0';
             }
             break;
+        }
             
         case AGTV_INTEGER: {
             result = malloc(32);

@@ -14,6 +14,9 @@ PYTHON ?= python3.11
 EXTRA_INCLUDES ?=
 EXTRA_LIBS ?=
 
+# Vendored SQLite headers for consistent extension builds
+VENDOR_SQLITE_DIR = vendor/sqlite
+
 # Build mode: debug (default) or release
 # Use: make extension RELEASE=1
 ifdef RELEASE
@@ -94,13 +97,26 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_func_list.c \
 	$(TRANSFORM_DIR)/transform_func_graph.c \
 	$(TRANSFORM_DIR)/transform_func_aggregate.c \
-	$(TRANSFORM_DIR)/transform_expr_predicate.c
+	$(TRANSFORM_DIR)/transform_expr_predicate.c \
+	$(TRANSFORM_DIR)/transform_with.c \
+	$(TRANSFORM_DIR)/transform_unwind.c \
+	$(TRANSFORM_DIR)/transform_expr_ops.c
 
 # Executor sources
 EXECUTOR_DIR = $(SRC_DIR)/backend/executor
 EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/cypher_schema.c \
 	$(EXECUTOR_DIR)/cypher_executor.c \
+	$(EXECUTOR_DIR)/executor_variable_map.c \
+	$(EXECUTOR_DIR)/executor_foreach_ctx.c \
+	$(EXECUTOR_DIR)/executor_result.c \
+	$(EXECUTOR_DIR)/executor_helpers.c \
+	$(EXECUTOR_DIR)/executor_delete.c \
+	$(EXECUTOR_DIR)/executor_set.c \
+	$(EXECUTOR_DIR)/executor_create.c \
+	$(EXECUTOR_DIR)/executor_foreach.c \
+	$(EXECUTOR_DIR)/executor_merge.c \
+	$(EXECUTOR_DIR)/executor_match.c \
 	$(EXECUTOR_DIR)/agtype.c \
 	$(EXECUTOR_DIR)/graph_algorithms.c
 
@@ -136,6 +152,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_merge.c \
 	$(TEST_DIR)/test_executor_pagerank.c \
 	$(TEST_DIR)/test_executor_label_propagation.c \
+	$(TEST_DIR)/test_executor_params.c \
 	$(TEST_DIR)/test_output_format.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
@@ -190,9 +207,9 @@ endif
 $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Extension object
+# Extension object (uses vendored SQLite headers for ABI consistency)
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(SRC_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -I$(SRC_DIR) -c $< -o $@
 
 
 # Help target
@@ -277,21 +294,21 @@ $(BUILD_EXECUTOR_DIR)/%.o: $(EXECUTOR_DIR)/%.c | dirs
 $(BUILD_EXECUTOR_DIR)/%.cov.o: $(EXECUTOR_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
 
-# PIC object builds for shared library (with EXTENSION_CFLAGS for sqlite3ext.h API redirection)
+# PIC object builds for shared library (uses vendored SQLite headers for ABI consistency)
 $(BUILD_PARSER_DIR)/%.pic.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_scanner.pic.o: $(SCANNER_SRC) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -Wno-sign-compare -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_gram.tab.pic.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_TRANSFORM_DIR)/%.pic.o: $(TRANSFORM_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -c $< -o $@
 
 $(BUILD_EXECUTOR_DIR)/%.pic.o: $(EXECUTOR_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -c $< -o $@
 
 # Test objects
 $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs

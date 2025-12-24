@@ -1,0 +1,18 @@
+[project]
+name = "nanographrag"
+version = "0.1.0"
+description = "Minimal GraphRAG example using GraphQLite"
+requires-python = ">=3.10"
+dependencies = [
+    "graphqlite",
+    "sqlite-vec",
+    "numpy>=1.21.0",
+    "sentence-transformers>=2.2.0",
+    "spacy>=3.7.0",
+]
+
+[tool.uv]
+dev-dependencies = []
+
+[tool.uv.sources]
+graphqlite = { path = "../../bindings/python", editable = true }

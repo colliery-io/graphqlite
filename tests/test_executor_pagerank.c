@@ -304,12 +304,18 @@ static double extract_score_for_node(const char *json, int target_node_id)
     while ((p = strstr(p, "node_id")) != NULL) {
         int node_id = 0;
         double score = 0.0;
-        /* Try to parse node_id and score */
-        if (sscanf(p, "node_id\":%d,\"score\":%lf", &node_id, &score) == 2 ||
-            sscanf(p, "node_id\": %d, \"score\": %lf", &node_id, &score) == 2 ||
-            sscanf(p, "node_id\":%d,\"score\": %lf", &node_id, &score) == 2) {
+        /* Parse node_id first */
+        if (sscanf(p, "node_id\":%d", &node_id) == 1 ||
+            sscanf(p, "node_id\": %d", &node_id) == 1) {
             if (node_id == target_node_id) {
-                return score;
+                /* Find and parse score (may have user_id field in between) */
+                const char *score_ptr = strstr(p, "score");
+                if (score_ptr) {
+                    if (sscanf(score_ptr, "score\":%lf", &score) == 1 ||
+                        sscanf(score_ptr, "score\": %lf", &score) == 1) {
+                        return score;
+                    }
+                }
             }
         }
         p++;

@@ -33,7 +33,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * a parenthesized expression until it sees more context.
  */
 %expect 3
-%expect-rr 1
+%expect-rr 2  /* One for IDENTIFIER, one for BQIDENT in variable_opt */
 
 %union {
     int integer;
@@ -699,6 +699,11 @@ rel_pattern:
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
             free($5);
         }
+    | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
+            free($5);
+        }
     | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-' '>'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, true);
@@ -711,6 +716,11 @@ rel_pattern:
             $$ = make_rel_pattern_varlen($4, NULL, (ast_node*)$6, true, false, (ast_node*)$5);
         }
     | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
+            free($6);
+        }
+    | '<' '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
             free($6);
@@ -731,6 +741,11 @@ rel_pattern:
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
             free($5);
         }
+    | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-'
+        {
+            $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
+            free($5);
+        }
     | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, false);
@@ -742,6 +757,7 @@ rel_pattern:
 variable_opt:
     /* empty */     { $$ = NULL; }
     | IDENTIFIER    { $$ = $1; }
+    | BQIDENT       { $$ = $1; }
     ;
 
 /* Variable-length range for relationships: *, *1..5, *2.., *..3 */
@@ -765,9 +781,16 @@ label_opt:
     | label_list        { $$ = $1; }
     ;
 
-/* Support for multiple labels: :Label1:Label2:Label3 */
+/* Support for multiple labels: :Label1:Label2:Label3 or :`Quoted Label` */
 label_list:
     ':' IDENTIFIER
+        {
+            $$ = ast_list_create();
+            cypher_literal *label = make_string_literal($2, @2.first_line);
+            ast_list_append($$, (ast_node*)label);
+            free($2);
+        }
+    | ':' BQIDENT
         {
             $$ = ast_list_create();
             cypher_literal *label = make_string_literal($2, @2.first_line);
@@ -781,13 +804,19 @@ label_list:
             ast_list_append($$, (ast_node*)label);
             free($3);
         }
+    | label_list ':' BQIDENT
+        {
+            $$ = $1;
+            cypher_literal *label = make_string_literal($3, @3.first_line);
+            ast_list_append($$, (ast_node*)label);
+            free($3);
+        }
     ;
 
 rel_type_list:
     IDENTIFIER '|' IDENTIFIER
         {
             $$ = ast_list_create();
-            /* Create string literal nodes for both types */
             cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
             cypher_literal *type_lit3 = make_string_literal($3, @3.first_line);
             ast_list_append($$, (ast_node*)type_lit1);
@@ -795,20 +824,45 @@ rel_type_list:
             free($1);
             free($3);
         }
-    | IDENTIFIER '|' ':' IDENTIFIER
+    | IDENTIFIER '|' BQIDENT
         {
-            /* Second type has explicit colon: [:KNOWS|:FRIENDS] */
             $$ = ast_list_create();
             cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
-            cypher_literal *type_lit4 = make_string_literal($4, @4.first_line);
+            cypher_literal *type_lit3 = make_string_literal($3, @3.first_line);
             ast_list_append($$, (ast_node*)type_lit1);
-            ast_list_append($$, (ast_node*)type_lit4);
+            ast_list_append($$, (ast_node*)type_lit3);
             free($1);
-            free($4);
+            free($3);
+        }
+    | BQIDENT '|' IDENTIFIER
+        {
+            $$ = ast_list_create();
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit3 = make_string_literal($3, @3.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit3);
+            free($1);
+            free($3);
+        }
+    | BQIDENT '|' BQIDENT
+        {
+            $$ = ast_list_create();
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit3 = make_string_literal($3, @3.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit3);
+            free($1);
+            free($3);
         }
     | rel_type_list '|' IDENTIFIER
         {
-            /* Add another type to the list */
+            cypher_literal *type_lit = make_string_literal($3, @3.first_line);
+            ast_list_append($1, (ast_node*)type_lit);
+            $$ = $1;
+            free($3);
+        }
+    | rel_type_list '|' BQIDENT
+        {
             cypher_literal *type_lit = make_string_literal($3, @3.first_line);
             ast_list_append($1, (ast_node*)type_lit);
             $$ = $1;
@@ -816,7 +870,13 @@ rel_type_list:
         }
     | rel_type_list '|' ':' IDENTIFIER
         {
-            /* Add another type with explicit colon */
+            cypher_literal *type_lit = make_string_literal($4, @4.first_line);
+            ast_list_append($1, (ast_node*)type_lit);
+            $$ = $1;
+            free($4);
+        }
+    | rel_type_list '|' ':' BQIDENT
+        {
             cypher_literal *type_lit = make_string_literal($4, @4.first_line);
             ast_list_append($1, (ast_node*)type_lit);
             $$ = $1;
@@ -1273,6 +1333,10 @@ map_pair_list:
 
 map_pair:
     IDENTIFIER ':' expr
+        {
+            $$ = make_map_pair($1, $3, @1.first_line);
+        }
+    | BQIDENT ':' expr
         {
             $$ = make_map_pair($1, $3, @1.first_line);
         }

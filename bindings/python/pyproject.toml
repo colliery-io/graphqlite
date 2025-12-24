@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -37,7 +37,7 @@ dev = ["pytest>=7.0", "pytest-cov"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-graphqlite = ["*.dylib", "*.so"]
+graphqlite = ["*.dylib", "*.so", "*.dll"]
 
 [tool.setuptools.dynamic]
 version = {attr = "graphqlite.__version__"}

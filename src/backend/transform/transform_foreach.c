@@ -142,51 +142,12 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
     snprintf(var_alias, sizeof(var_alias), "%s.\"%s\"", cte_name, foreach->variable);
     register_projected_variable(ctx, foreach->variable, cte_name, foreach->variable);
 
-    /* Now transform each update clause in the body */
-    /* For now, we only support a single CREATE or SET clause */
-    /* Each update clause will use the CTE data */
-
-    for (int i = 0; i < foreach->body->count; i++) {
-        ast_node *clause = foreach->body->items[i];
-        if (!clause) continue;
-
-        CYPHER_DEBUG("FOREACH body clause %d: type=%s", i, ast_node_type_name(clause->type));
-
-        switch (clause->type) {
-            case AST_NODE_CREATE:
-                /* For CREATE inside FOREACH, we need to generate an INSERT...SELECT */
-                /* This is complex - for now, report as not fully supported */
-                ctx->has_error = true;
-                ctx->error_message = strdup("CREATE inside FOREACH is not yet fully implemented. Use UNWIND + CREATE as an alternative.");
-                return -1;
-
-            case AST_NODE_SET:
-                /* SET inside FOREACH needs to generate an UPDATE...FROM */
-                ctx->has_error = true;
-                ctx->error_message = strdup("SET inside FOREACH is not yet fully implemented. Use UNWIND + SET as an alternative.");
-                return -1;
-
-            case AST_NODE_DELETE:
-                ctx->has_error = true;
-                ctx->error_message = strdup("DELETE inside FOREACH is not yet fully implemented. Use UNWIND + DELETE as an alternative.");
-                return -1;
-
-            case AST_NODE_MERGE:
-                ctx->has_error = true;
-                ctx->error_message = strdup("MERGE inside FOREACH is not yet fully implemented. Use UNWIND + MERGE as an alternative.");
-                return -1;
-
-            case AST_NODE_REMOVE:
-                ctx->has_error = true;
-                ctx->error_message = strdup("REMOVE inside FOREACH is not yet fully implemented. Use UNWIND + REMOVE as an alternative.");
-                return -1;
-
-            default:
-                ctx->has_error = true;
-                ctx->error_message = strdup("Unsupported clause type inside FOREACH");
-                return -1;
-        }
-    }
+    /*
+     * FOREACH is now handled in the executor via execute_foreach_clause().
+     * This transform function is only used for EXPLAIN mode to show the CTE structure.
+     * The actual execution happens imperatively in C.
+     */
+    (void)foreach;  /* Mark as intentionally unused in body processing */
 
     return 0;
 }

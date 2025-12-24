@@ -47,13 +47,13 @@ static void simple_test_func(sqlite3_context *context, int argc, sqlite3_value *
 
 /* Cypher function - full implementation with cached executor */
 static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
-    if (argc != 1) {
-        sqlite3_result_error(context, "cypher() function requires exactly one argument", -1);
+    if (argc < 1 || argc > 2) {
+        sqlite3_result_error(context, "cypher() requires 1 or 2 arguments: (query) or (query, params_json)", -1);
         return;
     }
 
     if (sqlite3_value_type(argv[0]) != SQLITE_TEXT) {
-        sqlite3_result_error(context, "cypher() argument must be text", -1);
+        sqlite3_result_error(context, "cypher() first argument (query) must be text", -1);
         return;
     }
 
@@ -61,6 +61,19 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
     if (!query) {
         sqlite3_result_error(context, "cypher() query cannot be null", -1);
         return;
+    }
+
+    /* Optional parameters JSON */
+    const char *params_json = NULL;
+    if (argc == 2) {
+        if (sqlite3_value_type(argv[1]) == SQLITE_NULL) {
+            /* NULL is allowed - treat as no params */
+        } else if (sqlite3_value_type(argv[1]) != SQLITE_TEXT) {
+            sqlite3_result_error(context, "cypher() second argument (params) must be JSON text or NULL", -1);
+            return;
+        } else {
+            params_json = (const char*)sqlite3_value_text(argv[1]);
+        }
     }
 
     /* Get database connection from SQLite context */
@@ -93,8 +106,13 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
         g_executor_cache.executor = executor;
     }
 
-    /* Execute query */
-    cypher_result *result = cypher_executor_execute(executor, query);
+    /* Execute query (with or without parameters) */
+    cypher_result *result;
+    if (params_json) {
+        result = cypher_executor_execute_params(executor, query, params_json);
+    } else {
+        result = cypher_executor_execute(executor, query);
+    }
     if (!result) {
         /* Don't free cached executor on error */
         sqlite3_result_error(context, "Failed to execute cypher query", -1);
@@ -380,8 +398,8 @@ int sqlite3_graphqlite_init(
   sqlite3_create_function(db, "graphqlite_test", 0, SQLITE_UTF8, 0,
                          simple_test_func, 0, 0);
   
-  /* Register the main cypher() function */
-  sqlite3_create_function(db, "cypher", 1, SQLITE_UTF8, 0,
+  /* Register the main cypher() function (1 or 2 args: query, optional params_json) */
+  sqlite3_create_function(db, "cypher", -1, SQLITE_UTF8, 0,
                          graphqlite_cypher_func, 0, 0);
 
   /* Register the regexp() function for =~ operator support */

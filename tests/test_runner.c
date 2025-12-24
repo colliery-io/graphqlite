@@ -26,6 +26,7 @@ int init_executor_unwind_suite(void);
 int init_executor_merge_suite(void);
 int init_executor_pagerank_suite(void);
 int init_executor_label_propagation_suite(void);
+int register_params_tests(void);
 int init_output_format_suite(void);
 
 int main(void)
@@ -159,6 +160,12 @@ int main(void)
 
     if (init_executor_label_propagation_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add executor Label Propagation suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (register_params_tests() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor params suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

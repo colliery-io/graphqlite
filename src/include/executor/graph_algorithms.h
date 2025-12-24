@@ -22,7 +22,8 @@ typedef struct {
     int *row_ptr;         /* Size: node_count + 1. row_ptr[i] = start of node i's edges in col_idx */
     int *col_idx;         /* Size: edge_count. Target node IDs for each edge */
 
-    int *node_ids;        /* Size: node_count. Maps internal index -> original node ID */
+    int *node_ids;        /* Size: node_count. Maps internal index -> original node ID (rowid) */
+    char **user_ids;      /* Size: node_count. Maps internal index -> user-defined 'id' property */
     int *node_idx;        /* Hash table: original node ID -> internal index (for reverse lookup) */
     int node_idx_size;    /* Size of node_idx hash table */
 

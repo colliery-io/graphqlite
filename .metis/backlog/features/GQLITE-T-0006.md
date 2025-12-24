@@ -4,15 +4,15 @@ level: task
 title: "Implement FOREACH clause for iterative updates"
 short_code: "GQLITE-T-0006"
 created_at: 2025-12-24T01:49:49.042048+00:00
-updated_at: 2025-12-24T01:49:49.042048+00:00
+updated_at: 2025-12-24T15:02:17.022679+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -33,6 +33,12 @@ Implement the FOREACH clause for iterating over a list and performing update ope
 - **User Value**: Batch update operations without multiple queries
 - **Business Value**: OpenCypher compliance, better performance for bulk operations
 - **Effort Estimate**: M (Medium)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

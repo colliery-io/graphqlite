@@ -1,8 +1,13 @@
+
 # GraphQLite
 
-A SQLite extension that adds graph database capabilities using the Cypher query language.
+<p align="center">
+    <img src="docs/assets/logo.png" alt="GQL" width="256">
+</p>
 
-GraphQLite lets you store and query graph data directly in SQLite. You get the simplicity of SQLite (single file, zero configuration, embedded) combined with the expressiveness of Cypher for modeling relationships. It's designed for applications that need graph queries without the overhead of a separate database server.
+An SQLite extension that adds graph database capabilities using the Cypher query language.
+
+GraphQLite lets you store and query graph data directly in SQLite—combining the simplicity of a single-file, zero-config embedded database with Cypher's expressive power for modeling relationships. With first-class Python bindings, you can `pip install` and start querying graphs in minutes. Perfect for applications that need graph queries without a separate database server, or for local development and learning without standing up additional infrastructure.
 
 ## Installation
 

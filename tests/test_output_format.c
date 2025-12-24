@@ -75,7 +75,59 @@ static char* execute_and_format(const char *query)
         return err;
     }
 
-    /* Format like extension.c does */
+    /* Format like extension.c does - check agtype data FIRST */
+    if (result->row_count > 0 && result->use_agtype && result->agtype_data) {
+        /* Use AGE-compatible format with agtype values */
+        int buffer_size = 1024;
+        for (int row = 0; row < result->row_count; row++) {
+            for (int col = 0; col < result->column_count; col++) {
+                if (result->agtype_data[row][col]) {
+                    char *temp_str = agtype_value_to_string(result->agtype_data[row][col]);
+                    if (temp_str) {
+                        buffer_size += strlen(temp_str) + 50;
+                        free(temp_str);
+                    }
+                }
+            }
+        }
+
+        char *json = malloc(buffer_size);
+        strcpy(json, "[");
+
+        for (int row = 0; row < result->row_count; row++) {
+            if (row > 0) strcat(json, ",");
+            strcat(json, "{");
+
+            for (int col = 0; col < result->column_count; col++) {
+                if (col > 0) strcat(json, ",");
+
+                strcat(json, "\"");
+                if (result->column_names && result->column_names[col]) {
+                    strcat(json, result->column_names[col]);
+                } else {
+                    char col_name[32];
+                    snprintf(col_name, sizeof(col_name), "column_%d", col);
+                    strcat(json, col_name);
+                }
+                strcat(json, "\":");
+
+                char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
+                if (agtype_str) {
+                    strcat(json, agtype_str);
+                    free(agtype_str);
+                } else {
+                    strcat(json, "null");
+                }
+            }
+            strcat(json, "}");
+        }
+        strcat(json, "]");
+
+        cypher_result_free(result);
+        return json;
+    }
+
+    /* Fallback to raw data */
     if (result->row_count > 0 && result->data) {
         /* Check for single-cell JSON array (graph algorithms) */
         if (result->row_count == 1 && result->column_count == 1 &&
@@ -479,6 +531,128 @@ static void test_label_propagation_output_format(void)
     free(result);
 }
 
+/*=== Tests for returning whole nodes/relationships ===*/
+
+static void test_return_whole_node(void)
+{
+    /* RETURN n should return node as object with id, labels, properties */
+    execute_and_format("CREATE (n:WholeNode {name: \"Test\", value: 42})");
+
+    char *result = execute_and_format("MATCH (n:WholeNode) RETURN n");
+    printf("\nRETURN whole node: %s\n", result);
+
+    CU_ASSERT_TRUE(is_json_array(result));
+    /* Must have column name "n" */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"n\":"));
+    /* Node must have id field */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"id\":"));
+    /* Node must have labels array */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"labels\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"WholeNode\""));
+    /* Node must have properties object */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"properties\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"name\""));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"Test\""));
+
+    free(result);
+}
+
+static void test_return_whole_relationship(void)
+{
+    /* RETURN r should return relationship as object with id, type, properties */
+    execute_and_format("CREATE (a:RelSource {id: \"src\"})-[:KNOWS {since: 2020}]->(b:RelTarget {id: \"tgt\"})");
+
+    char *result = execute_and_format("MATCH ()-[r:KNOWS]->() RETURN r");
+    printf("\nRETURN whole relationship: %s\n", result);
+
+    CU_ASSERT_TRUE(is_json_array(result));
+    /* Must have column name "r" */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"r\":"));
+    /* Relationship must have id field */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"id\":"));
+    /* Relationship must have type field */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"type\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"KNOWS\""));
+    /* Relationship must have properties */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"properties\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"since\""));
+
+    free(result);
+}
+
+static void test_return_node_and_properties(void)
+{
+    /* Test mixing whole node and property access in same query */
+    execute_and_format("CREATE (n:MixedReturn {name: \"Mixed\", score: 100})");
+
+    char *result = execute_and_format("MATCH (n:MixedReturn) RETURN n, n.name, n.score");
+    printf("\nRETURN node + properties: %s\n", result);
+
+    CU_ASSERT_TRUE(is_json_array(result));
+    /* Should have all three columns */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"n\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"n.name\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"n.score\":"));
+
+    free(result);
+}
+
+static void test_return_multiple_nodes(void)
+{
+    /* Test returning multiple whole nodes */
+    execute_and_format("CREATE (a:MultiNode {name: \"A\"})-[:LINK]->(b:MultiNode {name: \"B\"})");
+
+    char *result = execute_and_format("MATCH (a:MultiNode)-[]->(b:MultiNode) RETURN a, b");
+    printf("\nRETURN multiple nodes: %s\n", result);
+
+    CU_ASSERT_TRUE(is_json_array(result));
+    /* Should have both node columns */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"a\":"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"b\":"));
+    /* Both should be node objects with id/labels/properties */
+    /* Count occurrences of "id": - should be at least 2 */
+    int id_count = 0;
+    const char *p = result;
+    while ((p = strstr(p, "\"id\":")) != NULL) {
+        id_count++;
+        p++;
+    }
+    CU_ASSERT_TRUE(id_count >= 2);
+
+    free(result);
+}
+
+static void test_return_path(void)
+{
+    /* Test returning a path */
+    execute_and_format("CREATE (a:PathNode {name: \"Start\"})-[:STEP]->(b:PathNode {name: \"End\"})");
+
+    char *result = execute_and_format("MATCH p=(a:PathNode)-[]->(b:PathNode) RETURN p");
+    printf("\nRETURN path: %s\n", result);
+
+    CU_ASSERT_TRUE(is_json_array(result));
+    /* Path should be returned with column name "p" */
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"p\":"));
+
+    free(result);
+}
+
+static void test_node_not_double_encoded(void)
+{
+    /* Ensure node is not returned as escaped JSON string */
+    execute_and_format("CREATE (n:NoDoubleEncode {val: 1})");
+
+    char *result = execute_and_format("MATCH (n:NoDoubleEncode) RETURN n");
+    printf("\nNo double encoding: %s\n", result);
+
+    CU_ASSERT_TRUE(is_json_array(result));
+    /* Should NOT have escaped quotes like \\\" which indicates double-encoding */
+    CU_ASSERT_PTR_NULL(strstr(result, "\\\"id\\\""));
+    CU_ASSERT_PTR_NULL(strstr(result, "\\\"labels\\\""));
+
+    free(result);
+}
+
 /*=== Tests for error handling ===*/
 
 static void test_syntax_error_format(void)
@@ -543,6 +717,16 @@ int init_output_format_suite(void)
     /* Graph algorithms */
     if (!CU_add_test(suite, "PageRank output format", test_pagerank_output_format) ||
         !CU_add_test(suite, "LabelPropagation output format", test_label_propagation_output_format)) {
+        return CU_get_error();
+    }
+
+    /* Whole node/relationship returns */
+    if (!CU_add_test(suite, "RETURN whole node", test_return_whole_node) ||
+        !CU_add_test(suite, "RETURN whole relationship", test_return_whole_relationship) ||
+        !CU_add_test(suite, "RETURN node and properties", test_return_node_and_properties) ||
+        !CU_add_test(suite, "RETURN multiple nodes", test_return_multiple_nodes) ||
+        !CU_add_test(suite, "RETURN path", test_return_path) ||
+        !CU_add_test(suite, "Node not double encoded", test_node_not_double_encoded)) {
         return CU_get_error();
     }
 

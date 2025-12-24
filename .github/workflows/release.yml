@@ -128,8 +128,59 @@ jobs:
           name: ${{ matrix.artifact-name }}
           path: build/${{ matrix.artifact-name }}
 
-  publish-python:
+  # Build platform-specific wheels with bundled extensions
+  build-wheels:
     needs: build-and-test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: graphqlite-linux-x86_64.so
+            extension: graphqlite.so
+          - os: macos-14
+            artifact: graphqlite-macos-arm64.dylib
+            extension: graphqlite.dylib
+          # Note: macos-x86_64 wheel built on arm64 with universal tag
+          - os: windows-latest
+            artifact: graphqlite-windows-x86_64.dll
+            extension: graphqlite.dll
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download extension artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bindings/python/src/graphqlite/
+
+      - name: Rename extension to standard name
+        working-directory: bindings/python/src/graphqlite
+        run: mv ${{ matrix.artifact }} ${{ matrix.extension }}
+        shell: bash
+
+      - name: Install build tools
+        run: pip install build wheel
+
+      - name: Build wheel
+        working-directory: bindings/python
+        run: python -m build --wheel
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: bindings/python/dist/*.whl
+
+  publish-python:
+    needs: build-wheels
     runs-on: ubuntu-latest
 
     steps:
@@ -140,15 +191,27 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install build tools
-        run: pip install build twine
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Install twine
+        run: pip install twine
 
       - name: Build source distribution
         working-directory: bindings/python
-        run: python -m build --sdist
+        run: |
+          pip install build
+          python -m build --sdist
+          cp dist/*.tar.gz ../../dist/
+
+      - name: List distributions
+        run: ls -la dist/
 
       - name: Publish to PyPI
-        working-directory: bindings/python
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
@@ -171,7 +234,7 @@ jobs:
         run: cargo publish --allow-dirty
 
   create-release:
-    needs: [build-and-test, publish-python, publish-rust]
+    needs: [build-and-test, build-wheels, publish-python, publish-rust]
     runs-on: ubuntu-latest
 
     steps:

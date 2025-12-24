@@ -51,7 +51,6 @@ class Connection:
     def _find_extension(self) -> str:
         """Find the GraphQLite extension library."""
         system = platform.system()
-        machine = platform.machine()
 
         if system == "Darwin":
             ext_name = "graphqlite.dylib"
@@ -93,12 +92,32 @@ class Connection:
             extension_path = self._find_extension()
 
         # Enable extension loading
-        self._conn.enable_load_extension(True)
+        try:
+            self._conn.enable_load_extension(True)
+        except AttributeError as e:
+            raise RuntimeError(
+                "SQLite extension loading not available. "
+                "Your Python's sqlite3 module may not support extensions.\n"
+                "On macOS with MacPorts/Homebrew, try:\n"
+                "  DYLD_LIBRARY_PATH=/opt/local/lib python your_script.py"
+            ) from e
 
         # Load extension (remove file extension for SQLite)
         ext_path = Path(extension_path)
         load_path = str(ext_path.parent / ext_path.stem)
-        self._conn.load_extension(load_path)
+
+        try:
+            self._conn.load_extension(load_path)
+        except sqlite3.OperationalError as e:
+            error_msg = str(e).lower()
+            if "not authorized" in error_msg:
+                raise RuntimeError(
+                    "SQLite extension loading is disabled. "
+                    "The system SQLite may not allow extensions.\n"
+                    "On macOS, try using Homebrew or MacPorts Python with:\n"
+                    "  DYLD_LIBRARY_PATH=/opt/local/lib python your_script.py"
+                ) from e
+            raise
 
         # Verify extension loaded
         cursor = self._conn.execute("SELECT graphqlite_test()")
@@ -106,20 +125,28 @@ class Connection:
         if not result or "successfully" not in result[0].lower():
             raise RuntimeError("Failed to initialize GraphQLite extension")
 
-    def cypher(self, query: str) -> CypherResult:
+    def cypher(self, query: str, params: Optional[dict[str, Any]] = None) -> CypherResult:
         """
-        Execute a Cypher query.
+        Execute a Cypher query with optional parameters.
 
         Args:
-            query: Cypher query string
+            query: Cypher query string, may contain $param placeholders
+            params: Optional dictionary of parameter values
 
         Returns:
             CypherResult object with query results
 
         Raises:
             sqlite3.Error: If the query fails
+
+        Example:
+            >>> db.cypher("MATCH (n) WHERE n.name = $name RETURN n", {"name": "Alice"})
         """
-        cursor = self._conn.execute("SELECT cypher(?)", (query,))
+        if params:
+            params_json = json.dumps(params)
+            cursor = self._conn.execute("SELECT cypher(?, ?)", (query, params_json))
+        else:
+            cursor = self._conn.execute("SELECT cypher(?)", (query,))
         row = cursor.fetchone()
 
         if row is None or row[0] is None:
