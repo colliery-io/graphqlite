@@ -7,7 +7,7 @@ from typing import Optional
 from .connection import Connection, connect, wrap
 from .graph import Graph, graph, escape_string, sanitize_rel_type, CYPHER_RESERVED
 
-__version__ = "0.1.0b1"
+__version__ = "0.1.0b2"
 __all__ = [
     "Connection", "connect", "wrap", "load", "loadable_path",
     "Graph", "graph", "escape_string", "sanitize_rel_type", "CYPHER_RESERVED"

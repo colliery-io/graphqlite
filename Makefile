@@ -8,10 +8,9 @@ SQLITE ?= sqlite3
 # Override with: make PYTHON=python3.12 test-python
 PYTHON ?= python3.11
 
-# Platform-specific paths (override for local development)
-# macOS with MacPorts: make EXTRA_INCLUDES=-I/opt/local/include EXTRA_LIBS=-L/opt/local/lib
+# Platform-specific paths (for test runner linking only, not extension builds)
+# macOS with MacPorts: make EXTRA_LIBS=-L/opt/local/lib
 # macOS with Homebrew: make SQLITE=$(brew --prefix)/bin/sqlite3
-EXTRA_INCLUDES ?=
 EXTRA_LIBS ?=
 
 # Vendored SQLite headers for consistent extension builds
@@ -20,10 +19,10 @@ VENDOR_SQLITE_DIR = vendor/sqlite
 # Build mode: debug (default) or release
 # Use: make extension RELEASE=1
 ifdef RELEASE
-CFLAGS = -Wall -Wextra -O2 -I./src/include $(EXTRA_INCLUDES)
+CFLAGS = -Wall -Wextra -O2 -I$(VENDOR_SQLITE_DIR) -I./src/include
 else
 # Add -DGRAPHQLITE_PERF_TIMING for detailed query timing instrumentation
-CFLAGS = -Wall -Wextra -g -I./src/include $(EXTRA_INCLUDES) -DGRAPHQLITE_DEBUG
+CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG
 endif
 LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3
 
@@ -209,7 +208,7 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 
 # Extension object (uses vendored SQLite headers for ABI consistency)
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -I$(SRC_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 
 # Help target
@@ -294,21 +293,21 @@ $(BUILD_EXECUTOR_DIR)/%.o: $(EXECUTOR_DIR)/%.c | dirs
 $(BUILD_EXECUTOR_DIR)/%.cov.o: $(EXECUTOR_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
 
-# PIC object builds for shared library (uses vendored SQLite headers for ABI consistency)
+# PIC object builds for shared library (uses vendored SQLite headers via CFLAGS)
 $(BUILD_PARSER_DIR)/%.pic.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_scanner.pic.o: $(SCANNER_SRC) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -Wno-sign-compare -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_gram.tab.pic.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_TRANSFORM_DIR)/%.pic.o: $(TRANSFORM_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 $(BUILD_EXECUTOR_DIR)/%.pic.o: $(EXECUTOR_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(VENDOR_SQLITE_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 # Test objects
 $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs
