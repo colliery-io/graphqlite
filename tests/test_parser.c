@@ -11,6 +11,17 @@
 #include "cypher_gram.tab.h"
 #include "test_parser.h"
 
+/* Helper to get first label string from a node pattern */
+static const char* get_first_label(cypher_node_pattern *node)
+{
+    if (!node || !node->labels || node->labels->count == 0) return NULL;
+    ast_node *label_node = node->labels->items[0];
+    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
+    cypher_literal *lit = (cypher_literal*)label_node;
+    if (lit->literal_type != LITERAL_STRING) return NULL;
+    return lit->value.string;
+}
+
 /* Test basic query parsing */
 static void test_simple_match_return(void)
 {
@@ -418,11 +429,12 @@ static void test_create_label_and_properties(void)
         cypher_path *path = (cypher_path*)create->pattern->items[0];
         cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
         
-        CU_ASSERT_PTR_NOT_NULL(node->label);
-        CU_ASSERT_STRING_EQUAL(node->label, "Person");
+        CU_ASSERT_PTR_NOT_NULL(node->labels);
+        CU_ASSERT_EQUAL(node->labels->count, 1);
+        CU_ASSERT_STRING_EQUAL(get_first_label(node), "Person");
         CU_ASSERT_PTR_NOT_NULL(node->properties);
         CU_ASSERT_EQUAL(node->properties->type, AST_NODE_MAP);
-        
+
         cypher_parser_free_result(result);
     }
 }
@@ -459,10 +471,11 @@ static void test_create_with_variable(void)
         
         CU_ASSERT_PTR_NOT_NULL(node->variable);
         CU_ASSERT_STRING_EQUAL(node->variable, "alice");
-        CU_ASSERT_PTR_NOT_NULL(node->label);
-        CU_ASSERT_STRING_EQUAL(node->label, "Person");
+        CU_ASSERT_PTR_NOT_NULL(node->labels);
+        CU_ASSERT_EQUAL(node->labels->count, 1);
+        CU_ASSERT_STRING_EQUAL(get_first_label(node), "Person");
         CU_ASSERT_PTR_NOT_NULL(node->properties);
-        
+
         cypher_parser_free_result(result);
     }
 }
@@ -572,10 +585,11 @@ static void test_create_label_only(void)
         cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
         
         CU_ASSERT_PTR_NULL(node->variable); /* No variable */
-        CU_ASSERT_PTR_NOT_NULL(node->label);
-        CU_ASSERT_STRING_EQUAL(node->label, "Person");
+        CU_ASSERT_PTR_NOT_NULL(node->labels);
+        CU_ASSERT_EQUAL(node->labels->count, 1);
+        CU_ASSERT_STRING_EQUAL(get_first_label(node), "Person");
         CU_ASSERT_PTR_NULL(node->properties); /* No properties */
-        
+
         cypher_parser_free_result(result);
     }
 }
@@ -598,10 +612,347 @@ static void test_create_properties_no_label(void)
         
         CU_ASSERT_PTR_NOT_NULL(node->variable);
         CU_ASSERT_STRING_EQUAL(node->variable, "n");
-        CU_ASSERT_PTR_NULL(node->label); /* No label */
+        CU_ASSERT_PTR_NULL(node->labels); /* No label */
         CU_ASSERT_PTR_NOT_NULL(node->properties);
-        
+
         cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with multiple labels */
+static void test_create_multiple_labels(void)
+{
+    const char *query = "CREATE (n:Person:Employee {name: 'Alice'})";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+
+        CU_ASSERT_PTR_NOT_NULL(node->labels);
+        CU_ASSERT_EQUAL(node->labels->count, 2);
+        CU_ASSERT_STRING_EQUAL(get_first_label(node), "Person");
+
+        /* Check second label */
+        cypher_literal *second_label = (cypher_literal*)node->labels->items[1];
+        CU_ASSERT_PTR_NOT_NULL(second_label);
+        CU_ASSERT_STRING_EQUAL(second_label->value.string, "Employee");
+
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test CREATE with three labels */
+static void test_create_three_labels(void)
+{
+    const char *query = "CREATE (n:Person:Employee:Manager)";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_create *create = (cypher_create*)query_ast->clauses->items[0];
+        cypher_path *path = (cypher_path*)create->pattern->items[0];
+        cypher_node_pattern *node = (cypher_node_pattern*)path->elements->items[0];
+
+        CU_ASSERT_PTR_NOT_NULL(node->labels);
+        CU_ASSERT_EQUAL(node->labels->count, 3);
+
+        /* Check all three labels */
+        CU_ASSERT_STRING_EQUAL(get_first_label(node), "Person");
+        cypher_literal *second_label = (cypher_literal*)node->labels->items[1];
+        CU_ASSERT_STRING_EQUAL(second_label->value.string, "Employee");
+        cypher_literal *third_label = (cypher_literal*)node->labels->items[2];
+        CU_ASSERT_STRING_EQUAL(third_label->value.string, "Manager");
+
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test REMOVE property parsing */
+static void test_remove_property_parsing(void)
+{
+    const char *query = "MATCH (n) REMOVE n.age RETURN n";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 3); /* MATCH, REMOVE, RETURN */
+
+        /* Check that second clause is REMOVE */
+        ast_node *remove_node = query_ast->clauses->items[1];
+        CU_ASSERT_EQUAL(remove_node->type, AST_NODE_REMOVE);
+
+        cypher_remove *remove = (cypher_remove*)remove_node;
+        CU_ASSERT_EQUAL(remove->items->count, 1);
+
+        /* Check the remove item is a property */
+        cypher_remove_item *item = (cypher_remove_item*)remove->items->items[0];
+        CU_ASSERT_PTR_NOT_NULL(item->target);
+        CU_ASSERT_EQUAL(item->target->type, AST_NODE_PROPERTY);
+
+        cypher_property *prop = (cypher_property*)item->target;
+        CU_ASSERT_STRING_EQUAL(prop->property_name, "age");
+
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test REMOVE label parsing */
+static void test_remove_label_parsing(void)
+{
+    const char *query = "MATCH (n) REMOVE n:Admin RETURN n";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 3);
+
+        /* Check that second clause is REMOVE */
+        ast_node *remove_node = query_ast->clauses->items[1];
+        CU_ASSERT_EQUAL(remove_node->type, AST_NODE_REMOVE);
+
+        cypher_remove *remove = (cypher_remove*)remove_node;
+        CU_ASSERT_EQUAL(remove->items->count, 1);
+
+        /* Check the remove item is a label expression */
+        cypher_remove_item *item = (cypher_remove_item*)remove->items->items[0];
+        CU_ASSERT_PTR_NOT_NULL(item->target);
+        CU_ASSERT_EQUAL(item->target->type, AST_NODE_LABEL_EXPR);
+
+        cypher_label_expr *label_expr = (cypher_label_expr*)item->target;
+        CU_ASSERT_STRING_EQUAL(label_expr->label_name, "Admin");
+
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test multiple REMOVE items parsing */
+static void test_remove_multiple_items_parsing(void)
+{
+    const char *query = "MATCH (n) REMOVE n.age, n.name, n:Admin RETURN n";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 3);
+
+        /* Check that second clause is REMOVE */
+        ast_node *remove_node = query_ast->clauses->items[1];
+        CU_ASSERT_EQUAL(remove_node->type, AST_NODE_REMOVE);
+
+        cypher_remove *remove = (cypher_remove*)remove_node;
+        CU_ASSERT_EQUAL(remove->items->count, 3);
+
+        /* First item: n.age */
+        cypher_remove_item *item1 = (cypher_remove_item*)remove->items->items[0];
+        CU_ASSERT_EQUAL(item1->target->type, AST_NODE_PROPERTY);
+
+        /* Second item: n.name */
+        cypher_remove_item *item2 = (cypher_remove_item*)remove->items->items[1];
+        CU_ASSERT_EQUAL(item2->target->type, AST_NODE_PROPERTY);
+
+        /* Third item: n:Admin */
+        cypher_remove_item *item3 = (cypher_remove_item*)remove->items->items[2];
+        CU_ASSERT_EQUAL(item3->target->type, AST_NODE_LABEL_EXPR);
+
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test regex matching operator parsing */
+static void test_regex_match_parsing(void)
+{
+    const char *query = "MATCH (n) WHERE n.name =~ \"A.*\" RETURN n";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2); /* MATCH (with WHERE), RETURN */
+
+        /* Get the WHERE clause expression from MATCH */
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+        CU_ASSERT_PTR_NOT_NULL(match->where);
+
+        /* The WHERE expression should be a binary operation */
+        CU_ASSERT_EQUAL(match->where->type, AST_NODE_BINARY_OP);
+
+        cypher_binary_op *binary = (cypher_binary_op*)match->where;
+        CU_ASSERT_EQUAL(binary->op_type, BINARY_OP_REGEX_MATCH);
+
+        /* Left should be a property access */
+        CU_ASSERT_EQUAL(binary->left->type, AST_NODE_PROPERTY);
+
+        /* Right should be a string literal */
+        CU_ASSERT_EQUAL(binary->right->type, AST_NODE_LITERAL);
+
+        cypher_parser_free_result(result);
+    }
+}
+
+/* Test FOREACH clause parsing */
+static void test_foreach_parsing(void)
+{
+    const char *query = "FOREACH (x IN [1, 2, 3] | CREATE (n {val: x}))";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 1); /* FOREACH */
+
+        /* Get the FOREACH clause */
+        ast_node *clause = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(clause->type, AST_NODE_FOREACH);
+
+        cypher_foreach *foreach = (cypher_foreach*)clause;
+        CU_ASSERT_PTR_NOT_NULL(foreach->variable);
+        CU_ASSERT_STRING_EQUAL(foreach->variable, "x");
+
+        /* List expression should be a list */
+        CU_ASSERT_PTR_NOT_NULL(foreach->list_expr);
+        CU_ASSERT_EQUAL(foreach->list_expr->type, AST_NODE_LIST);
+
+        /* Body should have 1 clause (CREATE) */
+        CU_ASSERT_PTR_NOT_NULL(foreach->body);
+        CU_ASSERT_EQUAL(foreach->body->count, 1);
+
+        ast_node *body_clause = foreach->body->items[0];
+        CU_ASSERT_EQUAL(body_clause->type, AST_NODE_CREATE);
+
+        cypher_parser_free_result(result);
+        printf("FOREACH clause parsing test passed\n");
+    }
+}
+
+/* Test nested FOREACH parsing */
+static void test_foreach_nested_parsing(void)
+{
+    const char *query = "FOREACH (x IN [1, 2] | FOREACH (y IN [3, 4] | CREATE (n {x: x, y: y})))";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 1);
+
+        cypher_foreach *outer = (cypher_foreach*)query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(outer->base.type, AST_NODE_FOREACH);
+        CU_ASSERT_STRING_EQUAL(outer->variable, "x");
+
+        /* Body should have nested FOREACH */
+        CU_ASSERT_EQUAL(outer->body->count, 1);
+        ast_node *inner_node = outer->body->items[0];
+        CU_ASSERT_EQUAL(inner_node->type, AST_NODE_FOREACH);
+
+        cypher_foreach *inner = (cypher_foreach*)inner_node;
+        CU_ASSERT_STRING_EQUAL(inner->variable, "y");
+
+        cypher_parser_free_result(result);
+        printf("Nested FOREACH parsing test passed\n");
+    }
+}
+
+/* Test LOAD CSV basic parsing */
+static void test_load_csv_parsing(void)
+{
+    const char *query = "LOAD CSV FROM 'data.csv' AS row RETURN row";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2); /* LOAD CSV + RETURN */
+
+        /* Get the LOAD CSV clause */
+        ast_node *clause = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(clause->type, AST_NODE_LOAD_CSV);
+
+        cypher_load_csv *load_csv = (cypher_load_csv*)clause;
+        CU_ASSERT_PTR_NOT_NULL(load_csv->file_path);
+        CU_ASSERT_STRING_EQUAL(load_csv->file_path, "data.csv");
+        CU_ASSERT_PTR_NOT_NULL(load_csv->variable);
+        CU_ASSERT_STRING_EQUAL(load_csv->variable, "row");
+        CU_ASSERT_FALSE(load_csv->with_headers);
+        CU_ASSERT_PTR_NULL(load_csv->fieldterminator);
+
+        cypher_parser_free_result(result);
+        printf("LOAD CSV basic parsing test passed\n");
+    }
+}
+
+/* Test LOAD CSV WITH HEADERS parsing */
+static void test_load_csv_with_headers_parsing(void)
+{
+    const char *query = "LOAD CSV WITH HEADERS FROM 'users.csv' AS user RETURN user.name";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2); /* LOAD CSV + RETURN */
+
+        /* Get the LOAD CSV clause */
+        ast_node *clause = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(clause->type, AST_NODE_LOAD_CSV);
+
+        cypher_load_csv *load_csv = (cypher_load_csv*)clause;
+        CU_ASSERT_PTR_NOT_NULL(load_csv->file_path);
+        CU_ASSERT_STRING_EQUAL(load_csv->file_path, "users.csv");
+        CU_ASSERT_PTR_NOT_NULL(load_csv->variable);
+        CU_ASSERT_STRING_EQUAL(load_csv->variable, "user");
+        CU_ASSERT_TRUE(load_csv->with_headers);
+        CU_ASSERT_PTR_NULL(load_csv->fieldterminator);
+
+        cypher_parser_free_result(result);
+        printf("LOAD CSV WITH HEADERS parsing test passed\n");
+    }
+}
+
+/* Test LOAD CSV with FIELDTERMINATOR parsing */
+static void test_load_csv_fieldterminator_parsing(void)
+{
+    const char *query = "LOAD CSV FROM 'data.csv' AS row FIELDTERMINATOR ';' RETURN row";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2); /* LOAD CSV + RETURN */
+
+        /* Get the LOAD CSV clause */
+        ast_node *clause = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(clause->type, AST_NODE_LOAD_CSV);
+
+        cypher_load_csv *load_csv = (cypher_load_csv*)clause;
+        CU_ASSERT_PTR_NOT_NULL(load_csv->file_path);
+        CU_ASSERT_STRING_EQUAL(load_csv->file_path, "data.csv");
+        CU_ASSERT_PTR_NOT_NULL(load_csv->variable);
+        CU_ASSERT_STRING_EQUAL(load_csv->variable, "row");
+        CU_ASSERT_FALSE(load_csv->with_headers);
+        CU_ASSERT_PTR_NOT_NULL(load_csv->fieldterminator);
+        CU_ASSERT_STRING_EQUAL(load_csv->fieldterminator, ";");
+
+        cypher_parser_free_result(result);
+        printf("LOAD CSV FIELDTERMINATOR parsing test passed\n");
     }
 }
 
@@ -1406,6 +1757,184 @@ static void test_is_null_combined(void)
     printf("IS NULL combined conditions test passed\n");
 }
 
+/* Test basic WITH clause parsing */
+static void test_with_clause_basic(void)
+{
+    const char *query = "MATCH (n) WITH n RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 3);
+
+        /* First clause is MATCH */
+        CU_ASSERT_EQUAL(query_ast->clauses->items[0]->type, AST_NODE_MATCH);
+
+        /* Second clause is WITH */
+        CU_ASSERT_EQUAL(query_ast->clauses->items[1]->type, AST_NODE_WITH);
+
+        /* Third clause is RETURN */
+        CU_ASSERT_EQUAL(query_ast->clauses->items[2]->type, AST_NODE_RETURN);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("WITH clause basic parsing test passed\n");
+}
+
+/* Test WITH clause with alias */
+static void test_with_clause_alias(void)
+{
+    const char *query = "MATCH (n) WITH n AS person RETURN person";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 3);
+
+        /* Check WITH clause */
+        cypher_with *with = (cypher_with*)query_ast->clauses->items[1];
+        CU_ASSERT_EQUAL(with->base.type, AST_NODE_WITH);
+        CU_ASSERT_PTR_NOT_NULL(with->items);
+        CU_ASSERT_EQUAL(with->items->count, 1);
+
+        /* Check alias */
+        cypher_return_item *item = (cypher_return_item*)with->items->items[0];
+        CU_ASSERT_PTR_NOT_NULL(item->alias);
+        CU_ASSERT_STRING_EQUAL(item->alias, "person");
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("WITH clause alias parsing test passed\n");
+}
+
+/* Test WITH DISTINCT */
+static void test_with_clause_distinct(void)
+{
+    const char *query = "MATCH (n) WITH DISTINCT n RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_with *with = (cypher_with*)query_ast->clauses->items[1];
+        CU_ASSERT_TRUE(with->distinct);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("WITH DISTINCT parsing test passed\n");
+}
+
+/* Test WITH clause with WHERE */
+static void test_with_clause_where(void)
+{
+    const char *query = "MATCH (n) WITH n WHERE n.age > 18 RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_with *with = (cypher_with*)query_ast->clauses->items[1];
+        CU_ASSERT_PTR_NOT_NULL(with->where);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("WITH clause WHERE parsing test passed\n");
+}
+
+/* Test WITH clause with ORDER BY and LIMIT */
+static void test_with_clause_order_limit(void)
+{
+    const char *query = "MATCH (n) WITH n ORDER BY n.name LIMIT 10 RETURN n";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        cypher_with *with = (cypher_with*)query_ast->clauses->items[1];
+        CU_ASSERT_PTR_NOT_NULL(with->order_by);
+        CU_ASSERT_PTR_NOT_NULL(with->limit);
+
+        cypher_parser_free_result(result);
+    }
+
+    printf("WITH clause ORDER BY LIMIT parsing test passed\n");
+}
+
+/* Test CASE expression basic parsing */
+static void test_case_expression_basic(void)
+{
+    const char *query = "RETURN CASE WHEN true THEN 1 END";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+
+    printf("CASE expression basic parsing test passed\n");
+}
+
+/* Test CASE expression with ELSE */
+static void test_case_expression_else(void)
+{
+    const char *query = "RETURN CASE WHEN false THEN 1 ELSE 2 END";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+
+    printf("CASE expression with ELSE parsing test passed\n");
+}
+
+/* Test CASE expression with multiple WHEN clauses */
+static void test_case_expression_multiple_when(void)
+{
+    const char *query = "RETURN CASE WHEN 1 = 2 THEN 'a' WHEN 2 = 2 THEN 'b' ELSE 'c' END";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+
+    printf("CASE expression with multiple WHEN clauses test passed\n");
+}
+
+/* Test CASE expression with property access */
+static void test_case_expression_with_property(void)
+{
+    const char *query = "MATCH (n) RETURN CASE WHEN n.age > 18 THEN 'adult' ELSE 'minor' END";
+    ast_node *result = parse_cypher_query(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_EQUAL(result->type, AST_NODE_QUERY);
+        cypher_parser_free_result(result);
+    }
+
+    printf("CASE expression with property access test passed\n");
+}
+
 /* Initialize the parser test suite */
 int init_parser_suite(void)
 {
@@ -1467,7 +1996,27 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Regular relationship no varlen", test_varlen_no_varlen) ||
         !CU_add_test(suite, "IS NULL parsing", test_is_null_parsing) ||
         !CU_add_test(suite, "IS NOT NULL parsing", test_is_not_null_parsing) ||
-        !CU_add_test(suite, "IS NULL combined conditions", test_is_null_combined))
+        !CU_add_test(suite, "IS NULL combined conditions", test_is_null_combined) ||
+        !CU_add_test(suite, "WITH clause basic", test_with_clause_basic) ||
+        !CU_add_test(suite, "WITH clause alias", test_with_clause_alias) ||
+        !CU_add_test(suite, "WITH DISTINCT", test_with_clause_distinct) ||
+        !CU_add_test(suite, "WITH clause WHERE", test_with_clause_where) ||
+        !CU_add_test(suite, "WITH clause ORDER BY LIMIT", test_with_clause_order_limit) ||
+        !CU_add_test(suite, "CASE expression basic", test_case_expression_basic) ||
+        !CU_add_test(suite, "CASE expression with ELSE", test_case_expression_else) ||
+        !CU_add_test(suite, "CASE expression multiple WHEN", test_case_expression_multiple_when) ||
+        !CU_add_test(suite, "CASE expression with property", test_case_expression_with_property) ||
+        !CU_add_test(suite, "CREATE multiple labels", test_create_multiple_labels) ||
+        !CU_add_test(suite, "CREATE three labels", test_create_three_labels) ||
+        !CU_add_test(suite, "REMOVE property parsing", test_remove_property_parsing) ||
+        !CU_add_test(suite, "REMOVE label parsing", test_remove_label_parsing) ||
+        !CU_add_test(suite, "REMOVE multiple items parsing", test_remove_multiple_items_parsing) ||
+        !CU_add_test(suite, "Regex match operator parsing", test_regex_match_parsing) ||
+        !CU_add_test(suite, "FOREACH clause parsing", test_foreach_parsing) ||
+        !CU_add_test(suite, "Nested FOREACH parsing", test_foreach_nested_parsing) ||
+        !CU_add_test(suite, "LOAD CSV parsing", test_load_csv_parsing) ||
+        !CU_add_test(suite, "LOAD CSV WITH HEADERS parsing", test_load_csv_with_headers_parsing) ||
+        !CU_add_test(suite, "LOAD CSV FIELDTERMINATOR parsing", test_load_csv_fieldterminator_parsing))
     {
         return CU_get_error();
     }

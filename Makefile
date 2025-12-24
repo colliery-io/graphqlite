@@ -1,10 +1,25 @@
 # GraphQLite Makefile
 
 CC = gcc
-BISON = /opt/local/bin/bison
-FLEX = flex
-CFLAGS = -Wall -Wextra -g -I./src/include -I/opt/local/include -DGRAPHQLITE_DEBUG
-LDFLAGS = -L/opt/local/lib -lcunit -lsqlite3
+BISON ?= bison
+FLEX ?= flex
+SQLITE ?= sqlite3
+# Use python3.11 as default since it has pip available on this system
+# Override with: make PYTHON=python3.12 test-python
+PYTHON ?= python3.11
+
+# Platform-specific paths (override for local development)
+# macOS with MacPorts: make EXTRA_INCLUDES=-I/opt/local/include EXTRA_LIBS=-L/opt/local/lib
+# macOS with Homebrew: make SQLITE=$(brew --prefix)/bin/sqlite3
+EXTRA_INCLUDES ?=
+EXTRA_LIBS ?=
+
+# Add -DGRAPHQLITE_PERF_TIMING for detailed query timing instrumentation
+CFLAGS = -Wall -Wextra -g -I./src/include $(EXTRA_INCLUDES) -DGRAPHQLITE_DEBUG
+LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3
+
+# Extension-specific flags: enable sqlite3ext.h API pointer redirection
+EXTENSION_CFLAGS = -DGRAPHQLITE_EXTENSION
 
 # Coverage flags
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
@@ -62,14 +77,26 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_create.c \
 	$(TRANSFORM_DIR)/transform_set.c \
 	$(TRANSFORM_DIR)/transform_delete.c \
-	$(TRANSFORM_DIR)/transform_return.c
+	$(TRANSFORM_DIR)/transform_remove.c \
+	$(TRANSFORM_DIR)/transform_foreach.c \
+	$(TRANSFORM_DIR)/transform_load_csv.c \
+	$(TRANSFORM_DIR)/transform_return.c \
+	$(TRANSFORM_DIR)/transform_func_string.c \
+	$(TRANSFORM_DIR)/transform_func_math.c \
+	$(TRANSFORM_DIR)/transform_func_entity.c \
+	$(TRANSFORM_DIR)/transform_func_path.c \
+	$(TRANSFORM_DIR)/transform_func_list.c \
+	$(TRANSFORM_DIR)/transform_func_graph.c \
+	$(TRANSFORM_DIR)/transform_func_aggregate.c \
+	$(TRANSFORM_DIR)/transform_expr_predicate.c
 
 # Executor sources
 EXECUTOR_DIR = $(SRC_DIR)/backend/executor
 EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/cypher_schema.c \
 	$(EXECUTOR_DIR)/cypher_executor.c \
-	$(EXECUTOR_DIR)/agtype.c
+	$(EXECUTOR_DIR)/agtype.c \
+	$(EXECUTOR_DIR)/graph_algorithms.c
 
 TRANSFORM_OBJS = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.o)
 TRANSFORM_OBJS_COV = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.cov.o)
@@ -89,12 +116,21 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_transform_set.c \
 	$(TEST_DIR)/test_transform_delete.c \
 	$(TEST_DIR)/test_transform_functions.c \
+	$(TEST_DIR)/test_transform_match.c \
+	$(TEST_DIR)/test_transform_return.c \
+	$(TEST_DIR)/test_agtype.c \
 	$(TEST_DIR)/test_schema.c \
 	$(TEST_DIR)/test_executor_basic.c \
 	$(TEST_DIR)/test_executor_relationships.c \
 	$(TEST_DIR)/test_executor_set.c \
 	$(TEST_DIR)/test_executor_delete.c \
-	$(TEST_DIR)/test_executor_varlen.c
+	$(TEST_DIR)/test_executor_varlen.c \
+	$(TEST_DIR)/test_executor_with.c \
+	$(TEST_DIR)/test_executor_unwind.c \
+	$(TEST_DIR)/test_executor_merge.c \
+	$(TEST_DIR)/test_executor_pagerank.c \
+	$(TEST_DIR)/test_executor_label_propagation.c \
+	$(TEST_DIR)/test_output_format.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
@@ -142,7 +178,7 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 
 # Extension object
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
-	$(CC) $(CFLAGS) -fPIC -I$(SRC_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(SRC_DIR) -c $< -o $@
 
 
 # Help target
@@ -152,9 +188,14 @@ help:
 	@echo "  make all       - Same as 'make'"
 	@echo "  make graphqlite - Build main interactive application"
 	@echo "  make extension - Build SQLite extension (graphqlite.dylib on macOS, graphqlite.so on Linux)"
-	@echo "  make test      - Build and run CUnit tests"
-	@echo "  make test-functional - Build extension and run functional SQL tests"
+	@echo "  make test      - Run all tests (unit + functional + bindings)"
+	@echo "  make test unit - Run only CUnit tests"
+	@echo "  make test rust - Run Rust binding tests"
+	@echo "  make test python - Run Python binding tests"
+	@echo "  make test bindings - Run all binding tests (Rust + Python)"
+	@echo "  make test functional - Run functional SQL tests"
 	@echo "  make test-constraints - Run constraint tests (expected to fail)"
+	@echo "  make performance - Run all performance tests with summary table"
 	@echo "  make coverage  - Run tests and generate gcov coverage report"
 	@echo "  make clean     - Remove all build artifacts"
 	@echo "  make help      - Show this help message"
@@ -222,21 +263,21 @@ $(BUILD_EXECUTOR_DIR)/%.o: $(EXECUTOR_DIR)/%.c | dirs
 $(BUILD_EXECUTOR_DIR)/%.cov.o: $(EXECUTOR_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
 
-# PIC object builds for shared library
+# PIC object builds for shared library (with EXTENSION_CFLAGS for sqlite3ext.h API redirection)
 $(BUILD_PARSER_DIR)/%.pic.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_scanner.pic.o: $(SCANNER_SRC) | dirs
-	$(CC) $(CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_gram.tab.pic.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) -fPIC -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_TRANSFORM_DIR)/%.pic.o: $(TRANSFORM_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 $(BUILD_EXECUTOR_DIR)/%.pic.o: $(EXECUTOR_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 # Test objects
 $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs
@@ -245,25 +286,6 @@ $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs
 # Test runner executable
 $(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) $(EXECUTOR_OBJS_COV) | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) $^ -o $@ $(LDFLAGS) $(COVERAGE_LIBS)
-
-# Run tests
-test: $(TEST_RUNNER)
-	./$(TEST_RUNNER)
-
-# Run functional tests with SQLite extension (excludes constraint error tests)
-test-functional: extension
-	@echo "Running functional tests..."
-	@for test_file in tests/functional/*.sql; do \
-		if [ -f "$$test_file" ] && [[ "$$test_file" != *"constraint"* ]]; then \
-			echo ""; \
-			echo "========================================"; \
-			echo "Running: $$(basename $$test_file)"; \
-			echo "========================================"; \
-			sqlite3 -bail < "$$test_file" || exit 1; \
-		fi; \
-	done
-	@echo ""
-	@echo "All functional tests completed successfully!"
 
 # Run constraint tests (expected to fail with specific errors)
 test-constraints: extension
@@ -274,7 +296,7 @@ test-constraints: extension
 			echo "========================================"; \
 			echo "Running: $$(basename $$test_file)"; \
 			echo "========================================"; \
-			sqlite3 < "$$test_file" 2>&1 && echo "ERROR: Test should have failed!" || echo "Constraint correctly enforced"; \
+			$(SQLITE) < "$$test_file" 2>&1 && echo "ERROR: Test should have failed!" || echo "Constraint correctly enforced"; \
 		fi; \
 	done
 	@echo ""
@@ -310,6 +332,91 @@ coverage: test
 	@echo ""
 	@echo "Detailed reports in: $(COVERAGE_DIR)/"
 
+# Run performance tests
+test-perf: extension
+	@echo "Running performance tests..."
+	@if [ -x tests/performance/run_perf_tests.sh ]; then \
+		tests/performance/run_perf_tests.sh 100 2>&1 | grep -v "^\[CYPHER_DEBUG\]"; \
+	else \
+		echo "Performance test script not found or not executable"; \
+		exit 1; \
+	fi
+
+# Run quick performance benchmark (fewer iterations)
+test-perf-quick: extension
+	@echo "Running quick performance benchmark..."
+	@tests/performance/run_perf_tests.sh 25 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+
+# Run scaled performance tests (various graph sizes)
+test-perf-scaled: extension
+	@echo "Running scaled performance tests..."
+	@tests/performance/run_scaled_perf_tests.sh 10 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+
+# Run PageRank performance tests
+test-perf-pagerank: extension
+	@echo "Running PageRank performance tests..."
+	@tests/performance/run_pagerank_perf.sh 3 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+
+# Run all performance tests with summary table
+performance: extension
+	@tests/performance/run_all_perf.sh 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+
+# Bindings directories
+RUST_BINDINGS_DIR = bindings/rust
+PYTHON_BINDINGS_DIR = bindings/python
+
+# Nested test commands: make test [unit|rust|python|bindings|functional]
+# Check what subcommand was passed
+ifneq ($(filter unit,$(MAKECMDGOALS)),)
+TEST_TARGET = unit
+else ifneq ($(filter rust,$(MAKECMDGOALS)),)
+TEST_TARGET = rust
+else ifneq ($(filter python,$(MAKECMDGOALS)),)
+TEST_TARGET = python
+else ifneq ($(filter bindings,$(MAKECMDGOALS)),)
+TEST_TARGET = bindings
+else ifneq ($(filter functional,$(MAKECMDGOALS)),)
+TEST_TARGET = functional
+else
+TEST_TARGET = all
+endif
+
+# Dummy targets for subcommands (prevents "No rule to make target" errors)
+unit rust python bindings functional:
+	@true
+
+# Individual test targets
+test-unit: $(TEST_RUNNER)
+	@echo "Running unit tests..."
+	./$(TEST_RUNNER)
+
+test-rust: extension
+	@echo "Running Rust binding tests..."
+	cd $(RUST_BINDINGS_DIR) && cargo test -- --test-threads=1
+
+test-python: extension
+	@echo "Running Python binding tests..."
+	@# Install in dev mode if not already installed, then run tests
+	@# Use $(PYTHON) -m pip to ensure pip matches the Python interpreter
+	@cd $(PYTHON_BINDINGS_DIR) && $(PYTHON) -m pip install -q -e . 2>/dev/null || true
+	cd $(PYTHON_BINDINGS_DIR) && $(PYTHON) -m pytest tests/ -v
+
+test-bindings: test-rust test-python
+
+test-functional: extension
+	@echo "Running functional tests..."
+	@for test_file in tests/functional/*.sql; do \
+		if [ -f "$$test_file" ] && [[ "$$test_file" != *"constraint"* ]]; then \
+			echo "Running: $$(basename $$test_file)"; \
+			$(SQLITE) -bail < "$$test_file" || exit 1; \
+		fi; \
+	done
+
+test-all: test-unit test-functional test-bindings
+
+# Main test target dispatches to appropriate sub-target
+test: test-$(TEST_TARGET)
+
 # Clean
 clean:
 	rm -rf $(BUILD_DIR)
@@ -317,4 +424,4 @@ clean:
 	find . -name "*.gcno" -delete
 	find . -name "*.gcov" -delete
 
-.PHONY: all help dirs test coverage clean
+.PHONY: all help dirs test test-unit test-rust test-python test-bindings test-functional test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional

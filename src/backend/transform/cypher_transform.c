@@ -383,11 +383,39 @@ int finalize_sql_generation(cypher_transform_context *ctx)
         return 0; /* Not using builder, nothing to do */
     }
 
-    /* Clear existing SQL buffer */
+    /*
+     * If from_clause is empty but sql_buffer has content, the MATCH clause
+     * wrote directly to sql_buffer (common path). In this case, just prepend
+     * "SELECT * " to the existing content.
+     */
+    if ((!ctx->sql_builder.from_clause || ctx->sql_builder.from_size == 0) &&
+        ctx->sql_size > 0) {
+        /* Save existing content (FROM ... JOIN ... WHERE ...) */
+        char *existing = strdup(ctx->sql_buffer);
+
+        /* Clear buffer and rebuild with SELECT * prefix */
+        ctx->sql_size = 0;
+        ctx->sql_buffer[0] = '\0';
+
+        /* Add CTE clause if present */
+        if (ctx->sql_builder.cte_clause && ctx->sql_builder.cte_size > 0) {
+            append_sql(ctx, "%s ", ctx->sql_builder.cte_clause);
+        }
+
+        append_sql(ctx, "SELECT * %s", existing);
+
+        /* Add any join_clauses from builder */
+        if (ctx->sql_builder.join_clauses && ctx->sql_builder.join_size > 0) {
+            append_sql(ctx, "%s", ctx->sql_builder.join_clauses);
+        }
+
+        free(existing);
+        return 0;
+    }
+
+    /* Standard path: combine builder buffers */
     ctx->sql_size = 0;
     ctx->sql_buffer[0] = '\0';
-
-    /* Combine: CTE + SELECT + FROM + JOINs + WHERE */
 
     /* Add CTE clause if present (for variable-length relationships) */
     if (ctx->sql_builder.cte_clause && ctx->sql_builder.cte_size > 0) {
@@ -566,13 +594,33 @@ int register_edge_variable(cypher_transform_context *ctx, const char *name, cons
     return result;
 }
 
+/* Register a projected variable (from WITH clause - value is direct, no .id needed) */
+int register_projected_variable(cypher_transform_context *ctx, const char *name, const char *cte_name, const char *column_name)
+{
+    /* Build the full column reference: cte_name.column_name */
+    char alias[128];
+    snprintf(alias, sizeof(alias), "%s.%s", cte_name, column_name);
+
+    int result = register_variable(ctx, name, alias);
+    if (result == 0) {
+        /* Find the variable and set its type to projected */
+        for (int i = 0; i < ctx->variable_count; i++) {
+            if (strcmp(ctx->variables[i].name, name) == 0) {
+                ctx->variables[i].type = VAR_TYPE_PROJECTED;
+                break;
+            }
+        }
+    }
+    return result;
+}
+
 /* Register a path variable */
 int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path)
 {
     /* For path variables, we use a special alias that references the path elements */
     char alias[64];
     snprintf(alias, sizeof(alias), "_path_%s", name);
-    
+
     int result = register_variable(ctx, name, alias);
     if (result == 0) {
         /* Find the variable and set its type to path */
@@ -582,7 +630,7 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
                 break;
             }
         }
-        
+
         /* Store path variable metadata */
         if (ctx->path_variable_count >= ctx->path_variable_capacity) {
             int new_capacity = ctx->path_variable_capacity == 0 ? 4 : ctx->path_variable_capacity * 2;
@@ -593,9 +641,22 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
             ctx->path_variables = new_path_vars;
             ctx->path_variable_capacity = new_capacity;
         }
-        
+
         ctx->path_variables[ctx->path_variable_count].name = strdup(name);
         ctx->path_variables[ctx->path_variable_count].elements = path->elements;
+        /* Map AST path_type to transform path_type */
+        switch (path->type) {
+            case PATH_TYPE_SHORTEST:
+                ctx->path_variables[ctx->path_variable_count].path_type = TRANSFORM_PATH_SHORTEST;
+                break;
+            case PATH_TYPE_ALL_SHORTEST:
+                ctx->path_variables[ctx->path_variable_count].path_type = TRANSFORM_PATH_ALL_SHORTEST;
+                break;
+            default:
+                ctx->path_variables[ctx->path_variable_count].path_type = TRANSFORM_PATH_NORMAL;
+                break;
+        }
+        ctx->path_variables[ctx->path_variable_count].cte_name = NULL; /* Will be set during varlen CTE generation */
         ctx->path_variable_count++;
     }
     return result;
@@ -618,6 +679,16 @@ bool is_path_variable(cypher_transform_context *ctx, const char *name)
     for (int i = 0; i < ctx->variable_count; i++) {
         if (strcmp(ctx->variables[i].name, name) == 0) {
             return ctx->variables[i].type == VAR_TYPE_PATH;
+        }
+    }
+    return false;
+}
+
+bool is_projected_variable(cypher_transform_context *ctx, const char *name)
+{
+    for (int i = 0; i < ctx->variable_count; i++) {
+        if (strcmp(ctx->variables[i].name, name) == 0) {
+            return ctx->variables[i].type == VAR_TYPE_PROJECTED;
         }
     }
     return false;
@@ -708,16 +779,20 @@ char* get_next_default_alias(cypher_transform_context *ctx)
     return alias;
 }
 
+/* Forward declarations for UNION support */
+static int transform_single_query_sql(cypher_transform_context *ctx, cypher_query *query);
+static int transform_union_sql(cypher_transform_context *ctx, cypher_union *union_node);
+
 /* Main transform dispatcher */
 
 cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cypher_query *query)
 {
     CYPHER_DEBUG("Starting query transformation");
-    
+
     if (!ctx || !query) {
         return NULL;
     }
-    
+
     /* Reset context for new query */
     ctx->sql_size = 0;
     ctx->sql_buffer[0] = '\0';
@@ -725,14 +800,39 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     free(ctx->error_message);
     ctx->error_message = NULL;
     ctx->global_alias_counter = 0;
-    
+
     /* Reset entity tracking for new query (AGE-style) */
     for (int i = 0; i < ctx->entity_count; i++) {
         free(ctx->entities[i].name);
         free(ctx->entities[i].table_alias);
     }
     ctx->entity_count = 0;
-    
+
+    /* Check if this is a UNION query */
+    ast_node *root = (ast_node*)query;
+    if (root->type == AST_NODE_UNION) {
+        CYPHER_DEBUG("Processing UNION query");
+        if (transform_union_sql(ctx, (cypher_union*)root) < 0) {
+            goto error;
+        }
+        prepend_cte_to_sql(ctx);
+
+        /* Create result structure and prepare statement */
+        cypher_query_result *result = calloc(1, sizeof(cypher_query_result));
+        if (!result) {
+            goto error;
+        }
+
+        CYPHER_DEBUG("Generated SQL (UNION): %s", ctx->sql_buffer);
+        int rc = sqlite3_prepare_v2(ctx->db, ctx->sql_buffer, -1, &result->stmt, NULL);
+        if (rc != SQLITE_OK) {
+            result->has_error = true;
+            result->error_message = strdup(sqlite3_errmsg(ctx->db));
+            return result;
+        }
+        return result;
+    }
+
     /* Check if any MATCH clause is optional - if so, use SQL builder from start */
     bool has_optional_match = false;
     for (int i = 0; i < query->clauses->count; i++) {
@@ -747,7 +847,7 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
         }
     }
     CYPHER_DEBUG("Query analysis complete: has_optional_match = %s", has_optional_match ? "true" : "false");
-    
+
     if (has_optional_match) {
         CYPHER_DEBUG("Query contains OPTIONAL MATCH - using SQL builder from start");
         if (init_sql_builder(ctx) < 0) {
@@ -795,7 +895,13 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                     goto error;
                 }
                 break;
-                
+
+            case AST_NODE_REMOVE:
+                if (transform_remove_clause(ctx, (cypher_remove*)clause) < 0) {
+                    goto error;
+                }
+                break;
+
             case AST_NODE_RETURN:
                 /* If using SQL builder, finalize SQL generation before RETURN */
                 if (ctx->sql_builder.using_builder) {
@@ -808,19 +914,63 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 } else {
                     CYPHER_DEBUG("SQL builder NOT active before RETURN clause");
                 }
-                
+
                 if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
                     goto error;
                 }
                 break;
-                
+
+            case AST_NODE_WITH:
+                /* If using SQL builder, finalize SQL generation before WITH */
+                if (ctx->sql_builder.using_builder) {
+                    CYPHER_DEBUG("Finalizing SQL generation before WITH clause");
+                    if (finalize_sql_generation(ctx) < 0) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to finalize SQL generation");
+                        goto error;
+                    }
+                }
+
+                if (transform_with_clause(ctx, (cypher_with*)clause) < 0) {
+                    goto error;
+                }
+                break;
+
+            case AST_NODE_UNWIND:
+                /* If using SQL builder, finalize SQL generation before UNWIND */
+                if (ctx->sql_builder.using_builder) {
+                    CYPHER_DEBUG("Finalizing SQL generation before UNWIND clause");
+                    if (finalize_sql_generation(ctx) < 0) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to finalize SQL generation");
+                        goto error;
+                    }
+                }
+
+                if (transform_unwind_clause(ctx, (cypher_unwind*)clause) < 0) {
+                    goto error;
+                }
+                break;
+
+            case AST_NODE_FOREACH:
+                if (transform_foreach_clause(ctx, (cypher_foreach*)clause) < 0) {
+                    goto error;
+                }
+                break;
+
+            case AST_NODE_LOAD_CSV:
+                if (transform_load_csv_clause(ctx, (cypher_load_csv*)clause) < 0) {
+                    goto error;
+                }
+                break;
+
             default:
                 ctx->has_error = true;
                 ctx->error_message = strdup("Unsupported clause type");
                 goto error;
         }
     }
-    
+
     /* Create result structure */
     cypher_query_result *result = calloc(1, sizeof(cypher_query_result));
     if (!result) {
@@ -850,6 +1000,200 @@ error:
         error_result->error_message = strdup(ctx->error_message ? ctx->error_message : "Transform failed");
     }
     return error_result;
+}
+
+/* Transform a UNION query to SQL */
+static int transform_union_sql(cypher_transform_context *ctx, cypher_union *union_node)
+{
+    CYPHER_DEBUG("Transforming UNION query (all=%s)", union_node->all ? "true" : "false");
+
+    /* Transform left side */
+    if (union_node->left->type == AST_NODE_UNION) {
+        if (transform_union_sql(ctx, (cypher_union*)union_node->left) < 0) {
+            return -1;
+        }
+    } else if (union_node->left->type == AST_NODE_QUERY) {
+        if (transform_single_query_sql(ctx, (cypher_query*)union_node->left) < 0) {
+            return -1;
+        }
+    } else {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Invalid left side of UNION");
+        return -1;
+    }
+
+    /* Add UNION or UNION ALL */
+    if (union_node->all) {
+        append_sql(ctx, " UNION ALL ");
+    } else {
+        append_sql(ctx, " UNION ");
+    }
+
+    /* Transform right side - must be a single query */
+    if (union_node->right->type == AST_NODE_QUERY) {
+        if (transform_single_query_sql(ctx, (cypher_query*)union_node->right) < 0) {
+            return -1;
+        }
+    } else {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Invalid right side of UNION");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Transform a single query (non-UNION) to SQL */
+static int transform_single_query_sql(cypher_transform_context *ctx, cypher_query *query)
+{
+    CYPHER_DEBUG("Transforming single query to SQL");
+
+    /* Check if any MATCH clause is optional */
+    bool has_optional_match = false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (clause->type == AST_NODE_MATCH) {
+            cypher_match *match = (cypher_match*)clause;
+            if (match->optional) {
+                has_optional_match = true;
+                break;
+            }
+        }
+    }
+
+    if (has_optional_match) {
+        if (init_sql_builder(ctx) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to initialize SQL builder for OPTIONAL MATCH");
+            return -1;
+        }
+        /* Note: We don't reset sql_buffer here as we may be appending to existing UNION */
+    }
+
+    /* Process each clause in order */
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+
+        if (i > 0) {
+            mark_entities_as_inherited(ctx);
+        }
+
+        switch (clause->type) {
+            case AST_NODE_MATCH:
+                if (transform_match_clause(ctx, (cypher_match*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_CREATE:
+                if (transform_create_clause(ctx, (cypher_create*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_SET:
+                if (transform_set_clause(ctx, (cypher_set*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_DELETE:
+                if (transform_delete_clause(ctx, (cypher_delete*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_REMOVE:
+                if (transform_remove_clause(ctx, (cypher_remove*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_RETURN:
+                if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_WITH:
+                if (transform_with_clause(ctx, (cypher_with*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_UNWIND:
+                if (transform_unwind_clause(ctx, (cypher_unwind*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_FOREACH:
+                if (transform_foreach_clause(ctx, (cypher_foreach*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            case AST_NODE_LOAD_CSV:
+                if (transform_load_csv_clause(ctx, (cypher_load_csv*)clause) < 0) {
+                    return -1;
+                }
+                break;
+
+            default:
+                ctx->has_error = true;
+                ctx->error_message = strdup("Unsupported clause type");
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* Generate SQL only (for EXPLAIN) - does not prepare statement */
+int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *query)
+{
+    CYPHER_DEBUG("Starting SQL-only query transformation (EXPLAIN)");
+
+    if (!ctx || !query) {
+        return -1;
+    }
+
+    /* Reset context for new query */
+    ctx->sql_size = 0;
+    ctx->sql_buffer[0] = '\0';
+    ctx->has_error = false;
+    free(ctx->error_message);
+    ctx->error_message = NULL;
+    ctx->global_alias_counter = 0;
+
+    /* Reset entity tracking for new query */
+    for (int i = 0; i < ctx->entity_count; i++) {
+        free(ctx->entities[i].name);
+        free(ctx->entities[i].table_alias);
+    }
+    ctx->entity_count = 0;
+
+    /* Check if this is a UNION query */
+    ast_node *root = (ast_node*)query;
+    if (root->type == AST_NODE_UNION) {
+        int result = transform_union_sql(ctx, (cypher_union*)root);
+        if (result == 0) {
+            prepend_cte_to_sql(ctx);
+            CYPHER_DEBUG("Generated SQL (EXPLAIN UNION): %s", ctx->sql_buffer);
+        }
+        return result;
+    }
+
+    /* Standard single query transformation */
+    if (transform_single_query_sql(ctx, query) < 0) {
+        return -1;
+    }
+
+    /* Prepend CTE prefix if we have variable-length relationships */
+    prepend_cte_to_sql(ctx);
+
+    CYPHER_DEBUG("Generated SQL (EXPLAIN): %s", ctx->sql_buffer);
+    return 0;
 }
 
 /* Variable-length relationship CTE generation */

@@ -14,7 +14,6 @@
 static int generate_delete_operations(cypher_transform_context *ctx, cypher_delete *delete_clause);
 static int generate_node_delete(cypher_transform_context *ctx, const char *variable);
 static int generate_edge_delete(cypher_transform_context *ctx, const char *variable);
-static int generate_cascade_delete(cypher_transform_context *ctx, const char *variable);
 static int check_node_constraints(cypher_transform_context *ctx, const char *variable);
 
 /*
@@ -156,35 +155,6 @@ static int generate_edge_delete(cypher_transform_context *ctx, const char *varia
     
     /* Delete the edge itself using subquery */
     append_sql(ctx, "DELETE FROM edges WHERE id IN (SELECT %s.id FROM edges AS %s)", alias, alias);
-    
-    return 0;
-}
-
-/*
- * generate_cascade_delete
- *    Generate SQL to cascade delete all relationships connected to a node
- */
-static int generate_cascade_delete(cypher_transform_context *ctx, const char *variable)
-{
-    const char *alias = lookup_variable_alias(ctx, variable);
-    if (!alias) {
-        return -1;
-    }
-    
-    CYPHER_DEBUG("Generating cascade DELETE for node %s relationships", variable);
-    
-    /* Delete from edge property tables for all connected edges */
-    const char *prop_tables[] = {
-        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool"
-    };
-    
-    for (int i = 0; i < 4; i++) {
-        append_sql(ctx, "DELETE FROM %s WHERE edge_id IN (SELECT id FROM edges WHERE start_id = @%s_id OR end_id = @%s_id);\n",
-                   prop_tables[i], alias, alias);
-    }
-    
-    /* Delete all edges connected to this node */
-    append_sql(ctx, "DELETE FROM edges WHERE start_id = @%s_id OR end_id = @%s_id", alias, alias);
     
     return 0;
 }

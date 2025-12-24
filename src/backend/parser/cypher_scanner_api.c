@@ -152,6 +152,7 @@ const char* cypher_token_type_name(CypherTokenType type)
         case CYPHER_TOKEN_DOT_DOT:     return "DOT_DOT";
         case CYPHER_TOKEN_TYPECAST:    return "TYPECAST";
         case CYPHER_TOKEN_PLUS_EQ:     return "PLUS_EQ";
+        case CYPHER_TOKEN_REGEX_MATCH: return "REGEX_MATCH";
         case CYPHER_TOKEN_KEYWORD:     return "KEYWORD";
         default:                       return "UNKNOWN";
     }

@@ -11,10 +11,14 @@
 #include "executor/cypher_executor.h"
 #include "executor/cypher_schema.h"
 
-/* Test database handle */
+/* Test database handle and shared executor */
 static sqlite3 *test_db = NULL;
+static cypher_executor *shared_executor = NULL;
 
-/* Setup function - just create an empty database */
+/* Forward declaration */
+static void create_test_graph(cypher_executor *executor);
+
+/* Setup function - create database, schema, and test graph once */
 static int setup_varlen_suite(void)
 {
     int rc = sqlite3_open(":memory:", &test_db);
@@ -34,6 +38,15 @@ static int setup_varlen_suite(void)
     }
 
     cypher_schema_free_manager(schema_mgr);
+
+    /* Create shared executor and test graph once */
+    shared_executor = cypher_executor_create(test_db);
+    if (!shared_executor) {
+        return -1;
+    }
+
+    create_test_graph(shared_executor);
+
     return 0;
 }
 
@@ -72,6 +85,10 @@ static void create_test_graph(cypher_executor *executor)
 /* Teardown function */
 static int teardown_varlen_suite(void)
 {
+    if (shared_executor) {
+        cypher_executor_free(shared_executor);
+        shared_executor = NULL;
+    }
     if (test_db) {
         sqlite3_close(test_db);
         test_db = NULL;
@@ -98,184 +115,121 @@ static int count_query_results(cypher_executor *executor, const char *query)
 /* Test exact 1-hop variable-length relationship */
 static void test_varlen_exact_1_hop(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*1] from Alice should find Bob (1 hop) */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*1]->(b) RETURN b.name");
-        CU_ASSERT_EQUAL(count, 1);
-
-        cypher_executor_free(executor);
-    }
+    /* [*1] from Alice should find Bob (1 hop) */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*1]->(b) RETURN b.name");
+    CU_ASSERT_EQUAL(count, 1);
 }
 
 /* Test exact 2-hop variable-length relationship */
 static void test_varlen_exact_2_hops(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*2] from Alice should find Charlie (2 hops) */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*2]->(c) RETURN c.name");
-        CU_ASSERT_EQUAL(count, 1);
-
-        cypher_executor_free(executor);
-    }
+    /* [*2] from Alice should find Charlie (2 hops) */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*2]->(c) RETURN c.name");
+    CU_ASSERT_EQUAL(count, 1);
 }
 
 /* Test exact 3-hop variable-length relationship */
 static void test_varlen_exact_3_hops(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*3] from Alice should find Diana (3 hops) */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*3]->(d) RETURN d.name");
-        CU_ASSERT_EQUAL(count, 1);
-
-        cypher_executor_free(executor);
-    }
+    /* [*3] from Alice should find Diana (3 hops) */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*3]->(d) RETURN d.name");
+    CU_ASSERT_EQUAL(count, 1);
 }
 
 /* Test range variable-length relationship [*1..2] */
 static void test_varlen_range_1_to_2(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*1..2] from Alice should find Bob (1 hop) and Charlie (2 hops) */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*1..2]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 2);
-
-        cypher_executor_free(executor);
-    }
+    /* [*1..2] from Alice should find Bob (1 hop) and Charlie (2 hops) */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*1..2]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 2);
 }
 
 /* Test range variable-length relationship [*1..3] */
 static void test_varlen_range_1_to_3(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*1..3] from Alice should find Bob, Charlie, and Diana */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*1..3]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 3);
-
-        cypher_executor_free(executor);
-    }
+    /* [*1..3] from Alice should find Bob, Charlie, and Diana */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*1..3]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 3);
 }
 
 /* Test range variable-length relationship [*2..3] */
 static void test_varlen_range_2_to_3(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*2..3] from Alice should find Charlie (2 hops) and Diana (3 hops) */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*2..3]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 2);
-
-        cypher_executor_free(executor);
-    }
+    /* [*2..3] from Alice should find Charlie (2 hops) and Diana (3 hops) */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*2..3]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 2);
 }
 
 /* Test variable-length with no matches */
 static void test_varlen_no_matches(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
+    /* [*4] from Alice - no node 4 hops away */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*4]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 0);
 
-        /* [*4] from Alice - no node 4 hops away */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*4]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 0);
-
-        /* [*5..10] from Alice - no nodes in that range */
-        count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*5..10]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 0);
-
-        cypher_executor_free(executor);
-    }
+    /* [*5..10] from Alice - no nodes in that range */
+    count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*5..10]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 0);
 }
 
 /* Test variable-length from different starting points */
 static void test_varlen_different_start(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
+    /* From Bob, 1 hop should find Charlie */
+    int count = count_query_results(shared_executor,
+        "MATCH (b:Person {name: \"Bob\"})-[*1]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 1);
 
-        /* From Bob, 1 hop should find Charlie */
-        int count = count_query_results(executor,
-            "MATCH (b:Person {name: \"Bob\"})-[*1]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 1);
+    /* From Bob, 2 hops should find Diana */
+    count = count_query_results(shared_executor,
+        "MATCH (b:Person {name: \"Bob\"})-[*2]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 1);
 
-        /* From Bob, 2 hops should find Diana */
-        count = count_query_results(executor,
-            "MATCH (b:Person {name: \"Bob\"})-[*2]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 1);
+    /* From Charlie, 1 hop should find Diana */
+    count = count_query_results(shared_executor,
+        "MATCH (c:Person {name: \"Charlie\"})-[*1]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 1);
 
-        /* From Charlie, 1 hop should find Diana */
-        count = count_query_results(executor,
-            "MATCH (c:Person {name: \"Charlie\"})-[*1]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 1);
-
-        /* From Diana, no outgoing paths */
-        count = count_query_results(executor,
-            "MATCH (d:Person {name: \"Diana\"})-[*1]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 0);
-
-        cypher_executor_free(executor);
-    }
+    /* From Diana, no outgoing paths */
+    count = count_query_results(shared_executor,
+        "MATCH (d:Person {name: \"Diana\"})-[*1]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 0);
 }
 
 /* Test variable-length with type filter */
 static void test_varlen_with_type_filter(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [:KNOWS*1..3] from Alice should only follow KNOWS relationships */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[:KNOWS*1..3]->(x) RETURN x.name");
-        /* Should find Bob (1), Charlie (2), Diana (3) */
-        CU_ASSERT_EQUAL(count, 3);
-
-        cypher_executor_free(executor);
-    }
+    /* [:KNOWS*1..3] from Alice should only follow KNOWS relationships */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[:KNOWS*1..3]->(x) RETURN x.name");
+    /* Should find Bob (1), Charlie (2), Diana (3) */
+    CU_ASSERT_EQUAL(count, 3);
 }
 
 /* Test cycle detection with variable-length relationships */
@@ -331,96 +285,61 @@ static void test_varlen_cycle_detection(void)
 /* Test unbounded variable-length [*] */
 static void test_varlen_unbounded(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*] from Alice should find all reachable nodes */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*]->(x) RETURN x.name");
-        /* Should find Bob, Charlie, Diana */
-        CU_ASSERT_TRUE(count >= 3);
-
-        cypher_executor_free(executor);
-    }
+    /* [*] from Alice should find all reachable nodes */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*]->(x) RETURN x.name");
+    /* Should find Bob, Charlie, Diana */
+    CU_ASSERT_TRUE(count >= 3);
 }
 
 /* Test min-bounded variable-length [*2..] */
 static void test_varlen_min_bounded(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*2..] from Alice should skip 1-hop nodes */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*2..]->(x) RETURN x.name");
-        /* Should find Charlie (2 hops) and Diana (3 hops), but not Bob */
-        CU_ASSERT_TRUE(count >= 2);
-
-        cypher_executor_free(executor);
-    }
+    /* [*2..] from Alice should skip 1-hop nodes */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*2..]->(x) RETURN x.name");
+    /* Should find Charlie (2 hops) and Diana (3 hops), but not Bob */
+    CU_ASSERT_TRUE(count >= 2);
 }
 
 /* Test max-bounded variable-length [*..2] */
 static void test_varlen_max_bounded(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* [*..2] from Alice should find nodes up to 2 hops */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[*..2]->(x) RETURN x.name");
-        /* Should find Bob (1 hop) and Charlie (2 hops), but not Diana */
-        CU_ASSERT_EQUAL(count, 2);
-
-        cypher_executor_free(executor);
-    }
+    /* [*..2] from Alice should find nodes up to 2 hops */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[*..2]->(x) RETURN x.name");
+    /* Should find Bob (1 hop) and Charlie (2 hops), but not Diana */
+    CU_ASSERT_EQUAL(count, 2);
 }
 
 /* Test variable-length with relationship variable */
 static void test_varlen_with_variable(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* Named relationship variable with varlen */
-        int count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[r*1..2]->(x) RETURN x.name");
-        CU_ASSERT_EQUAL(count, 2);
-
-        cypher_executor_free(executor);
-    }
+    /* Named relationship variable with varlen */
+    int count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[r*1..2]->(x) RETURN x.name");
+    CU_ASSERT_EQUAL(count, 2);
 }
 
 /* Test comparing regular vs variable-length results */
 static void test_varlen_vs_regular(void)
 {
-    cypher_executor *executor = cypher_executor_create(test_db);
-    CU_ASSERT_PTR_NOT_NULL(executor);
+    CU_ASSERT_PTR_NOT_NULL(shared_executor);
 
-    if (executor) {
-        create_test_graph(executor);
-
-        /* Regular 1-hop should match [*1] */
-        int regular_count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
-        int varlen_count = count_query_results(executor,
-            "MATCH (a:Person {name: \"Alice\"})-[:KNOWS*1]->(b) RETURN b.name");
-        CU_ASSERT_EQUAL(regular_count, varlen_count);
-
-        cypher_executor_free(executor);
-    }
+    /* Regular 1-hop should match [*1] */
+    int regular_count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
+    int varlen_count = count_query_results(shared_executor,
+        "MATCH (a:Person {name: \"Alice\"})-[:KNOWS*1]->(b) RETURN b.name");
+    CU_ASSERT_EQUAL(regular_count, varlen_count);
 }
 
 /* Initialize the variable-length executor test suite */

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphqlite"
+dynamic = ["version"]
+description = "SQLite extension for graph queries using Cypher"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "GraphQLite Contributors"}
+]
+keywords = ["sqlite", "graph", "cypher", "database"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+]
+
+[project.urls]
+Homepage = "https://github.com/colliery-io/graphqlite"
+Repository = "https://github.com/colliery-io/graphqlite"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+graphqlite = ["*.dylib", "*.so"]
+
+[tool.setuptools.dynamic]
+version = {attr = "graphqlite.__version__"}

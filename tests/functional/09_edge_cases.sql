@@ -224,7 +224,7 @@ SELECT 'Test 10.1 - Recovery after error:' as test_name;
 SELECT cypher('MATCH (n:TestNode) RETURN count(n)') as recovery_query;
 
 SELECT 'Test 10.2 - Partial success queries:' as test_name;
-SELECT cypher('MATCH (exists:TestNode), (missing:NonExistent) RETURN exists, missing') as result;
+SELECT cypher('MATCH (present:TestNode), (missing:NonExistent) RETURN present, missing') as result;
 
 SELECT 'Test 10.3 - Mixed valid and invalid patterns:' as test_name;
 -- NOTE: Parser error handling not graceful - documented in BUG_FIXES.md

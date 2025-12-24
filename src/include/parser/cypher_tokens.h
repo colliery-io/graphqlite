@@ -8,8 +8,10 @@ enum CypherTokens {
     
     /* Keywords - values from 258 onwards to avoid conflicts with single chars */
     ALL = 258,
+    ALLSHORTESTPATHS,
     ANALYZE,
     AND,
+    ANY,
     AS,
     ASC,
     ASCENDING,
@@ -30,21 +32,33 @@ enum CypherTokens {
     ENDS,
     EXISTS,
     EXPLAIN,
+    CSV,
     FALSE_P,
+    FIELDTERMINATOR,
+    FOREACH,
+    FROM,
+    HEADERS,
     IN,
     IS,
+    LOAD,
     LIMIT,
     MATCH,
     MERGE,
+    NONE,
     NOT,
     NULL_P,
+    ON,
     OPERATOR,
     OPTIONAL,
     OR,
     ORDER,
+    PATTERN,
+    REDUCE,
     REMOVE,
     RETURN,
     SET,
+    SHORTESTPATH,
+    SINGLE,
     SKIP,
     STARTS,
     THEN,
@@ -73,6 +87,7 @@ enum CypherTokens {
     DOT_DOT,     /* .. */
     TYPECAST,    /* :: */
     PLUS_EQ,     /* += */
+    REGEX_MATCH, /* =~ */
     
     /* Generic operator */
     OP

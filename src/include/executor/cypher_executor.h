@@ -1,7 +1,7 @@
 #ifndef CYPHER_EXECUTOR_H
 #define CYPHER_EXECUTOR_H
 
-#include <sqlite3.h>
+#include "graphqlite_sqlite.h"
 #include <stdbool.h>
 
 #include "executor/cypher_schema.h"
@@ -22,6 +22,7 @@ typedef struct cypher_result {
     int column_count;
     char **column_names;
     char ***data; /* 2D array: data[row][column] - legacy format */
+    int **data_types; /* 2D array: data_types[row][column] - SQLite type constants */
     
     /* AGType-compatible result data */
     agtype_value ***agtype_data; /* 2D array: agtype_data[row][column] */

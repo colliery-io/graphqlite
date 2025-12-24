@@ -119,10 +119,10 @@ const char* CYPHER_SCHEMA_DDL_EDGE_PROPS_BOOL =
 const char* CYPHER_SCHEMA_INDEX_EDGES_SOURCE = 
     "CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id, type)";
 
-const char* CYPHER_SCHEMA_INDEX_EDGES_TARGET = 
+const char* CYPHER_SCHEMA_INDEX_EDGES_TARGET =
     "CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id, type)";
 
-const char* CYPHER_SCHEMA_INDEX_EDGES_TYPE = 
+const char* CYPHER_SCHEMA_INDEX_EDGES_TYPE =
     "CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type)";
 
 const char* CYPHER_SCHEMA_INDEX_NODE_LABELS = 
@@ -370,7 +370,31 @@ int cypher_schema_initialize(cypher_schema_manager *manager)
     if (cypher_schema_create_indexes(manager) < 0) {
         return -1;
     }
-    
+
+    /* Run ANALYZE to update query planner statistics if needed */
+    /* Check if statistics already exist to avoid expensive re-analysis */
+    sqlite3_stmt *check_stmt;
+    bool needs_analyze = true;
+    int rc = sqlite3_prepare_v2(manager->db,
+        "SELECT 1 FROM sqlite_stat1 WHERE tbl = 'edges' LIMIT 1", -1, &check_stmt, NULL);
+    if (rc == SQLITE_OK) {
+        if (sqlite3_step(check_stmt) == SQLITE_ROW) {
+            needs_analyze = false;
+            CYPHER_DEBUG("Statistics already exist, skipping ANALYZE");
+        }
+        sqlite3_finalize(check_stmt);
+    }
+
+    if (needs_analyze) {
+        rc = sqlite3_exec(manager->db, "ANALYZE", NULL, NULL, NULL);
+        if (rc != SQLITE_OK) {
+            CYPHER_DEBUG("ANALYZE failed: %s", sqlite3_errmsg(manager->db));
+            /* Non-fatal - continue without statistics */
+        } else {
+            CYPHER_DEBUG("ANALYZE completed successfully");
+        }
+    }
+
     /* Now prepare the property key cache statements */
     if (prepare_property_key_cache_statements(manager->key_cache, manager->db) < 0) {
         return -1;

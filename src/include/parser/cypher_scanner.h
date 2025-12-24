@@ -27,7 +27,8 @@ typedef enum CypherTokenType {
     CYPHER_TOKEN_DOT_DOT,          /* .. */
     CYPHER_TOKEN_TYPECAST,         /* :: */
     CYPHER_TOKEN_PLUS_EQ,          /* += */
-    
+    CYPHER_TOKEN_REGEX_MATCH,      /* =~ */
+
     /* Keywords - will be mapped from our keyword system */
     CYPHER_TOKEN_KEYWORD           /* Any keyword from our keyword table */
 } CypherTokenType;

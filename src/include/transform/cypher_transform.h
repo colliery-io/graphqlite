@@ -1,7 +1,7 @@
 #ifndef CYPHER_TRANSFORM_H
 #define CYPHER_TRANSFORM_H
 
-#include <sqlite3.h>
+#include "graphqlite_sqlite.h"
 #include "parser/cypher_ast.h"
 
 /* Forward declarations */
@@ -23,10 +23,19 @@ struct transform_entity {
     bool is_current_clause;         /* True if declared in current clause, false if inherited */
 };
 
+/* Path types for shortest path support */
+typedef enum {
+    TRANSFORM_PATH_NORMAL,          /* Regular path matching */
+    TRANSFORM_PATH_SHORTEST,        /* shortestPath() - single shortest path */
+    TRANSFORM_PATH_ALL_SHORTEST     /* allShortestPaths() - all paths of minimum length */
+} transform_path_type;
+
 /* Path variable metadata */
 typedef struct path_variable {
     char *name;                     /* Path variable name */
     ast_list *elements;             /* AST nodes in the path (nodes and relationships) */
+    transform_path_type path_type;  /* Type of path (normal, shortest, all_shortest) */
+    char *cte_name;                 /* CTE name for variable-length paths (for filtering) */
 } path_variable;
 
 /* Transform context - tracks state during AST transformation */
@@ -52,7 +61,8 @@ struct cypher_transform_context {
         enum {
             VAR_TYPE_NODE,          /* Node variable */
             VAR_TYPE_EDGE,          /* Edge/relationship variable */
-            VAR_TYPE_PATH           /* Path variable */
+            VAR_TYPE_PATH,          /* Path variable */
+            VAR_TYPE_PROJECTED      /* WITH-projected variable (value is direct, no .id needed) */
         } type;                     /* Variable type */
     } *variables;
     int variable_count;
@@ -133,12 +143,20 @@ void cypher_transform_free_context(cypher_transform_context *ctx);
 /* Main transform entry point */
 cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cypher_query *query);
 
+/* Generate SQL only (for EXPLAIN) - returns 0 on success, -1 on error */
+int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *query);
+
 /* Individual clause transformers */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match);
 int transform_create_clause(cypher_transform_context *ctx, cypher_create *create);
 int transform_set_clause(cypher_transform_context *ctx, cypher_set *set);
 int transform_delete_clause(cypher_transform_context *ctx, cypher_delete *delete_clause);
+int transform_remove_clause(cypher_transform_context *ctx, cypher_remove *remove);
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret);
+int transform_with_clause(cypher_transform_context *ctx, cypher_with *with);
+int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind);
+int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *foreach);
+int transform_load_csv_clause(cypher_transform_context *ctx, cypher_load_csv *load_csv);
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where);
 
 /* Pattern transformers */
@@ -169,11 +187,13 @@ char* get_next_default_alias(cypher_transform_context *ctx);
 int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias);
 int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias);
+int register_projected_variable(cypher_transform_context *ctx, const char *name, const char *cte_name, const char *column_name);
 int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path);
 const char* lookup_variable_alias(cypher_transform_context *ctx, const char *name);
 bool is_variable_bound(cypher_transform_context *ctx, const char *name);
 bool is_edge_variable(cypher_transform_context *ctx, const char *name);
 bool is_path_variable(cypher_transform_context *ctx, const char *name);
+bool is_projected_variable(cypher_transform_context *ctx, const char *name);
 path_variable* get_path_variable(cypher_transform_context *ctx, const char *name);
 
 /* SQL generation helpers */

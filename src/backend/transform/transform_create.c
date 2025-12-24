@@ -13,8 +13,23 @@
 /* Forward declarations */
 static int transform_create_pattern(cypher_transform_context *ctx, ast_node *pattern);
 static int generate_node_create(cypher_transform_context *ctx, cypher_node_pattern *node);
-static int generate_relationship_create(cypher_transform_context *ctx, cypher_rel_pattern *rel, 
+static int generate_relationship_create(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                                        cypher_node_pattern *source_node, cypher_node_pattern *target_node);
+
+/* Helper to get label string from a label literal node */
+static const char* get_label_string(ast_node *label_node)
+{
+    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
+    cypher_literal *lit = (cypher_literal*)label_node;
+    if (lit->literal_type != LITERAL_STRING) return NULL;
+    return lit->value.string;
+}
+
+/* Helper to check if a node pattern has any labels */
+static bool has_labels(cypher_node_pattern *node)
+{
+    return node && node->labels && node->labels->count > 0;
+}
 
 /* Transform a CREATE clause into SQL */
 int transform_create_clause(cypher_transform_context *ctx, cypher_create *create)
@@ -101,31 +116,39 @@ static int transform_create_pattern(cypher_transform_context *ctx, ast_node *pat
 /* Generate SQL for creating a node */
 static int generate_node_create(cypher_transform_context *ctx, cypher_node_pattern *node)
 {
-    CYPHER_DEBUG("Generating CREATE for node %s (label: %s)", 
+    const char *first_label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+    CYPHER_DEBUG("Generating CREATE for node %s (labels: %s, count: %d)",
                  node->variable ? node->variable : "<anonymous>",
-                 node->label ? node->label : "<no label>");
-    
+                 first_label ? first_label : "<no label>",
+                 node->labels ? node->labels->count : 0);
+
     /* Start a new statement if needed */
     if (ctx->sql_size > 0) {
         append_sql(ctx, "; ");
     }
-    
+
     /* Insert into nodes table */
     append_sql(ctx, "INSERT INTO nodes DEFAULT VALUES");
-    
+
     /* If we need to track the node ID for labels or properties */
-    if (node->label || node->properties || node->variable) {
+    if (has_labels(node) || node->properties || node->variable) {
         append_sql(ctx, "; ");
-        
+
         /* Get the last inserted node ID */
         /* In a real implementation, we'd need to handle this better,
          * possibly using RETURNING clause or last_insert_rowid() */
-        
-        if (node->label) {
-            /* Insert label */
-            append_sql(ctx, "INSERT INTO node_labels (node_id, label) VALUES (last_insert_rowid(), ");
-            append_string_literal(ctx, node->label);
-            append_sql(ctx, ")");
+
+        /* Insert each label */
+        if (has_labels(node)) {
+            for (int i = 0; i < node->labels->count; i++) {
+                const char *label = get_label_string(node->labels->items[i]);
+                if (label) {
+                    if (i > 0) append_sql(ctx, "; ");
+                    append_sql(ctx, "INSERT INTO node_labels (node_id, label) VALUES (last_insert_rowid(), ");
+                    append_string_literal(ctx, label);
+                    append_sql(ctx, ")");
+                }
+            }
         }
         
         if (node->properties) {

@@ -1,0 +1,156 @@
+name: CI Full
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev libcunit1-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bison flex sqlite cunit
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
+          echo "HOMEBREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
+          echo "SQLITE_PREFIX=$(brew --prefix sqlite)" >> $GITHUB_ENV
+
+      - name: Build extension (Linux)
+        if: runner.os == 'Linux'
+        run: make extension
+
+      - name: Build extension (macOS)
+        if: runner.os == 'macOS'
+        run: make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Run unit tests (Linux)
+        if: runner.os == 'Linux'
+        run: make test-unit
+
+      - name: Run unit tests (macOS)
+        if: runner.os == 'macOS'
+        run: make test-unit EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Run functional tests (Linux)
+        if: runner.os == 'Linux'
+        run: make test-functional
+
+      - name: Run functional tests (macOS)
+        if: runner.os == 'macOS'
+        run: make test-functional EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib" SQLITE="$SQLITE_PREFIX/bin/sqlite3"
+
+  rust-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bison flex sqlite
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
+          echo "HOMEBREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
+
+      - name: Build extension (Linux)
+        if: runner.os == 'Linux'
+        run: make extension
+
+      - name: Build extension (macOS)
+        if: runner.os == 'macOS'
+        run: make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Run Rust tests
+        working-directory: bindings/rust
+        run: cargo test -- --test-threads=1
+
+  python-tests-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev
+
+      - name: Build extension
+        run: make extension
+
+      - name: Install Python package
+        working-directory: bindings/python
+        run: pip install -e ".[dev]"
+
+      - name: Run Python tests
+        working-directory: bindings/python
+        run: pytest tests/ -v
+
+  python-tests-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install bison flex sqlite python@3.11
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix python@3.11)/libexec/bin" >> $GITHUB_PATH
+
+      - name: Build extension
+        run: |
+          HOMEBREW_PREFIX=$(brew --prefix)
+          make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Install Python package
+        run: |
+          python3 -m pip install -e "./bindings/python[dev]"
+
+      - name: Run Python tests
+        working-directory: bindings/python
+        run: |
+          SQLITE_PREFIX=$(brew --prefix sqlite)
+          DYLD_LIBRARY_PATH="$SQLITE_PREFIX/lib:$DYLD_LIBRARY_PATH" python3 -m pytest tests/ -v

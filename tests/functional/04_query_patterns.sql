@@ -17,26 +17,26 @@ SELECT '=== Test 04: Query Patterns ===' as test_section;
 SELECT '=== Setup: Creating diverse test data ===' as section;
 
 -- People with various properties
-SELECT cypher("CREATE (a:Person {name: 'Alice', age: 30, city: 'NYC'})") as setup;
-SELECT cypher("CREATE (b:Person {name: 'Bob', age: 25, city: 'LA'})") as setup;
-SELECT cypher("CREATE (c:Person {name: 'Carol', age: 30, city: 'NYC'})") as setup;
-SELECT cypher("CREATE (d:Person {name: 'David', age: 35})") as setup; -- Missing city
-SELECT cypher("CREATE (:Person {name: 'Eve', age: 28})") as setup; -- No variable
+SELECT cypher('CREATE (a:Person {name: "Alice", age: 30, city: "NYC"})') as setup;
+SELECT cypher('CREATE (b:Person {name: "Bob", age: 25, city: "LA"})') as setup;
+SELECT cypher('CREATE (c:Person {name: "Carol", age: 30, city: "NYC"})') as setup;
+SELECT cypher('CREATE (d:Person {name: "David", age: 35})') as setup; -- Missing city
+SELECT cypher('CREATE (:Person {name: "Eve", age: 28})') as setup; -- No variable
 
 -- Companies
-SELECT cypher("CREATE (tc:Company {name: 'TechCorp', employees: 100})") as setup;
-SELECT cypher("CREATE (ac:Company {name: 'AcmeCorp', employees: 50})") as setup;
-SELECT cypher("CREATE (:Company {name: 'StartupInc'})") as setup; -- No variable, no employees
+SELECT cypher('CREATE (tc:Company {name: "TechCorp", employees: 100})') as setup;
+SELECT cypher('CREATE (ac:Company {name: "AcmeCorp", employees: 50})') as setup;
+SELECT cypher('CREATE (:Company {name: "StartupInc"})') as setup; -- No variable, no employees
 
 -- Products
-SELECT cypher("CREATE (p1:Product {name: 'Widget', price: 19.99})") as setup;
-SELECT cypher("CREATE (p2:Product {name: 'Gadget', price: 29.99})") as setup;
-SELECT cypher("CREATE (:Product {name: 'Thing', price: 9.99})") as setup;
+SELECT cypher('CREATE (p1:Product {name: "Widget", price: 19.99})') as setup;
+SELECT cypher('CREATE (p2:Product {name: "Gadget", price: 29.99})') as setup;
+SELECT cypher('CREATE (:Product {name: "Thing", price: 9.99})') as setup;
 
 -- Nodes without labels
-SELECT cypher("CREATE (n1 {type: 'unknown', value: 'test'})") as setup;
-SELECT cypher("CREATE ({type: 'anonymous'})") as setup;
-SELECT cypher("CREATE (empty)") as setup; -- No label, no properties
+SELECT cypher('CREATE (n1 {type: "unknown", value: "test"})') as setup;
+SELECT cypher('CREATE ({type: "anonymous"})') as setup;
+SELECT cypher('CREATE (empty)') as setup; -- No label, no properties
 
 -- =======================================================================
 -- SECTION 1: Basic MATCH Patterns
@@ -85,7 +85,7 @@ SELECT cypher('MATCH (n:PERSON) RETURN n') as result; -- uppercase
 SELECT '=== Section 3: Property-based Matching ===' as section;
 
 SELECT 'Test 3.1 - Match by single property:' as test_name;
-SELECT cypher("MATCH (n {name: 'Alice'}) RETURN n") as result;
+SELECT cypher('MATCH (n {name: "Alice"}) RETURN n') as result;
 
 SELECT 'Test 3.2 - Match by integer property:' as test_name;
 SELECT cypher('MATCH (n {age: 30}) RETURN n.name') as result;
@@ -94,10 +94,10 @@ SELECT 'Test 3.3 - Match by float property:' as test_name;
 SELECT cypher('MATCH (n {price: 19.99}) RETURN n.name') as result;
 
 SELECT 'Test 3.4 - Match by multiple properties:' as test_name;
-SELECT cypher("MATCH (n {name: 'Alice', age: 30}) RETURN n") as result;
+SELECT cypher('MATCH (n {name: "Alice", age: 30}) RETURN n') as result;
 
 SELECT 'Test 3.5 - Match with non-existent property value:' as test_name;
-SELECT cypher("MATCH (n {name: 'Nobody'}) RETURN n") as result;
+SELECT cypher('MATCH (n {name: "Nobody"}) RETURN n') as result;
 
 SELECT 'Test 3.6 - Match nodes with specific property type:' as test_name;
 SELECT cypher('MATCH (n {type: "unknown"}) RETURN n') as result;
@@ -111,16 +111,16 @@ SELECT cypher('MATCH (n {}) RETURN n LIMIT 3') as result;
 SELECT '=== Section 4: Label + Property Matching ===' as section;
 
 SELECT 'Test 4.1 - Label with single property:' as test_name;
-SELECT cypher("MATCH (n:Person {name: 'Bob'}) RETURN n") as result;
+SELECT cypher('MATCH (n:Person {name: "Bob"}) RETURN n') as result;
 
 SELECT 'Test 4.2 - Label with multiple properties:' as test_name;
-SELECT cypher("MATCH (n:Person {age: 30, city: 'NYC'}) RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person {age: 30, city: "NYC"}) RETURN n.name') as result;
 
 SELECT 'Test 4.3 - Label with integer property:' as test_name;
 SELECT cypher('MATCH (c:Company {employees: 100}) RETURN c.name') as result;
 
 SELECT 'Test 4.4 - Wrong label, right property:' as test_name;
-SELECT cypher("MATCH (n:Company {name: 'Alice'}) RETURN n") as result;
+SELECT cypher('MATCH (n:Company {name: "Alice"}) RETURN n') as result;
 
 SELECT 'Test 4.5 - Right label, wrong property:' as test_name;
 SELECT cypher('MATCH (n:Person {employees: 100}) RETURN n') as result;
@@ -131,10 +131,10 @@ SELECT cypher('MATCH (n:Person {employees: 100}) RETURN n') as result;
 SELECT '=== Section 5: WHERE Clause Patterns ===' as section;
 
 SELECT 'Test 5.1 - WHERE with equality:' as test_name;
-SELECT cypher("MATCH (n:Person) WHERE n.name = 'Alice' RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person) WHERE n.name = "Alice" RETURN n.name') as result;
 
 SELECT 'Test 5.2 - WHERE with inequality:' as test_name;
-SELECT cypher("MATCH (n:Person) WHERE n.name <> 'Alice' RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person) WHERE n.name <> "Alice" RETURN n.name') as result;
 
 SELECT 'Test 5.3 - WHERE with greater than:' as test_name;
 SELECT cypher('MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age') as result;
@@ -149,13 +149,13 @@ SELECT 'Test 5.6 - WHERE with less than or equal:' as test_name;
 SELECT cypher('MATCH (n:Person) WHERE n.age <= 30 RETURN n.name, n.age') as result;
 
 SELECT 'Test 5.7 - WHERE with AND:' as test_name;
-SELECT cypher("MATCH (n:Person) WHERE n.age > 25 AND n.city = 'NYC' RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person) WHERE n.age > 25 AND n.city = "NYC" RETURN n.name') as result;
 
 SELECT 'Test 5.8 - WHERE with OR:' as test_name;
-SELECT cypher("MATCH (n:Person) WHERE n.age < 28 OR n.city = 'LA' RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person) WHERE n.age < 28 OR n.city = "LA" RETURN n.name') as result;
 
 SELECT 'Test 5.9 - WHERE with NOT:' as test_name;
-SELECT cypher("MATCH (n:Person) WHERE NOT n.age = 30 RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person) WHERE NOT n.age = 30 RETURN n.name') as result;
 
 -- =======================================================================
 -- SECTION 6: Property Existence and Null Checks
@@ -206,7 +206,7 @@ SELECT 'Test 8.2 - Nested property access patterns:' as test_name;
 SELECT cypher('MATCH (p:Product) WHERE p.price > 15.0 RETURN p.name, p.price') as result;
 
 SELECT 'Test 8.3 - Complex WHERE with multiple conditions:' as test_name;
-SELECT cypher("MATCH (n:Person) WHERE n.age > 25 AND n.city = 'NYC' AND n.name <> 'Bob' RETURN n.name") as result;
+SELECT cypher('MATCH (n:Person) WHERE n.age > 25 AND n.city = "NYC" AND n.name <> "Bob" RETURN n.name') as result;
 
 SELECT 'Test 8.4 - Pattern with property ranges:' as test_name;
 SELECT cypher('MATCH (p:Product) WHERE p.price >= 10.0 AND p.price <= 25.0 RETURN p.name, p.price') as result;

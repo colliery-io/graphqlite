@@ -1,0 +1,24 @@
+[package]
+name = "graphqlite"
+version = "0.0.0-alpha.1"
+edition = "2021"
+description = "SQLite extension for graph queries using Cypher"
+license = "MIT"
+repository = "https://github.com/colliery-io/graphqlite"
+readme = "README.md"
+keywords = ["sqlite", "graph", "cypher", "database"]
+categories = ["database"]
+exclude = ["tests/", "target/"]
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[features]
+default = []
+bundled-extension = []  # Future: bundle the compiled extension

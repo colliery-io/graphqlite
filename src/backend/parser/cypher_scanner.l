@@ -90,6 +90,7 @@ gt_eq       >=
 dot_dot     \.\.
 typecast    ::
 plus_eq     \+=
+regex_match =~
 
 /* Single-line comments */
 comment     "//"[^\n\r]*
@@ -144,6 +145,7 @@ operator    [+\-*/%^=!&|~]+
 {dot_dot}       { RETURN_TOKEN(CYPHER_TOKEN_DOT_DOT); }
 {typecast}      { RETURN_TOKEN(CYPHER_TOKEN_TYPECAST); }
 {plus_eq}       { RETURN_TOKEN(CYPHER_TOKEN_PLUS_EQ); }
+{regex_match}   { RETURN_TOKEN(CYPHER_TOKEN_REGEX_MATCH); }
 
 {hexint}        { prepare_integer_token(yytext); return CYPHER_TOKEN_INTEGER; }
 {integer}       { prepare_integer_token(yytext); return CYPHER_TOKEN_INTEGER; }

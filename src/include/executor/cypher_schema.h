@@ -1,7 +1,7 @@
 #ifndef CYPHER_SCHEMA_H
 #define CYPHER_SCHEMA_H
 
-#include <sqlite3.h>
+#include "graphqlite_sqlite.h"
 #include <stdbool.h>
 #include <time.h>
 

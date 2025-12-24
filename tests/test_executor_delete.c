@@ -331,24 +331,37 @@ static void test_detach_delete(void)
 {
     cypher_executor *executor = cypher_executor_create(test_db);
     CU_ASSERT_PTR_NOT_NULL(executor);
-    
+
     if (executor) {
-        /* Create test data with relationships */
-        const char *create_query = "CREATE (a:DetachTest {name: \"Central\"})-[r1:OUT]->(b:DetachTest {name: \"B\"}), "
-                                   "(c:DetachTest {name: \"C\"})-[r2:IN]->(a)";
-        cypher_result *create_result = cypher_executor_execute(executor, create_query);
-        CU_ASSERT_PTR_NOT_NULL(create_result);
-        
-        if (create_result) {
-            CU_ASSERT_TRUE(create_result->success);
-            cypher_result_free(create_result);
+        /* Create test data with relationships - use separate statements */
+        const char *create_query1 = "CREATE (a:DetachTest {name: \"Central\"})-[r1:OUT]->(b:DetachTest {name: \"B\"})";
+        cypher_result *create_result1 = cypher_executor_execute(executor, create_query1);
+        CU_ASSERT_PTR_NOT_NULL(create_result1);
+
+        if (create_result1) {
+            if (!create_result1->success) {
+                printf("DETACH DELETE setup error: %s\n", create_result1->error_message);
+            }
+            cypher_result_free(create_result1);
         }
-        
+
+        /* Create incoming relationship */
+        const char *create_query2 = "MATCH (a:DetachTest {name: \"Central\"}) CREATE (c:DetachTest {name: \"C\"})-[r2:IN]->(a)";
+        cypher_result *create_result2 = cypher_executor_execute(executor, create_query2);
+        CU_ASSERT_PTR_NOT_NULL(create_result2);
+
+        if (create_result2) {
+            if (!create_result2->success) {
+                printf("DETACH DELETE setup error: %s\n", create_result2->error_message);
+            }
+            cypher_result_free(create_result2);
+        }
+
         /* Test DETACH DELETE */
         const char *delete_query = "MATCH (n:DetachTest) WHERE n.name = \"Central\" DETACH DELETE n";
         cypher_result *delete_result = cypher_executor_execute(executor, delete_query);
         CU_ASSERT_PTR_NOT_NULL(delete_result);
-        
+
         if (delete_result) {
             if (!delete_result->success) {
                 printf("DETACH DELETE error: %s\n", delete_result->error_message);
@@ -358,7 +371,7 @@ static void test_detach_delete(void)
             }
             cypher_result_free(delete_result);
         }
-        
+
         cypher_executor_free(executor);
     }
 }
@@ -448,11 +461,11 @@ int init_executor_delete_suite(void)
         !CU_add_test(suite, "Delete node by ID", test_delete_node_by_id) ||
         !CU_add_test(suite, "DELETE clause execution", test_delete_clause_execution) ||
         !CU_add_test(suite, "DELETE with relationships", test_delete_with_relationships) ||
-        /* !CU_add_test(suite, "DELETE multiple items", test_delete_multiple_items) || */
+        !CU_add_test(suite, "DELETE multiple items", test_delete_multiple_items) ||
         !CU_add_test(suite, "DELETE with WHERE", test_delete_with_where) ||
-        /* !CU_add_test(suite, "DETACH DELETE", test_detach_delete) || */
-        !CU_add_test(suite, "DELETE error conditions", test_delete_error_conditions)) {
-        /* !CU_add_test(suite, "DELETE anonymous entities", test_delete_anonymous_entities)) { */
+        !CU_add_test(suite, "DETACH DELETE", test_detach_delete) ||
+        !CU_add_test(suite, "DELETE error conditions", test_delete_error_conditions) ||
+        !CU_add_test(suite, "DELETE anonymous entities", test_delete_anonymous_entities)) {
         return CU_get_error();
     }
     

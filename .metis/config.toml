@@ -1,0 +1,6 @@
+[project]
+prefix = "GQLITE"
+
+[flight_levels]
+strategies_enabled = false
+initiatives_enabled = true

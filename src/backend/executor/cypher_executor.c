@@ -7,9 +7,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 
 #include "executor/cypher_executor.h"
+#include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
+
+/* Helper to get label string from a label literal node */
+static const char* get_label_string(ast_node *label_node)
+{
+    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
+    cypher_literal *lit = (cypher_literal*)label_node;
+    if (lit->literal_type != LITERAL_STRING) return NULL;
+    return lit->value.string;
+}
+
+/* Helper to check if a node pattern has any labels */
+static bool has_labels(cypher_node_pattern *node)
+{
+    return node && node->labels && node->labels->count > 0;
+}
+
+/* Performance timing instrumentation - enable with -DGRAPHQLITE_PERF_TIMING */
 
 /* Create execution engine */
 cypher_executor* cypher_executor_create(sqlite3 *db)
@@ -86,6 +105,7 @@ static cypher_result* create_empty_result(void)
     result->column_count = 0;
     result->column_names = NULL;
     result->data = NULL;
+    result->data_types = NULL;
     result->agtype_data = NULL;
     result->use_agtype = false;
     result->nodes_created = 0;
@@ -237,10 +257,13 @@ static int execute_path_pattern_with_variables(cypher_executor *executor, cypher
                     CYPHER_DEBUG("Mapped variable '%s' to node %d", node_pattern->variable, node_id);
                 }
                 
-                /* Handle node labels and properties for new nodes */
-                if (node_pattern->label) {
-                    if (cypher_schema_add_node_label(executor->schema_mgr, node_id, node_pattern->label) == 0) {
-                        CYPHER_DEBUG("Added label '%s' to node %d", node_pattern->label, node_id);
+                /* Handle node labels and properties for new nodes - supports multiple labels */
+                if (has_labels(node_pattern)) {
+                    for (int li = 0; li < node_pattern->labels->count; li++) {
+                        const char *label = get_label_string(node_pattern->labels->items[li]);
+                        if (label && cypher_schema_add_node_label(executor->schema_mgr, node_id, label) == 0) {
+                            CYPHER_DEBUG("Added label '%s' to node %d", label, node_id);
+                        }
                     }
                 }
                 
@@ -336,10 +359,13 @@ static int execute_path_pattern_with_variables(cypher_executor *executor, cypher
                     CYPHER_DEBUG("Mapped target variable '%s' to node %d", target_pattern->variable, target_node_id);
                 }
                 
-                /* Handle target node labels and properties for new nodes */
-                if (target_pattern->label) {
-                    if (cypher_schema_add_node_label(executor->schema_mgr, target_node_id, target_pattern->label) == 0) {
-                        CYPHER_DEBUG("Added label '%s' to target node %d", target_pattern->label, target_node_id);
+                /* Handle target node labels and properties for new nodes - supports multiple labels */
+                if (has_labels(target_pattern)) {
+                    for (int li = 0; li < target_pattern->labels->count; li++) {
+                        const char *label = get_label_string(target_pattern->labels->items[li]);
+                        if (label && cypher_schema_add_node_label(executor->schema_mgr, target_node_id, label) == 0) {
+                            CYPHER_DEBUG("Added label '%s' to target node %d", label, target_node_id);
+                        }
                     }
                 }
                 
@@ -511,7 +537,301 @@ static int execute_create_clause(cypher_executor *executor, cypher_create *creat
     
     /* Clean up variable map */
     free_variable_map(var_map);
-    
+
+    return 0;
+}
+
+/* Find a node by label and properties, returns node_id or -1 if not found */
+static int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern)
+{
+    if (!executor || !node_pattern) {
+        return -1;
+    }
+
+    /* Build SQL query to find matching node */
+    char sql[2048];
+    int offset = 0;
+
+    offset += snprintf(sql + offset, sizeof(sql) - offset,
+                       "SELECT n.id FROM nodes n");
+
+    /* Add label joins if specified - one join per label */
+    if (has_labels(node_pattern)) {
+        for (int li = 0; li < node_pattern->labels->count; li++) {
+            const char *label = get_label_string(node_pattern->labels->items[li]);
+            if (label) {
+                offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                  " JOIN node_labels nl%d ON n.id = nl%d.node_id AND nl%d.label = '%s'",
+                                  li, li, li, label);
+            }
+        }
+    }
+
+    /* Add property joins if specified */
+    if (node_pattern->properties && node_pattern->properties->type == AST_NODE_MAP) {
+        cypher_map *map = (cypher_map*)node_pattern->properties;
+        if (map->pairs) {
+            for (int i = 0; i < map->pairs->count; i++) {
+                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[i];
+                if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)pair->value;
+
+                    /* Determine which property table to join */
+                    const char *prop_table = "node_props_text";
+                    char value_str[256];
+
+                    switch (lit->literal_type) {
+                        case LITERAL_STRING:
+                            prop_table = "node_props_text";
+                            snprintf(value_str, sizeof(value_str), "'%s'", lit->value.string);
+                            break;
+                        case LITERAL_INTEGER:
+                            prop_table = "node_props_int";
+                            snprintf(value_str, sizeof(value_str), "%d", lit->value.integer);
+                            break;
+                        case LITERAL_DECIMAL:
+                            prop_table = "node_props_real";
+                            snprintf(value_str, sizeof(value_str), "%f", lit->value.decimal);
+                            break;
+                        case LITERAL_BOOLEAN:
+                            prop_table = "node_props_bool";
+                            snprintf(value_str, sizeof(value_str), "%d", lit->value.boolean ? 1 : 0);
+                            break;
+                        default:
+                            continue;
+                    }
+
+                    offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                      " JOIN %s np%d ON n.id = np%d.node_id"
+                                      " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = '%s'"
+                                      " AND np%d.value = %s",
+                                      prop_table, i, i,
+                                      i, i, i, i, pair->key,
+                                      i, value_str);
+                }
+            }
+        }
+    }
+
+    offset += snprintf(sql + offset, sizeof(sql) - offset, " LIMIT 1");
+
+    CYPHER_DEBUG("MERGE find query: %s", sql);
+
+    /* Execute the query */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("MERGE find query prepare failed: %s", sqlite3_errmsg(executor->db));
+        return -1;
+    }
+
+    int node_id = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        node_id = sqlite3_column_int(stmt, 0);
+        CYPHER_DEBUG("Found existing node %d", node_id);
+    }
+
+    sqlite3_finalize(stmt);
+    return node_id;
+}
+
+/* Execute SET items from a list (used for ON CREATE/ON MATCH) */
+static int execute_set_items(cypher_executor *executor, ast_list *items, variable_map *var_map, cypher_result *result)
+{
+    if (!executor || !items || !var_map || !result) {
+        return -1;
+    }
+
+    /* Create a temporary cypher_set to reuse execute_set_operations */
+    cypher_set temp_set;
+    temp_set.base.type = AST_NODE_SET;
+    temp_set.items = items;
+
+    return execute_set_operations(executor, &temp_set, var_map, result);
+}
+
+/* Execute MERGE clause */
+static int execute_merge_clause(cypher_executor *executor, cypher_merge *merge, cypher_result *result)
+{
+    if (!executor || !merge || !result) {
+        return -1;
+    }
+
+    if (!merge->pattern) {
+        set_result_error(result, "No pattern in MERGE clause");
+        return -1;
+    }
+
+    CYPHER_DEBUG("Executing MERGE clause with %d patterns", merge->pattern->count);
+
+    /* Create variable map to track node variables */
+    variable_map *var_map = create_variable_map();
+    if (!var_map) {
+        set_result_error(result, "Failed to create variable map");
+        return -1;
+    }
+
+    /* Track which nodes were created vs matched */
+    int nodes_matched = 0;
+    int nodes_created_in_merge = 0;
+
+    /* Process each path pattern in the MERGE clause */
+    for (int p = 0; p < merge->pattern->count; p++) {
+        ast_node *pattern = merge->pattern->items[p];
+
+        if (pattern->type != AST_NODE_PATH) {
+            CYPHER_DEBUG("Unexpected pattern type in MERGE: %d", pattern->type);
+            continue;
+        }
+
+        cypher_path *path = (cypher_path*)pattern;
+        if (!path->elements) continue;
+
+        int previous_node_id = -1;
+
+        /* Process path elements: node, rel, node, rel, node, ... */
+        for (int i = 0; i < path->elements->count; i++) {
+            ast_node *element = path->elements->items[i];
+
+            if (element->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *node_pattern = (cypher_node_pattern*)element;
+                int node_id = -1;
+                bool was_created = false;
+
+                /* Check if this variable already exists in var_map */
+                if (node_pattern->variable) {
+                    node_id = get_variable_node_id(var_map, node_pattern->variable);
+                    if (node_id >= 0) {
+                        CYPHER_DEBUG("Reusing existing node %d for variable '%s'", node_id, node_pattern->variable);
+                        previous_node_id = node_id;
+                        continue;
+                    }
+                }
+
+                /* Try to find existing node by label + properties */
+                node_id = find_node_by_pattern(executor, node_pattern);
+
+                if (node_id >= 0) {
+                    /* Node exists - matched */
+                    nodes_matched++;
+                    CYPHER_DEBUG("MERGE matched existing node %d", node_id);
+                } else {
+                    /* Node doesn't exist - create it */
+                    node_id = cypher_schema_create_node(executor->schema_mgr);
+                    if (node_id < 0) {
+                        set_result_error(result, "Failed to create node in MERGE");
+                        free_variable_map(var_map);
+                        return -1;
+                    }
+
+                    was_created = true;
+                    nodes_created_in_merge++;
+                    result->nodes_created++;
+                    CYPHER_DEBUG("MERGE created new node %d", node_id);
+
+                    /* Add labels if specified - supports multiple labels */
+                    if (has_labels(node_pattern)) {
+                        for (int li = 0; li < node_pattern->labels->count; li++) {
+                            const char *label = get_label_string(node_pattern->labels->items[li]);
+                            if (label) {
+                                cypher_schema_add_node_label(executor->schema_mgr, node_id, label);
+                            }
+                        }
+                    }
+
+                    /* Add properties if specified */
+                    if (node_pattern->properties && node_pattern->properties->type == AST_NODE_MAP) {
+                        cypher_map *map = (cypher_map*)node_pattern->properties;
+                        if (map->pairs) {
+                            for (int j = 0; j < map->pairs->count; j++) {
+                                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+                                if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
+                                    cypher_literal *lit = (cypher_literal*)pair->value;
+                                    property_type prop_type = PROP_TYPE_TEXT;
+                                    const void *prop_value = NULL;
+
+                                    switch (lit->literal_type) {
+                                        case LITERAL_STRING:
+                                            prop_type = PROP_TYPE_TEXT;
+                                            prop_value = lit->value.string;
+                                            break;
+                                        case LITERAL_INTEGER:
+                                            prop_type = PROP_TYPE_INTEGER;
+                                            prop_value = &lit->value.integer;
+                                            break;
+                                        case LITERAL_DECIMAL:
+                                            prop_type = PROP_TYPE_REAL;
+                                            prop_value = &lit->value.decimal;
+                                            break;
+                                        case LITERAL_BOOLEAN:
+                                            prop_type = PROP_TYPE_BOOLEAN;
+                                            prop_value = &lit->value.boolean;
+                                            break;
+                                        default:
+                                            continue;
+                                    }
+
+                                    if (prop_value) {
+                                        cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value);
+                                        result->properties_set++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                /* Store variable mapping if present */
+                if (node_pattern->variable) {
+                    set_variable_node_id(var_map, node_pattern->variable, node_id);
+                }
+
+                previous_node_id = node_id;
+
+                /* Apply ON CREATE SET if node was created */
+                if (was_created && merge->on_create && merge->on_create->count > 0) {
+                    CYPHER_DEBUG("Applying ON CREATE SET for node %d", node_id);
+                    if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
+                        free_variable_map(var_map);
+                        return -1;
+                    }
+                }
+
+                /* Apply ON MATCH SET if node was matched */
+                if (!was_created && merge->on_match && merge->on_match->count > 0) {
+                    CYPHER_DEBUG("Applying ON MATCH SET for node %d", node_id);
+                    if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
+                        free_variable_map(var_map);
+                        return -1;
+                    }
+                }
+
+            } else if (element->type == AST_NODE_REL_PATTERN) {
+                /* Handle relationship MERGE - need source and target nodes */
+                if (previous_node_id < 0 || i + 1 >= path->elements->count) {
+                    set_result_error(result, "Invalid relationship pattern in MERGE");
+                    free_variable_map(var_map);
+                    return -1;
+                }
+
+                /* Get the target node (next element) */
+                ast_node *next_element = path->elements->items[i + 1];
+                if (next_element->type != AST_NODE_NODE_PATTERN) {
+                    set_result_error(result, "Expected node after relationship in MERGE");
+                    free_variable_map(var_map);
+                    return -1;
+                }
+
+                /* For now, just skip relationship handling - focus on node MERGE first */
+                /* TODO: Implement relationship MERGE */
+                CYPHER_DEBUG("Relationship MERGE not yet fully implemented");
+            }
+        }
+    }
+
+    CYPHER_DEBUG("MERGE complete: %d nodes matched, %d nodes created", nodes_matched, nodes_created_in_merge);
+
+    free_variable_map(var_map);
     return 0;
 }
 
@@ -558,23 +878,64 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
     if (!executor || !match || !return_clause || !result) {
         return -1;
     }
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    struct timespec t_start, t_transform, t_prepare, t_execute;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+#endif
+
     CYPHER_DEBUG("Executing MATCH+RETURN query");
-    
+
     /* Build SQL query from MATCH and RETURN clauses */
     cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
     }
-    
+
+    /*
+     * Check if we should enable sql_builder for optimized property JOINs.
+     * Only enable for simple node-only patterns without relationships,
+     * as the MATCH transformation for relationships writes directly to sql_buffer
+     * and doesn't work well with the sql_builder pattern.
+     */
+    bool has_relationships = false;
+    for (int i = 0; i < match->pattern->count; i++) {
+        ast_node *pattern = match->pattern->items[i];
+        if (pattern->type == AST_NODE_PATH) {
+            cypher_path *path = (cypher_path *)pattern;
+            if (path->elements && path->elements->count > 1) {
+                has_relationships = true;
+                break;
+            }
+        }
+    }
+
+    if (!has_relationships) {
+        if (init_sql_builder(ctx) < 0) {
+            set_result_error(result, "Failed to initialize SQL builder");
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+    }
+
     /* Transform MATCH clause to generate FROM/WHERE */
     if (transform_match_clause(ctx, match) < 0) {
         set_result_error(result, "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
-    
+
+    /* Finalize SQL generation before RETURN (assembles FROM + JOINs + WHERE) */
+    /* Only needed if sql_builder was initialized */
+    if (!has_relationships) {
+        if (finalize_sql_generation(ctx) < 0) {
+            set_result_error(result, "Failed to finalize SQL generation");
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+    }
+
     /* Transform RETURN clause to generate SELECT projections */
     if (transform_return_clause(ctx, return_clause) < 0) {
         set_result_error(result, "Failed to transform RETURN clause");
@@ -585,8 +946,12 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
     /* Prepend any CTE (Common Table Expression) for variable-length relationships */
     prepend_cte_to_sql(ctx);
 
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_transform);
+#endif
+
     CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
-    
+
     /* Execute the SQL query */
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
@@ -597,14 +962,26 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
         cypher_transform_free_context(ctx);
         return -1;
     }
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_prepare);
+#endif
+
     /* Build result from SQL execution */
     if (build_query_results(executor, stmt, return_clause, result, ctx) < 0) {
         sqlite3_finalize(stmt);
         cypher_transform_free_context(ctx);
         return -1;
     }
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_execute);
+    double transform_ms = (t_transform.tv_sec - t_start.tv_sec) * 1000.0 + (t_transform.tv_nsec - t_start.tv_nsec) / 1000000.0;
+    double prepare_ms = (t_prepare.tv_sec - t_transform.tv_sec) * 1000.0 + (t_prepare.tv_nsec - t_transform.tv_nsec) / 1000000.0;
+    double execute_ms = (t_execute.tv_sec - t_prepare.tv_sec) * 1000.0 + (t_execute.tv_nsec - t_prepare.tv_nsec) / 1000000.0;
+    CYPHER_DEBUG("MATCH+RETURN TIMING: transform=%.2fms, prepare=%.2fms, build_results=%.2fms", transform_ms, prepare_ms, execute_ms);
+#endif
+
     sqlite3_finalize(stmt);
     cypher_transform_free_context(ctx);
     return 0;
@@ -613,20 +990,25 @@ static int execute_match_return_query(cypher_executor *executor, cypher_match *m
 /* Build query results from executed SQL statement */
 static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_return *return_clause, cypher_result *result, cypher_transform_context *ctx)
 {
+#ifdef GRAPHQLITE_PERF_TIMING
+    struct timespec t_start, t_count, t_read;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+#endif
+
     if (!stmt || !return_clause || !result) {
         return -1;
     }
-    
+
     /* Get column count from return clause */
     int column_count = return_clause->items->count;
-    
+
     /* Allocate column names array */
     result->column_names = malloc(column_count * sizeof(char*));
     if (!result->column_names) {
         set_result_error(result, "Memory allocation failed for column names");
         return -1;
     }
-    
+
     /* Determine if we're returning vertices/edges/properties by analyzing return items */
     bool has_agtype_values = false;
     for (int i = 0; i < column_count; i++) {
@@ -636,7 +1018,7 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
             has_agtype_values = true;
         }
     }
-    
+
     /* Set column names from return items */
     for (int i = 0; i < column_count; i++) {
         cypher_return_item *item = (cypher_return_item*)return_clause->items->items[i];
@@ -644,9 +1026,16 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
             /* Use explicit alias if provided */
             result->column_names[i] = strdup(item->alias);
         } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
-            /* Extract property name from property access (n.age -> "age") */
+            /* Build full property path from property access (n.age -> "n.age") */
             cypher_property *prop = (cypher_property*)item->expr;
-            result->column_names[i] = strdup(prop->property_name);
+            if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+                cypher_identifier *id = (cypher_identifier*)prop->expr;
+                char full_name[256];
+                snprintf(full_name, sizeof(full_name), "%s.%s", id->name, prop->property_name);
+                result->column_names[i] = strdup(full_name);
+            } else {
+                result->column_names[i] = strdup(prop->property_name);
+            }
         } else if (item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
             /* Use identifier name as column name (n -> "n") */
             cypher_identifier *ident = (cypher_identifier*)item->expr;
@@ -659,15 +1048,34 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
         }
     }
     result->column_count = column_count;
-    
+
     /* Count rows first */
+#ifdef GRAPHQLITE_PERF_TIMING
+    struct timespec t_first_step;
+#endif
     int row_count = 0;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int first_step_rc = sqlite3_step(stmt);
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_first_step);
+#endif
+    if (first_step_rc == SQLITE_ROW) {
         row_count++;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            row_count++;
+        }
     }
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_count);
+    double first_step_ms = (t_first_step.tv_sec - t_start.tv_sec) * 1000.0 + (t_first_step.tv_nsec - t_start.tv_nsec) / 1000000.0;
+    CYPHER_DEBUG("SQL FIRST_STEP TIMING: %.2fms", first_step_ms);
+#endif
+
     if (row_count == 0) {
-        /* No results */
+#ifdef GRAPHQLITE_PERF_TIMING
+        double count_ms = (t_count.tv_sec - t_start.tv_sec) * 1000.0 + (t_count.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        CYPHER_DEBUG("BUILD_RESULTS TIMING: count_rows=%.2fms (0 rows), read_data=0ms", count_ms);
+#endif
         result->row_count = 0;
         result->data = NULL;
         result->success = true;
@@ -802,9 +1210,15 @@ static int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cy
     
     result->row_count = row_count;
     result->success = true;
-    
-    CYPHER_DEBUG("Built result with %d rows, %d columns (agtype: %s)", 
-                row_count, column_count, has_agtype_values ? "yes" : "no");
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_read);
+    double count_ms = (t_count.tv_sec - t_start.tv_sec) * 1000.0 + (t_count.tv_nsec - t_start.tv_nsec) / 1000000.0;
+    double read_ms = (t_read.tv_sec - t_count.tv_sec) * 1000.0 + (t_read.tv_nsec - t_count.tv_nsec) / 1000000.0;
+    CYPHER_DEBUG("BUILD_RESULTS TIMING: count_rows=%.2fms (%d rows), read_data=%.2fms (agtype: %s)",
+                count_ms, row_count, read_ms, has_agtype_values ? "yes" : "no");
+#endif
+
     return 0;
 }
 
@@ -919,8 +1333,9 @@ static agtype_value* build_path_from_ids(cypher_executor *executor, cypher_trans
                 if (element->type == AST_NODE_NODE_PATTERN) {
                     /* Create vertex */
                     cypher_node_pattern *node = (cypher_node_pattern*)element;
+                    const char *first_label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
                     CYPHER_DEBUG("build_path_from_ids: Creating vertex for element %d with ID %lld", elem_index, (long long)element_id);
-                    path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, node->label);
+                    path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, first_label);
                     CYPHER_DEBUG("build_path_from_ids: Created vertex %p", (void*)path_elements[elem_index]);
                 } else if (element->type == AST_NODE_REL_PATTERN) {
                     /* Create edge - need to query for edge details */
@@ -969,8 +1384,9 @@ static agtype_value* build_path_from_ids(cypher_executor *executor, cypher_trans
         if (element->type == AST_NODE_NODE_PATTERN) {
             /* Create vertex */
             cypher_node_pattern *node = (cypher_node_pattern*)element;
+            const char *first_label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
             CYPHER_DEBUG("build_path_from_ids: Creating vertex for element %d with ID %lld", elem_index, (long long)element_id);
-            path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, node->label);
+            path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, first_label);
             CYPHER_DEBUG("build_path_from_ids: Created vertex %p", (void*)path_elements[elem_index]);
         } else if (element->type == AST_NODE_REL_PATTERN) {
             /* Create edge - need to query for edge details */
@@ -1468,17 +1884,8 @@ static int execute_match_delete_query(cypher_executor *executor, cypher_match *m
         set_result_error(result, "Failed to execute MATCH for DELETE");
         cypher_transform_free_context(ctx);
         cypher_result_free(match_result);
-        /* Clean up synthetic return */
+        /* Clean up synthetic return - ast_list_free handles freeing items */
         if (synthetic_return->items) {
-            for (int i = 0; i < synthetic_return->items->count; i++) {
-                cypher_return_item *item = (cypher_return_item*)synthetic_return->items->items[i];
-                if (item && item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
-                    cypher_identifier *id = (cypher_identifier*)item->expr;
-                    free(id->name);
-                    free(id);
-                }
-                free(item);
-            }
             ast_list_free(synthetic_return->items);
         }
         free(synthetic_return);
@@ -1524,21 +1931,12 @@ static int execute_match_delete_query(cypher_executor *executor, cypher_match *m
                                 cypher_result_free(match_result);
                                 cypher_transform_free_context(ctx);
                                 
-                                /* Clean up synthetic return */
+                                /* Clean up synthetic return - ast_list_free handles freeing items */
                                 if (synthetic_return->items) {
-                                    for (int j = 0; j < synthetic_return->items->count; j++) {
-                                        cypher_return_item *cleanup_item = (cypher_return_item*)synthetic_return->items->items[j];
-                                        if (cleanup_item && cleanup_item->expr && cleanup_item->expr->type == AST_NODE_IDENTIFIER) {
-                                            cypher_identifier *cleanup_id = (cypher_identifier*)cleanup_item->expr;
-                                            free(cleanup_id->name);
-                                            free(cleanup_id);
-                                        }
-                                        free(cleanup_item);
-                                    }
                                     ast_list_free(synthetic_return->items);
                                 }
                                 free(synthetic_return);
-                                
+
                                 return -1;
                             }
                         } else if (entity->type == AGTV_EDGE) {
@@ -1560,21 +1958,12 @@ static int execute_match_delete_query(cypher_executor *executor, cypher_match *m
     cypher_result_free(match_result);
     cypher_transform_free_context(ctx);
     
-    /* Clean up synthetic return */
+    /* Clean up synthetic return - ast_list_free handles freeing items */
     if (synthetic_return->items) {
-        for (int i = 0; i < synthetic_return->items->count; i++) {
-            cypher_return_item *item = (cypher_return_item*)synthetic_return->items->items[i];
-            if (item && item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
-                cypher_identifier *id = (cypher_identifier*)item->expr;
-                free(id->name);
-                free(id);
-            }
-            free(item);
-        }
         ast_list_free(synthetic_return->items);
     }
     free(synthetic_return);
-    
+
     /* Set result with deletion counts */
     result->success = true;
     result->nodes_deleted = deleted_nodes;
@@ -1743,9 +2132,12 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     cypher_match *match_clause = NULL;
                     cypher_return *return_clause = NULL;
                     cypher_create *create_clause = NULL;
+                    cypher_merge *merge_clause = NULL;
                     cypher_set *set_clause = NULL;
                     cypher_delete *delete_clause = NULL;
-                    
+                    cypher_with *with_clause = NULL;
+                    cypher_unwind *unwind_clause = NULL;
+
                     /* Scan for clause types */
                     for (int i = 0; i < query->clauses->count; i++) {
                         ast_node *clause = query->clauses->items[i];
@@ -1759,11 +2151,20 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                             case AST_NODE_CREATE:
                                 create_clause = (cypher_create*)clause;
                                 break;
+                            case AST_NODE_MERGE:
+                                merge_clause = (cypher_merge*)clause;
+                                break;
                             case AST_NODE_SET:
                                 set_clause = (cypher_set*)clause;
                                 break;
                             case AST_NODE_DELETE:
                                 delete_clause = (cypher_delete*)clause;
+                                break;
+                            case AST_NODE_WITH:
+                                with_clause = (cypher_with*)clause;
+                                break;
+                            case AST_NODE_UNWIND:
+                                unwind_clause = (cypher_unwind*)clause;
                                 break;
                             default:
                                 CYPHER_DEBUG("Found clause type: %d", clause->type);
@@ -1771,8 +2172,131 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         }
                     }
                     
+                    /* Handle EXPLAIN - return generated SQL instead of executing */
+                    if (query->explain) {
+                        CYPHER_DEBUG("EXPLAIN mode - returning generated SQL");
+                        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                        if (!ctx) {
+                            set_result_error(result, "Failed to create transform context");
+                            return result;
+                        }
+
+                        /* Transform the query to SQL */
+                        int transform_status = cypher_transform_generate_sql(ctx, query);
+                        if (transform_status < 0 || ctx->has_error) {
+                            set_result_error(result, ctx->error_message ? ctx->error_message : "Transform error");
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        /* Return the SQL as a single-row, single-column result */
+                        result->column_count = 1;
+                        result->row_count = 1;
+                        result->data = malloc(sizeof(char**));
+                        result->data[0] = malloc(sizeof(char*));
+                        result->data[0][0] = strdup(ctx->sql_buffer ? ctx->sql_buffer : "");
+                        result->success = true;
+
+                        cypher_transform_free_context(ctx);
+                        return result;
+                    }
+
                     /* Execute based on query pattern */
-                    if (match_clause && create_clause && return_clause) {
+                    if (unwind_clause && return_clause) {
+                        /* UNWIND ... RETURN pattern - use generic transform */
+                        CYPHER_DEBUG("Executing UNWIND+RETURN query");
+                        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                        if (!ctx) {
+                            set_result_error(result, "Failed to create transform context");
+                            return result;
+                        }
+
+                        cypher_query_result *transform_result = cypher_transform_query(ctx, query);
+                        if (!transform_result) {
+                            set_result_error(result, "Failed to transform query");
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        if (transform_result->has_error) {
+                            set_result_error(result, transform_result->error_message ? transform_result->error_message : "Transform error");
+                            free(transform_result);
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        /* Execute the prepared statement */
+                        if (transform_result->stmt) {
+                            result->data = NULL;
+                            result->row_count = 0;
+                            result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                            /* Collect results */
+                            while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
+                                /* Allocate/resize data array */
+                                result->data = realloc(result->data, (result->row_count + 1) * sizeof(char**));
+                                result->data[result->row_count] = calloc(result->column_count, sizeof(char*));
+
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *val = (const char*)sqlite3_column_text(transform_result->stmt, c);
+                                    result->data[result->row_count][c] = val ? strdup(val) : NULL;
+                                }
+                                result->row_count++;
+                            }
+                            sqlite3_finalize(transform_result->stmt);
+                        }
+
+                        result->success = true;
+                        free(transform_result);
+                        cypher_transform_free_context(ctx);
+                    } else if (with_clause && match_clause && return_clause) {
+                        /* MATCH ... WITH ... RETURN pattern - use generic transform */
+                        CYPHER_DEBUG("Executing MATCH+WITH+RETURN query");
+                        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                        if (!ctx) {
+                            set_result_error(result, "Failed to create transform context");
+                            return result;
+                        }
+
+                        cypher_query_result *transform_result = cypher_transform_query(ctx, query);
+                        if (!transform_result) {
+                            set_result_error(result, "Failed to transform query");
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        if (transform_result->has_error) {
+                            set_result_error(result, transform_result->error_message ? transform_result->error_message : "Transform error");
+                            free(transform_result);
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        /* Execute the prepared statement */
+                        if (transform_result->stmt) {
+                            result->data = NULL;
+                            result->row_count = 0;
+                            result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                            /* Collect results */
+                            while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
+                                /* Allocate/resize data array */
+                                result->data = realloc(result->data, (result->row_count + 1) * sizeof(char**));
+                                result->data[result->row_count] = calloc(result->column_count, sizeof(char*));
+
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *val = (const char*)sqlite3_column_text(transform_result->stmt, c);
+                                    result->data[result->row_count][c] = val ? strdup(val) : NULL;
+                                }
+                                result->row_count++;
+                            }
+                            sqlite3_finalize(transform_result->stmt);
+                        }
+
+                        result->success = true;
+                        free(transform_result);
+                        cypher_transform_free_context(ctx);
+                    } else if (match_clause && create_clause && return_clause) {
                         /* MATCH ... CREATE ... RETURN pattern */
                         CYPHER_DEBUG("Executing MATCH+CREATE+RETURN query");
                         if (execute_match_create_return_query(executor, match_clause, create_clause, return_clause, result) < 0) {
@@ -1814,12 +2338,120 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         if (execute_create_clause(executor, create_clause, result) < 0) {
                             return result; /* Error already set */
                         }
+                    } else if (merge_clause) {
+                        /* MERGE pattern */
+                        CYPHER_DEBUG("Executing MERGE clause");
+                        if (execute_merge_clause(executor, merge_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
                     } else if (match_clause) {
                         /* MATCH without RETURN - not typical but handle it */
                         CYPHER_DEBUG("Executing MATCH without RETURN");
                         if (execute_match_clause(executor, match_clause, result) < 0) {
                             return result; /* Error already set */
                         }
+                    } else if (return_clause) {
+                        /* Standalone RETURN - useful for expressions and list comprehensions */
+                        CYPHER_DEBUG("Executing standalone RETURN query");
+
+                        /* Check for graph algorithm functions - execute in C for performance */
+                        graph_algo_params algo_params = detect_graph_algorithm(return_clause);
+                        if (algo_params.type != GRAPH_ALGO_NONE) {
+                            graph_algo_result *algo_result = NULL;
+
+                            switch (algo_params.type) {
+                                case GRAPH_ALGO_PAGERANK:
+                                    CYPHER_DEBUG("Executing C-based PageRank");
+                                    algo_result = execute_pagerank(executor->db,
+                                                                   algo_params.damping,
+                                                                   algo_params.iterations,
+                                                                   algo_params.top_k);
+                                    break;
+                                case GRAPH_ALGO_LABEL_PROPAGATION:
+                                    CYPHER_DEBUG("Executing C-based Label Propagation");
+                                    algo_result = execute_label_propagation(executor->db,
+                                                                            algo_params.iterations);
+                                    break;
+                                default:
+                                    break;
+                            }
+
+                            if (algo_result) {
+                                if (algo_result->success) {
+                                    /* Return the JSON result as a single column, single row */
+                                    result->column_count = 1;
+                                    result->row_count = 1;
+                                    result->data = malloc(sizeof(char**));
+                                    result->data[0] = malloc(sizeof(char*));
+                                    result->data[0][0] = strdup(algo_result->json_result);
+                                    result->success = true;
+                                } else {
+                                    set_result_error(result, algo_result->error_message ?
+                                                     algo_result->error_message : "Graph algorithm failed");
+                                }
+                                graph_algo_result_free(algo_result);
+                                return result;
+                            }
+                        }
+
+                        /* Standard SQL-based execution for non-algorithm queries */
+                        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                        if (!ctx) {
+                            set_result_error(result, "Failed to create transform context");
+                            return result;
+                        }
+
+                        cypher_query_result *transform_result = cypher_transform_query(ctx, query);
+                        if (!transform_result) {
+                            set_result_error(result, "Failed to transform query");
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        if (transform_result->has_error) {
+                            set_result_error(result, transform_result->error_message ? transform_result->error_message : "Transform error");
+                            free(transform_result);
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        /* Execute the prepared statement */
+                        if (transform_result->stmt) {
+                            result->data = NULL;
+                            result->row_count = 0;
+                            result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                            /* Get column names from the SQL result */
+                            result->column_names = malloc(result->column_count * sizeof(char*));
+                            if (result->column_names) {
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *name = sqlite3_column_name(transform_result->stmt, c);
+                                    result->column_names[c] = name ? strdup(name) : NULL;
+                                }
+                            }
+
+                            /* Collect results with type information */
+                            while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
+                                /* Allocate/resize data and data_types arrays */
+                                result->data = realloc(result->data, (result->row_count + 1) * sizeof(char**));
+                                result->data[result->row_count] = calloc(result->column_count, sizeof(char*));
+                                result->data_types = realloc(result->data_types, (result->row_count + 1) * sizeof(int*));
+                                result->data_types[result->row_count] = calloc(result->column_count, sizeof(int));
+
+                                for (int c = 0; c < result->column_count; c++) {
+                                    /* Store the SQLite type */
+                                    result->data_types[result->row_count][c] = sqlite3_column_type(transform_result->stmt, c);
+                                    const char *val = (const char*)sqlite3_column_text(transform_result->stmt, c);
+                                    result->data[result->row_count][c] = val ? strdup(val) : NULL;
+                                }
+                                result->row_count++;
+                            }
+                            sqlite3_finalize(transform_result->stmt);
+                        }
+
+                        result->success = true;
+                        free(transform_result);
+                        cypher_transform_free_context(ctx);
                     } else {
                         set_result_error(result, "Unsupported query pattern");
                         return result;
@@ -1835,7 +2467,13 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                 return result; /* Error already set */
             }
             break;
-            
+
+        case AST_NODE_MERGE:
+            if (execute_merge_clause(executor, (cypher_merge*)ast, result) < 0) {
+                return result; /* Error already set */
+            }
+            break;
+
         case AST_NODE_SET:
             if (execute_set_clause(executor, (cypher_set*)ast, result) < 0) {
                 return result; /* Error already set */
@@ -1869,9 +2507,14 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
         }
         return result;
     }
-    
+
     CYPHER_DEBUG("Executing query: %s", query);
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    struct timespec t_start, t_parse, t_exec, t_cleanup;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+#endif
+
     /* Parse query to AST with extended error handling */
     CYPHER_DEBUG("Parsing query: '%s'", query);
     cypher_parse_result *parse_result = parse_cypher_query_ext(query);
@@ -1883,7 +2526,7 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
         }
         return result;
     }
-    
+
     /* Check for parse errors */
     if (!parse_result->ast) {
         CYPHER_DEBUG("Parser error: %s", parse_result->error_message ? parse_result->error_message : "Unknown error");
@@ -1895,21 +2538,37 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
         cypher_parse_result_free(parse_result);
         return result;
     }
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_parse);
+#endif
+
     ast_node *ast = parse_result->ast;
-    
+
     CYPHER_DEBUG("Parser returned AST with type=%d, data=%p", ast->type, ast->data);
-    
+
     /* Execute AST */
     cypher_result *result = cypher_executor_execute_ast(executor, ast);
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_exec);
+#endif
+
     /* Clean up parse result (includes AST) - note: don't free AST separately */
     parse_result->ast = NULL;  /* Prevent double-free since execute_ast may have taken ownership */
     cypher_parse_result_free(parse_result);
-    
+
     /* Clean up AST */
     cypher_parser_free_result(ast);
-    
+
+#ifdef GRAPHQLITE_PERF_TIMING
+    clock_gettime(CLOCK_MONOTONIC, &t_cleanup);
+    double parse_ms = (t_parse.tv_sec - t_start.tv_sec) * 1000.0 + (t_parse.tv_nsec - t_start.tv_nsec) / 1000000.0;
+    double exec_ms = (t_exec.tv_sec - t_parse.tv_sec) * 1000.0 + (t_exec.tv_nsec - t_parse.tv_nsec) / 1000000.0;
+    double cleanup_ms = (t_cleanup.tv_sec - t_exec.tv_sec) * 1000.0 + (t_cleanup.tv_nsec - t_exec.tv_nsec) / 1000000.0;
+    CYPHER_DEBUG("TIMING: parse=%.2fms, exec=%.2fms, cleanup=%.2fms", parse_ms, exec_ms, cleanup_ms);
+#endif
+
     return result;
 }
 
@@ -1940,7 +2599,14 @@ void cypher_result_free(cypher_result *result)
         }
         free(result->data);
     }
-    
+
+    if (result->data_types) {
+        for (int row = 0; row < result->row_count; row++) {
+            free(result->data_types[row]);
+        }
+        free(result->data_types);
+    }
+
     if (result->agtype_data) {
         for (int row = 0; row < result->row_count; row++) {
             if (result->agtype_data[row]) {

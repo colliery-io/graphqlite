@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <sqlite3.h>
+#include "graphqlite_sqlite.h"
 
 /* AGType value types - simplified from Apache AGE */
 typedef enum agtype_value_type

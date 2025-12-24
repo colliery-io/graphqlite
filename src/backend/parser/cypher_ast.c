@@ -54,7 +54,21 @@ void ast_node_free(ast_node *node)
                 }
             }
             break;
-            
+
+        case AST_NODE_UNION:
+            {
+                cypher_union *u = (cypher_union*)node;
+                if (u->left) {
+                    ast_node_free(u->left);
+                    u->left = NULL;
+                }
+                if (u->right) {
+                    ast_node_free(u->right);
+                    u->right = NULL;
+                }
+            }
+            break;
+
         case AST_NODE_MATCH:
             {
                 cypher_match *match = (cypher_match*)node;
@@ -90,14 +104,105 @@ void ast_node_free(ast_node *node)
                 }
             }
             break;
-            
+
+        case AST_NODE_WITH:
+            {
+                cypher_with *with = (cypher_with*)node;
+                if (with->items) {
+                    ast_list_free(with->items);
+                    with->items = NULL;
+                }
+                if (with->order_by) {
+                    ast_list_free(with->order_by);
+                    with->order_by = NULL;
+                }
+                if (with->skip) {
+                    ast_node_free(with->skip);
+                    with->skip = NULL;
+                }
+                if (with->limit) {
+                    ast_node_free(with->limit);
+                    with->limit = NULL;
+                }
+                if (with->where) {
+                    ast_node_free(with->where);
+                    with->where = NULL;
+                }
+            }
+            break;
+
+        case AST_NODE_UNWIND:
+            {
+                cypher_unwind *unwind = (cypher_unwind*)node;
+                if (unwind->expr) {
+                    ast_node_free(unwind->expr);
+                    unwind->expr = NULL;
+                }
+                if (unwind->alias) {
+                    free(unwind->alias);
+                    unwind->alias = NULL;
+                }
+            }
+            break;
+
+        case AST_NODE_FOREACH:
+            {
+                cypher_foreach *foreach = (cypher_foreach*)node;
+                if (foreach->variable) {
+                    free(foreach->variable);
+                    foreach->variable = NULL;
+                }
+                if (foreach->list_expr) {
+                    ast_node_free(foreach->list_expr);
+                    foreach->list_expr = NULL;
+                }
+                if (foreach->body) {
+                    ast_list_free(foreach->body);
+                    foreach->body = NULL;
+                }
+            }
+            break;
+
+        case AST_NODE_LOAD_CSV:
+            {
+                cypher_load_csv *load_csv = (cypher_load_csv*)node;
+                if (load_csv->file_path) {
+                    free(load_csv->file_path);
+                    load_csv->file_path = NULL;
+                }
+                if (load_csv->variable) {
+                    free(load_csv->variable);
+                    load_csv->variable = NULL;
+                }
+                if (load_csv->fieldterminator) {
+                    free(load_csv->fieldterminator);
+                    load_csv->fieldterminator = NULL;
+                }
+            }
+            break;
+
         case AST_NODE_CREATE:
             {
                 cypher_create *create = (cypher_create*)node;
                 ast_list_free(create->pattern);
             }
             break;
-            
+
+        case AST_NODE_MERGE:
+            {
+                cypher_merge *merge = (cypher_merge*)node;
+                if (merge->pattern) {
+                    ast_list_free(merge->pattern);
+                }
+                if (merge->on_create) {
+                    ast_list_free(merge->on_create);
+                }
+                if (merge->on_match) {
+                    ast_list_free(merge->on_match);
+                }
+            }
+            break;
+
         case AST_NODE_SET:
             {
                 cypher_set *set = (cypher_set*)node;
@@ -141,7 +246,27 @@ void ast_node_free(ast_node *node)
                 }
             }
             break;
-            
+
+        case AST_NODE_REMOVE:
+            {
+                cypher_remove *rem = (cypher_remove*)node;
+                if (rem->items) {
+                    ast_list_free(rem->items);
+                    rem->items = NULL;
+                }
+            }
+            break;
+
+        case AST_NODE_REMOVE_ITEM:
+            {
+                cypher_remove_item *item = (cypher_remove_item*)node;
+                if (item->target) {
+                    ast_node_free(item->target);
+                    item->target = NULL;
+                }
+            }
+            break;
+
         case AST_NODE_RETURN_ITEM:
             {
                 cypher_return_item *item = (cypher_return_item*)node;
@@ -160,16 +285,16 @@ void ast_node_free(ast_node *node)
         case AST_NODE_NODE_PATTERN:
             {
                 cypher_node_pattern *pattern = (cypher_node_pattern*)node;
-                CYPHER_DEBUG("NODE_PATTERN variable=%p, label=%p, properties=%p", 
-                       (void*)pattern->variable, (void*)pattern->label, (void*)pattern->properties);
-                
+                CYPHER_DEBUG("NODE_PATTERN variable=%p, labels=%p, properties=%p",
+                       (void*)pattern->variable, (void*)pattern->labels, (void*)pattern->properties);
+
                 if (pattern->variable) {
                     CYPHER_DEBUG("Freeing variable: %s", pattern->variable);
                     free(pattern->variable);
                 }
-                if (pattern->label) {
-                    CYPHER_DEBUG("Freeing label: %s", pattern->label);
-                    free(pattern->label);
+                if (pattern->labels) {
+                    CYPHER_DEBUG("Freeing labels list with %d items", pattern->labels->count);
+                    ast_list_free(pattern->labels);
                 }
                 if (pattern->properties) {
                     CYPHER_DEBUG("Freeing properties node");
@@ -280,7 +405,27 @@ void ast_node_free(ast_node *node)
                 }
             }
             break;
-            
+
+        case AST_NODE_LIST_PREDICATE:
+            {
+                cypher_list_predicate *lp = (cypher_list_predicate*)node;
+                free(lp->variable);
+                ast_node_free(lp->list_expr);
+                ast_node_free(lp->predicate);
+            }
+            break;
+
+        case AST_NODE_REDUCE_EXPR:
+            {
+                cypher_reduce_expr *reduce = (cypher_reduce_expr*)node;
+                free(reduce->accumulator);
+                ast_node_free(reduce->initial_value);
+                free(reduce->variable);
+                ast_node_free(reduce->list_expr);
+                ast_node_free(reduce->expression);
+            }
+            break;
+
         case AST_NODE_MAP:
             {
                 cypher_map *map = (cypher_map*)node;
@@ -295,14 +440,90 @@ void ast_node_free(ast_node *node)
                 ast_node_free(pair->value);
             }
             break;
-            
+
+        case AST_NODE_MAP_PROJECTION:
+            {
+                cypher_map_projection *proj = (cypher_map_projection*)node;
+                if (proj->base_expr) { ast_node_free(proj->base_expr); }
+                if (proj->items) { ast_list_free(proj->items); }
+            }
+            break;
+
+        case AST_NODE_MAP_PROJECTION_ITEM:
+            {
+                cypher_map_projection_item *item = (cypher_map_projection_item*)node;
+                free(item->key);
+                free(item->property);
+                if (item->expr) { ast_node_free(item->expr); }
+            }
+            break;
+
         case AST_NODE_LIST:
             {
                 cypher_list *list = (cypher_list*)node;
                 ast_list_free(list->items);
             }
             break;
-            
+
+        case AST_NODE_LIST_COMPREHENSION:
+            {
+                cypher_list_comprehension *comp = (cypher_list_comprehension*)node;
+                free(comp->variable);
+                if (comp->list_expr) {
+                    ast_node_free(comp->list_expr);
+                }
+                if (comp->where_expr) {
+                    ast_node_free(comp->where_expr);
+                }
+                if (comp->transform_expr) {
+                    ast_node_free(comp->transform_expr);
+                }
+            }
+            break;
+
+        case AST_NODE_PATTERN_COMPREHENSION:
+            {
+                cypher_pattern_comprehension *comp = (cypher_pattern_comprehension*)node;
+                if (comp->pattern) {
+                    ast_list_free(comp->pattern);
+                }
+                if (comp->where_expr) {
+                    ast_node_free(comp->where_expr);
+                }
+                if (comp->collect_expr) {
+                    ast_node_free(comp->collect_expr);
+                }
+            }
+            break;
+
+        case AST_NODE_CASE_EXPR:
+            {
+                cypher_case_expr *case_expr = (cypher_case_expr*)node;
+                if (case_expr->when_clauses) {
+                    ast_list_free(case_expr->when_clauses);
+                    case_expr->when_clauses = NULL;
+                }
+                if (case_expr->else_expr) {
+                    ast_node_free(case_expr->else_expr);
+                    case_expr->else_expr = NULL;
+                }
+            }
+            break;
+
+        case AST_NODE_WHEN_CLAUSE:
+            {
+                cypher_when_clause *when_clause = (cypher_when_clause*)node;
+                if (when_clause->condition) {
+                    ast_node_free(when_clause->condition);
+                    when_clause->condition = NULL;
+                }
+                if (when_clause->result) {
+                    ast_node_free(when_clause->result);
+                    when_clause->result = NULL;
+                }
+            }
+            break;
+
         default:
             /* Other node types don't have special cleanup needs */
             break;
@@ -377,15 +598,29 @@ void ast_list_append(ast_list *list, ast_node *node)
 
 /* Node creation functions */
 
-cypher_query* make_cypher_query(ast_list *clauses)
+cypher_query* make_cypher_query(ast_list *clauses, bool explain)
 {
     cypher_query *query = (cypher_query*)ast_node_create(AST_NODE_QUERY, -1, sizeof(cypher_query));
     if (!query) {
         return NULL;
     }
-    
+
     query->clauses = clauses;
+    query->explain = explain;
     return query;
+}
+
+cypher_union* make_cypher_union(ast_node *left, ast_node *right, bool all, int location)
+{
+    cypher_union *u = (cypher_union*)ast_node_create(AST_NODE_UNION, location, sizeof(cypher_union));
+    if (!u) {
+        return NULL;
+    }
+
+    u->left = left;
+    u->right = right;
+    u->all = all;
+    return u;
 }
 
 cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optional)
@@ -407,7 +642,7 @@ cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *orde
     if (!ret) {
         return NULL;
     }
-    
+
     ret->distinct = distinct;
     ret->items = items;
     ret->order_by = order_by;
@@ -416,15 +651,83 @@ cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *orde
     return ret;
 }
 
+cypher_with* make_cypher_with(bool distinct, ast_list *items, ast_list *order_by, ast_node *skip, ast_node *limit, ast_node *where)
+{
+    cypher_with *with = (cypher_with*)ast_node_create(AST_NODE_WITH, -1, sizeof(cypher_with));
+    if (!with) {
+        return NULL;
+    }
+
+    with->distinct = distinct;
+    with->items = items;
+    with->order_by = order_by;
+    with->skip = skip;
+    with->limit = limit;
+    with->where = where;
+    return with;
+}
+
+cypher_unwind* make_cypher_unwind(ast_node *expr, char *alias, int location)
+{
+    cypher_unwind *unwind = (cypher_unwind*)ast_node_create(AST_NODE_UNWIND, location, sizeof(cypher_unwind));
+    if (!unwind) {
+        return NULL;
+    }
+
+    unwind->expr = expr;
+    unwind->alias = alias ? strdup(alias) : NULL;
+    return unwind;
+}
+
+cypher_foreach* make_cypher_foreach(char *variable, ast_node *list_expr, ast_list *body, int location)
+{
+    cypher_foreach *foreach = (cypher_foreach*)ast_node_create(AST_NODE_FOREACH, location, sizeof(cypher_foreach));
+    if (!foreach) {
+        return NULL;
+    }
+
+    foreach->variable = variable ? strdup(variable) : NULL;
+    foreach->list_expr = list_expr;
+    foreach->body = body;
+    return foreach;
+}
+
+cypher_load_csv* make_cypher_load_csv(char *file_path, char *variable, bool with_headers, char *fieldterminator, int location)
+{
+    cypher_load_csv *load_csv = (cypher_load_csv*)ast_node_create(AST_NODE_LOAD_CSV, location, sizeof(cypher_load_csv));
+    if (!load_csv) {
+        return NULL;
+    }
+
+    load_csv->file_path = file_path ? strdup(file_path) : NULL;
+    load_csv->variable = variable ? strdup(variable) : NULL;
+    load_csv->with_headers = with_headers;
+    load_csv->fieldterminator = fieldterminator ? strdup(fieldterminator) : NULL;
+    return load_csv;
+}
+
 cypher_create* make_cypher_create(ast_list *pattern)
 {
     cypher_create *create = (cypher_create*)ast_node_create(AST_NODE_CREATE, -1, sizeof(cypher_create));
     if (!create) {
         return NULL;
     }
-    
+
     create->pattern = pattern;
     return create;
+}
+
+cypher_merge* make_cypher_merge(ast_list *pattern, ast_list *on_create, ast_list *on_match)
+{
+    cypher_merge *merge = (cypher_merge*)ast_node_create(AST_NODE_MERGE, -1, sizeof(cypher_merge));
+    if (!merge) {
+        return NULL;
+    }
+
+    merge->pattern = pattern;
+    merge->on_create = on_create;
+    merge->on_match = on_match;
+    return merge;
 }
 
 cypher_set* make_cypher_set(ast_list *items)
@@ -468,8 +771,30 @@ cypher_delete_item* make_delete_item(char *variable)
     if (!item) {
         return NULL;
     }
-    
+
     item->variable = variable ? strdup(variable) : NULL;
+    return item;
+}
+
+cypher_remove* make_cypher_remove(ast_list *items)
+{
+    cypher_remove *rem = (cypher_remove*)ast_node_create(AST_NODE_REMOVE, -1, sizeof(cypher_remove));
+    if (!rem) {
+        return NULL;
+    }
+
+    rem->items = items;
+    return rem;
+}
+
+cypher_remove_item* make_remove_item(ast_node *target)
+{
+    cypher_remove_item *item = (cypher_remove_item*)ast_node_create(AST_NODE_REMOVE_ITEM, -1, sizeof(cypher_remove_item));
+    if (!item) {
+        return NULL;
+    }
+
+    item->target = target;
     return item;
 }
 
@@ -497,27 +822,27 @@ cypher_order_by_item* make_order_by_item(ast_node *expr, bool descending)
     return item;
 }
 
-cypher_node_pattern* make_node_pattern(char *variable, char *label, ast_node *properties)
+cypher_node_pattern* make_node_pattern(char *variable, ast_list *labels, ast_node *properties)
 {
-    CYPHER_DEBUG("make_node_pattern called with variable=%p, label=%p, properties=%p", 
-           (void*)variable, (void*)label, (void*)properties);
+    CYPHER_DEBUG("make_node_pattern called with variable=%p, labels=%p, properties=%p",
+           (void*)variable, (void*)labels, (void*)properties);
     if (variable) CYPHER_DEBUG("  variable='%s'", variable);
-    if (label) CYPHER_DEBUG("  label='%s'", label);
-    
+    if (labels) CYPHER_DEBUG("  labels count=%d", labels->count);
+
     cypher_node_pattern *pattern = (cypher_node_pattern*)ast_node_create(AST_NODE_NODE_PATTERN, -1, sizeof(cypher_node_pattern));
     if (!pattern) {
         return NULL;
     }
-    
+
     CYPHER_DEBUG("Created NODE_PATTERN at %p", (void*)pattern);
-    
+
     pattern->variable = variable ? strdup(variable) : NULL;
-    pattern->label = label ? strdup(label) : NULL;
+    pattern->labels = labels;  /* Take ownership of the list */
     pattern->properties = properties;
-    
-    CYPHER_DEBUG("Set variable=%p, label=%p, properties=%p", 
-           (void*)pattern->variable, (void*)pattern->label, (void*)pattern->properties);
-    
+
+    CYPHER_DEBUG("Set variable=%p, labels=%p, properties=%p",
+           (void*)pattern->variable, (void*)pattern->labels, (void*)pattern->properties);
+
     return pattern;
 }
 
@@ -590,9 +915,10 @@ cypher_path* make_path(ast_list *elements)
     if (!path) {
         return NULL;
     }
-    
+
     path->elements = elements;
     path->var_name = NULL;
+    path->type = PATH_TYPE_NORMAL;
     return path;
 }
 
@@ -602,10 +928,23 @@ cypher_path* make_path_with_var(char *var_name, ast_list *elements)
     if (!path) {
         return NULL;
     }
-    
+
     path->var_name = var_name;
-    CYPHER_DEBUG("Created path variable: %s with %d elements", 
+    CYPHER_DEBUG("Created path variable: %s with %d elements",
                  var_name ? var_name : "NULL", elements ? elements->count : 0);
+    return path;
+}
+
+cypher_path* make_shortest_path(ast_list *elements, path_type type)
+{
+    cypher_path *path = make_path(elements);
+    if (!path) {
+        return NULL;
+    }
+
+    path->type = type;
+    CYPHER_DEBUG("Created shortest path with type %d and %d elements",
+                 type, elements ? elements->count : 0);
     return path;
 }
 
@@ -787,6 +1126,35 @@ cypher_exists_expr* make_exists_property_expr(ast_node *property, int location)
     return exists_expr;
 }
 
+cypher_list_predicate* make_list_predicate(list_predicate_type pred_type, const char *variable, ast_node *list_expr, ast_node *predicate, int location)
+{
+    cypher_list_predicate *lp = (cypher_list_predicate*)ast_node_create(AST_NODE_LIST_PREDICATE, location, sizeof(cypher_list_predicate));
+    if (!lp) {
+        return NULL;
+    }
+
+    lp->pred_type = pred_type;
+    lp->variable = variable ? strdup(variable) : NULL;
+    lp->list_expr = list_expr;
+    lp->predicate = predicate;
+    return lp;
+}
+
+cypher_reduce_expr* make_reduce_expr(const char *accumulator, ast_node *initial_value, const char *variable, ast_node *list_expr, ast_node *expression, int location)
+{
+    cypher_reduce_expr *reduce = (cypher_reduce_expr*)ast_node_create(AST_NODE_REDUCE_EXPR, location, sizeof(cypher_reduce_expr));
+    if (!reduce) {
+        return NULL;
+    }
+
+    reduce->accumulator = accumulator ? strdup(accumulator) : NULL;
+    reduce->initial_value = initial_value;
+    reduce->variable = variable ? strdup(variable) : NULL;
+    reduce->list_expr = list_expr;
+    reduce->expression = expression;
+    return reduce;
+}
+
 cypher_map* make_map(ast_list *pairs, int location)
 {
     cypher_map *map = (cypher_map*)ast_node_create(AST_NODE_MAP, location, sizeof(cypher_map));
@@ -810,15 +1178,91 @@ cypher_map_pair* make_map_pair(char *key, ast_node *value, int location)
     return pair;
 }
 
+cypher_map_projection* make_map_projection(ast_node *base_expr, ast_list *items, int location)
+{
+    cypher_map_projection *proj = (cypher_map_projection*)ast_node_create(AST_NODE_MAP_PROJECTION, location, sizeof(cypher_map_projection));
+    if (!proj) {
+        return NULL;
+    }
+
+    proj->base_expr = base_expr;
+    proj->items = items;
+    return proj;
+}
+
+cypher_map_projection_item* make_map_projection_item(char *key, char *property, ast_node *expr, int location)
+{
+    cypher_map_projection_item *item = (cypher_map_projection_item*)ast_node_create(AST_NODE_MAP_PROJECTION_ITEM, location, sizeof(cypher_map_projection_item));
+    if (!item) {
+        return NULL;
+    }
+
+    item->key = key ? strdup(key) : NULL;
+    item->property = property ? strdup(property) : NULL;
+    item->expr = expr;
+    return item;
+}
+
 cypher_list* make_list(ast_list *items, int location)
 {
     cypher_list *list = (cypher_list*)ast_node_create(AST_NODE_LIST, location, sizeof(cypher_list));
     if (!list) {
         return NULL;
     }
-    
+
     list->items = items;
     return list;
+}
+
+cypher_list_comprehension* make_list_comprehension(const char *variable, ast_node *list_expr, ast_node *where_expr, ast_node *transform_expr, int location)
+{
+    cypher_list_comprehension *comp = (cypher_list_comprehension*)ast_node_create(AST_NODE_LIST_COMPREHENSION, location, sizeof(cypher_list_comprehension));
+    if (!comp) {
+        return NULL;
+    }
+
+    comp->variable = variable ? strdup(variable) : NULL;
+    comp->list_expr = list_expr;
+    comp->where_expr = where_expr;
+    comp->transform_expr = transform_expr;
+    return comp;
+}
+
+cypher_pattern_comprehension* make_pattern_comprehension(ast_list *pattern, ast_node *where_expr, ast_node *collect_expr, int location)
+{
+    cypher_pattern_comprehension *comp = (cypher_pattern_comprehension*)ast_node_create(AST_NODE_PATTERN_COMPREHENSION, location, sizeof(cypher_pattern_comprehension));
+    if (!comp) {
+        return NULL;
+    }
+
+    comp->pattern = pattern;
+    comp->where_expr = where_expr;
+    comp->collect_expr = collect_expr;
+    return comp;
+}
+
+cypher_case_expr* make_case_expr(ast_list *when_clauses, ast_node *else_expr, int location)
+{
+    cypher_case_expr *case_expr = (cypher_case_expr*)ast_node_create(AST_NODE_CASE_EXPR, location, sizeof(cypher_case_expr));
+    if (!case_expr) {
+        return NULL;
+    }
+
+    case_expr->when_clauses = when_clauses;
+    case_expr->else_expr = else_expr;
+    return case_expr;
+}
+
+cypher_when_clause* make_when_clause(ast_node *condition, ast_node *result, int location)
+{
+    cypher_when_clause *when_clause = (cypher_when_clause*)ast_node_create(AST_NODE_WHEN_CLAUSE, location, sizeof(cypher_when_clause));
+    if (!when_clause) {
+        return NULL;
+    }
+
+    when_clause->condition = condition;
+    when_clause->result = result;
+    return when_clause;
 }
 
 /* Utility functions */
@@ -829,6 +1273,7 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_UNKNOWN:        return "UNKNOWN";
         case AST_NODE_QUERY:          return "QUERY";
         case AST_NODE_SINGLE_QUERY:   return "SINGLE_QUERY";
+        case AST_NODE_UNION:          return "UNION";
         case AST_NODE_MATCH:          return "MATCH";
         case AST_NODE_RETURN:         return "RETURN";
         case AST_NODE_CREATE:         return "CREATE";
@@ -837,8 +1282,11 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_SET:            return "SET";
         case AST_NODE_DELETE:         return "DELETE";
         case AST_NODE_REMOVE:         return "REMOVE";
+        case AST_NODE_REMOVE_ITEM:    return "REMOVE_ITEM";
         case AST_NODE_MERGE:          return "MERGE";
         case AST_NODE_UNWIND:         return "UNWIND";
+        case AST_NODE_FOREACH:        return "FOREACH";
+        case AST_NODE_LOAD_CSV:       return "LOAD_CSV";
         case AST_NODE_PATTERN:        return "PATTERN";
         case AST_NODE_PATH:           return "PATH";
         case AST_NODE_NODE_PATTERN:   return "NODE_PATTERN";
@@ -854,8 +1302,16 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_BINARY_OP:      return "BINARY_OP";
         case AST_NODE_FUNCTION_CALL:  return "FUNCTION_CALL";
         case AST_NODE_EXISTS_EXPR:    return "EXISTS_EXPR";
+        case AST_NODE_LIST_PREDICATE: return "LIST_PREDICATE";
+        case AST_NODE_REDUCE_EXPR:    return "REDUCE_EXPR";
         case AST_NODE_LIST:           return "LIST";
+        case AST_NODE_LIST_COMPREHENSION: return "LIST_COMPREHENSION";
+        case AST_NODE_PATTERN_COMPREHENSION: return "PATTERN_COMPREHENSION";
         case AST_NODE_MAP:            return "MAP";
+        case AST_NODE_MAP_PROJECTION: return "MAP_PROJECTION";
+        case AST_NODE_MAP_PROJECTION_ITEM: return "MAP_PROJECTION_ITEM";
+        case AST_NODE_CASE_EXPR:      return "CASE_EXPR";
+        case AST_NODE_WHEN_CLAUSE:    return "WHEN_CLAUSE";
         case AST_NODE_VARLEN_RANGE:   return "VARLEN_RANGE";
         case AST_NODE_RETURN_ITEM:    return "RETURN_ITEM";
         case AST_NODE_ORDER_BY:       return "ORDER_BY";
@@ -998,8 +1454,15 @@ void ast_node_print(ast_node *node, int indent)
                 if (pattern->variable) {
                     printf(" var=%s", pattern->variable);
                 }
-                if (pattern->label) {
-                    printf(" label=%s", pattern->label);
+                if (pattern->labels && pattern->labels->count > 0) {
+                    printf(" labels=");
+                    for (int i = 0; i < pattern->labels->count; i++) {
+                        if (i > 0) printf(":");
+                        cypher_literal *lit = (cypher_literal*)pattern->labels->items[i];
+                        if (lit && lit->base.type == AST_NODE_LITERAL && lit->literal_type == LITERAL_STRING && lit->value.string) {
+                            printf("%s", lit->value.string);
+                        }
+                    }
                 }
                 if (pattern->properties) {
                     ast_node_print(pattern->properties, indent + 1);

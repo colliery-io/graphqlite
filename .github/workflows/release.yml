@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-extension:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: graphqlite.so
+          - os: macos-latest
+            artifact: graphqlite.dylib
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bison flex sqlite
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
+          echo "HOMEBREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
+
+      - name: Build extension (Linux)
+        if: runner.os == 'Linux'
+        run: make extension
+
+      - name: Build extension (macOS)
+        if: runner.os == 'macOS'
+        run: make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-${{ matrix.os }}
+          path: build/${{ matrix.artifact }}
+
+  publish-python:
+    needs: build-extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build source distribution
+        working-directory: bindings/python
+        run: python -m build --sdist
+
+      - name: Publish to PyPI
+        working-directory: bindings/python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
+
+  publish-rust:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        working-directory: bindings/rust
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --allow-dirty
+
+  create-release:
+    needs: [build-extension, publish-python, publish-rust]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/extension-ubuntu-latest/*
+            artifacts/extension-macos-latest/*
+          generate_release_notes: true

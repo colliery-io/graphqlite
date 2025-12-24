@@ -539,12 +539,12 @@ char* agtype_value_to_string(agtype_value *val)
             break;
             
         case AGTV_VERTEX: {
-            /* Format: {"id": 123, "label": "Person", "properties": {"name": "Alice", "age": 30}}::vertex */
+            /* OpenCypher format: {"id": 123, "labels": ["Person"], "properties": {"name": "Alice"}} */
             int base_size = 200;
             if (val->val.entity.label) {
                 base_size += strlen(val->val.entity.label);
             }
-            
+
             /* Calculate size needed for properties */
             for (int i = 0; i < val->val.entity.num_pairs; i++) {
                 if (val->val.entity.pairs[i].key && val->val.entity.pairs[i].value) {
@@ -557,19 +557,26 @@ char* agtype_value_to_string(agtype_value *val)
                     free(value_str);
                 }
             }
-            
+
             result = malloc(base_size);
             if (result) {
-                snprintf(result, base_size, 
-                    "{\"id\": %lld, \"label\": \"%s\", \"properties\": {",
-                    (long long)val->val.entity.id,
-                    val->val.entity.label ? val->val.entity.label : "");
-                
+                /* Use "labels" as array per OpenCypher spec */
+                if (val->val.entity.label && strlen(val->val.entity.label) > 0) {
+                    snprintf(result, base_size,
+                        "{\"id\": %lld, \"labels\": [\"%s\"], \"properties\": {",
+                        (long long)val->val.entity.id,
+                        val->val.entity.label);
+                } else {
+                    snprintf(result, base_size,
+                        "{\"id\": %lld, \"labels\": [], \"properties\": {",
+                        (long long)val->val.entity.id);
+                }
+
                 /* Add properties */
                 for (int i = 0; i < val->val.entity.num_pairs; i++) {
                     if (val->val.entity.pairs[i].key && val->val.entity.pairs[i].value) {
                         if (i > 0) strcat(result, ", ");
-                        
+
                         char *key_str = agtype_value_to_string(val->val.entity.pairs[i].key);
                         char *value_str = agtype_value_to_string(val->val.entity.pairs[i].value);
                         if (key_str && value_str) {
@@ -581,19 +588,19 @@ char* agtype_value_to_string(agtype_value *val)
                         free(value_str);
                     }
                 }
-                
-                strcat(result, "}}::vertex");
+
+                strcat(result, "}}");
             }
             break;
         }
         
         case AGTV_EDGE: {
-            /* Format: {"id": 123, "label": "KNOWS", "start_id": 456, "end_id": 789, "properties": {"since": 2020}}::edge */
+            /* OpenCypher format: {"id": 123, "type": "KNOWS", "startNode": 456, "endNode": 789, "properties": {...}} */
             int base_size = 250;
             if (val->val.edge.label) {
                 base_size += strlen(val->val.edge.label);
             }
-            
+
             /* Calculate size needed for properties */
             for (int i = 0; i < val->val.edge.num_pairs; i++) {
                 if (val->val.edge.pairs[i].key && val->val.edge.pairs[i].value) {
@@ -606,21 +613,22 @@ char* agtype_value_to_string(agtype_value *val)
                     free(value_str);
                 }
             }
-            
+
             result = malloc(base_size);
             if (result) {
+                /* Use "type" instead of "label", and "startNode"/"endNode" per OpenCypher */
                 snprintf(result, base_size,
-                    "{\"id\": %lld, \"label\": \"%s\", \"start_id\": %lld, \"end_id\": %lld, \"properties\": {",
+                    "{\"id\": %lld, \"type\": \"%s\", \"startNode\": %lld, \"endNode\": %lld, \"properties\": {",
                     (long long)val->val.edge.id,
                     val->val.edge.label ? val->val.edge.label : "",
                     (long long)val->val.edge.start_id,
                     (long long)val->val.edge.end_id);
-                
+
                 /* Add properties */
                 for (int i = 0; i < val->val.edge.num_pairs; i++) {
                     if (val->val.edge.pairs[i].key && val->val.edge.pairs[i].value) {
                         if (i > 0) strcat(result, ", ");
-                        
+
                         char *key_str = agtype_value_to_string(val->val.edge.pairs[i].key);
                         char *value_str = agtype_value_to_string(val->val.edge.pairs[i].value);
                         if (key_str && value_str) {
@@ -632,16 +640,16 @@ char* agtype_value_to_string(agtype_value *val)
                         free(value_str);
                     }
                 }
-                
-                strcat(result, "}}::edge");
+
+                strcat(result, "}}");
             }
             break;
         }
         
         case AGTV_PATH: {
-            /* Format: [vertex, edge, vertex, ...]::path */
-            int base_size = 50; /* for brackets and ::path */
-            
+            /* Path as JSON array of alternating vertices and edges */
+            int base_size = 50;
+
             /* Calculate size needed for all elements */
             for (int i = 0; i < val->val.array.num_elems; i++) {
                 char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
@@ -650,22 +658,22 @@ char* agtype_value_to_string(agtype_value *val)
                     free(elem_str);
                 }
             }
-            
+
             result = malloc(base_size);
             if (result) {
                 strcpy(result, "[");
-                
+
                 for (int i = 0; i < val->val.array.num_elems; i++) {
                     if (i > 0) strcat(result, ", ");
-                    
+
                     char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
                     if (elem_str) {
                         strcat(result, elem_str);
                         free(elem_str);
                     }
                 }
-                
-                strcat(result, "]::path");
+
+                strcat(result, "]");
             }
             break;
         }

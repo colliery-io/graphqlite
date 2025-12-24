@@ -18,40 +18,57 @@ static struct {
     int token;
 } keyword_token_map[] = {
     {"all", CYPHER_ALL},
+    {"allshortestpaths", CYPHER_ALLSHORTESTPATHS},
     {"and", CYPHER_AND},
+    {"any", CYPHER_ANY},
     {"as", CYPHER_AS},
     {"asc", CYPHER_ASC},
     {"by", CYPHER_BY},
     {"case", CYPHER_CASE},
     {"create", CYPHER_CREATE},
+    {"csv", CYPHER_CSV},
     {"delete", CYPHER_DELETE},
     {"desc", CYPHER_DESC},
     {"detach", CYPHER_DETACH},
     {"distinct", CYPHER_DISTINCT},
     {"else", CYPHER_ELSE},
-    {"end", CYPHER_END},
-    {"false", CYPHER_FALSE},
+    {"end", CYPHER_END_P},
+    {"explain", CYPHER_EXPLAIN},
+    {"exists", CYPHER_EXISTS},
+    {"false", CYPHER_FALSE_P},
+    {"fieldterminator", CYPHER_FIELDTERMINATOR},
+    {"foreach", CYPHER_FOREACH},
+    {"from", CYPHER_FROM},
+    {"headers", CYPHER_HEADERS},
     {"in", CYPHER_IN},
     {"is", CYPHER_IS},
     {"limit", CYPHER_LIMIT},
+    {"load", CYPHER_LOAD},
     {"match", CYPHER_MATCH},
     {"merge", CYPHER_MERGE},
+    {"none", CYPHER_NONE},
     {"not", CYPHER_NOT},
-    {"null", CYPHER_NULL},
+    {"null", CYPHER_NULL_P},
+    {"on", CYPHER_ON},
     {"optional", CYPHER_OPTIONAL},
     {"or", CYPHER_OR},
     {"order", CYPHER_ORDER},
+    {"pattern", CYPHER_PATTERN},
+    {"reduce", CYPHER_REDUCE},
     {"remove", CYPHER_REMOVE},
     {"return", CYPHER_RETURN},
     {"set", CYPHER_SET},
+    {"shortestpath", CYPHER_SHORTESTPATH},
+    {"single", CYPHER_SINGLE},
     {"skip", CYPHER_SKIP},
     {"then", CYPHER_THEN},
-    {"true", CYPHER_TRUE},
+    {"true", CYPHER_TRUE_P},
     {"union", CYPHER_UNION},
     {"unwind", CYPHER_UNWIND},
     {"when", CYPHER_WHEN},
     {"where", CYPHER_WHERE},
     {"with", CYPHER_WITH},
+    {"xor", CYPHER_XOR},
     {NULL, 0}
 };
 
@@ -316,7 +333,10 @@ int cypher_token_to_bison(CypherToken *token)
             
         case CYPHER_TOKEN_PLUS_EQ:
             return CYPHER_PLUS_EQ;
-            
+
+        case CYPHER_TOKEN_REGEX_MATCH:
+            return CYPHER_REGEX_MATCH;
+
         case CYPHER_TOKEN_KEYWORD:
             /* Look up keyword in mapping table */
             if (token->value.string) {
@@ -396,16 +416,16 @@ const char* cypher_token_name(int token)
         case CYPHER_NOT:         return "NOT";
         case CYPHER_IN:          return "IN";
         case CYPHER_IS:          return "IS";
-        case CYPHER_NULL:        return "NULL";
-        case CYPHER_TRUE:        return "TRUE";
-        case CYPHER_FALSE:       return "FALSE";
+        case CYPHER_NULL_P:      return "NULL";
+        case CYPHER_TRUE_P:      return "TRUE";
+        case CYPHER_FALSE_P:     return "FALSE";
         case CYPHER_UNION:       return "UNION";
         case CYPHER_ALL:         return "ALL";
         case CYPHER_CASE:        return "CASE";
         case CYPHER_WHEN:        return "WHEN";
         case CYPHER_THEN:        return "THEN";
         case CYPHER_ELSE:        return "ELSE";
-        case CYPHER_END:         return "END";
+        case CYPHER_END_P:       return "END";
         default:
             if (token >= 32 && token <= 126) {
                 static char char_name[4];
