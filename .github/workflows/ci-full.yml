@@ -37,7 +37,7 @@ jobs:
 
       - name: Build extension (macOS)
         if: runner.os == 'macOS'
-        run: make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+        run: make extension
 
       - name: Run unit tests (Linux)
         if: runner.os == 'Linux'
@@ -89,7 +89,7 @@ jobs:
 
       - name: Build extension (macOS)
         if: runner.os == 'macOS'
-        run: make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+        run: make extension
 
       - name: Run Rust tests
         working-directory: bindings/rust
@@ -141,9 +141,7 @@ jobs:
           echo "$(brew --prefix python@3.11)/libexec/bin" >> $GITHUB_PATH
 
       - name: Build extension
-        run: |
-          HOMEBREW_PREFIX=$(brew --prefix)
-          make extension EXTRA_INCLUDES="-I$HOMEBREW_PREFIX/include" EXTRA_LIBS="-L$HOMEBREW_PREFIX/lib"
+        run: make extension
 
       - name: Install Python package
         run: |

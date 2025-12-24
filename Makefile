@@ -8,21 +8,27 @@ SQLITE ?= sqlite3
 # Override with: make PYTHON=python3.12 test-python
 PYTHON ?= python3.11
 
-# Platform-specific paths (for test runner linking only, not extension builds)
-# macOS with MacPorts: make EXTRA_LIBS=-L/opt/local/lib
-# macOS with Homebrew: make SQLITE=$(brew --prefix)/bin/sqlite3
+# Platform-specific paths for test builds (CUnit headers/libs)
+# macOS with MacPorts: make EXTRA_LIBS=-L/opt/local/lib EXTRA_INCLUDES=-I/opt/local/include
+# macOS with Homebrew: make EXTRA_INCLUDES=-I$(brew --prefix)/include EXTRA_LIBS=-L$(brew --prefix)/lib
 EXTRA_LIBS ?=
+EXTRA_INCLUDES ?=
 
 # Vendored SQLite headers for consistent extension builds
-VENDOR_SQLITE_DIR = vendor/sqlite
+VENDOR_SQLITE_DIR = bindings/python/vendor/sqlite
+
+# Base flags for extension builds (vendor headers only, no system includes)
+EXTENSION_BASE_CFLAGS = -Wall -Wextra -I$(VENDOR_SQLITE_DIR) -I./src/include
 
 # Build mode: debug (default) or release
 # Use: make extension RELEASE=1
 ifdef RELEASE
-CFLAGS = -Wall -Wextra -O2 -I$(VENDOR_SQLITE_DIR) -I./src/include
+CFLAGS = -Wall -Wextra -O2 -I$(VENDOR_SQLITE_DIR) -I./src/include $(EXTRA_INCLUDES)
+EXTENSION_CFLAGS_BASE = -Wall -Wextra -O2 -I$(VENDOR_SQLITE_DIR) -I./src/include
 else
 # Add -DGRAPHQLITE_PERF_TIMING for detailed query timing instrumentation
-CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG
+CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG $(EXTRA_INCLUDES)
+EXTENSION_CFLAGS_BASE = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG
 endif
 LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3
 
@@ -206,9 +212,9 @@ endif
 $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Extension object (uses vendored SQLite headers for ABI consistency)
+# Extension object (uses vendored SQLite headers for ABI consistency - no EXTRA_INCLUDES)
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 
 # Help target
@@ -293,21 +299,21 @@ $(BUILD_EXECUTOR_DIR)/%.o: $(EXECUTOR_DIR)/%.c | dirs
 $(BUILD_EXECUTOR_DIR)/%.cov.o: $(EXECUTOR_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -c $< -o $@
 
-# PIC object builds for shared library (uses vendored SQLite headers via CFLAGS)
+# PIC object builds for shared library (uses vendored SQLite headers only - no EXTRA_INCLUDES)
 $(BUILD_PARSER_DIR)/%.pic.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_scanner.pic.o: $(SCANNER_SRC) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
+	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
 
 $(BUILD_PARSER_DIR)/cypher_gram.tab.pic.o: $(GRAMMAR_SRC) $(GRAMMAR_HDR) | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
+	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -Wno-unused-but-set-variable -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 $(BUILD_TRANSFORM_DIR)/%.pic.o: $(TRANSFORM_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 $(BUILD_EXECUTOR_DIR)/%.pic.o: $(EXECUTOR_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
 # Test objects
 $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs
