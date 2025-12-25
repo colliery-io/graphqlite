@@ -90,7 +90,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     if (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||
         binary_op->op_type == BINARY_OP_LT || binary_op->op_type == BINARY_OP_GT ||
         binary_op->op_type == BINARY_OP_LTE || binary_op->op_type == BINARY_OP_GTE ||
-        binary_op->op_type == BINARY_OP_REGEX_MATCH) {
+        binary_op->op_type == BINARY_OP_REGEX_MATCH || binary_op->op_type == BINARY_OP_IN) {
         ctx->in_comparison = true;
     }
 
@@ -105,6 +105,40 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         /* String to match is the left operand */
         if (transform_expression(ctx, binary_op->left) < 0) {
             return -1;
+        }
+        append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle IN operator specially - check membership in list */
+    if (binary_op->op_type == BINARY_OP_IN) {
+        append_sql(ctx, "(");
+        /* Transform the left operand (value to check) */
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " IN ");
+
+        /* Check if right side is a literal list */
+        if (binary_op->right->type == AST_NODE_LIST) {
+            /* Literal list: generate IN (val1, val2, val3) */
+            cypher_list *list = (cypher_list*)binary_op->right;
+            append_sql(ctx, "(");
+            for (int i = 0; i < list->items->count; i++) {
+                if (i > 0) append_sql(ctx, ", ");
+                if (transform_expression(ctx, list->items->items[i]) < 0) {
+                    return -1;
+                }
+            }
+            append_sql(ctx, ")");
+        } else {
+            /* Variable or expression: use json_each subquery */
+            append_sql(ctx, "(SELECT value FROM json_each(");
+            if (transform_expression(ctx, binary_op->right) < 0) {
+                return -1;
+            }
+            append_sql(ctx, "))");
         }
         append_sql(ctx, ")");
         ctx->in_comparison = was_in_comparison;

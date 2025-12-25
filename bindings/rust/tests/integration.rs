@@ -908,6 +908,91 @@ fn test_remove_no_match() {
     assert!(result.is_ok());
 }
 
+// =============================================================================
+// IN Operator Tests
+// =============================================================================
+
+#[test]
+fn test_in_literal_list_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 5 IN [1, 2, 5, 10]").unwrap();
+    assert_eq!(results.len(), 1);
+    // Result should be truthy (1)
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 1);
+}
+
+#[test]
+fn test_in_literal_list_no_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'x' IN ['a', 'b', 'c']").unwrap();
+    assert_eq!(results.len(), 1);
+    // Result should be falsy (0)
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 0);
+}
+
+#[test]
+fn test_in_with_where_clause() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    conn.cypher("CREATE (n:InTest {name: 'Alice', status: 'active'})").unwrap();
+    conn.cypher("CREATE (n:InTest {name: 'Bob', status: 'pending'})").unwrap();
+    conn.cypher("CREATE (n:InTest {name: 'Charlie', status: 'inactive'})").unwrap();
+
+    let results = conn
+        .cypher("MATCH (n:InTest) WHERE n.status IN ['active', 'pending'] RETURN n.name ORDER BY n.name")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+    assert_eq!(results[1].get::<String>("n.name").unwrap(), "Bob");
+}
+
+#[test]
+fn test_in_with_integers() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    conn.cypher("CREATE (n:InIntTest {name: 'A', priority: 1})").unwrap();
+    conn.cypher("CREATE (n:InIntTest {name: 'B', priority: 2})").unwrap();
+    conn.cypher("CREATE (n:InIntTest {name: 'C', priority: 3})").unwrap();
+
+    let results = conn
+        .cypher("MATCH (n:InIntTest) WHERE n.priority IN [1, 3] RETURN n.name ORDER BY n.name")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "A");
+    assert_eq!(results[1].get::<String>("n.name").unwrap(), "C");
+}
+
+#[test]
+fn test_in_empty_result() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    conn.cypher("CREATE (n:InEmptyTest {name: 'Test', status: 'archived'})").unwrap();
+
+    let results = conn
+        .cypher("MATCH (n:InEmptyTest) WHERE n.status IN ['active', 'pending'] RETURN n.name")
+        .unwrap();
+    assert!(results.is_empty());
+}
+
 #[test]
 fn test_utility_functions() {
     // escape_string

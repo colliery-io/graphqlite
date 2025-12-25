@@ -1,10 +1,10 @@
 ---
-id: implement-node-similarity-jaccard
+id: implement-remove-clause-execution
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "Implement REMOVE clause execution"
+short_code: "GQLITE-T-0036"
+created_at: 2025-12-25T16:34:15.255814+00:00
+updated_at: 2025-12-25T23:08:37.522776+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# Implement REMOVE clause execution
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -28,38 +28,25 @@ initiative_id: NULL
 
 [[Parent Initiative]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Complete the REMOVE clause execution path so `MATCH (n) REMOVE n.prop` queries work end-to-end.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Feature - New functionality or enhancement  
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
 ### Priority
-- [x] P2 - Medium (nice to have)
-
-### Cypher Syntax
-```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
-```
-
-### Return Format
-```json
-[
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
-]
-```
-
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
-### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -87,9 +74,11 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 
 ## Acceptance Criteria **[REQUIRED]**
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] `MATCH (n {name: 'x'}) REMOVE n.age RETURN n` executes successfully
+- [ ] `MATCH (n) REMOVE n:Label` removes labels from nodes
+- [ ] `MATCH (n) REMOVE n.prop1, n.prop2` removes multiple properties
+- [ ] Unit tests added in tests/test_executor_remove.c
+- [ ] Functional tests added in tests/functional/
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -139,18 +128,26 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Example Request**: {Code example}
 - **Example Response**: {Expected response format}
 
-## Implementation Notes **[CONDITIONAL: Technical Task]**
+## Implementation Notes
 
-{Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
+### Current State
+- Parser: ✅ Parses REMOVE syntax (cypher_gram.y lines 548-587)
+- AST: ✅ AST_NODE_REMOVE defined (cypher_ast.h line 25)
+- Transform: ✅ transform_remove_clause() generates DELETE SQL (transform_remove.c)
+- Executor: ❌ No `remove_clause` variable in executor dispatch (cypher_executor.c lines 117-161)
 
 ### Technical Approach
-{How this will be implemented}
+1. Add `cypher_remove *remove_clause` variable in clause scanning loop (cypher_executor.c ~line 125)
+2. Add case for `AST_NODE_REMOVE` in the switch (line 130)
+3. Add execution path for `MATCH...REMOVE` pattern (after line 300)
+4. Route through transform layer similar to how WITH/UNWIND work
+
+### Files to Modify
+- src/backend/executor/cypher_executor.c
+- src/backend/executor/executor_internal.h (if new function needed)
 
 ### Dependencies
-{Other tasks or systems this depends on}
-
-### Risk Considerations
-{Technical risks and mitigation strategies}
+None - transform layer already works
 
 ## Status Updates **[REQUIRED]**
 

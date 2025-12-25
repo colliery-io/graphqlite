@@ -32,7 +32,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * where the parser can't immediately distinguish a node pattern from
  * a parenthesized expression until it sees more context.
  */
-%expect 3
+%expect 4
 %expect-rr 2  /* One for IDENTIFIER, one for BQIDENT in variable_opt */
 
 %union {
@@ -922,6 +922,7 @@ expr:
     | expr AND expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_AND, $1, $3, @2.first_line); }
     | expr OR expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_OR, $1, $3, @2.first_line); }
     | expr XOR expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_XOR, $1, $3, @2.first_line); }
+    | expr IN expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_IN, $1, $3, @2.first_line); }
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
@@ -935,8 +936,8 @@ primary_expr:
     | function_call     { $$ = $1; }
     | list_predicate    { $$ = $1; }
     | reduce_expr       { $$ = $1; }
-    | list_literal      { $$ = $1; }
-    | list_comprehension { $$ = $1; }
+    | list_literal      { $$ = $1; } %dprec 1
+    | list_comprehension { $$ = $1; } %dprec 2
     | pattern_comprehension { $$ = $1; }
     | map_literal       { $$ = $1; }
     | map_projection    { $$ = $1; }

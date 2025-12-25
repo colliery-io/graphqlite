@@ -438,3 +438,61 @@ def test_remove_no_match(db):
     # Remove property on non-existent nodes - should succeed (0 rows affected)
     db.cypher("MATCH (n:NonExistentLabel) REMOVE n.property")
     # No error should be raised
+
+
+# =============================================================================
+# IN Operator Tests
+# =============================================================================
+
+def test_in_literal_list_match(db):
+    """Test IN operator with literal list - matching value."""
+    results = db.cypher("RETURN 5 IN [1, 2, 5, 10]")
+    assert len(results) == 1
+    # Result should be truthy (1 or true)
+    assert results[0][list(results[0].keys())[0]] in [1, True, "1", "true"]
+
+
+def test_in_literal_list_no_match(db):
+    """Test IN operator with literal list - non-matching value."""
+    results = db.cypher("RETURN 'x' IN ['a', 'b', 'c']")
+    assert len(results) == 1
+    # Result should be falsy (0 or false)
+    assert results[0][list(results[0].keys())[0]] in [0, False, "0", "false"]
+
+
+def test_in_with_where_clause(db):
+    """Test IN operator in WHERE clause for filtering."""
+    db.cypher("CREATE (n:InTest {name: 'Alice', status: 'active'})")
+    db.cypher("CREATE (n:InTest {name: 'Bob', status: 'pending'})")
+    db.cypher("CREATE (n:InTest {name: 'Charlie', status: 'inactive'})")
+
+    results = db.cypher(
+        "MATCH (n:InTest) WHERE n.status IN ['active', 'pending'] RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "Alice"
+    assert results[1]["n.name"] == "Bob"
+
+
+def test_in_with_integers(db):
+    """Test IN operator with integer values."""
+    db.cypher("CREATE (n:InIntTest {name: 'A', priority: 1})")
+    db.cypher("CREATE (n:InIntTest {name: 'B', priority: 2})")
+    db.cypher("CREATE (n:InIntTest {name: 'C', priority: 3})")
+
+    results = db.cypher(
+        "MATCH (n:InIntTest) WHERE n.priority IN [1, 3] RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "A"
+    assert results[1]["n.name"] == "C"
+
+
+def test_in_empty_result(db):
+    """Test IN operator when no values match."""
+    db.cypher("CREATE (n:InEmptyTest {name: 'Test', status: 'archived'})")
+
+    results = db.cypher(
+        "MATCH (n:InEmptyTest) WHERE n.status IN ['active', 'pending'] RETURN n.name"
+    )
+    assert len(results) == 0

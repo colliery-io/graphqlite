@@ -1,10 +1,10 @@
 ---
-id: implement-node-similarity-jaccard
+id: implement-modulo-operator
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "Implement modulo operator (%)"
+short_code: "GQLITE-T-0037"
+created_at: 2025-12-25T16:34:15.322948+00:00
+updated_at: 2025-12-25T23:08:37.615885+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# Implement modulo operator (%)
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -28,38 +28,25 @@ initiative_id: NULL
 
 [[Parent Initiative]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Add support for the modulo operator (%) so expressions like `RETURN 10 % 3` work.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Feature - New functionality or enhancement  
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
 ### Priority
-- [x] P2 - Medium (nice to have)
-
-### Cypher Syntax
-```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
-```
-
-### Return Format
-```json
-[
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
-]
-```
-
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
-### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -87,9 +74,11 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 
 ## Acceptance Criteria **[REQUIRED]**
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] `RETURN 10 % 3` returns 1
+- [ ] `RETURN 7 % 2` returns 1
+- [ ] `MATCH (n) WHERE n.value % 2 = 0 RETURN n` filters even values
+- [ ] Parser tests added for modulo expressions
+- [ ] Transform tests verify correct SQL generation
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -139,18 +128,26 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Example Request**: {Code example}
 - **Example Response**: {Expected response format}
 
-## Implementation Notes **[CONDITIONAL: Technical Task]**
+## Implementation Notes
 
-{Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
+### Current State
+- Precedence: ✅ Defined in cypher_gram.y line 148: `%left '*' '/' '%'`
+- Grammar rule: ❌ No `expr '%' expr` rule exists (lines 910-913 have +, -, *, / but not %)
+- AST enum: ❌ No `BINARY_OP_MOD` in binary_op_type (cypher_ast.h lines 71-86)
+- Transform: ❌ No handler for MOD operation
 
 ### Technical Approach
-{How this will be implemented}
+1. Add `BINARY_OP_MOD` to binary_op_type enum (cypher_ast.h after line 84)
+2. Add grammar rule in cypher_gram.y after line 913:
+   ```c
+   | expr '%' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MOD, $1, $3, @2.first_line); }
+   ```
+3. Add case in transform_expr_ops.c binary op switch to emit `%` (SQLite supports it natively)
 
-### Dependencies
-{Other tasks or systems this depends on}
-
-### Risk Considerations
-{Technical risks and mitigation strategies}
+### Files to Modify
+- src/include/parser/cypher_ast.h
+- src/backend/parser/cypher_gram.y
+- src/backend/transform/transform_expr_ops.c
 
 ## Status Updates **[REQUIRED]**
 

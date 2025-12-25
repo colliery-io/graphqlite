@@ -1,13 +1,13 @@
 ---
-id: implement-node-similarity-jaccard
+id: complete-nanographrag-demo-app
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "Complete nanographrag demo app"
+short_code: "GQLITE-T-0012"
+created_at: 2025-12-24T14:18:38.677564+00:00
+updated_at: 2025-12-24T15:02:39.854072+00:00
 parent: 
-blocked_by: []
-archived: false
+blocked_by: [GQLITE-T-0011]
+archived: true
 
 tags:
   - "#task"
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# Complete nanographrag demo app
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -28,11 +28,13 @@ initiative_id: NULL
 
 [[Parent Initiative]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Complete the nanographrag demo to showcase GraphQLite + sqlite-vec for knowledge graph construction with semantic search.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
 - [x] Feature - New functionality or enhancement  
@@ -40,39 +42,10 @@ Implement Node Similarity using Jaccard coefficient - measures similarity betwee
 ### Priority
 - [x] P2 - Medium (nice to have)
 
-### Cypher Syntax
-```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
-```
-
-### Return Format
-```json
-[
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
-]
-```
-
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
-### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
-
-### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: {Number/percentage of users affected}
-- **Reproduction Steps**: 
-  1. {Step 1}
-  2. {Step 2}
-  3. {Step 3}
-- **Expected vs Actual**: {What should happen vs what happens}
-
-### Business Justification **[CONDITIONAL: Feature]**
-- **User Value**: {Why users need this}
-- **Business Value**: {Impact on metrics/revenue}
-- **Effort Estimate**: {Rough size - S/M/L/XL}
+### Business Justification
+- **User Value**: Demonstrates GraphQLite capabilities for RAG/knowledge graph use cases
+- **Business Value**: Example app for documentation and marketing
+- **Effort Estimate**: S (small - mostly workarounds needed)
 
 ### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
 - **Current Problems**: {What's difficult/slow/buggy now}
@@ -85,11 +58,22 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 ## Acceptance Criteria **[REQUIRED]**
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [x] Entity extraction with spaCy NER (181 entities, 266 relationships from 19 docs)
+- [x] Graph storage via GraphQLite (nodes and edges created)
+- [x] Graph exploration queries (entity counts, samples, relationships)
+- [x] Community detection (label propagation algorithm)
+- [x] PageRank analysis (algorithm runs)
+- [x] sqlite-vec integration initialized
+- [ ] `get_all_nodes()` returns nodes (blocked by GQLITE-T-0011, needs workaround)
+- [ ] Semantic search embeds all entities
+- [ ] Semantic search returns relevant results for queries
+- [ ] PageRank displays entity names (not "Unknown")
+- [ ] Demo runs end-to-end without errors
+- [ ] Clean up debug output before finalizing
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -139,18 +123,32 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Example Request**: {Code example}
 - **Example Response**: {Expected response format}
 
-## Implementation Notes **[CONDITIONAL: Technical Task]**
+## Implementation Notes
 
-{Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
+### Current State
+**Location:** `examples/nanographrag/`
 
-### Technical Approach
-{How this will be implemented}
+**Files:**
+- `demo.py` - Main demo script
+- `graphqlite_graph.py` - Graph storage wrapper
+- `entity_extractor.py` - spaCy NER extraction
+- `pyproject.toml` - Dependencies (graphqlite, sqlite-vec, spacy, sentence-transformers)
+
+### Workaround for GQLITE-T-0011
+Instead of `MATCH (n) RETURN n` (broken), use property access which works:
+```cypher
+MATCH (n) RETURN n.id AS id, n.name AS name, n.entity_type AS entity_type, n.description AS description
+```
+
+### Remaining Work
+1. Rewrite `get_all_nodes()` to query properties individually
+2. Verify semantic search works with embedded entities
+3. Fix PageRank display to show entity names
+4. Remove debug print statements
+5. Test full end-to-end run
 
 ### Dependencies
-{Other tasks or systems this depends on}
-
-### Risk Considerations
-{Technical risks and mitigation strategies}
+- Blocked by GQLITE-T-0011 for proper `RETURN n` support (workaround available)
 
 ## Status Updates **[REQUIRED]**
 

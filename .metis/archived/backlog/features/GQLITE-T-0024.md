@@ -1,13 +1,13 @@
 ---
-id: implement-node-similarity-jaccard
+id: implement-degree-centrality
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "Implement Degree Centrality Algorithm"
+short_code: "GQLITE-T-0024"
+created_at: 2025-12-24T22:50:01.438312+00:00
+updated_at: 2025-12-25T16:29:59.693344+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# Implement Degree Centrality Algorithm
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,7 +30,7 @@ initiative_id: NULL
 
 ## Objective
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Implement Degree Centrality - simple but useful metric counting the number of edges connected to each node. Support in-degree, out-degree, and total degree variants.
 
 ## Details
 
@@ -42,24 +42,20 @@ Implement Node Similarity using Jaccard coefficient - measures similarity betwee
 
 ### Cypher Syntax
 ```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
+RETURN degreeCentrality()
+RETURN degreeCentrality('in')   -- in-degree only
+RETURN degreeCentrality('out')  -- out-degree only
 ```
 
 ### Return Format
 ```json
 [
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
+  {"node_id": 1, "user_id": "alice", "in_degree": 5, "out_degree": 3, "total": 8}
 ]
 ```
 
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
 ### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
+- O(V + E) - single pass through adjacency lists
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -78,6 +74,8 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

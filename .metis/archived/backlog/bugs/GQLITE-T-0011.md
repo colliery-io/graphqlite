@@ -1,17 +1,17 @@
 ---
-id: implement-node-similarity-jaccard
+id: return-n-serializes-all-nodes-into
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "RETURN n serializes all nodes into single JSON string instead of separate rows"
+short_code: "GQLITE-T-0011"
+created_at: 2025-12-24T14:16:05.505777+00:00
+updated_at: 2025-12-24T14:38:27.912817+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#feature"
+  - "#bug"
   - "#phase/completed"
 
 
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# RETURN n serializes all nodes into single JSON string instead of separate rows
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -28,46 +28,29 @@ initiative_id: NULL
 
 [[Parent Initiative]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Fix the Cypher executor to return node objects as separate rows instead of serializing all nodes into a single JSON string.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Feature - New functionality or enhancement  
+- [x] Bug - Production issue that needs fixing
 
 ### Priority
-- [x] P2 - Medium (nice to have)
+- [ ] P1 - High (important for user experience)
 
-### Cypher Syntax
-```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
-```
-
-### Return Format
-```json
-[
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
-]
-```
-
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
-### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
-
-### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: {Number/percentage of users affected}
+### Impact Assessment
+- **Affected Users**: Anyone using `RETURN n` to get full node objects
 - **Reproduction Steps**: 
-  1. {Step 1}
-  2. {Step 2}
-  3. {Step 3}
-- **Expected vs Actual**: {What should happen vs what happens}
+  1. Create nodes: `CREATE (n:Person {name: 'Alice'})`
+  2. Query: `MATCH (n) RETURN n`
+  3. Observe result structure
+- **Expected vs Actual**: 
+  - **Expected (openCypher standard):** Multiple rows, each with `{"n": {"id": 1, "labels": [...], "properties": {...}}}`
+  - **Actual:** Single row with `{"result": "[{\"n\": {...}}, {\"n\": {...}}]"}` - all nodes serialized as JSON string
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -85,11 +68,14 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 ## Acceptance Criteria **[REQUIRED]**
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] `MATCH (n) RETURN n` returns each node as a separate row
+- [ ] Each row has key `n` containing the node object directly (not wrapped in JSON string)
+- [ ] `RETURN n.name` continues to work (regression test)
+- [ ] Python bindings can iterate: `for row in result: node = row["n"]`
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -139,18 +125,17 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Example Request**: {Code example}
 - **Example Response**: {Expected response format}
 
-## Implementation Notes **[CONDITIONAL: Technical Task]**
-
-{Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
+## Implementation Notes
 
 ### Technical Approach
-{How this will be implemented}
+The bug is likely in the C code that handles RETURN clauses. When returning a node variable (vs a property like `n.name`), the executor serializes all results into one JSON array string instead of emitting separate result rows.
 
-### Dependencies
-{Other tasks or systems this depends on}
+**Likely location:** `src/backend/transform/transform_return.c` or the executor code that builds the final JSON result.
 
-### Risk Considerations
-{Technical risks and mitigation strategies}
+### Notes
+- `RETURN n.name AS name` works correctly (returns scalars per row)
+- `RETURN count(n)` works correctly
+- Only `RETURN n` (full node object) exhibits this behavior
 
 ## Status Updates **[REQUIRED]**
 

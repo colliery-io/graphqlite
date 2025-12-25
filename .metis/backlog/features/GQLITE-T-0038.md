@@ -1,10 +1,10 @@
 ---
-id: implement-node-similarity-jaccard
+id: implement-in-membership-operator
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "Implement IN membership operator"
+short_code: "GQLITE-T-0038"
+created_at: 2025-12-25T16:34:15.385098+00:00
+updated_at: 2025-12-25T23:53:09.140215+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# Implement IN membership operator
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -28,38 +28,25 @@ initiative_id: NULL
 
 [[Parent Initiative]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Add support for the IN membership operator so expressions like `n.status IN ['active', 'pending']` work.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Feature - New functionality or enhancement  
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
 ### Priority
-- [x] P2 - Medium (nice to have)
-
-### Cypher Syntax
-```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
-```
-
-### Return Format
-```json
-[
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
-]
-```
-
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
-### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -87,9 +74,11 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 
 ## Acceptance Criteria **[REQUIRED]**
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] `RETURN 5 IN [1, 2, 5, 10]` returns true
+- [ ] `RETURN 'x' IN ['a', 'b', 'c']` returns false
+- [ ] `MATCH (n) WHERE n.status IN ['active', 'pending'] RETURN n` filters correctly
+- [ ] `WITH [1,2,3] AS list RETURN 2 IN list` works with variables
+- [ ] Parser and transform tests added
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -139,18 +128,31 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Example Request**: {Code example}
 - **Example Response**: {Expected response format}
 
-## Implementation Notes **[CONDITIONAL: Technical Task]**
+## Implementation Notes
 
-{Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
+### Current State
+- Token: ✅ IN token defined (cypher_gram.y line 91)
+- Precedence: ✅ Defined (line 150: `%left IN IS`)
+- Current usage: Only in FOREACH, list predicates (all/any/none/single), reduce, list comprehensions
+- Membership: ❌ Cannot write `value IN [1, 2, 3]` as binary operator
 
 ### Technical Approach
-{How this will be implemented}
+1. Add `BINARY_OP_IN` to binary_op_type enum (cypher_ast.h)
+2. Add grammar rule in cypher_gram.y:
+   ```c
+   | expr IN expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_IN, $1, $3, @2.first_line); }
+   ```
+3. Add transform handler in transform_expr_ops.c:
+   - For literal lists: `expr IN (val1, val2, val3)`
+   - For variable lists: `expr IN (SELECT value FROM json_each(list_expr))`
 
-### Dependencies
-{Other tasks or systems this depends on}
+### Files to Modify
+- src/include/parser/cypher_ast.h
+- src/backend/parser/cypher_gram.y
+- src/backend/transform/transform_expr_ops.c
 
 ### Risk Considerations
-{Technical risks and mitigation strategies}
+Grammar conflict possible with existing `x IN list` usage in FOREACH/list predicates - may need precedence adjustment or context-sensitive parsing
 
 ## Status Updates **[REQUIRED]**
 

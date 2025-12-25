@@ -1,13 +1,13 @@
 ---
-id: implement-node-similarity-jaccard
+id: implement-closeness-centrality
 level: task
-title: "Implement Node Similarity (Jaccard) Algorithm"
-short_code: "GQLITE-T-0030"
-created_at: 2025-12-24T22:50:16.900661+00:00
-updated_at: 2025-12-25T18:05:56.436226+00:00
+title: "Implement Closeness Centrality Algorithm"
+short_code: "GQLITE-T-0025"
+created_at: 2025-12-24T22:50:01.518925+00:00
+updated_at: 2025-12-25T16:24:01.530168+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement Node Similarity (Jaccard) Algorithm
+# Implement Closeness Centrality Algorithm
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,7 +30,7 @@ initiative_id: NULL
 
 ## Objective
 
-Implement Node Similarity using Jaccard coefficient - measures similarity between nodes based on shared neighbors. Useful for link prediction and recommendation systems.
+Implement Closeness Centrality - measures how close a node is to all other nodes based on average shortest path length. Identifies nodes that can quickly reach the entire network.
 
 ## Details
 
@@ -42,24 +42,22 @@ Implement Node Similarity using Jaccard coefficient - measures similarity betwee
 
 ### Cypher Syntax
 ```cypher
-RETURN nodeSimilarity()  -- all pairs above threshold
-RETURN nodeSimilarity(node1, node2)  -- specific pair
-RETURN nodeSimilarity(threshold)  -- filter by minimum similarity
+RETURN closenessCentrality()
 ```
 
 ### Return Format
 ```json
 [
-  {"node1": "alice", "node2": "bob", "similarity": 0.67}
+  {"node_id": 1, "user_id": "alice", "score": 0.67}
 ]
 ```
 
-### Formula
-Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
-
 ### Complexity
-- O(V² * avg_degree) for all pairs
-- Consider top-K optimization
+- O(V * (V + E)) - BFS from each node
+- Consider sampling for large graphs
+
+### Notes
+- Handle disconnected graphs (use harmonic centrality variant)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -78,6 +76,8 @@ Jaccard: |N(a) ∩ N(b)| / |N(a) ∪ N(b)|
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

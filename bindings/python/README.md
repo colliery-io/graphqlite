@@ -107,10 +107,52 @@ g = graph(":memory:")
 
 #### Graph Algorithms
 
+**Centrality**
 | Method | Description |
 |--------|-------------|
-| `pagerank(damping=0.85, iterations=20)` | Run PageRank algorithm |
-| `community_detection(iterations=10)` | Community detection via label propagation |
+| `pagerank(damping=0.85, iterations=20)` | PageRank importance scores |
+| `degree_centrality()` | In/out/total degree for each node |
+| `betweenness_centrality()` | Betweenness centrality scores |
+| `closeness_centrality()` | Closeness centrality scores |
+| `eigenvector_centrality(iterations=100)` | Eigenvector centrality scores |
+
+**Community Detection**
+| Method | Description |
+|--------|-------------|
+| `community_detection(iterations=10)` | Label propagation communities |
+| `louvain(resolution=1.0)` | Louvain modularity optimization |
+| `leiden_communities(resolution, seed)` | Leiden algorithm (requires graspologic) |
+
+**Connected Components**
+| Method | Description |
+|--------|-------------|
+| `weakly_connected_components()` | Weakly connected components |
+| `strongly_connected_components()` | Strongly connected components |
+
+**Path Finding**
+| Method | Description |
+|--------|-------------|
+| `shortest_path(source, target, weight)` | Dijkstra's shortest path |
+| `astar(source, target, lat, lon)` | A* with optional heuristic |
+| `all_pairs_shortest_path()` | All-pairs shortest paths (Floyd-Warshall) |
+
+**Traversal**
+| Method | Description |
+|--------|-------------|
+| `bfs(start, max_depth=-1)` | Breadth-first search |
+| `dfs(start, max_depth=-1)` | Depth-first search |
+
+**Similarity**
+| Method | Description |
+|--------|-------------|
+| `node_similarity(n1, n2, threshold, top_k)` | Jaccard similarity |
+| `knn(node, k=10)` | K-nearest neighbors |
+| `triangle_count()` | Triangle counts and clustering coefficients |
+
+**Export**
+| Method | Description |
+|--------|-------------|
+| `to_rustworkx()` | Export to rustworkx PyDiGraph (requires rustworkx) |
 
 #### Batch Operations
 
