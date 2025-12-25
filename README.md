@@ -7,19 +7,49 @@
 
 An SQLite extension that adds graph database capabilities using the Cypher query language.
 
-GraphQLite lets you store and query graph data directly in SQLite—combining the simplicity of a single-file, zero-config embedded database with Cypher's expressive power for modeling relationships. With first-class Python bindings, you can `pip install` and start querying graphs in minutes. Perfect for applications that need graph queries without a separate database server, or for local development and learning without standing up additional infrastructure.
+GraphQLite lets you store and query graph data directly in SQLite—combining the simplicity of a single-file, zero-config embedded database with Cypher's expressive power for modeling relationships. Perfect for applications that need graph queries without a separate database server, or for local development and learning without standing up additional infrastructure.
 
 ## Installation
 
-Build from source (requires gcc, bison, flex):
-
+**Python** (recommended):
 ```bash
-make extension
+pip install graphqlite
 ```
 
-This creates `build/graphqlite.dylib` (macOS) or `build/graphqlite.so` (Linux).
+**Rust**:
+```bash
+cargo add graphqlite
+```
+
+**From source** (requires gcc, bison, flex):
+```bash
+make extension
+# Creates build/graphqlite.dylib (macOS), .so (Linux), or .dll (Windows)
+```
 
 ## Quick Start
+
+### Python
+
+```python
+from graphqlite import Graph
+
+# High-level Graph API
+g = Graph(":memory:")
+g.upsert_node("alice", {"name": "Alice", "age": 30}, label="Person")
+g.upsert_node("bob", {"name": "Bob", "age": 25}, label="Person")
+g.upsert_edge("alice", "bob", {"since": 2020}, rel_type="KNOWS")
+
+print(g.stats())  # {'nodes': 2, 'edges': 1}
+print(g.get_neighbors("alice"))  # [{'id': 'bob', ...}]
+
+# Or use raw Cypher
+results = g.query("MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name")
+```
+
+See the [Python bindings documentation](bindings/python/README.md) for the full API.
+
+### SQL
 
 ```sql
 .load build/graphqlite.dylib
@@ -40,30 +70,56 @@ SELECT cypher('MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name');
 
 GraphQLite supports a substantial subset of Cypher:
 
+**Clauses**: MATCH, OPTIONAL MATCH, CREATE, MERGE, SET, DELETE, DETACH DELETE, REMOVE, WITH, UNWIND, FOREACH, RETURN (with DISTINCT, ORDER BY, SKIP, LIMIT).
+
 **Patterns**: Nodes `(n:Label {prop: value})`, relationships `-[:TYPE]->`, variable-length paths `[*1..3]`, bidirectional matching.
 
-**Clauses**: MATCH, OPTIONAL MATCH, CREATE, MERGE, SET, DELETE, WITH, UNWIND, RETURN (with ORDER BY, SKIP, LIMIT).
+**Functions**:
+- **String**: `toLower`, `toUpper`, `trim`, `ltrim`, `rtrim`, `replace`, `substring`, `left`, `right`, `split`, `reverse`, `toString`
+- **Math**: `abs`, `ceil`, `floor`, `round`, `sign`, `sqrt`, `log`, `log10`, `exp`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `rand`, `pi`, `e`
+- **List**: `head`, `tail`, `last`, `size`, `range`, `reverse`, `keys`
+- **Aggregate**: `count`, `sum`, `avg`, `min`, `max`, `collect`
+- **Entity**: `id`, `labels`, `type`, `properties`, `startNode`, `endNode`
+- **Path**: `nodes`, `relationships`, `length`
+- **Type**: `toInteger`, `toFloat`, `toBoolean`, `coalesce`
+- **Temporal**: `date`, `datetime`, `time`, `timestamp`, `localdatetime`
 
-**Expressions**: Properties, aggregations (count, sum, min, max, avg, collect), list operations, CASE expressions, path functions, EXISTS predicates, list comprehensions (all, any, none, single, reduce).
+**Predicates**: `EXISTS { pattern }`, `EXISTS(n.property)`, `all(x IN list WHERE ...)`, `any(...)`, `none(...)`, `single(...)`, `reduce(acc = init, x IN list | expr)`
+
+**Operators**: `+`, `-`, `*`, `/`, `%`, `=`, `<>`, `<`, `>`, `<=`, `>=`, `AND`, `OR`, `NOT`, `XOR`, `IN`, `STARTS WITH`, `ENDS WITH`, `CONTAINS`, `IS NULL`, `IS NOT NULL`
 
 ## Graph Algorithms
 
-Built-in algorithms return JSON that integrates with SQLite's json_each():
+Built-in algorithms return JSON results:
 
 ```sql
--- PageRank (damping factor, iterations)
-SELECT cypher('RETURN pageRank(0.85, 20)');
+-- PageRank
+SELECT cypher('RETURN pageRank(0.85, 20)');           -- All nodes with scores
+SELECT cypher('RETURN topPageRank(10)');              -- Top 10 nodes
+SELECT cypher('RETURN personalizedPageRank([1,2])'); -- Seeded PageRank
 
--- Community detection via label propagation
-SELECT cypher('RETURN labelPropagation(10)');
-
--- Query community membership
-SELECT cypher('MATCH (n:Person) RETURN n.name, communityOf(n)');
+-- Community Detection (Label Propagation)
+SELECT cypher('RETURN labelPropagation(10)');         -- All community assignments
+SELECT cypher('RETURN communityOf(n)');               -- Single node's community
+SELECT cypher('RETURN communityMembers(1)');          -- Nodes in community 1
+SELECT cypher('RETURN communityCount()');             -- Number of communities
 
 -- Use results in SQL
 SELECT json_extract(value, '$.node_id') as id,
        json_extract(value, '$.score') as score
 FROM json_each(cypher('RETURN pageRank()'));
+```
+
+## Parameterized Queries
+
+Use parameters to prevent SQL injection:
+
+```sql
+-- Named parameters with $prefix
+SELECT cypher('MATCH (n:Person {name: $name}) RETURN n', '{"name": "Alice"}');
+
+-- Works with all operations
+SELECT cypher('CREATE (n:Person {name: $name, age: $age})', '{"name": "Bob", "age": 30}');
 ```
 
 ## Storage Model
@@ -78,14 +134,27 @@ GraphQLite uses a typed property graph model stored in regular SQLite tables. No
 pip install graphqlite
 ```
 
+**High-level Graph API** (recommended for most use cases):
 ```python
-from graphqlite import Connection
+from graphqlite import Graph
 
-conn = Connection(":memory:")
+g = Graph("my_graph.db")
+g.upsert_node("n1", {"name": "Alice"}, label="Person")
+g.upsert_edge("n1", "n2", {}, rel_type="KNOWS")
+print(g.pagerank())  # Built-in graph algorithms
+```
+
+**Low-level Cypher API** (for complex queries):
+```python
+from graphqlite import connect
+
+conn = connect(":memory:")
 conn.cypher("CREATE (n:Person {name: 'Alice'})")
 for row in conn.cypher("MATCH (n:Person) RETURN n.name"):
-    print(row[0])
+    print(row["n.name"])
 ```
+
+See [bindings/python/README.md](bindings/python/README.md) for full documentation.
 
 ### Rust
 
@@ -106,17 +175,17 @@ for row in conn.cypher("MATCH (n:Person) RETURN n.name")? {
 
 ## Examples
 
-The `examples/` directory contains tutorials organized by language:
+The `examples/` directory contains tutorials:
 
 ```bash
 # SQL tutorials
 sqlite3 < examples/sql/01_getting_started.sql
 
-# Python tutorial
+# Python examples
 python examples/python/knowledge_graph.py
 
-# Rust tutorial
-cd graphqlite-rs && cargo run --example knowledge_graph
+# Rust examples
+cd bindings/rust && cargo run --example basic
 ```
 
 ## Testing

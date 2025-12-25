@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphqlite = "0.0.0-alpha.1"
+graphqlite = "0.1.0-beta"
 ```
 
 ## Quick Start
