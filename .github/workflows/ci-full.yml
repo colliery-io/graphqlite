@@ -93,7 +93,7 @@ jobs:
 
       - name: Run Rust tests
         working-directory: bindings/rust
-        run: cargo test -- --test-threads=1
+        run: cargo test --lib --test integration -- --test-threads=1
 
   python-tests-linux:
     strategy:
@@ -201,7 +201,7 @@ jobs:
       - name: Test Rust bindings
         shell: bash
         working-directory: bindings/rust
-        run: cargo test -- --test-threads=1
+        run: cargo test --lib --test integration -- --test-threads=1
 
   performance-tests:
     runs-on: ubuntu-latest

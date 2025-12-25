@@ -198,7 +198,48 @@ make performance       # Performance benchmarks
 
 ## Performance
 
-Tested on graphs up to 500K nodes / 5M edges. Simple traversals complete in 1-2ms, aggregations in under 500ms, and graph algorithms (PageRank, label propagation) in 1-5 seconds depending on iteration count.
+Benchmarks on Apple M1 Max, testing insertion, traversal, and algorithm performance across graph topologies (uniform, normal distribution, power-law/scale-free):
+
+**Insertion** (nodes + edges)
+| Nodes | Edges | Time   | Rate   |
+|-------|-------|--------|--------|
+| 100K  | 500K  | 445ms  | 1.3M/s |
+| 500K  | 2.5M  | 2.30s  | 1.3M/s |
+| 1M    | 5.0M  | 5.16s  | 1.1M/s |
+
+**Traversal by topology** (1-hop and 2-hop query time)
+| Topology | Nodes | Edges | 1-hop | 2-hop |
+|----------|-------|-------|-------|-------|
+| chain    | 100K  | 99K   | <1ms  | <1ms  |
+| sparse   | 100K  | 500K  | <1ms  | <1ms  |
+| moderate | 100K  | 2.0M  | <1ms  | 2ms   |
+| dense    | 100K  | 5.0M  | <1ms  | 9ms   |
+| normal   | 100K  | 957K  | <1ms  | 1ms   |
+| powerlaw | 100K  | 242K  | <1ms  | <1ms  |
+| moderate | 500K  | 10.0M | 1ms   | 2ms   |
+| moderate | 1M    | 20.0M | <1ms  | 2ms   |
+
+**Graph algorithms**
+| Algorithm | Nodes | Edges | Time   |
+|-----------|-------|-------|--------|
+| PageRank  | 100K  | 500K  | 148ms  |
+| LabelProp | 100K  | 500K  | 154ms  |
+| PageRank  | 500K  | 2.5M  | 953ms  |
+| LabelProp | 500K  | 2.5M  | 811ms  |
+| PageRank  | 1M    | 5.0M  | 37.81s |
+| LabelProp | 1M    | 5.0M  | 40.21s |
+
+**Cypher queries**
+| Query     | G(N:100K, E:500K) | G(N:500K, E:2.5M) | G(N:1M, E:5M) |
+|-----------|-------------------|-------------------|---------------|
+| Lookup    | <1ms              | 1ms               | <1ms          |
+| 1-hop     | <1ms              | <1ms              | <1ms          |
+| 2-hop     | <1ms              | <1ms              | <1ms          |
+| 3-hop     | 1ms               | 1ms               | 1ms           |
+| Filter    | 341ms             | 1.98s             | 3.79s         |
+| MATCH all | 360ms             | 2.05s             | 3.98s         |
+
+Run `make performance` to benchmark on your hardware.
 
 ---
 

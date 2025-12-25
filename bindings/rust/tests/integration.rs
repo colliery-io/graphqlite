@@ -1,6 +1,6 @@
 //! Integration tests for GraphQLite Rust bindings.
 
-use graphqlite::{Connection, Error};
+use graphqlite::{escape_string, sanitize_rel_type, Connection, Error, Graph};
 use std::path::PathBuf;
 
 /// Get the path to the test extension, or skip if not found.
@@ -293,4 +293,209 @@ fn test_graph_algorithms() {
     // Label Propagation
     let results = conn.cypher("RETURN labelPropagation(5)").unwrap();
     assert!(!results.is_empty());
+}
+
+// =============================================================================
+// Graph API Tests
+// =============================================================================
+
+/// Create a test Graph, or skip if extension not available.
+fn test_graph() -> Option<Graph> {
+    let ext_path = get_extension_path()?;
+    let conn = Connection::open_with_extension(":memory:", ext_path).ok()?;
+    Some(Graph::from_connection(conn))
+}
+
+#[test]
+fn test_graph_upsert_node() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person")
+        .unwrap();
+
+    assert!(g.has_node("alice").unwrap());
+    assert!(!g.has_node("bob").unwrap());
+
+    let node = g.get_node("alice").unwrap();
+    assert!(node.is_some());
+}
+
+#[test]
+fn test_graph_upsert_edge() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+    g.upsert_edge("a", "b", [("weight", "10")], "CONNECTS")
+        .unwrap();
+
+    assert!(g.has_edge("a", "b").unwrap());
+    assert!(!g.has_edge("b", "a").unwrap()); // Directed edge
+}
+
+#[test]
+fn test_graph_stats() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("n1", [("v", "1")], "N").unwrap();
+    g.upsert_node("n2", [("v", "2")], "N").unwrap();
+    g.upsert_node("n3", [("v", "3")], "N").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("n1", "n2", empty, "E").unwrap();
+    g.upsert_edge("n2", "n3", empty, "E").unwrap();
+
+    let stats = g.stats().unwrap();
+    assert_eq!(stats.nodes, 3);
+    assert_eq!(stats.edges, 2);
+}
+
+#[test]
+fn test_graph_degree() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("hub", [("name", "Hub")], "Node").unwrap();
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+    g.upsert_node("c", [("name", "C")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("hub", "a", empty, "LINK").unwrap();
+    g.upsert_edge("hub", "b", empty, "LINK").unwrap();
+    g.upsert_edge("hub", "c", empty, "LINK").unwrap();
+
+    let degree = g.node_degree("hub").unwrap();
+    assert_eq!(degree, 3);
+}
+
+#[test]
+fn test_graph_neighbors() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("center", [("name", "Center")], "Node")
+        .unwrap();
+    g.upsert_node("n1", [("name", "N1")], "Node").unwrap();
+    g.upsert_node("n2", [("name", "N2")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("center", "n1", empty, "LINK").unwrap();
+    g.upsert_edge("n2", "center", empty, "LINK").unwrap();
+
+    let neighbors = g.get_neighbors("center").unwrap();
+    // At least one neighbor should be found (bidirectional matching)
+    assert!(!neighbors.is_empty());
+}
+
+#[test]
+fn test_graph_delete_node() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("temp", [("name", "Temp")], "Node").unwrap();
+    assert!(g.has_node("temp").unwrap());
+
+    g.delete_node("temp").unwrap();
+    assert!(!g.has_node("temp").unwrap());
+}
+
+#[test]
+fn test_graph_delete_edge() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("x", [("name", "X")], "Node").unwrap();
+    g.upsert_node("y", [("name", "Y")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("x", "y", empty, "REL").unwrap();
+    assert!(g.has_edge("x", "y").unwrap());
+
+    g.delete_edge("x", "y").unwrap();
+    assert!(!g.has_edge("x", "y").unwrap());
+}
+
+#[test]
+fn test_graph_query() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("test", [("name", "Test"), ("value", "42")], "Data")
+        .unwrap();
+
+    let result = g
+        .query("MATCH (n:Data) RETURN n.name, n.value")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].get::<String>("n.name").unwrap(), "Test");
+}
+
+#[test]
+fn test_graph_batch_nodes() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_nodes_batch([
+        ("n1", [("name", "Node1")], "Batch"),
+        ("n2", [("name", "Node2")], "Batch"),
+        ("n3", [("name", "Node3")], "Batch"),
+    ])
+    .unwrap();
+
+    let stats = g.stats().unwrap();
+    assert_eq!(stats.nodes, 3);
+}
+
+#[test]
+fn test_graph_api_algorithms() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create a small graph for algorithms
+    g.upsert_node("a", [("name", "A")], "Page").unwrap();
+    g.upsert_node("b", [("name", "B")], "Page").unwrap();
+    g.upsert_node("c", [("name", "C")], "Page").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("a", "b", empty, "LINKS").unwrap();
+    g.upsert_edge("a", "c", empty, "LINKS").unwrap();
+    g.upsert_edge("b", "c", empty, "LINKS").unwrap();
+
+    let ranks = g.pagerank(0.85, 10).unwrap();
+    assert!(!ranks.is_empty());
+
+    let communities = g.community_detection(5).unwrap();
+    assert!(!communities.is_empty());
+}
+
+#[test]
+fn test_utility_functions() {
+    // escape_string
+    assert_eq!(escape_string("hello"), "hello");
+    assert_eq!(escape_string("it's"), "it\\'s");
+    assert_eq!(escape_string("line\nbreak"), "line break");
+
+    // sanitize_rel_type
+    assert_eq!(sanitize_rel_type("KNOWS"), "KNOWS");
+    assert_eq!(sanitize_rel_type("has-items"), "has_items");
+    assert_eq!(sanitize_rel_type("CREATE"), "REL_CREATE");
 }

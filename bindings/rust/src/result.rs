@@ -1,30 +1,71 @@
 //! Result types for Cypher query results.
+//!
+//! This module provides types for working with Cypher query results:
+//!
+//! - [`CypherResult`] - A collection of rows returned from a query
+//! - [`Row`] - A single row with named columns
+//! - [`Value`] - A typed value that can be extracted from rows
+//!
+//! # Example
+//!
+//! ```no_run
+//! use graphqlite::Connection;
+//!
+//! let conn = Connection::open_in_memory()?;
+//! conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")?;
+//!
+//! let results = conn.cypher("MATCH (n:Person) RETURN n.name, n.age")?;
+//! for row in &results {
+//!     let name: String = row.get("n.name")?;
+//!     let age: i64 = row.get("n.age")?;
+//!     println!("{} is {} years old", name, age);
+//! }
+//! # Ok::<(), graphqlite::Error>(())
+//! ```
 
 use crate::Error;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-/// A value returned from a Cypher query.
-#[derive(Debug, Clone, PartialEq)]
+/// A dynamically-typed value returned from a Cypher query.
+///
+/// Cypher queries can return various types of values. This enum represents
+/// all possible value types and provides methods to inspect and extract them.
+///
+/// # Type Extraction
+///
+/// Use [`Row::get`] with a type parameter for type-safe extraction:
+///
+/// ```ignore
+/// let name: String = row.get("name")?;
+/// let age: i64 = row.get("age")?;
+/// let score: f64 = row.get("score")?;
+/// let active: bool = row.get("active")?;
+/// let maybe: Option<String> = row.get("nullable_field")?;
+/// ```
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
 pub enum Value {
-    /// Null value.
+    /// SQL/Cypher NULL value.
     Null,
-    /// Boolean value.
+    /// Boolean value (`true` or `false`).
     Bool(bool),
-    /// Integer value.
+    /// 64-bit signed integer.
     Integer(i64),
-    /// Floating-point value.
+    /// 64-bit floating-point number.
     Float(f64),
-    /// String value.
+    /// UTF-8 string.
     String(String),
-    /// Array of values.
+    /// Array of values (from Cypher list expressions or `collect()`).
     Array(Vec<Value>),
-    /// Object/map of values.
+    /// Object/map of values (from node/relationship properties).
     Object(HashMap<String, Value>),
 }
 
 impl Value {
-    /// Convert from serde_json Value.
+    /// Convert from a `serde_json::Value`.
+    ///
+    /// This is used internally when parsing Cypher query results.
     pub fn from_json(json: JsonValue) -> Self {
         match json {
             JsonValue::Null => Value::Null,
@@ -48,12 +89,14 @@ impl Value {
         }
     }
 
-    /// Check if the value is null.
+    /// Returns `true` if this value is [`Value::Null`].
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
-    /// Try to get as a boolean.
+    /// Returns the boolean value if this is a [`Value::Bool`].
+    ///
+    /// Returns `None` for other value types.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -61,7 +104,10 @@ impl Value {
         }
     }
 
-    /// Try to get as an integer.
+    /// Returns the integer value if this is a [`Value::Integer`].
+    ///
+    /// Returns `None` for other value types. For automatic conversion
+    /// from floats, use [`as_f64`](Self::as_f64) and cast.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Integer(i) => Some(*i),
@@ -69,7 +115,9 @@ impl Value {
         }
     }
 
-    /// Try to get as a float.
+    /// Returns the float value if this is a [`Value::Float`] or [`Value::Integer`].
+    ///
+    /// Integers are automatically converted to floats.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Float(f) => Some(*f),
@@ -78,7 +126,9 @@ impl Value {
         }
     }
 
-    /// Try to get as a string.
+    /// Returns a string slice if this is a [`Value::String`].
+    ///
+    /// Returns `None` for other value types.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
@@ -88,6 +138,19 @@ impl Value {
 }
 
 /// A single row from a Cypher query result.
+///
+/// Rows contain named columns that can be accessed by name using [`get`](Self::get)
+/// or [`get_value`](Self::get_value).
+///
+/// # Example
+///
+/// ```ignore
+/// for row in &results {
+///     let name: String = row.get("n.name")?;
+///     let age: i64 = row.get("n.age")?;
+///     println!("{}: {}", name, age);
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Row {
     columns: Vec<String>,
@@ -105,12 +168,31 @@ impl Row {
         Row { columns, values }
     }
 
-    /// Get a value by column name.
+    /// Get a raw [`Value`] by column name.
+    ///
+    /// Returns `None` if the column doesn't exist. For type-safe extraction,
+    /// prefer [`get`](Self::get).
     pub fn get_value(&self, column: &str) -> Option<&Value> {
         self.values.get(column)
     }
 
     /// Get a typed value by column name.
+    ///
+    /// This is the primary way to extract values from query results.
+    /// The type parameter determines how the value is converted.
+    ///
+    /// # Supported Types
+    ///
+    /// - `String` - for text values (null becomes empty string)
+    /// - `i64`, `i32` - for integers
+    /// - `f64` - for floats (integers auto-convert)
+    /// - `bool` - for booleans (SQLite's 1/0 auto-convert)
+    /// - `Option<T>` - for nullable values
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ColumnNotFound`] if the column doesn't exist,
+    /// or [`Error::TypeError`] if the value can't be converted.
     pub fn get<T: FromValue>(&self, column: &str) -> crate::Result<T> {
         let value = self.values.get(column).ok_or_else(|| {
             Error::ColumnNotFound(column.to_string())
@@ -118,20 +200,32 @@ impl Row {
         T::from_value(value)
     }
 
-    /// Get column names.
+    /// Get the column names in this row.
     pub fn columns(&self) -> &[String] {
         &self.columns
     }
 
-    /// Check if the row contains a column.
+    /// Check if the row contains a column with the given name.
     pub fn contains(&self, column: &str) -> bool {
         self.values.contains_key(column)
     }
 }
 
-/// Trait for converting from Value to typed values.
+/// Trait for converting from [`Value`] to typed Rust values.
+///
+/// This trait is implemented for common types and is used by [`Row::get`]
+/// to provide type-safe value extraction.
+///
+/// # Implementations
+///
+/// - `String` - extracts string values (null → empty string)
+/// - `i64` - extracts integers
+/// - `i32` - extracts integers (with truncation)
+/// - `f64` - extracts floats (integers auto-convert)
+/// - `bool` - extracts booleans (1/0 auto-convert)
+/// - `Option<T>` - wraps any type, returning `None` for null
 pub trait FromValue: Sized {
-    /// Convert from a Value reference.
+    /// Convert from a [`Value`] reference.
     fn from_value(value: &Value) -> crate::Result<Self>;
 }
 
@@ -214,7 +308,34 @@ impl<T: FromValue> FromValue for Option<T> {
     }
 }
 
-/// Result of a Cypher query.
+/// Result of a Cypher query, containing zero or more rows.
+///
+/// `CypherResult` implements `IntoIterator` so you can iterate over rows directly,
+/// and `Index<usize>` for direct row access.
+///
+/// # Example
+///
+/// ```no_run
+/// use graphqlite::Connection;
+///
+/// let conn = Connection::open_in_memory()?;
+/// let results = conn.cypher("MATCH (n) RETURN n.name")?;
+///
+/// // Check size
+/// println!("Found {} rows", results.len());
+///
+/// // Iterate over rows
+/// for row in &results {
+///     let name: String = row.get("n.name")?;
+///     println!("{}", name);
+/// }
+///
+/// // Direct access
+/// if !results.is_empty() {
+///     let first_name: String = results[0].get("n.name")?;
+/// }
+/// # Ok::<(), graphqlite::Error>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct CypherResult {
     rows: Vec<Row>,
@@ -222,7 +343,7 @@ pub struct CypherResult {
 }
 
 impl CypherResult {
-    /// Create an empty result.
+    /// Create an empty result with no rows or columns.
     pub fn empty() -> Self {
         CypherResult {
             rows: Vec::new(),
@@ -230,7 +351,9 @@ impl CypherResult {
         }
     }
 
-    /// Parse a JSON string into a CypherResult.
+    /// Parse a JSON string into a `CypherResult`.
+    ///
+    /// This is used internally when processing Cypher query output.
     pub fn from_json(json_str: &str) -> crate::Result<Self> {
         let trimmed = json_str.trim();
         if trimmed.is_empty() {
@@ -308,27 +431,29 @@ impl CypherResult {
         }
     }
 
-    /// Get the number of rows.
+    /// Returns the number of rows in the result.
     pub fn len(&self) -> usize {
         self.rows.len()
     }
 
-    /// Check if the result is empty.
+    /// Returns `true` if the result contains no rows.
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
-    /// Get column names.
+    /// Returns the column names from the query.
+    ///
+    /// Column names correspond to the `RETURN` clause expressions.
     pub fn columns(&self) -> &[String] {
         &self.columns
     }
 
-    /// Get a row by index.
+    /// Returns a reference to the row at the given index, or `None` if out of bounds.
     pub fn get(&self, index: usize) -> Option<&Row> {
         self.rows.get(index)
     }
 
-    /// Iterate over rows.
+    /// Returns an iterator over the rows.
     pub fn iter(&self) -> impl Iterator<Item = &Row> {
         self.rows.iter()
     }

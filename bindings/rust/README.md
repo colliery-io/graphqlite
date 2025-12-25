@@ -13,24 +13,52 @@ graphqlite = "0.1.0-beta"
 
 ## Quick Start
 
+### High-Level Graph API (Recommended)
+
+The `Graph` struct provides an ergonomic interface for common graph operations:
+
+```rust
+use graphqlite::Graph;
+
+fn main() -> graphqlite::Result<()> {
+    let g = Graph::open(":memory:")?;
+
+    // Add nodes
+    g.upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person")?;
+    g.upsert_node("bob", [("name", "Bob"), ("age", "25")], "Person")?;
+
+    // Add edge
+    g.upsert_edge("alice", "bob", [("since", "2020")], "KNOWS")?;
+
+    // Query
+    println!("{:?}", g.stats()?);           // GraphStats { nodes: 2, edges: 1 }
+    println!("{:?}", g.get_neighbors("alice")?);
+
+    // Graph algorithms
+    let ranks = g.pagerank(0.85, 20)?;
+    let communities = g.community_detection(10)?;
+
+    Ok(())
+}
+```
+
+### Low-Level Cypher API
+
+For complex queries or when you need full control:
+
 ```rust
 use graphqlite::Connection;
 
 fn main() -> graphqlite::Result<()> {
-    // Open a database
     let conn = Connection::open("graph.db")?;
 
-    // Create nodes
     conn.cypher("CREATE (a:Person {name: 'Alice', age: 30})")?;
     conn.cypher("CREATE (b:Person {name: 'Bob', age: 25})")?;
-
-    // Create relationships
     conn.cypher(r#"
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
     "#)?;
 
-    // Query the graph
     let results = conn.cypher("MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name")?;
     for row in &results {
         let a: String = row.get("a.name")?;
@@ -42,55 +70,111 @@ fn main() -> graphqlite::Result<()> {
 }
 ```
 
-## API
+## API Reference
 
-### `Connection::open(path)`
-
-Open a database file or in-memory database.
+### Graph
 
 ```rust
+use graphqlite::{Graph, graph};
+
+// Constructor
+let g = Graph::open("graph.db")?;
+let g = Graph::open(":memory:")?;
+let g = Graph::open_in_memory()?;
+
+// Or use the factory function
+let g = graph(":memory:")?;
+```
+
+#### Node Operations
+
+| Method | Description |
+|--------|-------------|
+| `upsert_node(id, props, label)` | Create or update a node |
+| `get_node(id)` | Get node by ID |
+| `has_node(id)` | Check if node exists |
+| `delete_node(id)` | Delete node and its edges |
+| `get_all_nodes(label)` | Get all nodes, optionally by label |
+
+#### Edge Operations
+
+| Method | Description |
+|--------|-------------|
+| `upsert_edge(src, dst, props, type)` | Create edge between nodes |
+| `get_edge(src, dst)` | Get edge properties |
+| `has_edge(src, dst)` | Check if edge exists |
+| `delete_edge(src, dst)` | Delete edge |
+| `get_all_edges()` | Get all edges |
+
+#### Graph Queries
+
+| Method | Description |
+|--------|-------------|
+| `node_degree(id)` | Count edges connected to node |
+| `get_neighbors(id)` | Get adjacent nodes |
+| `stats()` | Get node/edge counts |
+| `query(cypher)` | Execute raw Cypher query |
+
+#### Graph Algorithms
+
+| Method | Description |
+|--------|-------------|
+| `pagerank(damping, iterations)` | Run PageRank algorithm |
+| `community_detection(iterations)` | Community detection via label propagation |
+
+#### Batch Operations
+
+```rust
+// Batch insert nodes
+g.upsert_nodes_batch([
+    ("n1", [("name", "Node1")], "Type"),
+    ("n2", [("name", "Node2")], "Type"),
+])?;
+
+// Batch insert edges
+g.upsert_edges_batch([
+    ("n1", "n2", [("weight", "1.0")], "CONNECTS"),
+])?;
+```
+
+### Connection
+
+```rust
+use graphqlite::Connection;
+
 let conn = Connection::open("graph.db")?;
 let conn = Connection::open(":memory:")?;
 let conn = Connection::open_in_memory()?;
-```
 
-### `Connection::from_rusqlite(conn)`
-
-Wrap an existing rusqlite connection.
-
-```rust
+// Wrap existing rusqlite connection
 let sqlite_conn = rusqlite::Connection::open_in_memory()?;
 let conn = Connection::from_rusqlite(sqlite_conn)?;
 ```
 
-### `Connection::cypher(query)`
+#### Methods
 
-Execute a Cypher query.
+| Method | Description |
+|--------|-------------|
+| `cypher(query)` | Execute Cypher query, return results |
+| `execute(sql)` | Execute raw SQL |
+| `sqlite_connection()` | Access underlying rusqlite connection |
 
-```rust
-let results = conn.cypher("MATCH (n:Person) RETURN n.name, n.age")?;
-```
-
-### `CypherResult`
-
-Query results support iteration and indexing:
+### CypherResult
 
 ```rust
-// Iterate
+let results = conn.cypher("MATCH (n) RETURN n.name")?;
+
+results.len();           // Number of rows
+results.is_empty();      // Check if empty
+results.columns();       // Column names
+results[0];              // First row
+
 for row in &results {
     let name: String = row.get("n.name")?;
 }
-
-// Index access
-let first = &results[0];
-
-// Properties
-results.len();
-results.is_empty();
-results.columns();
 ```
 
-### `Row::get<T>(column)`
+### Row
 
 Type-safe value extraction:
 
@@ -100,6 +184,24 @@ let age: i64 = row.get("age")?;
 let score: f64 = row.get("score")?;
 let active: bool = row.get("active")?;
 let maybe: Option<String> = row.get("optional")?;
+```
+
+### Utility Functions
+
+```rust
+use graphqlite::{escape_string, sanitize_rel_type, CYPHER_RESERVED};
+
+// Escape strings for Cypher queries
+let safe = escape_string("it's");  // "it\\'s"
+
+// Sanitize relationship types
+let rel = sanitize_rel_type("has-items");  // "has_items"
+let rel = sanitize_rel_type("CREATE");     // "REL_CREATE"
+
+// Check reserved keywords
+if CYPHER_RESERVED.contains(&"MATCH") {
+    println!("MATCH is reserved");
+}
 ```
 
 ## Extension Path
