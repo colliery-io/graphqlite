@@ -434,3 +434,116 @@ def test_degree_centrality(g):
     assert by_user["dc3"]["out_degree"] == 0
     assert by_user["dc3"]["in_degree"] == 2
     assert by_user["dc3"]["degree"] == 2
+
+
+# =============================================================================
+# Rustworkx Export
+# =============================================================================
+
+def test_to_rustworkx(g):
+    rx = pytest.importorskip("rustworkx")
+
+    g.upsert_node("rx1", {"name": "RX1"}, label="Test")
+    g.upsert_node("rx2", {"name": "RX2"}, label="Test")
+    g.upsert_node("rx3", {"name": "RX3"}, label="Test")
+    g.upsert_edge("rx1", "rx2", {}, rel_type="CONNECTS")
+    g.upsert_edge("rx2", "rx3", {}, rel_type="CONNECTS")
+
+    G, node_map = g.to_rustworkx()
+
+    assert isinstance(G, rx.PyDiGraph)
+    assert G.num_nodes() == 3
+    assert G.num_edges() == 2
+    assert "rx1" in node_map
+    assert "rx2" in node_map
+    assert "rx3" in node_map
+
+
+def test_to_rustworkx_empty_graph(g):
+    rx = pytest.importorskip("rustworkx")
+
+    G, node_map = g.to_rustworkx()
+
+    assert isinstance(G, rx.PyDiGraph)
+    assert G.num_nodes() == 0
+    assert G.num_edges() == 0
+    assert node_map == {}
+
+
+def test_to_rustworkx_preserves_properties(g):
+    rx = pytest.importorskip("rustworkx")
+
+    g.upsert_node("prop1", {"name": "PropNode", "value": 42}, label="Test")
+
+    G, node_map = g.to_rustworkx()
+
+    assert "prop1" in node_map
+    node_idx = node_map["prop1"]
+    node_data = G[node_idx]
+    assert node_data["name"] == "PropNode"
+    assert node_data["value"] == 42
+
+
+# =============================================================================
+# Leiden Community Detection
+# =============================================================================
+
+def test_leiden_communities(g):
+    pytest.importorskip("rustworkx")
+    pytest.importorskip("graspologic")
+
+    # Create a graph with clear community structure
+    # Community 1: ld1, ld2, ld3 (densely connected)
+    g.upsert_node("ld1", {"name": "LD1"}, label="Test")
+    g.upsert_node("ld2", {"name": "LD2"}, label="Test")
+    g.upsert_node("ld3", {"name": "LD3"}, label="Test")
+    g.upsert_edge("ld1", "ld2", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld2", "ld3", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld1", "ld3", {}, rel_type="CONNECTS")
+
+    # Community 2: ld4, ld5, ld6 (densely connected)
+    g.upsert_node("ld4", {"name": "LD4"}, label="Test")
+    g.upsert_node("ld5", {"name": "LD5"}, label="Test")
+    g.upsert_node("ld6", {"name": "LD6"}, label="Test")
+    g.upsert_edge("ld4", "ld5", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld5", "ld6", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld4", "ld6", {}, rel_type="CONNECTS")
+
+    # Single weak link between communities
+    g.upsert_edge("ld3", "ld4", {}, rel_type="BRIDGE")
+
+    communities = g.leiden_communities(random_seed=42)
+
+    assert isinstance(communities, list)
+    assert len(communities) > 0
+
+    # Check structure of results
+    for c in communities:
+        assert "node_id" in c
+        assert "community" in c
+
+
+def test_leiden_communities_empty_graph(g):
+    pytest.importorskip("rustworkx")
+    pytest.importorskip("graspologic")
+
+    communities = g.leiden_communities()
+
+    assert communities == []
+
+
+def test_leiden_communities_with_resolution(g):
+    pytest.importorskip("rustworkx")
+    pytest.importorskip("graspologic")
+
+    g.upsert_node("r1", {"name": "R1"}, label="Test")
+    g.upsert_node("r2", {"name": "R2"}, label="Test")
+    g.upsert_edge("r1", "r2", {}, rel_type="CONNECTS")
+
+    # Higher resolution should produce more communities
+    communities = g.leiden_communities(resolution=2.0, random_seed=42)
+
+    assert isinstance(communities, list)
+    node_ids = {c["node_id"] for c in communities}
+    assert "r1" in node_ids
+    assert "r2" in node_ids

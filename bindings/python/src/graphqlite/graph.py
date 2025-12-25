@@ -608,6 +608,124 @@ class Graph:
 
         return degrees
 
+    def to_rustworkx(self):
+        """
+        Export the graph to a rustworkx PyDiGraph.
+
+        Requires rustworkx to be installed: pip install rustworkx
+
+        Returns:
+            Tuple of (rustworkx.PyDiGraph, dict mapping node_id to index)
+
+        Raises:
+            ImportError: If rustworkx is not installed
+        """
+        try:
+            import rustworkx as rx
+        except ImportError:
+            raise ImportError(
+                "rustworkx is required for to_rustworkx(). "
+                "Install with: pip install rustworkx"
+            )
+
+        G = rx.PyDiGraph()
+        node_id_to_index = {}
+
+        # Add nodes with their properties
+        nodes = self.get_all_nodes()
+        for node in nodes:
+            if isinstance(node, dict):
+                props = node.get("properties", {})
+                node_id = props.get("id")
+                if node_id:
+                    idx = G.add_node({"id": node_id, **props})
+                    node_id_to_index[node_id] = idx
+
+        # Add edges
+        edges = self.get_all_edges()
+        for edge in edges:
+            source = edge.get("source")
+            target = edge.get("target")
+            if source and target and source in node_id_to_index and target in node_id_to_index:
+                edge_props = edge.get("r", {})
+                if isinstance(edge_props, dict):
+                    props = edge_props.get("properties", {})
+                else:
+                    props = {}
+                G.add_edge(node_id_to_index[source], node_id_to_index[target], props)
+
+        return G, node_id_to_index
+
+    def leiden_communities(
+        self,
+        resolution: float = 1.0,
+        random_seed: Optional[int] = None
+    ) -> list[dict]:
+        """
+        Run Leiden community detection.
+
+        Uses graspologic's leiden algorithm for high-quality community detection.
+
+        Requires graspologic: pip install graphqlite[leiden]
+
+        Args:
+            resolution: Resolution parameter (higher = more communities)
+            random_seed: Random seed for reproducibility
+
+        Returns:
+            List of dicts with 'node_id', 'community'
+
+        Example:
+            >>> communities = graph.leiden_communities(resolution=1.0)
+            >>> for c in communities:
+            ...     print(f"{c['node_id']}: community {c['community']}")
+        """
+        try:
+            from graspologic.partition import leiden
+        except ImportError:
+            raise ImportError(
+                "graspologic is required for leiden_communities(). "
+                "Install with: pip install graphqlite[leiden]"
+            )
+
+        # Get all edges as weighted edge list (source, target, weight)
+        edges = self.get_all_edges()
+
+        if not edges:
+            return []
+
+        # Build edge list in graspologic format: list of (source, target, weight) tuples
+        edge_list = []
+        nodes = set()
+        for edge in edges:
+            source = edge.get("source")
+            target = edge.get("target")
+            if source and target:
+                nodes.add(source)
+                nodes.add(target)
+                # Use weight 1.0 for unweighted graphs
+                edge_list.append((source, target, 1.0))
+
+        if not edge_list:
+            return []
+
+        # Run Leiden - returns dict mapping node to community
+        partitions = leiden(
+            edge_list,
+            resolution=resolution,
+            random_seed=random_seed
+        )
+
+        # Convert results
+        results = []
+        for node_id, community in partitions.items():
+            results.append({
+                "node_id": str(node_id),
+                "community": int(community)
+            })
+
+        return results
+
     # -------------------------------------------------------------------------
     # Batch Operations
     # -------------------------------------------------------------------------
