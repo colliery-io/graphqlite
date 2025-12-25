@@ -3,7 +3,35 @@
 //! This crate provides Rust bindings for GraphQLite, allowing you to use
 //! Cypher graph queries in SQLite databases.
 //!
-//! # Example
+//! # High-Level Graph API
+//!
+//! The [`Graph`] struct provides an ergonomic interface for common graph operations:
+//!
+//! ```no_run
+//! use graphqlite::Graph;
+//!
+//! let g = Graph::open(":memory:")?;
+//!
+//! // Add nodes
+//! g.upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person")?;
+//! g.upsert_node("bob", [("name", "Bob"), ("age", "25")], "Person")?;
+//!
+//! // Add edge
+//! g.upsert_edge("alice", "bob", [("since", "2020")], "KNOWS")?;
+//!
+//! // Query
+//! println!("{:?}", g.stats()?);
+//! println!("{:?}", g.get_neighbors("alice")?);
+//!
+//! // Graph algorithms
+//! let ranks = g.pagerank(0.85, 20)?;
+//! let communities = g.community_detection(10)?;
+//! # Ok::<(), graphqlite::Error>(())
+//! ```
+//!
+//! # Low-Level Cypher API
+//!
+//! The [`Connection`] struct provides direct Cypher query access:
 //!
 //! ```no_run
 //! use graphqlite::Connection;
@@ -23,10 +51,15 @@
 
 mod connection;
 mod error;
+mod graph;
 mod result;
 
 pub use connection::Connection;
 pub use error::Error;
+pub use graph::{
+    escape_string, graph, sanitize_rel_type, CommunityResult, Graph, GraphStats, PageRankResult,
+    CYPHER_RESERVED,
+};
 pub use result::{CypherResult, Row, Value};
 
 /// Result type for GraphQLite operations.
