@@ -1,31 +1,21 @@
 /*
- * Graph Algorithms - High-performance C implementations
+ * Graph Algorithms - Core Infrastructure
  *
- * Provides PageRank, Label Propagation, and other graph algorithms
- * using CSR (Compressed Sparse Row) format for efficiency.
+ * CSR graph loading, algorithm detection, and result management.
+ * Individual algorithms are in separate files:
+ * - graph_algo_pagerank.c
+ * - graph_algo_community.c
+ * - graph_algo_paths.c
+ * - graph_algo_centrality.c
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 
 #include "executor/graph_algorithms.h"
+#include "executor/graph_algo_internal.h"
 #include "parser/cypher_ast.h"
-#include "parser/cypher_debug.h"
-
-/* Hash table size for node ID lookups - should be prime and larger than expected node count */
-#define HASH_TABLE_SIZE 1000003
-
-/* Simple hash function for integer keys */
-static inline int hash_int(int key, int size)
-{
-    unsigned int h = (unsigned int)key;
-    h = ((h >> 16) ^ h) * 0x45d9f3b;
-    h = ((h >> 16) ^ h) * 0x45d9f3b;
-    h = (h >> 16) ^ h;
-    return (int)(h % (unsigned int)size);
-}
 
 /* Free CSR graph */
 void csr_graph_free(csr_graph *graph)
@@ -66,7 +56,6 @@ csr_graph* csr_graph_load(sqlite3 *db)
         return NULL;
     }
 
-    /* First pass: count nodes */
     int node_capacity = 1024;
     graph->node_ids = malloc(node_capacity * sizeof(int));
     if (!graph->node_ids) {
@@ -106,19 +95,17 @@ csr_graph* csr_graph_load(sqlite3 *db)
         return NULL;
     }
 
-    /* Initialize hash table with -1 (empty) */
     for (int i = 0; i < graph->node_idx_size; i++) {
         graph->node_idx[i] = -1;
     }
 
-    /* Insert node IDs into hash table (linear probing) */
     for (int i = 0; i < graph->node_count; i++) {
         int node_id = graph->node_ids[i];
         int h = hash_int(node_id, graph->node_idx_size);
         while (graph->node_idx[h] != -1) {
             h = (h + 1) % graph->node_idx_size;
         }
-        graph->node_idx[h] = i;  /* Store index, not node_id */
+        graph->node_idx[h] = i;
     }
 
     /* Step 1b: Load user-defined 'id' property for each node */
@@ -133,7 +120,6 @@ csr_graph* csr_graph_load(sqlite3 *db)
                 int node_id = sqlite3_column_int(stmt, 0);
                 const char *user_id = (const char*)sqlite3_column_text(stmt, 1);
 
-                /* Find internal index for this node_id */
                 int h = hash_int(node_id, graph->node_idx_size);
                 while (graph->node_idx[h] != -1) {
                     int idx = graph->node_idx[h];
@@ -148,7 +134,7 @@ csr_graph* csr_graph_load(sqlite3 *db)
         }
     }
 
-    /* Step 2: Count edges per node (for row_ptr) */
+    /* Step 2: Count edges per node */
     graph->row_ptr = calloc(graph->node_count + 1, sizeof(int));
     graph->in_row_ptr = calloc(graph->node_count + 1, sizeof(int));
     if (!graph->row_ptr || !graph->in_row_ptr) {
@@ -156,7 +142,6 @@ csr_graph* csr_graph_load(sqlite3 *db)
         return NULL;
     }
 
-    /* Count outgoing and incoming edges per node */
     rc = sqlite3_prepare_v2(db, "SELECT source_id, target_id FROM edges", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         csr_graph_free(graph);
@@ -168,14 +153,12 @@ csr_graph* csr_graph_load(sqlite3 *db)
         int source_id = sqlite3_column_int(stmt, 0);
         int target_id = sqlite3_column_int(stmt, 1);
 
-        /* Find source index */
         int h = hash_int(source_id, graph->node_idx_size);
         while (graph->node_idx[h] != -1 && graph->node_ids[graph->node_idx[h]] != source_id) {
             h = (h + 1) % graph->node_idx_size;
         }
         int source_idx = (graph->node_idx[h] != -1) ? graph->node_idx[h] : -1;
 
-        /* Find target index */
         h = hash_int(target_id, graph->node_idx_size);
         while (graph->node_idx[h] != -1 && graph->node_ids[graph->node_idx[h]] != target_id) {
             h = (h + 1) % graph->node_idx_size;
@@ -183,8 +166,8 @@ csr_graph* csr_graph_load(sqlite3 *db)
         int target_idx = (graph->node_idx[h] != -1) ? graph->node_idx[h] : -1;
 
         if (source_idx >= 0 && target_idx >= 0) {
-            graph->row_ptr[source_idx + 1]++;    /* Outgoing from source */
-            graph->in_row_ptr[target_idx + 1]++; /* Incoming to target */
+            graph->row_ptr[source_idx + 1]++;
+            graph->in_row_ptr[target_idx + 1]++;
             graph->edge_count++;
         }
     }
@@ -206,7 +189,6 @@ csr_graph* csr_graph_load(sqlite3 *db)
         return NULL;
     }
 
-    /* Temporary counters for filling arrays */
     int *out_count = calloc(graph->node_count, sizeof(int));
     int *in_count = calloc(graph->node_count, sizeof(int));
     if (!out_count || !in_count) {
@@ -216,7 +198,6 @@ csr_graph* csr_graph_load(sqlite3 *db)
         return NULL;
     }
 
-    /* Second pass: fill edge arrays */
     rc = sqlite3_prepare_v2(db, "SELECT source_id, target_id FROM edges", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         free(out_count);
@@ -229,7 +210,6 @@ csr_graph* csr_graph_load(sqlite3 *db)
         int source_id = sqlite3_column_int(stmt, 0);
         int target_id = sqlite3_column_int(stmt, 1);
 
-        /* Find indices */
         int h = hash_int(source_id, graph->node_idx_size);
         while (graph->node_idx[h] != -1 && graph->node_ids[graph->node_idx[h]] != source_id) {
             h = (h + 1) % graph->node_idx_size;
@@ -243,11 +223,9 @@ csr_graph* csr_graph_load(sqlite3 *db)
         int target_idx = (graph->node_idx[h] != -1) ? graph->node_idx[h] : -1;
 
         if (source_idx >= 0 && target_idx >= 0) {
-            /* Outgoing edge: source -> target */
             int out_pos = graph->row_ptr[source_idx] + out_count[source_idx]++;
             graph->col_idx[out_pos] = target_idx;
 
-            /* Incoming edge: target <- source */
             int in_pos = graph->in_row_ptr[target_idx] + in_count[target_idx]++;
             graph->in_col_idx[in_pos] = source_idx;
         }
@@ -270,12 +248,14 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
     params.damping = 0.85;
     params.iterations = 20;
     params.top_k = 0;
+    params.source_id = NULL;
+    params.target_id = NULL;
+    params.weight_prop = NULL;
 
     if (!return_clause || !return_clause->items || return_clause->items->count == 0) {
         return params;
     }
 
-    /* Check first return item for a function call */
     cypher_return_item *item = (cypher_return_item *)return_clause->items->items[0];
     if (!item || !item->expr || item->expr->type != AST_NODE_FUNCTION_CALL) {
         return params;
@@ -286,11 +266,10 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         return params;
     }
 
-    /* Check for pageRank */
+    /* PageRank */
     if (strcasecmp(func->function_name, "pageRank") == 0) {
         params.type = GRAPH_ALGO_PAGERANK;
 
-        /* Parse arguments: pageRank() or pageRank(damping) or pageRank(damping, iterations) */
         if (func->args && func->args->count >= 1) {
             cypher_literal *damp_lit = (cypher_literal *)func->args->items[0];
             if (damp_lit && damp_lit->base.type == AST_NODE_LITERAL) {
@@ -313,12 +292,11 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         return params;
     }
 
-    /* Check for topPageRank */
+    /* topPageRank */
     if (strcasecmp(func->function_name, "topPageRank") == 0) {
         params.type = GRAPH_ALGO_PAGERANK;
-        params.top_k = 10;  /* Default */
+        params.top_k = 10;
 
-        /* Parse arguments: topPageRank(k) or topPageRank(k, damping, iterations) */
         if (func->args && func->args->count >= 1) {
             cypher_literal *k_lit = (cypher_literal *)func->args->items[0];
             if (k_lit && k_lit->base.type == AST_NODE_LITERAL &&
@@ -350,12 +328,11 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         return params;
     }
 
-    /* Check for labelPropagation */
+    /* Label Propagation */
     if (strcasecmp(func->function_name, "labelPropagation") == 0) {
         params.type = GRAPH_ALGO_LABEL_PROPAGATION;
-        params.iterations = 10;  /* Default for label propagation */
+        params.iterations = 10;
 
-        /* Parse arguments: labelPropagation() or labelPropagation(iterations) */
         if (func->args && func->args->count >= 1) {
             cypher_literal *iter_lit = (cypher_literal *)func->args->items[0];
             if (iter_lit && iter_lit->base.type == AST_NODE_LITERAL &&
@@ -365,6 +342,38 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
                 if (params.iterations > 100) params.iterations = 100;
             }
         }
+        return params;
+    }
+
+    /* Shortest Path (Dijkstra) */
+    if (strcasecmp(func->function_name, "dijkstra") == 0) {
+        params.type = GRAPH_ALGO_DIJKSTRA;
+
+        if (func->args && func->args->count >= 2) {
+            cypher_literal *src_lit = (cypher_literal *)func->args->items[0];
+            if (src_lit && src_lit->base.type == AST_NODE_LITERAL &&
+                src_lit->literal_type == LITERAL_STRING) {
+                params.source_id = strdup(src_lit->value.string);
+            }
+            cypher_literal *tgt_lit = (cypher_literal *)func->args->items[1];
+            if (tgt_lit && tgt_lit->base.type == AST_NODE_LITERAL &&
+                tgt_lit->literal_type == LITERAL_STRING) {
+                params.target_id = strdup(tgt_lit->value.string);
+            }
+        }
+        if (func->args && func->args->count >= 3) {
+            cypher_literal *weight_lit = (cypher_literal *)func->args->items[2];
+            if (weight_lit && weight_lit->base.type == AST_NODE_LITERAL &&
+                weight_lit->literal_type == LITERAL_STRING) {
+                params.weight_prop = strdup(weight_lit->value.string);
+            }
+        }
+        return params;
+    }
+
+    /* Degree Centrality */
+    if (strcasecmp(func->function_name, "degreeCentrality") == 0) {
+        params.type = GRAPH_ALGO_DEGREE_CENTRALITY;
         return params;
     }
 
@@ -378,440 +387,4 @@ void graph_algo_result_free(graph_algo_result *result)
     free(result->error_message);
     free(result->json_result);
     free(result);
-}
-
-/* Comparison function for sorting PageRank results */
-typedef struct {
-    int node_id;
-    const char *user_id;  /* User-defined 'id' property (may be NULL) */
-    double score;
-} pr_result;
-
-static int compare_pr_desc(const void *a, const void *b)
-{
-    double diff = ((pr_result *)b)->score - ((pr_result *)a)->score;
-    if (diff > 0) return 1;
-    if (diff < 0) return -1;
-    return 0;
-}
-
-/*
- * Execute PageRank algorithm (optimized)
- *
- * Formula: PR(n) = (1-d)/N + d * SUM(PR(m)/out_degree(m)) for all m -> n
- *
- * Optimizations:
- * - Uses float instead of double (2x memory bandwidth)
- * - Pre-computes 1/out_degree to avoid division in inner loop
- * - Early convergence detection (stops if max change < 1e-6)
- * - Push-based approach for better cache locality on outgoing edges
- */
-graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations, int top_k)
-{
-    graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
-    if (!result) return NULL;
-
-    CYPHER_DEBUG("Executing C-based PageRank: damping=%.2f, iterations=%d, top_k=%d",
-                 damping, iterations, top_k);
-
-    /* Load graph into CSR format */
-    csr_graph *graph = csr_graph_load(db);
-    if (!graph) {
-        /* Empty graph - return empty array (not an error) */
-        result->success = true;
-        result->json_result = strdup("[]");
-        return result;
-    }
-
-    int n = graph->node_count;
-    float dampf = (float)damping;
-
-    /* Allocate PageRank arrays - use float for 2x memory bandwidth */
-    float *pr = malloc(n * sizeof(float));
-    float *pr_new = malloc(n * sizeof(float));
-    float *inv_out_degree = malloc(n * sizeof(float));  /* Pre-computed 1/out_degree */
-
-    if (!pr || !pr_new || !inv_out_degree) {
-        free(pr);
-        free(pr_new);
-        free(inv_out_degree);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    /* Pre-compute inverse out-degrees (avoids division in inner loop) */
-    for (int i = 0; i < n; i++) {
-        int out_deg = graph->row_ptr[i + 1] - graph->row_ptr[i];
-        inv_out_degree[i] = (out_deg > 0) ? (1.0f / out_deg) : 0.0f;
-    }
-
-    /* Initialize PageRank: uniform distribution */
-    float init_pr = 1.0f / n;
-    for (int i = 0; i < n; i++) {
-        pr[i] = init_pr;
-    }
-
-    /* PageRank iterations with convergence detection */
-    float teleport = (1.0f - dampf) / n;
-    float convergence_threshold = 1e-6f;
-    int actual_iters = 0;
-
-    for (int iter = 0; iter < iterations; iter++) {
-        actual_iters++;
-
-        /* Initialize new PR with teleport probability */
-        for (int i = 0; i < n; i++) {
-            pr_new[i] = teleport;
-        }
-
-        /* Push-based: each node distributes its rank to neighbors */
-        for (int i = 0; i < n; i++) {
-            float contribution = dampf * pr[i] * inv_out_degree[i];
-            int out_start = graph->row_ptr[i];
-            int out_end = graph->row_ptr[i + 1];
-
-            for (int j = out_start; j < out_end; j++) {
-                int target = graph->col_idx[j];
-                pr_new[target] += contribution;
-            }
-        }
-
-        /* Check convergence and swap */
-        float max_diff = 0.0f;
-        for (int i = 0; i < n; i++) {
-            float diff = pr_new[i] - pr[i];
-            if (diff < 0) diff = -diff;
-            if (diff > max_diff) max_diff = diff;
-        }
-
-        /* Swap arrays */
-        float *tmp = pr;
-        pr = pr_new;
-        pr_new = tmp;
-
-        /* Early termination if converged */
-        if (max_diff < convergence_threshold) {
-            CYPHER_DEBUG("PageRank converged at iteration %d (max_diff=%.2e)", iter, max_diff);
-            break;
-        }
-    }
-
-    CYPHER_DEBUG("PageRank completed in %d iterations", actual_iters);
-
-    /* Build results array for sorting */
-    pr_result *results = malloc(n * sizeof(pr_result));
-    if (!results) {
-        free(pr);
-        free(pr_new);
-        free(inv_out_degree);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    for (int i = 0; i < n; i++) {
-        results[i].node_id = graph->node_ids[i];
-        results[i].user_id = graph->user_ids ? graph->user_ids[i] : NULL;
-        results[i].score = (double)pr[i];  /* Convert back to double for output */
-    }
-
-    /* Sort by score descending */
-    qsort(results, n, sizeof(pr_result), compare_pr_desc);
-
-    /* Determine how many results to return */
-    int result_count = (top_k > 0 && top_k < n) ? top_k : n;
-
-    /* Build JSON output */
-    size_t json_capacity = 64 + result_count * 64;
-    char *json = malloc(json_capacity);
-    if (!json) {
-        free(results);
-        free(pr);
-        free(pr_new);
-        free(inv_out_degree);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    strcpy(json, "[");
-    size_t json_len = 1;
-
-    for (int i = 0; i < result_count; i++) {
-        char entry[512];
-        int entry_len;
-        if (results[i].user_id) {
-            entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"user_id\":\"%s\",\"score\":%.10g}",
-                                 (i > 0) ? "," : "",
-                                 results[i].node_id,
-                                 results[i].user_id,
-                                 results[i].score);
-        } else {
-            entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"user_id\":null,\"score\":%.10g}",
-                                 (i > 0) ? "," : "",
-                                 results[i].node_id,
-                                 results[i].score);
-        }
-
-        if (json_len + entry_len >= json_capacity - 2) {
-            json_capacity *= 2;
-            json = realloc(json, json_capacity);
-            if (!json) break;
-        }
-
-        strcat(json + json_len, entry);
-        json_len += entry_len;
-    }
-
-    strcat(json, "]");
-
-    /* Cleanup */
-    free(results);
-    free(pr);
-    free(pr_new);
-    free(inv_out_degree);
-    csr_graph_free(graph);
-
-    result->success = true;
-    result->json_result = json;
-
-    CYPHER_DEBUG("PageRank completed: %d results", result_count);
-
-    return result;
-}
-
-/*
- * Execute Label Propagation algorithm (optimized)
- *
- * Each node starts with its own label, then iteratively adopts
- * the most common label among its neighbors.
- *
- * Optimizations:
- * - Uses a counting array instead of O(d^2) nested loops for label counting
- * - Only counts labels that actually appear in neighbors (sparse counting)
- * - Early termination when no changes occur
- */
-graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
-{
-    graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
-    if (!result) return NULL;
-
-    CYPHER_DEBUG("Executing C-based Label Propagation: iterations=%d", iterations);
-
-    /* Load graph into CSR format */
-    csr_graph *graph = csr_graph_load(db);
-    if (!graph) {
-        /* Empty graph - return empty array (not an error) */
-        result->success = true;
-        result->json_result = strdup("[]");
-        return result;
-    }
-
-    int n = graph->node_count;
-
-    /* Allocate label arrays */
-    int *labels = malloc(n * sizeof(int));
-    int *new_labels = malloc(n * sizeof(int));
-
-    if (!labels || !new_labels) {
-        free(labels);
-        free(new_labels);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    /* Initialize: each node has its own label (its index) */
-    for (int i = 0; i < n; i++) {
-        labels[i] = i;
-    }
-
-    /* Allocate label counting array - O(n) space but O(d) per node usage */
-    int *label_counts = calloc(n, sizeof(int));
-    int *touched_labels = malloc(n * sizeof(int));  /* Track which labels we've incremented */
-
-    if (!label_counts || !touched_labels) {
-        free(labels);
-        free(new_labels);
-        free(label_counts);
-        free(touched_labels);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    /* Label propagation iterations - O(E) per iteration instead of O(E*d) */
-    for (int iter = 0; iter < iterations; iter++) {
-        int changes = 0;
-
-        for (int i = 0; i < n; i++) {
-            int in_start = graph->in_row_ptr[i];
-            int in_end = graph->in_row_ptr[i + 1];
-            int out_start = graph->row_ptr[i];
-            int out_end = graph->row_ptr[i + 1];
-
-            int neighbor_count = (in_end - in_start) + (out_end - out_start);
-
-            if (neighbor_count == 0) {
-                new_labels[i] = labels[i];
-                continue;
-            }
-
-            /* Count labels using counting array - O(d) instead of O(d^2) */
-            int touched_count = 0;
-
-            /* Count incoming neighbor labels */
-            for (int j = in_start; j < in_end; j++) {
-                int label = labels[graph->in_col_idx[j]];
-                if (label_counts[label] == 0) {
-                    touched_labels[touched_count++] = label;
-                }
-                label_counts[label]++;
-            }
-
-            /* Count outgoing neighbor labels */
-            for (int j = out_start; j < out_end; j++) {
-                int label = labels[graph->col_idx[j]];
-                if (label_counts[label] == 0) {
-                    touched_labels[touched_count++] = label;
-                }
-                label_counts[label]++;
-            }
-
-            /* Find best label (highest count, tie-break by lowest label) */
-            int best_label = labels[i];
-            int best_count = 0;
-
-            for (int t = 0; t < touched_count; t++) {
-                int label = touched_labels[t];
-                int count = label_counts[label];
-                if (count > best_count || (count == best_count && label < best_label)) {
-                    best_count = count;
-                    best_label = label;
-                }
-            }
-
-            /* Reset only touched labels (sparse reset) */
-            for (int t = 0; t < touched_count; t++) {
-                label_counts[touched_labels[t]] = 0;
-            }
-
-            new_labels[i] = best_label;
-            if (new_labels[i] != labels[i]) changes++;
-        }
-
-        /* Swap arrays */
-        int *tmp = labels;
-        labels = new_labels;
-        new_labels = tmp;
-
-        CYPHER_DEBUG("Label propagation iter %d: %d changes", iter, changes);
-
-        /* Early termination if converged */
-        if (changes == 0) break;
-    }
-
-    free(label_counts);
-    free(touched_labels);
-
-    /* Count communities and collect results */
-    /* Map labels to community IDs and count sizes */
-    int *community_sizes = calloc(n, sizeof(int));
-    int *label_to_community = malloc(n * sizeof(int));
-
-    if (!community_sizes || !label_to_community) {
-        free(labels);
-        free(new_labels);
-        free(community_sizes);
-        free(label_to_community);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    for (int i = 0; i < n; i++) {
-        label_to_community[i] = -1;
-    }
-
-    int num_communities = 0;
-    for (int i = 0; i < n; i++) {
-        int label = labels[i];
-        if (label_to_community[label] < 0) {
-            label_to_community[label] = num_communities++;
-        }
-        community_sizes[label_to_community[label]]++;
-    }
-
-    CYPHER_DEBUG("Label propagation found %d communities", num_communities);
-
-    /* Build JSON output: array of {node_id, community_id} objects */
-    size_t json_capacity = 64 + n * 48;
-    char *json = malloc(json_capacity);
-    if (!json) {
-        free(labels);
-        free(new_labels);
-        free(community_sizes);
-        free(label_to_community);
-        csr_graph_free(graph);
-        result->success = false;
-        result->error_message = strdup("Memory allocation failed");
-        return result;
-    }
-
-    strcpy(json, "[");
-    size_t json_len = 1;
-
-    for (int i = 0; i < n; i++) {
-        char entry[512];
-        int community_id = label_to_community[labels[i]];
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
-        int entry_len;
-
-        if (user_id) {
-            entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"user_id\":\"%s\",\"community\":%d}",
-                                 (i > 0) ? "," : "",
-                                 graph->node_ids[i],
-                                 user_id,
-                                 community_id);
-        } else {
-            entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"user_id\":null,\"community\":%d}",
-                                 (i > 0) ? "," : "",
-                                 graph->node_ids[i],
-                                 community_id);
-        }
-
-        if (json_len + entry_len >= json_capacity - 2) {
-            json_capacity *= 2;
-            json = realloc(json, json_capacity);
-            if (!json) break;
-        }
-
-        strcat(json + json_len, entry);
-        json_len += entry_len;
-    }
-
-    strcat(json, "]");
-
-    /* Cleanup */
-    free(labels);
-    free(new_labels);
-    free(community_sizes);
-    free(label_to_community);
-    csr_graph_free(graph);
-
-    result->success = true;
-    result->json_result = json;
-
-    return result;
 }

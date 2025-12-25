@@ -515,6 +515,99 @@ class Graph:
 
         return communities
 
+    def shortest_path(
+        self,
+        source_id: str,
+        target_id: str,
+        weight_property: Optional[str] = None
+    ) -> dict:
+        """
+        Find the shortest path between two nodes using Dijkstra's algorithm.
+
+        Args:
+            source_id: Source node's id property value
+            target_id: Target node's id property value
+            weight_property: Optional edge property to use as weight
+                           (if None, uses unweighted/hop count)
+
+        Returns:
+            Dict with 'path' (list of node ids), 'distance', and 'found' (bool)
+
+        Example:
+            >>> result = graph.shortest_path("alice", "carol")
+            >>> print(result)
+            {'path': ['alice', 'bob', 'carol'], 'distance': 2, 'found': True}
+        """
+        esc_source = self._escape(source_id)
+        esc_target = self._escape(target_id)
+
+        if weight_property:
+            esc_weight = self._escape(weight_property)
+            query = f'RETURN dijkstra("{esc_source}", "{esc_target}", "{esc_weight}")'
+        else:
+            query = f'RETURN dijkstra("{esc_source}", "{esc_target}")'
+
+        result = self._conn.cypher(query)
+
+        if len(result) == 0:
+            return {"path": [], "distance": None, "found": False}
+
+        # Result comes as a single row with the JSON object
+        row = result[0]
+
+        # Handle nested column_0 structure from algorithm return
+        if "column_0" in row:
+            data = row["column_0"]
+            if isinstance(data, dict):
+                return {
+                    "path": data.get("path", []),
+                    "distance": data.get("distance"),
+                    "found": data.get("found", False)
+                }
+
+        # Direct access if already unpacked
+        return {
+            "path": row.get("path", []),
+            "distance": row.get("distance"),
+            "found": row.get("found", False)
+        }
+
+    def degree_centrality(self) -> list[dict]:
+        """
+        Calculate degree centrality for all nodes.
+
+        Returns the in-degree, out-degree, and total degree for each node.
+
+        Returns:
+            List of dicts with 'node_id', 'user_id', 'in_degree',
+            'out_degree', 'degree'
+
+        Example:
+            >>> results = graph.degree_centrality()
+            >>> for node in results:
+            ...     print(f"{node['user_id']}: {node['degree']} connections")
+        """
+        result = self._conn.cypher("RETURN degreeCentrality()")
+
+        degrees = []
+        for row in result:
+            node_id = row.get("node_id")
+            user_id = row.get("user_id")
+            in_degree = row.get("in_degree")
+            out_degree = row.get("out_degree")
+            degree = row.get("degree")
+
+            if node_id is not None:
+                degrees.append({
+                    "node_id": str(node_id),
+                    "user_id": user_id,
+                    "in_degree": int(in_degree) if in_degree is not None else 0,
+                    "out_degree": int(out_degree) if out_degree is not None else 0,
+                    "degree": int(degree) if degree is not None else 0
+                })
+
+        return degrees
+
     # -------------------------------------------------------------------------
     # Batch Operations
     # -------------------------------------------------------------------------

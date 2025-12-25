@@ -357,3 +357,80 @@ def test_community_detection(g):
     # Check user_ids are present
     user_ids = {c["user_id"] for c in communities}
     assert user_ids == {"cd1", "cd2"}
+
+
+def test_shortest_path(g):
+    # Create a simple path: sp1 -> sp2 -> sp3
+    g.upsert_node("sp1", {"name": "SP1"})
+    g.upsert_node("sp2", {"name": "SP2"})
+    g.upsert_node("sp3", {"name": "SP3"})
+    g.upsert_edge("sp1", "sp2", {})
+    g.upsert_edge("sp2", "sp3", {})
+
+    result = g.shortest_path("sp1", "sp3")
+    assert isinstance(result, dict)
+    assert result["found"] is True
+    assert result["distance"] == 2
+    assert result["path"] == ["sp1", "sp2", "sp3"]
+
+
+def test_shortest_path_no_path(g):
+    # Create disconnected nodes
+    g.upsert_node("iso1", {"name": "ISO1"})
+    g.upsert_node("iso2", {"name": "ISO2"})
+    # No edge between them
+
+    result = g.shortest_path("iso1", "iso2")
+    assert isinstance(result, dict)
+    assert result["found"] is False
+    assert result["path"] == []
+    assert result["distance"] is None
+
+
+def test_shortest_path_same_node(g):
+    g.upsert_node("same1", {"name": "Same"})
+
+    result = g.shortest_path("same1", "same1")
+    assert result["found"] is True
+    assert result["distance"] == 0
+    assert result["path"] == ["same1"]
+
+
+def test_degree_centrality(g):
+    # Create a simple graph: dc1 -> dc2 -> dc3, dc1 -> dc3
+    g.upsert_node("dc1", {"name": "DC1"})
+    g.upsert_node("dc2", {"name": "DC2"})
+    g.upsert_node("dc3", {"name": "DC3"})
+    g.upsert_edge("dc1", "dc2", {})
+    g.upsert_edge("dc2", "dc3", {})
+    g.upsert_edge("dc1", "dc3", {})
+
+    degrees = g.degree_centrality()
+    assert isinstance(degrees, list)
+    assert len(degrees) == 3
+
+    # Check structure
+    for d in degrees:
+        assert "node_id" in d
+        assert "user_id" in d
+        assert "in_degree" in d
+        assert "out_degree" in d
+        assert "degree" in d
+
+    # Check specific values by user_id
+    by_user = {d["user_id"]: d for d in degrees}
+
+    # dc1: out=2, in=0, total=2
+    assert by_user["dc1"]["out_degree"] == 2
+    assert by_user["dc1"]["in_degree"] == 0
+    assert by_user["dc1"]["degree"] == 2
+
+    # dc2: out=1, in=1, total=2
+    assert by_user["dc2"]["out_degree"] == 1
+    assert by_user["dc2"]["in_degree"] == 1
+    assert by_user["dc2"]["degree"] == 2
+
+    # dc3: out=0, in=2, total=2
+    assert by_user["dc3"]["out_degree"] == 0
+    assert by_user["dc3"]["in_degree"] == 2
+    assert by_user["dc3"]["degree"] == 2

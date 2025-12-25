@@ -488,6 +488,78 @@ fn test_graph_api_algorithms() {
 }
 
 #[test]
+fn test_graph_shortest_path() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create a path: sp1 -> sp2 -> sp3
+    g.upsert_node("sp1", [("name", "SP1")], "Node").unwrap();
+    g.upsert_node("sp2", [("name", "SP2")], "Node").unwrap();
+    g.upsert_node("sp3", [("name", "SP3")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("sp1", "sp2", empty, "CONNECTS").unwrap();
+    g.upsert_edge("sp2", "sp3", empty, "CONNECTS").unwrap();
+
+    // Test finding a path
+    let result = g.shortest_path("sp1", "sp3", None).unwrap();
+    assert!(result.found);
+    assert_eq!(result.distance, Some(2.0));
+    assert_eq!(result.path, vec!["sp1", "sp2", "sp3"]);
+
+    // Test same node
+    let result = g.shortest_path("sp1", "sp1", None).unwrap();
+    assert!(result.found);
+    assert_eq!(result.distance, Some(0.0));
+
+    // Test no path (reverse direction)
+    let result = g.shortest_path("sp3", "sp1", None).unwrap();
+    assert!(!result.found);
+    assert!(result.path.is_empty());
+}
+
+#[test]
+fn test_graph_degree_centrality() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create graph: dc1 -> dc2 -> dc3, dc1 -> dc3
+    g.upsert_node("dc1", [("name", "DC1")], "Node").unwrap();
+    g.upsert_node("dc2", [("name", "DC2")], "Node").unwrap();
+    g.upsert_node("dc3", [("name", "DC3")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("dc1", "dc2", empty, "CONNECTS").unwrap();
+    g.upsert_edge("dc2", "dc3", empty, "CONNECTS").unwrap();
+    g.upsert_edge("dc1", "dc3", empty, "CONNECTS").unwrap();
+
+    let degrees = g.degree_centrality().unwrap();
+    assert_eq!(degrees.len(), 3);
+
+    // Find each node's result
+    let dc1 = degrees.iter().find(|d| d.user_id.as_deref() == Some("dc1")).unwrap();
+    let dc2 = degrees.iter().find(|d| d.user_id.as_deref() == Some("dc2")).unwrap();
+    let dc3 = degrees.iter().find(|d| d.user_id.as_deref() == Some("dc3")).unwrap();
+
+    // dc1: out=2, in=0
+    assert_eq!(dc1.out_degree, 2);
+    assert_eq!(dc1.in_degree, 0);
+    assert_eq!(dc1.degree, 2);
+
+    // dc2: out=1, in=1
+    assert_eq!(dc2.out_degree, 1);
+    assert_eq!(dc2.in_degree, 1);
+    assert_eq!(dc2.degree, 2);
+
+    // dc3: out=0, in=2
+    assert_eq!(dc3.out_degree, 0);
+    assert_eq!(dc3.in_degree, 2);
+    assert_eq!(dc3.degree, 2);
+}
+
+#[test]
 fn test_utility_functions() {
     // escape_string
     assert_eq!(escape_string("hello"), "hello");

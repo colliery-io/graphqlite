@@ -123,7 +123,11 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/executor_merge.c \
 	$(EXECUTOR_DIR)/executor_match.c \
 	$(EXECUTOR_DIR)/agtype.c \
-	$(EXECUTOR_DIR)/graph_algorithms.c
+	$(EXECUTOR_DIR)/graph_algorithms.c \
+	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
+	$(EXECUTOR_DIR)/graph_algo_community.c \
+	$(EXECUTOR_DIR)/graph_algo_paths.c \
+	$(EXECUTOR_DIR)/graph_algo_centrality.c
 
 TRANSFORM_OBJS = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.o)
 TRANSFORM_OBJS_COV = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.cov.o)
@@ -157,6 +161,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_merge.c \
 	$(TEST_DIR)/test_executor_pagerank.c \
 	$(TEST_DIR)/test_executor_label_propagation.c \
+	$(TEST_DIR)/test_executor_dijkstra.c \
+	$(TEST_DIR)/test_executor_degree_centrality.c \
 	$(TEST_DIR)/test_executor_params.c \
 	$(TEST_DIR)/test_output_format.c
 

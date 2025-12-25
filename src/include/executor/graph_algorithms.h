@@ -47,7 +47,9 @@ void csr_graph_free(csr_graph *graph);
 typedef enum {
     GRAPH_ALGO_NONE = 0,
     GRAPH_ALGO_PAGERANK,
-    GRAPH_ALGO_LABEL_PROPAGATION
+    GRAPH_ALGO_LABEL_PROPAGATION,
+    GRAPH_ALGO_DIJKSTRA,
+    GRAPH_ALGO_DEGREE_CENTRALITY
 } graph_algo_type;
 
 typedef struct {
@@ -55,6 +57,9 @@ typedef struct {
     double damping;       /* For PageRank (default 0.85) */
     int iterations;       /* Number of iterations */
     int top_k;            /* For topPageRank - return top k nodes (0 = all) */
+    char *source_id;      /* For Dijkstra - source node user ID */
+    char *target_id;      /* For Dijkstra - target node user ID */
+    char *weight_prop;    /* For Dijkstra - optional edge weight property */
 } graph_algo_params;
 
 /* Check if RETURN clause contains a graph algorithm call and extract parameters */
@@ -63,6 +68,8 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause);
 /* Algorithm implementations */
 graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations, int top_k);
 graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations);
+graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const char *target_id, const char *weight_prop);
+graph_algo_result* execute_degree_centrality(sqlite3 *db);
 
 /* Result management */
 void graph_algo_result_free(graph_algo_result *result);

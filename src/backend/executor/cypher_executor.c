@@ -373,6 +373,21 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                                     algo_result = execute_label_propagation(executor->db,
                                                                             algo_params.iterations);
                                     break;
+                                case GRAPH_ALGO_DIJKSTRA:
+                                    CYPHER_DEBUG("Executing C-based Dijkstra");
+                                    algo_result = execute_dijkstra(executor->db,
+                                                                   algo_params.source_id,
+                                                                   algo_params.target_id,
+                                                                   algo_params.weight_prop);
+                                    /* Free strdup'd strings */
+                                    free(algo_params.source_id);
+                                    free(algo_params.target_id);
+                                    free(algo_params.weight_prop);
+                                    break;
+                                case GRAPH_ALGO_DEGREE_CENTRALITY:
+                                    CYPHER_DEBUG("Executing C-based Degree Centrality");
+                                    algo_result = execute_degree_centrality(executor->db);
+                                    break;
                                 default:
                                     break;
                             }

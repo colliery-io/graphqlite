@@ -57,8 +57,8 @@ mod result;
 pub use connection::Connection;
 pub use error::Error;
 pub use graph::{
-    escape_string, graph, sanitize_rel_type, CommunityResult, Graph, GraphStats, PageRankResult,
-    CYPHER_RESERVED,
+    escape_string, graph, sanitize_rel_type, CommunityResult, DegreeCentralityResult, Graph,
+    GraphStats, PageRankResult, ShortestPathResult, CYPHER_RESERVED,
 };
 pub use result::{CypherResult, Row, Value};
 

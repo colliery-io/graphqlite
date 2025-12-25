@@ -115,6 +115,36 @@ pub struct CommunityResult {
     pub community: i64,
 }
 
+/// Shortest path result from Dijkstra's algorithm.
+///
+/// Returned by [`Graph::shortest_path`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortestPathResult {
+    /// List of node IDs along the path (source to target).
+    pub path: Vec<String>,
+    /// Total distance/cost of the path (`None` if no path found).
+    pub distance: Option<f64>,
+    /// Whether a path was found.
+    pub found: bool,
+}
+
+/// Degree centrality result for a single node.
+///
+/// Returned as part of the vector from [`Graph::degree_centrality`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DegreeCentralityResult {
+    /// Internal node identifier.
+    pub node_id: String,
+    /// User-defined node identifier (from the `id` property).
+    pub user_id: Option<String>,
+    /// Number of incoming edges.
+    pub in_degree: i64,
+    /// Number of outgoing edges.
+    pub out_degree: i64,
+    /// Total degree (in + out).
+    pub degree: i64,
+}
+
 /// High-level graph operations.
 ///
 /// Provides ergonomic node/edge CRUD, graph queries, and algorithm wrappers
@@ -750,6 +780,190 @@ impl Graph {
         }
 
         Ok(communities)
+    }
+
+    /// Find the shortest path between two nodes using Dijkstra's algorithm.
+    ///
+    /// Returns the path as a list of node IDs along with the total distance.
+    /// If no path exists, returns `found: false` with an empty path.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_id` - ID of the source node
+    /// * `target_id` - ID of the target node
+    /// * `weight_property` - Optional edge property to use as weight.
+    ///   If `None`, uses unweighted edges (hop count).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// // ... add nodes and edges ...
+    /// let result = g.shortest_path("alice", "carol", None)?;
+    /// if result.found {
+    ///     println!("Path: {:?}, Distance: {:?}", result.path, result.distance);
+    /// }
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn shortest_path(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        weight_property: Option<&str>,
+    ) -> Result<ShortestPathResult> {
+        let esc_source = escape_string(source_id);
+        let esc_target = escape_string(target_id);
+
+        let query = match weight_property {
+            Some(wp) => format!(
+                "RETURN dijkstra(\"{}\", \"{}\", \"{}\")",
+                esc_source, esc_target, escape_string(wp)
+            ),
+            None => format!("RETURN dijkstra(\"{}\", \"{}\")", esc_source, esc_target),
+        };
+
+        let result = self.conn.cypher(&query)?;
+
+        if result.is_empty() {
+            return Ok(ShortestPathResult {
+                path: Vec::new(),
+                distance: None,
+                found: false,
+            });
+        }
+
+        // Result comes as a single row with the JSON object in column_0
+        let row = &result[0];
+
+        // Try to get from column_0 (algorithm return format)
+        if let Some(Value::Object(obj)) = row.get_value("column_0") {
+            let path = match obj.get("path") {
+                Some(Value::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::String(s) => Some(s.clone()),
+                        Value::Integer(i) => Some(i.to_string()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+            let distance = match obj.get("distance") {
+                Some(Value::Float(f)) => Some(*f),
+                Some(Value::Integer(i)) => Some(*i as f64),
+                _ => None,
+            };
+
+            let found = match obj.get("found") {
+                Some(Value::Bool(b)) => *b,
+                _ => false,
+            };
+
+            return Ok(ShortestPathResult {
+                path,
+                distance,
+                found,
+            });
+        }
+
+        // Fallback: try direct access
+        let path = match row.get_value("path") {
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Integer(i) => Some(i.to_string()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let distance = match row.get_value("distance") {
+            Some(Value::Float(f)) => Some(*f),
+            Some(Value::Integer(i)) => Some(*i as f64),
+            _ => None,
+        };
+
+        let found = match row.get_value("found") {
+            Some(Value::Bool(b)) => *b,
+            _ => false,
+        };
+
+        Ok(ShortestPathResult {
+            path,
+            distance,
+            found,
+        })
+    }
+
+    /// Calculate degree centrality for all nodes.
+    ///
+    /// Returns the in-degree, out-degree, and total degree for each node
+    /// in the graph.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// // ... add nodes and edges ...
+    /// let degrees = g.degree_centrality()?;
+    /// for d in &degrees {
+    ///     println!("{}: {} connections", d.node_id, d.degree);
+    /// }
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn degree_centrality(&self) -> Result<Vec<DegreeCentralityResult>> {
+        let result = self.conn.cypher("RETURN degreeCentrality()")?;
+
+        let mut degrees = Vec::new();
+        for row in result.iter() {
+            let node_id = row.get_value("node_id");
+            let user_id = row.get_value("user_id");
+            let in_degree = row.get_value("in_degree");
+            let out_degree = row.get_value("out_degree");
+            let degree = row.get_value("degree");
+
+            let nid = match node_id {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Integer(i)) => i.to_string(),
+                _ => continue,
+            };
+            let uid = match user_id {
+                Some(Value::String(u)) => Some(u.clone()),
+                _ => None,
+            };
+            let in_deg = match in_degree {
+                Some(Value::Integer(i)) => *i,
+                Some(Value::Float(f)) => *f as i64,
+                _ => 0,
+            };
+            let out_deg = match out_degree {
+                Some(Value::Integer(i)) => *i,
+                Some(Value::Float(f)) => *f as i64,
+                _ => 0,
+            };
+            let deg = match degree {
+                Some(Value::Integer(i)) => *i,
+                Some(Value::Float(f)) => *f as i64,
+                _ => 0,
+            };
+
+            degrees.push(DegreeCentralityResult {
+                node_id: nid,
+                user_id: uid,
+                in_degree: in_deg,
+                out_degree: out_deg,
+                degree: deg,
+            });
+        }
+
+        Ok(degrees)
     }
 
     // -------------------------------------------------------------------------
