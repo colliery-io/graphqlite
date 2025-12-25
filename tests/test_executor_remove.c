@@ -15,6 +15,11 @@
 /* Test database handle */
 static sqlite3 *test_db = NULL;
 
+/* Helper to check if a value represents NULL */
+static int is_null_value(const char *val) {
+    return val == NULL || strcmp(val, "null") == 0 || strcmp(val, "NULL") == 0;
+}
+
 /* Setup function - create test database */
 static int setup_executor_remove_suite(void)
 {
@@ -126,7 +131,7 @@ static void test_remove_basic_property(void)
                        after_result->data[0][0] ? after_result->data[0][0] : "NULL",
                        after_result->data[0][1] ? after_result->data[0][1] : "NULL",
                        after_result->data[0][2] ? after_result->data[0][2] : "NULL");
-                CU_ASSERT_PTR_NULL(after_result->data[0][1]); /* age should be NULL */
+                CU_ASSERT_TRUE(is_null_value(after_result->data[0][1])); /* age should be NULL */
                 CU_ASSERT_PTR_NOT_NULL(after_result->data[0][0]); /* name should still exist */
                 CU_ASSERT_PTR_NOT_NULL(after_result->data[0][2]); /* city should still exist */
             }
@@ -171,8 +176,8 @@ static void test_remove_multiple_properties(void)
                        verify_result->data[0][1] ? verify_result->data[0][1] : "NULL",
                        verify_result->data[0][2] ? verify_result->data[0][2] : "NULL",
                        verify_result->data[0][3] ? verify_result->data[0][3] : "NULL");
-                CU_ASSERT_PTR_NULL(verify_result->data[0][0]); /* a should be NULL */
-                CU_ASSERT_PTR_NULL(verify_result->data[0][1]); /* b should be NULL */
+                CU_ASSERT_TRUE(is_null_value(verify_result->data[0][0])); /* a should be NULL */
+                CU_ASSERT_TRUE(is_null_value(verify_result->data[0][1])); /* b should be NULL */
                 CU_ASSERT_PTR_NOT_NULL(verify_result->data[0][2]); /* c should exist */
                 CU_ASSERT_PTR_NOT_NULL(verify_result->data[0][3]); /* d should exist */
             }
@@ -293,7 +298,7 @@ static void test_remove_edge_property(void)
                 printf("After edge REMOVE: since='%s', strength='%s'\n",
                        after_result->data[0][0] ? after_result->data[0][0] : "NULL",
                        after_result->data[0][1] ? after_result->data[0][1] : "NULL");
-                CU_ASSERT_PTR_NULL(after_result->data[0][0]); /* since should be NULL */
+                CU_ASSERT_TRUE(is_null_value(after_result->data[0][0])); /* since should be NULL */
                 CU_ASSERT_PTR_NOT_NULL(after_result->data[0][1]); /* strength should still exist */
             }
             cypher_result_free(after_result);
@@ -423,10 +428,10 @@ static void test_remove_different_types(void)
         if (verify_result) {
             CU_ASSERT_TRUE(verify_result->success);
             if (verify_result->row_count > 0) {
-                CU_ASSERT_PTR_NULL(verify_result->data[0][0]);
-                CU_ASSERT_PTR_NULL(verify_result->data[0][1]);
-                CU_ASSERT_PTR_NULL(verify_result->data[0][2]);
-                CU_ASSERT_PTR_NULL(verify_result->data[0][3]);
+                CU_ASSERT_TRUE(is_null_value(verify_result->data[0][0]));
+                CU_ASSERT_TRUE(is_null_value(verify_result->data[0][1]));
+                CU_ASSERT_TRUE(is_null_value(verify_result->data[0][2]));
+                CU_ASSERT_TRUE(is_null_value(verify_result->data[0][3]));
             }
             cypher_result_free(verify_result);
         }

@@ -300,10 +300,13 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                 sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
                 free(json_result);
             }
+        } else if (result->column_count > 0) {
+            /* Query with RETURN clause but zero rows - return empty array */
+            sqlite3_result_text(context, "[]", -1, SQLITE_STATIC);
         } else {
-            /* Modification query - show statistics */
+            /* Modification query without RETURN - show statistics */
             char response[256];
-            snprintf(response, sizeof(response), "Query executed successfully - nodes created: %d, relationships created: %d", 
+            snprintf(response, sizeof(response), "Query executed successfully - nodes created: %d, relationships created: %d",
                     result->nodes_created, result->relationships_created);
             sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
         }
