@@ -118,6 +118,7 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/executor_helpers.c \
 	$(EXECUTOR_DIR)/executor_delete.c \
 	$(EXECUTOR_DIR)/executor_set.c \
+	$(EXECUTOR_DIR)/executor_remove.c \
 	$(EXECUTOR_DIR)/executor_create.c \
 	$(EXECUTOR_DIR)/executor_foreach.c \
 	$(EXECUTOR_DIR)/executor_merge.c \
@@ -185,6 +186,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_knn.c \
 	$(TEST_DIR)/test_executor_eigenvector.c \
 	$(TEST_DIR)/test_executor_apsp.c \
+	$(TEST_DIR)/test_executor_remove.c \
 	$(TEST_DIR)/test_executor_params.c \
 	$(TEST_DIR)/test_output_format.c
 

@@ -123,6 +123,7 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     cypher_with *with_clause = NULL;
                     cypher_unwind *unwind_clause = NULL;
                     cypher_foreach *foreach_clause = NULL;
+                    cypher_remove *remove_clause = NULL;
 
                     /* Scan for clause types */
                     for (int i = 0; i < query->clauses->count; i++) {
@@ -154,6 +155,9 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                                 break;
                             case AST_NODE_FOREACH:
                                 foreach_clause = (cypher_foreach*)clause;
+                                break;
+                            case AST_NODE_REMOVE:
+                                remove_clause = (cypher_remove*)clause;
                                 break;
                             default:
                                 CYPHER_DEBUG("Found clause type: %d", clause->type);
@@ -301,6 +305,12 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         /* MATCH ... DELETE pattern */
                         CYPHER_DEBUG("Executing MATCH+DELETE query");
                         if (execute_match_delete_query(executor, match_clause, delete_clause, result) < 0) {
+                            return result; /* Error already set */
+                        }
+                    } else if (match_clause && remove_clause) {
+                        /* MATCH ... REMOVE pattern */
+                        CYPHER_DEBUG("Executing MATCH+REMOVE query");
+                        if (execute_match_remove_query(executor, match_clause, remove_clause, result) < 0) {
                             return result; /* Error already set */
                         }
                     } else if (match_clause && create_clause) {

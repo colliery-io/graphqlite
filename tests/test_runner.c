@@ -39,6 +39,7 @@ int init_executor_similarity_suite(void);
 int init_executor_knn_suite(void);
 int init_executor_eigenvector_suite(void);
 int init_executor_apsp_suite(void);
+int init_executor_remove_suite(void);
 int register_params_tests(void);
 int init_output_format_suite(void);
 
@@ -251,6 +252,12 @@ int main(void)
 
     if (init_executor_apsp_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add executor APSP suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_remove_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor REMOVE suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

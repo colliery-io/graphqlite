@@ -102,6 +102,10 @@ int execute_match_create_return_query(cypher_executor *executor, cypher_match *m
 int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result);
 int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cypher_merge *merge, cypher_result *result);
+int execute_match_remove_query(cypher_executor *executor, cypher_match *match, cypher_remove *remove, cypher_result *result);
+
+/* REMOVE operations with variable map */
+int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, variable_map *var_map, cypher_result *result);
 
 /* Pattern matching functions */
 int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern);

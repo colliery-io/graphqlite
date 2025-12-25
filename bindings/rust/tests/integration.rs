@@ -691,6 +691,223 @@ fn test_graph_scc_empty() {
     assert!(components.is_empty());
 }
 
+// =============================================================================
+// REMOVE Clause Tests
+// =============================================================================
+
+#[test]
+fn test_remove_node_property() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create node with properties
+    conn.cypher("CREATE (n:RemoveTest {name: 'Alice', age: 30, city: 'NYC'})")
+        .unwrap();
+
+    // Verify properties exist
+    let results = conn
+        .cypher("MATCH (n:RemoveTest) RETURN n.name, n.age, n.city")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+    assert_eq!(results[0].get::<i64>("n.age").unwrap(), 30);
+    assert_eq!(results[0].get::<String>("n.city").unwrap(), "NYC");
+
+    // Remove age property
+    conn.cypher("MATCH (n:RemoveTest) REMOVE n.age").unwrap();
+
+    // Verify age is removed (null)
+    let results = conn
+        .cypher("MATCH (n:RemoveTest) RETURN n.name, n.age, n.city")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+    assert!(results[0].get::<Option<i64>>("n.age").unwrap().is_none());
+    assert_eq!(results[0].get::<String>("n.city").unwrap(), "NYC");
+}
+
+#[test]
+fn test_remove_multiple_properties() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create node with multiple properties
+    conn.cypher("CREATE (n:RemoveMultiTest {a: 1, b: 2, c: 3, d: 4})")
+        .unwrap();
+
+    // Remove multiple properties in one query
+    conn.cypher("MATCH (n:RemoveMultiTest) REMOVE n.a, n.b")
+        .unwrap();
+
+    // Verify a and b are removed, c and d remain
+    let results = conn
+        .cypher("MATCH (n:RemoveMultiTest) RETURN n.a, n.b, n.c, n.d")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].get::<Option<i64>>("n.a").unwrap().is_none());
+    assert!(results[0].get::<Option<i64>>("n.b").unwrap().is_none());
+    assert_eq!(results[0].get::<i64>("n.c").unwrap(), 3);
+    assert_eq!(results[0].get::<i64>("n.d").unwrap(), 4);
+}
+
+#[test]
+fn test_remove_label() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create node with multiple labels - use unique label to avoid conflicts
+    conn.cypher("CREATE (n:RemoveLabelTest:RemoveLabelEmp:RemoveLabelMgr {name: 'Bob'})")
+        .unwrap();
+
+    // Verify all labels exist
+    let results = conn
+        .cypher("MATCH (n:RemoveLabelMgr {name: 'Bob'}) RETURN n.name")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Bob");
+
+    // Remove Manager label
+    conn.cypher("MATCH (n:RemoveLabelTest {name: 'Bob'}) REMOVE n:RemoveLabelMgr")
+        .unwrap();
+
+    // Verify label is removed by checking that a query for the removed label returns no results
+    // For empty MATCH results, we may get a success message or empty array
+    let results = conn
+        .cypher("MATCH (n:RemoveLabelMgr {name: 'Bob'}) RETURN n.name")
+        .unwrap();
+
+    // After removing RemoveLabelMgr, this should not find any nodes
+    // Either empty or just a success message without actual data
+    let has_bob = results.iter().any(|row| {
+        row.get::<String>("n.name").map(|n| n == "Bob").unwrap_or(false)
+    });
+    assert!(!has_bob, "Should not find Bob with RemoveLabelMgr after removal");
+
+    // Verify the node still exists with remaining labels
+    let results = conn
+        .cypher("MATCH (n:RemoveLabelTest {name: 'Bob'}) RETURN n.name")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Bob");
+}
+
+#[test]
+fn test_remove_edge_property() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create relationship with properties
+    conn.cypher(
+        "CREATE (a:RemoveEdgeTest {name: 'A'})-[r:KNOWS {since: 2020, strength: 0.9}]->(b:RemoveEdgeTest {name: 'B'})",
+    )
+    .unwrap();
+
+    // Verify edge properties exist
+    let results = conn
+        .cypher("MATCH (a:RemoveEdgeTest)-[r:KNOWS]->(b:RemoveEdgeTest) RETURN r.since, r.strength")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<i64>("r.since").unwrap(), 2020);
+
+    // Remove since property
+    conn.cypher("MATCH (a:RemoveEdgeTest)-[r:KNOWS]->(b:RemoveEdgeTest) REMOVE r.since")
+        .unwrap();
+
+    // Verify since is removed, strength remains
+    let results = conn
+        .cypher("MATCH (a:RemoveEdgeTest)-[r:KNOWS]->(b:RemoveEdgeTest) RETURN r.since, r.strength")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].get::<Option<i64>>("r.since").unwrap().is_none());
+    // strength is a float, check it exists
+    let strength = results[0].get::<f64>("r.strength").unwrap();
+    assert!((strength - 0.9).abs() < 0.01);
+}
+
+#[test]
+fn test_remove_with_where() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create multiple nodes
+    conn.cypher("CREATE (a:RemoveWhereTest {name: 'Alice', age: 30, status: 'active'})")
+        .unwrap();
+    conn.cypher("CREATE (b:RemoveWhereTest {name: 'Bob', age: 25, status: 'active'})")
+        .unwrap();
+    conn.cypher("CREATE (c:RemoveWhereTest {name: 'Charlie', age: 35, status: 'active'})")
+        .unwrap();
+
+    // Remove status only from nodes where age > 28
+    conn.cypher("MATCH (n:RemoveWhereTest) WHERE n.age > 28 REMOVE n.status")
+        .unwrap();
+
+    // Verify: Alice (30) and Charlie (35) should have status removed, Bob (25) should keep it
+    let results = conn
+        .cypher("MATCH (n:RemoveWhereTest) RETURN n.name, n.status ORDER BY n.name")
+        .unwrap();
+    assert_eq!(results.len(), 3);
+
+    // Alice: status should be null
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+    assert!(results[0].get::<Option<String>>("n.status").unwrap().is_none());
+
+    // Bob: status should still exist
+    assert_eq!(results[1].get::<String>("n.name").unwrap(), "Bob");
+    assert_eq!(
+        results[1].get::<String>("n.status").unwrap(),
+        "active"
+    );
+
+    // Charlie: status should be null
+    assert_eq!(results[2].get::<String>("n.name").unwrap(), "Charlie");
+    assert!(results[2].get::<Option<String>>("n.status").unwrap().is_none());
+}
+
+#[test]
+fn test_remove_nonexistent_property() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create node with only one property
+    conn.cypher("CREATE (n:RemoveNonexistTest {name: 'Test'})")
+        .unwrap();
+
+    // Remove a property that doesn't exist - should succeed without error
+    let result = conn.cypher("MATCH (n:RemoveNonexistTest) REMOVE n.nonexistent");
+    assert!(result.is_ok());
+
+    // Original property should still exist
+    let results = conn
+        .cypher("MATCH (n:RemoveNonexistTest) RETURN n.name")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Test");
+}
+
+#[test]
+fn test_remove_no_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Remove property on non-existent nodes - should succeed (0 rows affected)
+    let result = conn.cypher("MATCH (n:NonExistentLabel) REMOVE n.property");
+    assert!(result.is_ok());
+}
+
 #[test]
 fn test_utility_functions() {
     // escape_string

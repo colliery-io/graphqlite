@@ -300,3 +300,141 @@ def test_parameterized_sql_injection_safe(db):
     names = [row["n.name"] for row in all_results]
     assert "Alice" in names
     assert "Bob" in names
+
+
+# =============================================================================
+# REMOVE Clause Tests
+# =============================================================================
+
+def test_remove_node_property(db):
+    """Test REMOVE clause for removing a node property."""
+    db.cypher("CREATE (n:RemoveTest {name: 'Alice', age: 30, city: 'NYC'})")
+
+    # Verify properties exist
+    results = db.cypher("MATCH (n:RemoveTest) RETURN n.name, n.age, n.city")
+    assert len(results) == 1
+    assert results[0]["n.name"] == "Alice"
+    assert results[0]["n.age"] == 30
+    assert results[0]["n.city"] == "NYC"
+
+    # Remove age property
+    db.cypher("MATCH (n:RemoveTest) REMOVE n.age")
+
+    # Verify age is removed (null)
+    results = db.cypher("MATCH (n:RemoveTest) RETURN n.name, n.age, n.city")
+    assert len(results) == 1
+    assert results[0]["n.name"] == "Alice"
+    assert results[0]["n.age"] is None
+    assert results[0]["n.city"] == "NYC"
+
+
+def test_remove_multiple_properties(db):
+    """Test REMOVE clause for removing multiple properties at once."""
+    db.cypher("CREATE (n:RemoveMultiTest {a: 1, b: 2, c: 3, d: 4})")
+
+    # Remove multiple properties in one query
+    db.cypher("MATCH (n:RemoveMultiTest) REMOVE n.a, n.b")
+
+    # Verify a and b are removed, c and d remain
+    results = db.cypher("MATCH (n:RemoveMultiTest) RETURN n.a, n.b, n.c, n.d")
+    assert len(results) == 1
+    assert results[0]["n.a"] is None
+    assert results[0]["n.b"] is None
+    assert results[0]["n.c"] == 3
+    assert results[0]["n.d"] == 4
+
+
+def test_remove_label(db):
+    """Test REMOVE clause for removing a label from a node."""
+    db.cypher("CREATE (n:RemoveLabelTest:RemoveLabelEmp:RemoveLabelMgr {name: 'Bob'})")
+
+    # Verify Manager label exists
+    results = db.cypher("MATCH (n:RemoveLabelMgr {name: 'Bob'}) RETURN n.name")
+    assert len(results) == 1
+    assert results[0]["n.name"] == "Bob"
+
+    # Remove Manager label
+    db.cypher("MATCH (n:RemoveLabelTest {name: 'Bob'}) REMOVE n:RemoveLabelMgr")
+
+    # Verify label is removed by checking that a query for the removed label returns no results
+    results = db.cypher("MATCH (n:RemoveLabelMgr {name: 'Bob'}) RETURN n.name")
+    has_bob = any(row.get("n.name") == "Bob" for row in results)
+    assert not has_bob, "Should not find Bob with RemoveLabelMgr after removal"
+
+    # Verify the node still exists with remaining labels
+    results = db.cypher("MATCH (n:RemoveLabelTest {name: 'Bob'}) RETURN n.name")
+    assert len(results) == 1
+    assert results[0]["n.name"] == "Bob"
+
+
+def test_remove_edge_property(db):
+    """Test REMOVE clause for removing an edge property."""
+    db.cypher(
+        "CREATE (a:RemoveEdgeTest {name: 'A'})-[r:KNOWS {since: 2020, strength: 0.9}]->(b:RemoveEdgeTest {name: 'B'})"
+    )
+
+    # Verify edge properties exist
+    results = db.cypher(
+        "MATCH (a:RemoveEdgeTest)-[r:KNOWS]->(b:RemoveEdgeTest) RETURN r.since, r.strength"
+    )
+    assert len(results) == 1
+    assert results[0]["r.since"] == 2020
+
+    # Remove since property
+    db.cypher("MATCH (a:RemoveEdgeTest)-[r:KNOWS]->(b:RemoveEdgeTest) REMOVE r.since")
+
+    # Verify since is removed, strength remains
+    results = db.cypher(
+        "MATCH (a:RemoveEdgeTest)-[r:KNOWS]->(b:RemoveEdgeTest) RETURN r.since, r.strength"
+    )
+    assert len(results) == 1
+    assert results[0]["r.since"] is None
+    assert abs(results[0]["r.strength"] - 0.9) < 0.01
+
+
+def test_remove_with_where(db):
+    """Test REMOVE clause with WHERE filtering."""
+    db.cypher("CREATE (a:RemoveWhereTest {name: 'Alice', age: 30, status: 'active'})")
+    db.cypher("CREATE (b:RemoveWhereTest {name: 'Bob', age: 25, status: 'active'})")
+    db.cypher("CREATE (c:RemoveWhereTest {name: 'Charlie', age: 35, status: 'active'})")
+
+    # Remove status only from nodes where age > 28
+    db.cypher("MATCH (n:RemoveWhereTest) WHERE n.age > 28 REMOVE n.status")
+
+    # Verify: Alice (30) and Charlie (35) should have status removed
+    results = db.cypher(
+        "MATCH (n:RemoveWhereTest) RETURN n.name, n.status ORDER BY n.name"
+    )
+    assert len(results) == 3
+
+    # Alice: status should be null
+    assert results[0]["n.name"] == "Alice"
+    assert results[0]["n.status"] is None
+
+    # Bob: status should still exist
+    assert results[1]["n.name"] == "Bob"
+    assert results[1]["n.status"] == "active"
+
+    # Charlie: status should be null
+    assert results[2]["n.name"] == "Charlie"
+    assert results[2]["n.status"] is None
+
+
+def test_remove_nonexistent_property(db):
+    """Test REMOVE clause on a non-existent property (should not error)."""
+    db.cypher("CREATE (n:RemoveNonexistTest {name: 'Test'})")
+
+    # Remove a property that doesn't exist - should succeed without error
+    db.cypher("MATCH (n:RemoveNonexistTest) REMOVE n.nonexistent")
+
+    # Original property should still exist
+    results = db.cypher("MATCH (n:RemoveNonexistTest) RETURN n.name")
+    assert len(results) == 1
+    assert results[0]["n.name"] == "Test"
+
+
+def test_remove_no_match(db):
+    """Test REMOVE clause when no nodes match."""
+    # Remove property on non-existent nodes - should succeed (0 rows affected)
+    db.cypher("MATCH (n:NonExistentLabel) REMOVE n.property")
+    # No error should be raised
