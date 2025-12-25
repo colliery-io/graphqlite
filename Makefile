@@ -368,34 +368,18 @@ coverage: test
 	@echo ""
 	@echo "Detailed reports in: $(COVERAGE_DIR)/"
 
-# Run performance tests
-test-perf: extension
-	@echo "Running performance tests..."
-	@if [ -x tests/performance/run_perf_tests.sh ]; then \
-		tests/performance/run_perf_tests.sh 100 2>&1 | grep -v "^\[CYPHER_DEBUG\]"; \
-	else \
-		echo "Performance test script not found or not executable"; \
-		exit 1; \
-	fi
-
-# Run quick performance benchmark (fewer iterations)
-test-perf-quick: extension
-	@echo "Running quick performance benchmark..."
-	@tests/performance/run_perf_tests.sh 25 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
-
-# Run scaled performance tests (various graph sizes)
-test-perf-scaled: extension
-	@echo "Running scaled performance tests..."
-	@tests/performance/run_scaled_perf_tests.sh 10 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
-
-# Run PageRank performance tests
-test-perf-pagerank: extension
-	@echo "Running PageRank performance tests..."
-	@tests/performance/run_pagerank_perf.sh 3 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
-
-# Run all performance tests with summary table
+# Performance tests - unified script with modes: quick, standard, full
+# Usage: make performance [MODE=quick|standard|full] [ITERATIONS=N]
 performance: extension
-	@tests/performance/run_all_perf.sh 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+	@tests/performance/run_all_perf.sh $(or $(MODE),standard) 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+
+# Quick performance check (~30s, 10K nodes only)
+performance-quick: extension
+	@tests/performance/run_all_perf.sh quick 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
+
+# Full performance suite (~10min, up to 1M nodes)
+performance-full: extension
+	@tests/performance/run_all_perf.sh full 2>&1 | grep -v "^\[CYPHER_DEBUG\]"
 
 # Bindings directories
 RUST_BINDINGS_DIR = bindings/rust

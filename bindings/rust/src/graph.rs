@@ -52,9 +52,7 @@ pub fn escape_string(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
         .replace('"', "\\\"")
-        .replace('\n', " ")
-        .replace('\r', " ")
-        .replace('\t', " ")
+        .replace(['\n', '\r', '\t'], " ")
 }
 
 /// Sanitize a relationship type for use in Cypher.
@@ -66,7 +64,7 @@ pub fn sanitize_rel_type(rel_type: &str) -> String {
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
         .collect();
 
-    let safe = if safe.is_empty() || safe.chars().next().map_or(false, |c| c.is_numeric()) {
+    let safe = if safe.is_empty() || safe.chars().next().is_some_and(|c| c.is_numeric()) {
         format!("REL_{}", safe)
     } else {
         safe
@@ -837,13 +835,14 @@ impl Graph {
 
 /// Format a value for inclusion in a Cypher query.
 fn format_value(v: &str) -> String {
-    // Try to parse as number or boolean
-    if v.parse::<i64>().is_ok() || v.parse::<f64>().is_ok() {
+    // Numbers, booleans, and null pass through as-is
+    if v.parse::<i64>().is_ok()
+        || v.parse::<f64>().is_ok()
+        || v == "true"
+        || v == "false"
+        || v == "null"
+    {
         v.to_string()
-    } else if v == "true" || v == "false" {
-        v.to_string()
-    } else if v == "null" {
-        "null".to_string()
     } else {
         format!("'{}'", escape_string(v))
     }
