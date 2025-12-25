@@ -353,15 +353,22 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 if (entity && entity->is_current_clause) {
                     /* Entity exists and is from current clause, reuse alias but check if we need FROM clause */
                     alias = entity->table_alias;
-                    /* Check if this alias is already in the FROM clause */
-                    if (!strstr(ctx->sql_buffer, entity->table_alias)) {
+                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
+                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
+                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
+                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
+                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
                         need_from_clause = true;
                     }
                 } else if (entity && !entity->is_current_clause) {
                     /* Entity from previous clause - reuse but may need FROM clause */
                     alias = entity->table_alias;
                     entity->is_current_clause = true; /* Mark as used in current clause */
-                    if (!strstr(ctx->sql_buffer, entity->table_alias)) {
+                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
+                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
+                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
+                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
+                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
                         need_from_clause = true;
                     }
                 } else {

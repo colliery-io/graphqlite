@@ -388,6 +388,69 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                                     CYPHER_DEBUG("Executing C-based Degree Centrality");
                                     algo_result = execute_degree_centrality(executor->db);
                                     break;
+                                case GRAPH_ALGO_WCC:
+                                    CYPHER_DEBUG("Executing C-based Weakly Connected Components");
+                                    algo_result = execute_wcc(executor->db);
+                                    break;
+                                case GRAPH_ALGO_SCC:
+                                    CYPHER_DEBUG("Executing C-based Strongly Connected Components");
+                                    algo_result = execute_scc(executor->db);
+                                    break;
+                                case GRAPH_ALGO_BETWEENNESS_CENTRALITY:
+                                    CYPHER_DEBUG("Executing C-based Betweenness Centrality");
+                                    algo_result = execute_betweenness_centrality(executor->db);
+                                    break;
+                                case GRAPH_ALGO_CLOSENESS_CENTRALITY:
+                                    CYPHER_DEBUG("Executing C-based Closeness Centrality");
+                                    algo_result = execute_closeness_centrality(executor->db);
+                                    break;
+                                case GRAPH_ALGO_LOUVAIN:
+                                    CYPHER_DEBUG("Executing C-based Louvain Community Detection");
+                                    algo_result = execute_louvain(executor->db, algo_params.resolution);
+                                    break;
+                                case GRAPH_ALGO_TRIANGLE_COUNT:
+                                    CYPHER_DEBUG("Executing C-based Triangle Count");
+                                    algo_result = execute_triangle_count(executor->db);
+                                    break;
+                                case GRAPH_ALGO_ASTAR:
+                                    CYPHER_DEBUG("Executing C-based A* Shortest Path");
+                                    algo_result = execute_astar(executor->db, algo_params.source_id,
+                                                                algo_params.target_id, algo_params.weight_prop,
+                                                                algo_params.lat_prop, algo_params.lon_prop);
+                                    break;
+                                case GRAPH_ALGO_BFS:
+                                    CYPHER_DEBUG("Executing C-based BFS Traversal");
+                                    algo_result = execute_bfs(executor->db, algo_params.source_id,
+                                                              algo_params.max_depth);
+                                    break;
+                                case GRAPH_ALGO_DFS:
+                                    CYPHER_DEBUG("Executing C-based DFS Traversal");
+                                    algo_result = execute_dfs(executor->db, algo_params.source_id,
+                                                              algo_params.max_depth);
+                                    break;
+                                case GRAPH_ALGO_NODE_SIMILARITY:
+                                    CYPHER_DEBUG("Executing C-based Node Similarity (Jaccard)");
+                                    algo_result = execute_node_similarity(executor->db,
+                                                                          algo_params.source_id,
+                                                                          algo_params.target_id,
+                                                                          algo_params.threshold,
+                                                                          algo_params.top_k);
+                                    break;
+                                case GRAPH_ALGO_KNN:
+                                    CYPHER_DEBUG("Executing C-based K-Nearest Neighbors");
+                                    algo_result = execute_knn(executor->db,
+                                                              algo_params.source_id,
+                                                              algo_params.k);
+                                    break;
+                                case GRAPH_ALGO_EIGENVECTOR_CENTRALITY:
+                                    CYPHER_DEBUG("Executing C-based Eigenvector Centrality");
+                                    algo_result = execute_eigenvector_centrality(executor->db,
+                                                                                  algo_params.iterations);
+                                    break;
+                                case GRAPH_ALGO_APSP:
+                                    CYPHER_DEBUG("Executing C-based All Pairs Shortest Path");
+                                    algo_result = execute_apsp(executor->db);
+                                    break;
                                 default:
                                     break;
                             }

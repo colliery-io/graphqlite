@@ -172,6 +172,35 @@ static void test_return_complex_arithmetic(void)
     }
 }
 
+/* Test RETURN with modulo operator */
+static void test_return_modulo(void)
+{
+    const char *query = "RETURN 10 % 3";
+    cypher_query_result *result = parse_and_transform(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error) {
+            printf("\nModulo test error: %s\n", result->error_message);
+        }
+        cypher_free_result(result);
+    }
+}
+
+/* Test RETURN with modulo in expression */
+static void test_return_modulo_expression(void)
+{
+    const char *query = "RETURN (10 % 3) + 1";
+    cypher_query_result *result = parse_and_transform(query);
+
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        cypher_free_result(result);
+    }
+}
+
 /* Test RETURN with comparison */
 static void test_return_comparison(void)
 {
@@ -742,6 +771,8 @@ int register_return_tests(void)
     if (!CU_add_test(suite, "RETURN null", test_return_null)) return -1;
     if (!CU_add_test(suite, "RETURN arithmetic", test_return_arithmetic)) return -1;
     if (!CU_add_test(suite, "RETURN complex arithmetic", test_return_complex_arithmetic)) return -1;
+    if (!CU_add_test(suite, "RETURN modulo", test_return_modulo)) return -1;
+    if (!CU_add_test(suite, "RETURN modulo expression", test_return_modulo_expression)) return -1;
     if (!CU_add_test(suite, "RETURN comparison", test_return_comparison)) return -1;
     if (!CU_add_test(suite, "ORDER BY ASC", test_order_by_asc)) return -1;
     if (!CU_add_test(suite, "ORDER BY DESC", test_order_by_desc)) return -1;

@@ -82,6 +82,7 @@ typedef enum {
     BINARY_OP_SUB,
     BINARY_OP_MUL,
     BINARY_OP_DIV,
+    BINARY_OP_MOD,
     BINARY_OP_REGEX_MATCH
 } binary_op_type;
 

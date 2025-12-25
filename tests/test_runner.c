@@ -28,6 +28,17 @@ int init_executor_pagerank_suite(void);
 int init_executor_label_propagation_suite(void);
 int init_executor_dijkstra_suite(void);
 int init_executor_degree_centrality_suite(void);
+int init_executor_components_suite(void);
+int init_executor_betweenness_suite(void);
+int init_executor_closeness_suite(void);
+int init_executor_louvain_suite(void);
+int init_executor_triangle_suite(void);
+int init_executor_astar_suite(void);
+int init_executor_traversal_suite(void);
+int init_executor_similarity_suite(void);
+int init_executor_knn_suite(void);
+int init_executor_eigenvector_suite(void);
+int init_executor_apsp_suite(void);
 int register_params_tests(void);
 int init_output_format_suite(void);
 
@@ -174,6 +185,72 @@ int main(void)
 
     if (init_executor_degree_centrality_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add executor Degree Centrality suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_components_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Components suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_betweenness_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Betweenness suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_closeness_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Closeness suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_louvain_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Louvain suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_triangle_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Triangle Count suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_astar_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor A* suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_traversal_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor traversal suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_similarity_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor similarity suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_knn_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor KNN suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_eigenvector_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Eigenvector suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_apsp_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor APSP suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

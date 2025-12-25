@@ -127,7 +127,18 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
 	$(EXECUTOR_DIR)/graph_algo_community.c \
 	$(EXECUTOR_DIR)/graph_algo_paths.c \
-	$(EXECUTOR_DIR)/graph_algo_centrality.c
+	$(EXECUTOR_DIR)/graph_algo_centrality.c \
+	$(EXECUTOR_DIR)/graph_algo_components.c \
+	$(EXECUTOR_DIR)/graph_algo_betweenness.c \
+	$(EXECUTOR_DIR)/graph_algo_closeness.c \
+	$(EXECUTOR_DIR)/graph_algo_louvain.c \
+	$(EXECUTOR_DIR)/graph_algo_triangle.c \
+	$(EXECUTOR_DIR)/graph_algo_astar.c \
+	$(EXECUTOR_DIR)/graph_algo_traversal.c \
+	$(EXECUTOR_DIR)/graph_algo_similarity.c \
+	$(EXECUTOR_DIR)/graph_algo_knn.c \
+	$(EXECUTOR_DIR)/graph_algo_eigenvector.c \
+	$(EXECUTOR_DIR)/graph_algo_apsp.c
 
 TRANSFORM_OBJS = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.o)
 TRANSFORM_OBJS_COV = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.cov.o)
@@ -163,6 +174,17 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_label_propagation.c \
 	$(TEST_DIR)/test_executor_dijkstra.c \
 	$(TEST_DIR)/test_executor_degree_centrality.c \
+	$(TEST_DIR)/test_executor_components.c \
+	$(TEST_DIR)/test_executor_betweenness.c \
+	$(TEST_DIR)/test_executor_closeness.c \
+	$(TEST_DIR)/test_executor_louvain.c \
+	$(TEST_DIR)/test_executor_triangle.c \
+	$(TEST_DIR)/test_executor_astar.c \
+	$(TEST_DIR)/test_executor_traversal.c \
+	$(TEST_DIR)/test_executor_similarity.c \
+	$(TEST_DIR)/test_executor_knn.c \
+	$(TEST_DIR)/test_executor_eigenvector.c \
+	$(TEST_DIR)/test_executor_apsp.c \
 	$(TEST_DIR)/test_executor_params.c \
 	$(TEST_DIR)/test_output_format.c
 

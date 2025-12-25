@@ -165,6 +165,9 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         case BINARY_OP_DIV:
             append_sql(ctx, " / ");
             break;
+        case BINARY_OP_MOD:
+            append_sql(ctx, " %% ");
+            break;
         default:
             CYPHER_DEBUG("Unknown binary operator: %d", binary_op->op_type);
             ctx->has_error = true;

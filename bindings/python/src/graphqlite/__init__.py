@@ -1,11 +1,11 @@
 """GraphQLite - SQLite extension for graph queries using Cypher."""
 
-import platform
-from pathlib import Path
 from typing import Optional
 
 from .connection import Connection, connect, wrap
-from .graph import Graph, graph, escape_string, sanitize_rel_type, CYPHER_RESERVED
+from .graph import Graph, graph
+from .utils import escape_string, sanitize_rel_type, CYPHER_RESERVED
+from ._platform import get_loadable_path
 
 __version__ = "0.1.0b3"
 __all__ = [
@@ -31,34 +31,7 @@ def loadable_path() -> str:
         >>> conn.enable_load_extension(True)
         >>> conn.load_extension(graphqlite.loadable_path())
     """
-    system = platform.system()
-
-    if system == "Darwin":
-        ext_name = "graphqlite.dylib"
-    elif system == "Linux":
-        ext_name = "graphqlite.so"
-    elif system == "Windows":
-        ext_name = "graphqlite.dll"
-    else:
-        raise OSError(f"Unsupported platform: {system}")
-
-    # Look for bundled extension first
-    bundled = Path(__file__).parent / ext_name
-    if bundled.exists():
-        # Return path without extension (SQLite convention)
-        return str(bundled.parent / bundled.stem)
-
-    # Fall back to development build
-    dev_build = Path(__file__).parent.parent.parent.parent.parent / "build" / ext_name
-    if dev_build.exists():
-        return str(dev_build.parent / dev_build.stem)
-
-    raise FileNotFoundError(
-        f"GraphQLite extension not found. Searched:\n"
-        f"  - {bundled}\n"
-        f"  - {dev_build}\n"
-        f"Build with 'make extension' or install from PyPI."
-    )
+    return get_loadable_path()
 
 
 def load(conn, entry_point: Optional[str] = None) -> None:

@@ -331,6 +331,7 @@ static void test_operators(void)
         {"+=", CYPHER_TOKEN_PLUS_EQ},
         {"+", CYPHER_TOKEN_OPERATOR},
         {"*", CYPHER_TOKEN_OPERATOR},
+        {"%", CYPHER_TOKEN_OPERATOR},
         {NULL, 0}
     };
     

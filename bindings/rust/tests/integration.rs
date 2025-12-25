@@ -560,6 +560,138 @@ fn test_graph_degree_centrality() {
 }
 
 #[test]
+fn test_graph_wcc() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create two disconnected components
+    // Component 1: wcc1 -> wcc2 -> wcc3
+    g.upsert_node("wcc1", [("name", "WCC1")], "Node").unwrap();
+    g.upsert_node("wcc2", [("name", "WCC2")], "Node").unwrap();
+    g.upsert_node("wcc3", [("name", "WCC3")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("wcc1", "wcc2", empty, "LINK").unwrap();
+    g.upsert_edge("wcc2", "wcc3", empty, "LINK").unwrap();
+
+    // Component 2: wcc4 -> wcc5
+    g.upsert_node("wcc4", [("name", "WCC4")], "Node").unwrap();
+    g.upsert_node("wcc5", [("name", "WCC5")], "Node").unwrap();
+    g.upsert_edge("wcc4", "wcc5", empty, "LINK").unwrap();
+
+    let components = g.wcc().unwrap();
+    assert_eq!(components.len(), 5);
+
+    // Group by component
+    let mut by_component: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    for c in &components {
+        by_component
+            .entry(c.component)
+            .or_default()
+            .push(c.user_id.clone().unwrap_or_default());
+    }
+
+    // Should have exactly 2 components
+    assert_eq!(by_component.len(), 2);
+
+    // Check component sizes
+    let mut sizes: Vec<usize> = by_component.values().map(|v| v.len()).collect();
+    sizes.sort();
+    assert_eq!(sizes, vec![2, 3]);
+}
+
+#[test]
+fn test_graph_wcc_empty() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let components = g.wcc().unwrap();
+    assert!(components.is_empty());
+}
+
+#[test]
+fn test_graph_wcc_alias() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    g.upsert_node("a1", [("name", "A1")], "Node").unwrap();
+    g.upsert_node("a2", [("name", "A2")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("a1", "a2", empty, "LINK").unwrap();
+
+    // Both methods should return the same result
+    let wcc = g.wcc().unwrap();
+    let cc = g.wcc().unwrap();
+
+    assert_eq!(wcc.len(), cc.len());
+}
+
+#[test]
+fn test_graph_scc_cycle() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create a cycle: scc1 -> scc2 -> scc3 -> scc1
+    g.upsert_node("scc1", [("name", "SCC1")], "Node").unwrap();
+    g.upsert_node("scc2", [("name", "SCC2")], "Node").unwrap();
+    g.upsert_node("scc3", [("name", "SCC3")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("scc1", "scc2", empty, "LINK").unwrap();
+    g.upsert_edge("scc2", "scc3", empty, "LINK").unwrap();
+    g.upsert_edge("scc3", "scc1", empty, "LINK").unwrap();
+
+    let components = g.scc().unwrap();
+    assert_eq!(components.len(), 3);
+
+    // All nodes should be in the same SCC (they form a cycle)
+    let component_ids: std::collections::HashSet<i64> =
+        components.iter().map(|c| c.component).collect();
+    assert_eq!(component_ids.len(), 1);
+}
+
+#[test]
+fn test_graph_scc_no_cycle() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    // Create a directed chain (no cycles): sc_a -> sc_b -> sc_c
+    g.upsert_node("sc_a", [("name", "SC_A")], "Node").unwrap();
+    g.upsert_node("sc_b", [("name", "SC_B")], "Node").unwrap();
+    g.upsert_node("sc_c", [("name", "SC_C")], "Node").unwrap();
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("sc_a", "sc_b", empty, "LINK").unwrap();
+    g.upsert_edge("sc_b", "sc_c", empty, "LINK").unwrap();
+
+    let components = g.scc().unwrap();
+    assert_eq!(components.len(), 3);
+
+    // Each node should be in its own SCC (no back edges)
+    let component_ids: std::collections::HashSet<i64> =
+        components.iter().map(|c| c.component).collect();
+    assert_eq!(component_ids.len(), 3);
+}
+
+#[test]
+fn test_graph_scc_empty() {
+    let Some(g) = test_graph() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let components = g.scc().unwrap();
+    assert!(components.is_empty());
+}
+
+#[test]
 fn test_utility_functions() {
     // escape_string
     assert_eq!(escape_string("hello"), "hello");

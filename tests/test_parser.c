@@ -803,6 +803,50 @@ static void test_regex_match_parsing(void)
     }
 }
 
+/* Test modulo operator parsing */
+static void test_modulo_operator_parsing(void)
+{
+    const char *query = "RETURN 10 % 3";
+
+    ast_node *result = parse_cypher_query(query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        cypher_query *query_ast = (cypher_query*)result;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 1); /* RETURN */
+
+        /* Get the RETURN clause */
+        cypher_return *ret = (cypher_return*)query_ast->clauses->items[0];
+        CU_ASSERT_PTR_NOT_NULL(ret->items);
+        CU_ASSERT_EQUAL(ret->items->count, 1);
+
+        /* Get the return item expression */
+        cypher_return_item *item = (cypher_return_item*)ret->items->items[0];
+        CU_ASSERT_PTR_NOT_NULL(item->expr);
+
+        /* The expression should be a binary operation */
+        CU_ASSERT_EQUAL(item->expr->type, AST_NODE_BINARY_OP);
+
+        cypher_binary_op *binary = (cypher_binary_op*)item->expr;
+        CU_ASSERT_EQUAL(binary->op_type, BINARY_OP_MOD);
+
+        /* Left should be integer literal 10 */
+        CU_ASSERT_EQUAL(binary->left->type, AST_NODE_LITERAL);
+        cypher_literal *left_lit = (cypher_literal*)binary->left;
+        CU_ASSERT_EQUAL(left_lit->literal_type, LITERAL_INTEGER);
+        CU_ASSERT_EQUAL(left_lit->value.integer, 10);
+
+        /* Right should be integer literal 3 */
+        CU_ASSERT_EQUAL(binary->right->type, AST_NODE_LITERAL);
+        cypher_literal *right_lit = (cypher_literal*)binary->right;
+        CU_ASSERT_EQUAL(right_lit->literal_type, LITERAL_INTEGER);
+        CU_ASSERT_EQUAL(right_lit->value.integer, 3);
+
+        cypher_parser_free_result(result);
+        printf("Modulo operator parsing test passed\n");
+    }
+}
+
 /* Test FOREACH clause parsing */
 static void test_foreach_parsing(void)
 {
@@ -2012,6 +2056,7 @@ int init_parser_suite(void)
         !CU_add_test(suite, "REMOVE label parsing", test_remove_label_parsing) ||
         !CU_add_test(suite, "REMOVE multiple items parsing", test_remove_multiple_items_parsing) ||
         !CU_add_test(suite, "Regex match operator parsing", test_regex_match_parsing) ||
+        !CU_add_test(suite, "Modulo operator parsing", test_modulo_operator_parsing) ||
         !CU_add_test(suite, "FOREACH clause parsing", test_foreach_parsing) ||
         !CU_add_test(suite, "Nested FOREACH parsing", test_foreach_nested_parsing) ||
         !CU_add_test(suite, "LOAD CSV parsing", test_load_csv_parsing) ||

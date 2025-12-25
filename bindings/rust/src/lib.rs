@@ -49,18 +49,26 @@
 //! # Ok::<(), graphqlite::Error>(())
 //! ```
 
+mod algorithms;
 mod connection;
 mod error;
 mod graph;
 mod result;
+mod utils;
 
 pub use connection::Connection;
 pub use error::Error;
-pub use graph::{
-    escape_string, graph, sanitize_rel_type, CommunityResult, DegreeCentralityResult, Graph,
-    GraphStats, PageRankResult, ShortestPathResult, CYPHER_RESERVED,
-};
+pub use graph::{graph, Graph, GraphStats};
 pub use result::{CypherResult, Row, Value};
+pub use utils::{escape_string, format_value, sanitize_rel_type, CYPHER_RESERVED};
+
+// Algorithm result types
+pub use algorithms::{
+    ApspResult, AStarResult, BetweennessCentralityResult, ClosenessCentralityResult,
+    CommunityResult, ComponentResult, DegreeCentralityResult, EigenvectorCentralityResult,
+    KnnResult, NodeSimilarityResult, PageRankResult, ShortestPathResult, TraversalResult,
+    TriangleCountResult,
+};
 
 /// Result type for GraphQLite operations.
 pub type Result<T> = std::result::Result<T, Error>;

@@ -437,6 +437,153 @@ def test_degree_centrality(g):
 
 
 # =============================================================================
+# Connected Components (WCC/SCC)
+# =============================================================================
+
+def test_weakly_connected_components(g):
+    # Create two disconnected components
+    # Component 1: wcc1 <-> wcc2 <-> wcc3
+    g.upsert_node("wcc1", {"name": "WCC1"})
+    g.upsert_node("wcc2", {"name": "WCC2"})
+    g.upsert_node("wcc3", {"name": "WCC3"})
+    g.upsert_edge("wcc1", "wcc2", {})
+    g.upsert_edge("wcc2", "wcc3", {})
+
+    # Component 2: wcc4 <-> wcc5
+    g.upsert_node("wcc4", {"name": "WCC4"})
+    g.upsert_node("wcc5", {"name": "WCC5"})
+    g.upsert_edge("wcc4", "wcc5", {})
+
+    components = g.weakly_connected_components()
+    assert isinstance(components, list)
+    assert len(components) == 5
+
+    # Check structure
+    for c in components:
+        assert "node_id" in c
+        assert "user_id" in c
+        assert "component" in c
+
+    # Group by component
+    by_component = {}
+    for c in components:
+        comp_id = c["component"]
+        if comp_id not in by_component:
+            by_component[comp_id] = set()
+        by_component[comp_id].add(c["user_id"])
+
+    # Should have exactly 2 components
+    assert len(by_component) == 2
+
+    # One component should have wcc1,2,3, the other wcc4,5
+    comp_sizes = sorted([len(v) for v in by_component.values()])
+    assert comp_sizes == [2, 3]
+
+
+def test_weakly_connected_components_single_node(g):
+    g.upsert_node("solo", {"name": "Solo"})
+
+    components = g.weakly_connected_components()
+    assert len(components) == 1
+    assert components[0]["user_id"] == "solo"
+    assert components[0]["component"] == 0
+
+
+def test_weakly_connected_components_empty_graph(g):
+    components = g.weakly_connected_components()
+    assert components == []
+
+
+def test_connected_components_alias(g):
+    """Test that connected_components is an alias for weakly_connected_components."""
+    g.upsert_node("alias1", {"name": "A1"})
+    g.upsert_node("alias2", {"name": "A2"})
+    g.upsert_edge("alias1", "alias2", {})
+
+    # Both should return the same result
+    wcc = g.weakly_connected_components()
+    cc = g.connected_components()
+
+    assert len(wcc) == len(cc) == 2
+    assert {c["user_id"] for c in wcc} == {c["user_id"] for c in cc}
+
+
+def test_strongly_connected_components_with_cycle(g):
+    # Create a cycle: scc1 -> scc2 -> scc3 -> scc1
+    g.upsert_node("scc1", {"name": "SCC1"})
+    g.upsert_node("scc2", {"name": "SCC2"})
+    g.upsert_node("scc3", {"name": "SCC3"})
+    g.upsert_edge("scc1", "scc2", {})
+    g.upsert_edge("scc2", "scc3", {})
+    g.upsert_edge("scc3", "scc1", {})
+
+    components = g.strongly_connected_components()
+    assert isinstance(components, list)
+    assert len(components) == 3
+
+    # Check structure
+    for c in components:
+        assert "node_id" in c
+        assert "user_id" in c
+        assert "component" in c
+
+    # All nodes should be in the same SCC (they form a cycle)
+    component_ids = {c["component"] for c in components}
+    assert len(component_ids) == 1
+
+
+def test_strongly_connected_components_no_cycle(g):
+    # Create a directed chain (no cycles): scc_a -> scc_b -> scc_c
+    g.upsert_node("scc_a", {"name": "SCC_A"})
+    g.upsert_node("scc_b", {"name": "SCC_B"})
+    g.upsert_node("scc_c", {"name": "SCC_C"})
+    g.upsert_edge("scc_a", "scc_b", {})
+    g.upsert_edge("scc_b", "scc_c", {})
+
+    components = g.strongly_connected_components()
+    assert len(components) == 3
+
+    # Each node should be in its own SCC (no back edges)
+    component_ids = {c["component"] for c in components}
+    assert len(component_ids) == 3
+
+
+def test_strongly_connected_components_empty_graph(g):
+    components = g.strongly_connected_components()
+    assert components == []
+
+
+def test_strongly_connected_components_mixed(g):
+    # Create a graph with multiple SCCs:
+    # SCC 1: m1 <-> m2 (cycle)
+    # SCC 2: m3 alone (pointed to by SCC 1)
+    g.upsert_node("m1", {"name": "M1"})
+    g.upsert_node("m2", {"name": "M2"})
+    g.upsert_node("m3", {"name": "M3"})
+    g.upsert_edge("m1", "m2", {})
+    g.upsert_edge("m2", "m1", {})  # Creates cycle between m1, m2
+    g.upsert_edge("m2", "m3", {})  # m3 is separate SCC
+
+    components = g.strongly_connected_components()
+    assert len(components) == 3
+
+    # Group by component
+    by_component = {}
+    for c in components:
+        comp_id = c["component"]
+        if comp_id not in by_component:
+            by_component[comp_id] = set()
+        by_component[comp_id].add(c["user_id"])
+
+    # Should have exactly 2 SCCs
+    assert len(by_component) == 2
+
+    # One SCC has m1,m2 and another has m3
+    comp_sizes = sorted([len(v) for v in by_component.values()])
+    assert comp_sizes == [1, 2]
+
+
+# =============================================================================
 # Rustworkx Export
 # =============================================================================
 

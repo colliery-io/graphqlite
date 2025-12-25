@@ -251,6 +251,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
     params.source_id = NULL;
     params.target_id = NULL;
     params.weight_prop = NULL;
+    params.resolution = 1.0;
 
     if (!return_clause || !return_clause->items || return_clause->items->count == 0) {
         return params;
@@ -374,6 +375,237 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
     /* Degree Centrality */
     if (strcasecmp(func->function_name, "degreeCentrality") == 0) {
         params.type = GRAPH_ALGO_DEGREE_CENTRALITY;
+        return params;
+    }
+
+    /* Weakly Connected Components */
+    if (strcasecmp(func->function_name, "wcc") == 0 ||
+        strcasecmp(func->function_name, "connectedComponents") == 0 ||
+        strcasecmp(func->function_name, "weaklyConnectedComponents") == 0) {
+        params.type = GRAPH_ALGO_WCC;
+        return params;
+    }
+
+    /* Strongly Connected Components */
+    if (strcasecmp(func->function_name, "scc") == 0 ||
+        strcasecmp(func->function_name, "stronglyConnectedComponents") == 0) {
+        params.type = GRAPH_ALGO_SCC;
+        return params;
+    }
+
+    /* Betweenness Centrality */
+    if (strcasecmp(func->function_name, "betweennessCentrality") == 0 ||
+        strcasecmp(func->function_name, "betweenness") == 0) {
+        params.type = GRAPH_ALGO_BETWEENNESS_CENTRALITY;
+        return params;
+    }
+
+    /* Closeness Centrality */
+    if (strcasecmp(func->function_name, "closenessCentrality") == 0 ||
+        strcasecmp(func->function_name, "closeness") == 0) {
+        params.type = GRAPH_ALGO_CLOSENESS_CENTRALITY;
+        return params;
+    }
+
+    /* Louvain Community Detection */
+    if (strcasecmp(func->function_name, "louvain") == 0) {
+        params.type = GRAPH_ALGO_LOUVAIN;
+        params.resolution = 1.0;
+
+        /* Optional resolution parameter */
+        if (func->args && func->args->count >= 1) {
+            cypher_literal *res_lit = (cypher_literal *)func->args->items[0];
+            if (res_lit && res_lit->base.type == AST_NODE_LITERAL) {
+                if (res_lit->literal_type == LITERAL_DECIMAL) {
+                    params.resolution = res_lit->value.decimal;
+                } else if (res_lit->literal_type == LITERAL_INTEGER) {
+                    params.resolution = (double)res_lit->value.integer;
+                }
+            }
+        }
+        return params;
+    }
+
+    /* Triangle Count */
+    if (strcasecmp(func->function_name, "triangleCount") == 0 ||
+        strcasecmp(func->function_name, "triangles") == 0) {
+        params.type = GRAPH_ALGO_TRIANGLE_COUNT;
+        return params;
+    }
+
+    /* A* Shortest Path */
+    if (strcasecmp(func->function_name, "astar") == 0 ||
+        strcasecmp(func->function_name, "aStar") == 0) {
+        params.type = GRAPH_ALGO_ASTAR;
+
+        /* astar(source, target) or astar(source, target, lat_prop, lon_prop) */
+        if (func->args && func->args->count >= 2) {
+            cypher_literal *src_lit = (cypher_literal *)func->args->items[0];
+            if (src_lit && src_lit->base.type == AST_NODE_LITERAL &&
+                src_lit->literal_type == LITERAL_STRING) {
+                params.source_id = strdup(src_lit->value.string);
+            }
+            cypher_literal *tgt_lit = (cypher_literal *)func->args->items[1];
+            if (tgt_lit && tgt_lit->base.type == AST_NODE_LITERAL &&
+                tgt_lit->literal_type == LITERAL_STRING) {
+                params.target_id = strdup(tgt_lit->value.string);
+            }
+        }
+        /* Optional: lat and lon property names for heuristic */
+        if (func->args && func->args->count >= 4) {
+            cypher_literal *lat_lit = (cypher_literal *)func->args->items[2];
+            if (lat_lit && lat_lit->base.type == AST_NODE_LITERAL &&
+                lat_lit->literal_type == LITERAL_STRING) {
+                params.lat_prop = strdup(lat_lit->value.string);
+            }
+            cypher_literal *lon_lit = (cypher_literal *)func->args->items[3];
+            if (lon_lit && lon_lit->base.type == AST_NODE_LITERAL &&
+                lon_lit->literal_type == LITERAL_STRING) {
+                params.lon_prop = strdup(lon_lit->value.string);
+            }
+        }
+        return params;
+    }
+
+    /* BFS Traversal */
+    if (strcasecmp(func->function_name, "bfs") == 0 ||
+        strcasecmp(func->function_name, "breadthFirstSearch") == 0) {
+        params.type = GRAPH_ALGO_BFS;
+        params.max_depth = -1;  /* Unlimited by default */
+
+        if (func->args && func->args->count >= 1) {
+            cypher_literal *start_lit = (cypher_literal *)func->args->items[0];
+            if (start_lit && start_lit->base.type == AST_NODE_LITERAL &&
+                start_lit->literal_type == LITERAL_STRING) {
+                params.source_id = strdup(start_lit->value.string);
+            }
+        }
+        if (func->args && func->args->count >= 2) {
+            cypher_literal *depth_lit = (cypher_literal *)func->args->items[1];
+            if (depth_lit && depth_lit->base.type == AST_NODE_LITERAL &&
+                depth_lit->literal_type == LITERAL_INTEGER) {
+                params.max_depth = (int)depth_lit->value.integer;
+            }
+        }
+        return params;
+    }
+
+    /* DFS Traversal */
+    if (strcasecmp(func->function_name, "dfs") == 0 ||
+        strcasecmp(func->function_name, "depthFirstSearch") == 0) {
+        params.type = GRAPH_ALGO_DFS;
+        params.max_depth = -1;  /* Unlimited by default */
+
+        if (func->args && func->args->count >= 1) {
+            cypher_literal *start_lit = (cypher_literal *)func->args->items[0];
+            if (start_lit && start_lit->base.type == AST_NODE_LITERAL &&
+                start_lit->literal_type == LITERAL_STRING) {
+                params.source_id = strdup(start_lit->value.string);
+            }
+        }
+        if (func->args && func->args->count >= 2) {
+            cypher_literal *depth_lit = (cypher_literal *)func->args->items[1];
+            if (depth_lit && depth_lit->base.type == AST_NODE_LITERAL &&
+                depth_lit->literal_type == LITERAL_INTEGER) {
+                params.max_depth = (int)depth_lit->value.integer;
+            }
+        }
+        return params;
+    }
+
+    /* Node Similarity (Jaccard) */
+    if (strcasecmp(func->function_name, "nodeSimilarity") == 0) {
+        params.type = GRAPH_ALGO_NODE_SIMILARITY;
+        params.threshold = 0.0;  /* Default: return all pairs */
+        params.top_k = 0;        /* Default: no limit */
+        params.source_id = NULL;
+        params.target_id = NULL;
+
+        /* Check for specific pair: nodeSimilarity('node1', 'node2') */
+        if (func->args && func->args->count >= 2) {
+            cypher_literal *node1_lit = (cypher_literal *)func->args->items[0];
+            cypher_literal *node2_lit = (cypher_literal *)func->args->items[1];
+
+            if (node1_lit && node1_lit->base.type == AST_NODE_LITERAL &&
+                node1_lit->literal_type == LITERAL_STRING &&
+                node2_lit && node2_lit->base.type == AST_NODE_LITERAL &&
+                node2_lit->literal_type == LITERAL_STRING) {
+                params.source_id = strdup(node1_lit->value.string);
+                params.target_id = strdup(node2_lit->value.string);
+            }
+        }
+        /* Check for threshold: nodeSimilarity(0.5) */
+        else if (func->args && func->args->count >= 1) {
+            cypher_literal *thresh_lit = (cypher_literal *)func->args->items[0];
+            if (thresh_lit && thresh_lit->base.type == AST_NODE_LITERAL) {
+                if (thresh_lit->literal_type == LITERAL_DECIMAL) {
+                    params.threshold = thresh_lit->value.decimal;
+                } else if (thresh_lit->literal_type == LITERAL_INTEGER) {
+                    params.threshold = (double)thresh_lit->value.integer;
+                }
+            }
+        }
+
+        /* Check for top_k as last argument */
+        if (func->args && func->args->count >= 2 && !params.source_id) {
+            /* nodeSimilarity(threshold, top_k) */
+            cypher_literal *topk_lit = (cypher_literal *)func->args->items[1];
+            if (topk_lit && topk_lit->base.type == AST_NODE_LITERAL &&
+                topk_lit->literal_type == LITERAL_INTEGER) {
+                params.top_k = (int)topk_lit->value.integer;
+            }
+        }
+
+        return params;
+    }
+
+    /* K-Nearest Neighbors */
+    if (strcasecmp(func->function_name, "knn") == 0) {
+        params.type = GRAPH_ALGO_KNN;
+        params.source_id = NULL;
+        params.k = 10;  /* Default k */
+
+        /* knn(node_id, k) */
+        if (func->args && func->args->count >= 1) {
+            cypher_literal *node_lit = (cypher_literal *)func->args->items[0];
+            if (node_lit && node_lit->base.type == AST_NODE_LITERAL &&
+                node_lit->literal_type == LITERAL_STRING) {
+                params.source_id = strdup(node_lit->value.string);
+            }
+        }
+        if (func->args && func->args->count >= 2) {
+            cypher_literal *k_lit = (cypher_literal *)func->args->items[1];
+            if (k_lit && k_lit->base.type == AST_NODE_LITERAL &&
+                k_lit->literal_type == LITERAL_INTEGER) {
+                params.k = (int)k_lit->value.integer;
+            }
+        }
+
+        return params;
+    }
+
+    /* Eigenvector Centrality */
+    if (strcasecmp(func->function_name, "eigenvectorCentrality") == 0) {
+        params.type = GRAPH_ALGO_EIGENVECTOR_CENTRALITY;
+        params.iterations = 100;  /* Default iterations */
+
+        /* Optional iterations parameter */
+        if (func->args && func->args->count >= 1) {
+            cypher_literal *iter_lit = (cypher_literal *)func->args->items[0];
+            if (iter_lit && iter_lit->base.type == AST_NODE_LITERAL &&
+                iter_lit->literal_type == LITERAL_INTEGER) {
+                params.iterations = (int)iter_lit->value.integer;
+                if (params.iterations < 1) params.iterations = 1;
+                if (params.iterations > 1000) params.iterations = 1000;
+            }
+        }
+        return params;
+    }
+
+    /* All Pairs Shortest Path */
+    if (strcasecmp(func->function_name, "allPairsShortestPath") == 0 ||
+        strcasecmp(func->function_name, "apsp") == 0) {
+        params.type = GRAPH_ALGO_APSP;
         return params;
     }
 
