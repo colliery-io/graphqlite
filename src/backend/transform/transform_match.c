@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
@@ -16,21 +17,6 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node,
                                      int rel_index, bool optional, path_type ptype);
-
-/* Helper to get label string from a label literal node */
-static const char* get_label_string(ast_node *label_node)
-{
-    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
-    cypher_literal *lit = (cypher_literal*)label_node;
-    if (lit->literal_type != LITERAL_STRING) return NULL;
-    return lit->value.string;
-}
-
-/* Helper to check if a node pattern has any labels */
-static bool has_labels(cypher_node_pattern *node)
-{
-    return node && node->labels && node->labels->count > 0;
-}
 
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)

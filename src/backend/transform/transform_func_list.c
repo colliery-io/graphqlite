@@ -227,3 +227,73 @@ int transform_randomuuid_function(cypher_transform_context *ctx, cypher_function
 
     return 0;
 }
+
+/* Transform length() function - handles both paths and strings */
+int transform_length_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming length() function");
+
+    /* Check if argument is a path variable - use path length */
+    if (func_call->args && func_call->args->count == 1 &&
+        func_call->args->items[0] &&
+        func_call->args->items[0]->type == AST_NODE_IDENTIFIER) {
+        cypher_identifier *id = (cypher_identifier*)func_call->args->items[0];
+        if (is_path_variable(ctx, id->name)) {
+            return transform_path_length_function(ctx, func_call);
+        }
+    }
+
+    /* Otherwise treat as string length */
+    return transform_string_function(ctx, func_call);
+}
+
+/* Transform date() function */
+int transform_date_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming date() function");
+
+    if (func_call->args && func_call->args->count > 0) {
+        /* date(string) - parse date from string */
+        append_sql(ctx, "date(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")");
+    } else {
+        /* date() - current date */
+        append_sql(ctx, "date('now')");
+    }
+    return 0;
+}
+
+/* Transform time() function */
+int transform_time_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming time() function");
+
+    if (func_call->args && func_call->args->count > 0) {
+        /* time(string) - parse time from string */
+        append_sql(ctx, "time(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")");
+    } else {
+        /* time() - current time */
+        append_sql(ctx, "time('now')");
+    }
+    return 0;
+}
+
+/* Transform datetime() function */
+int transform_datetime_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming datetime() function");
+
+    if (func_call->args && func_call->args->count > 0) {
+        /* datetime(string) - parse datetime from string */
+        append_sql(ctx, "datetime(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")");
+    } else {
+        /* datetime() - current datetime */
+        append_sql(ctx, "datetime('now')");
+    }
+    return 0;
+}

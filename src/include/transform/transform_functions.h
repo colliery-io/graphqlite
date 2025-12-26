@@ -57,6 +57,10 @@ int transform_range_function(cypher_transform_context *ctx, cypher_function_call
 int transform_collect_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_timestamp_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_randomuuid_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_length_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_date_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_time_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_datetime_function(cypher_transform_context *ctx, cypher_function_call *func);
 
 /*
  * Aggregate functions - transform_func_aggregate.c
