@@ -8,21 +8,6 @@
 /* Forward declarations */
 typedef struct cypher_transform_context cypher_transform_context;
 typedef struct cypher_query_result cypher_query_result;
-typedef struct transform_entity transform_entity;
-
-/* Entity types following AGE patterns */
-typedef enum {
-    ENTITY_TYPE_VERTEX,
-    ENTITY_TYPE_EDGE
-} entity_type;
-
-/* Transform entity structure (similar to AGE's transform_entity) */
-struct transform_entity {
-    char *name;                     /* Variable name (e.g., "p", "r") */
-    char *table_alias;              /* Generated SQL alias (e.g., "gql_default_alias_0") */
-    entity_type type;               /* VERTEX or EDGE */
-    bool is_current_clause;         /* True if declared in current clause, false if inherited */
-};
 
 /* Path types for shortest path support */
 typedef enum {
@@ -31,47 +16,13 @@ typedef enum {
     TRANSFORM_PATH_ALL_SHORTEST     /* allShortestPaths() - all paths of minimum length */
 } transform_path_type;
 
-/* Path variable metadata */
-typedef struct path_variable {
-    char *name;                     /* Path variable name */
-    ast_list *elements;             /* AST nodes in the path (nodes and relationships) */
-    transform_path_type path_type;  /* Type of path (normal, shortest, all_shortest) */
-    char *cte_name;                 /* CTE name for variable-length paths (for filtering) */
-} path_variable;
-
 /* Transform context - tracks state during AST transformation */
 struct cypher_transform_context {
     sqlite3 *db;                    /* SQLite database connection */
 
-    /* Unified variable tracking (new system - being phased in) */
+    /* Unified variable tracking (includes path variables) */
     transform_var_context *var_ctx;
 
-    /* Entity tracking (AGE-style) */
-    transform_entity *entities;     /* List of entities */
-    int entity_count;
-    int entity_capacity;
-    
-    /* Path variable tracking */
-    path_variable *path_variables;  /* List of path variables */
-    int path_variable_count;
-    int path_variable_capacity;
-    
-    /* Legacy variable tracking (will be phased out) */
-    struct {
-        char *name;                 /* Variable name (e.g., "n", "m") */
-        char *table_alias;          /* SQL table alias */
-        int node_id;                /* For already-bound nodes */
-        bool is_bound;              /* Whether variable has a value */
-        enum {
-            VAR_TYPE_NODE,          /* Node variable */
-            VAR_TYPE_EDGE,          /* Edge/relationship variable */
-            VAR_TYPE_PATH,          /* Path variable */
-            VAR_TYPE_PROJECTED      /* WITH-projected variable (value is direct, no .id needed) */
-        } type;                     /* Variable type */
-    } *variables;
-    int variable_count;
-    int variable_capacity;
-    
     /* SQL generation */
     char *sql_buffer;               /* Generated SQL query */
     size_t sql_size;
@@ -186,24 +137,11 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
 int transform_count_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 
-/* Entity management (AGE-style) */
-int add_entity(cypher_transform_context *ctx, const char *name, entity_type type, bool is_current_clause);
-transform_entity* lookup_entity(cypher_transform_context *ctx, const char *name);
-void mark_entities_as_inherited(cypher_transform_context *ctx);
+/* Alias generation */
 char* get_next_default_alias(cypher_transform_context *ctx);
 
-/* Legacy variable management (will be phased out) */
-int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);
-int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias);
-int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias);
-int register_projected_variable(cypher_transform_context *ctx, const char *name, const char *cte_name, const char *column_name);
+/* Path variable registration (uses unified transform_var system) */
 int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path);
-const char* lookup_variable_alias(cypher_transform_context *ctx, const char *name);
-bool is_variable_bound(cypher_transform_context *ctx, const char *name);
-bool is_edge_variable(cypher_transform_context *ctx, const char *name);
-bool is_path_variable(cypher_transform_context *ctx, const char *name);
-bool is_projected_variable(cypher_transform_context *ctx, const char *name);
-path_variable* get_path_variable(cypher_transform_context *ctx, const char *name);
 
 /* SQL generation helpers */
 void append_sql(cypher_transform_context *ctx, const char *format, ...);

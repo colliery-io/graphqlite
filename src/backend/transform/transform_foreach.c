@@ -137,11 +137,9 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
     append_cte_prefix(ctx, "))");
     ctx->cte_count++;
 
-    /* Register the loop variable */
+    /* Register the loop variable in unified system */
     char var_alias[128];
     snprintf(var_alias, sizeof(var_alias), "%s.\"%s\"", cte_name, foreach->variable);
-    register_projected_variable(ctx, foreach->variable, cte_name, foreach->variable);
-    /* Register in unified system */
     transform_var_register_projected(ctx->var_ctx, foreach->variable, var_alias);
 
     /*

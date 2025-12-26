@@ -12,6 +12,7 @@
 #include "executor/executor_internal.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_variables.h"
 
 /* Functions will be migrated here one by one */
 
@@ -321,11 +322,11 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                         cypher_identifier *ident = (cypher_identifier*)item->expr;
                         
                         /* Check if this is a path variable */
-                        if (ctx && is_path_variable(ctx, ident->name)) {
+                        if (ctx && transform_var_is_path(ctx->var_ctx, ident->name)) {
                             CYPHER_DEBUG("Executor: Processing path variable '%s' with value: %s", ident->name, value);
                             /* Parse the JSON array of element IDs and build path object */
                             result->agtype_data[current_row][col] = build_path_from_ids(executor, ctx, ident->name, value);
-                        } else if (ctx && is_edge_variable(ctx, ident->name)) {
+                        } else if (ctx && transform_var_is_edge(ctx->var_ctx, ident->name)) {
                             /* Check if value is already a JSON object (from new RETURN format) */
                             if (value[0] == '{') {
                                 /* Parse the JSON object directly */
@@ -475,12 +476,12 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
     }
     
     /* Get path variable metadata */
-    path_variable *path_var = get_path_variable(ctx, path_name);
-    if (!path_var || !path_var->elements) {
+    transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, path_name);
+    if (!path_var || !path_var->path_elements) {
         CYPHER_DEBUG("build_path_from_ids: Failed to get path variable metadata for '%s'", path_name);
         return agtype_value_create_null();
     }
-    CYPHER_DEBUG("build_path_from_ids: Found path metadata with %d elements", path_var->elements->count);
+    CYPHER_DEBUG("build_path_from_ids: Found path metadata with %d elements", path_var->path_elements->count);
     
     /* Parse the JSON array of IDs (simple parsing for "[id1,id2,id3]" format) */
     if (json_ids[0] != '[') {
@@ -501,10 +502,10 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
     
     CYPHER_DEBUG("build_path_from_ids: Counted %d IDs in JSON", id_count);
     
-    if (id_count != path_var->elements->count) {
+    if (id_count != path_var->path_elements->count) {
         /* Mismatch between expected elements and actual IDs */
         CYPHER_DEBUG("build_path_from_ids: Mismatch - expected %d elements, got %d IDs", 
-                     path_var->elements->count, id_count);
+                     path_var->path_elements->count, id_count);
         return agtype_value_create_null();
     }
     
@@ -532,7 +533,7 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
                 int64_t element_id = atoll(id_buffer);
                 
                 /* Create agtype value based on element type */
-                ast_node *element = path_var->elements->items[elem_index];
+                ast_node *element = path_var->path_elements->items[elem_index];
                 if (element->type == AST_NODE_NODE_PATTERN) {
                     /* Create vertex */
                     cypher_node_pattern *node = (cypher_node_pattern*)element;
@@ -583,7 +584,7 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
         CYPHER_DEBUG("build_path_from_ids: Processing final element %d with ID %lld", elem_index, (long long)element_id);
         
         /* Create agtype value based on element type */
-        ast_node *element = path_var->elements->items[elem_index];
+        ast_node *element = path_var->path_elements->items[elem_index];
         if (element->type == AST_NODE_NODE_PATTERN) {
             /* Create vertex */
             cypher_node_pattern *node = (cypher_node_pattern*)element;
@@ -683,10 +684,12 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
         
         /* Select all node variables found in the MATCH */
         bool first = true;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 if (!first) append_sql(ctx, ", ");
-                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                append_sql(ctx, "%s.id AS %s_id", var->table_alias, var->name);
                 first = false;
             }
         }
@@ -730,11 +733,13 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
     /* Read matched node IDs */
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         int col = 0;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count2 = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count2; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, ctx->variables[i].name, (int)node_id);
-                CYPHER_DEBUG("Bound variable '%s' to existing node %lld", ctx->variables[i].name, (long long)node_id);
+                set_variable_node_id(var_map, var->name, (int)node_id);
+                CYPHER_DEBUG("Bound variable '%s' to existing node %lld", var->name, (long long)node_id);
                 col++;
             }
         }

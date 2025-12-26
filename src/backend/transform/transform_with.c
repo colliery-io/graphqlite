@@ -256,12 +256,6 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     }
 
     /* Clear old variables - WITH creates a new scope */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        free(ctx->variables[i].name);
-        free(ctx->variables[i].table_alias);
-    }
-    ctx->variable_count = 0;
-    /* Clear unified system too */
     transform_var_ctx_reset(ctx->var_ctx);
 
     /* Register new variables from WITH projections and build SELECT list */
@@ -291,7 +285,6 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             /* Register the new projected variable */
             /* The variable name is the alias (or original name) */
             /* The full reference is cte_name.col_name */
-            register_projected_variable(ctx, col_name, cte_name, col_name);
             /* Register in unified system */
             char proj_source[256];
             snprintf(proj_source, sizeof(proj_source), "%s.%s", cte_name, col_name);

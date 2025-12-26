@@ -399,6 +399,18 @@ transform_var *transform_var_at(transform_var_context *ctx, int index)
     return &ctx->vars[index];
 }
 
+/* Truncate to saved count (for pattern comprehension save/restore) */
+void transform_var_truncate_to(transform_var_context *ctx, int count)
+{
+    if (!ctx || count < 0 || count > ctx->count) return;
+
+    /* Free variables being removed */
+    for (int i = count; i < ctx->count; i++) {
+        free_var(&ctx->vars[i]);
+    }
+    ctx->count = count;
+}
+
 /* Debug */
 
 void transform_var_dump(transform_var_context *ctx)

@@ -35,38 +35,10 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->sql_buffer[0] = '\0';
     ctx->sql_capacity = INITIAL_SQL_BUFFER_SIZE;
     ctx->sql_size = 0;
-    
-    /* Initialize entity tracking (AGE-style) */
-    ctx->entities = calloc(INITIAL_VARIABLE_CAPACITY, sizeof(ctx->entities[0]));
-    if (!ctx->entities) {
-        free(ctx->sql_buffer);
-        free(ctx);
-        return NULL;
-    }
-    ctx->entity_capacity = INITIAL_VARIABLE_CAPACITY;
-    ctx->entity_count = 0;
-    
-    /* Initialize variable tracking */
-    ctx->variables = calloc(INITIAL_VARIABLE_CAPACITY, sizeof(ctx->variables[0]));
-    if (!ctx->variables) {
-        free(ctx->entities);
-        free(ctx->sql_buffer);
-        free(ctx);
-        return NULL;
-    }
-    ctx->variable_capacity = INITIAL_VARIABLE_CAPACITY;
-    ctx->variable_count = 0;
-    
-    /* Initialize path variable tracking */
-    ctx->path_variables = NULL;
-    ctx->path_variable_count = 0;
-    ctx->path_variable_capacity = 0;
 
-    /* Initialize unified variable context (new system) */
+    /* Initialize unified variable context (includes path variable tracking) */
     ctx->var_ctx = transform_var_ctx_create();
     if (!ctx->var_ctx) {
-        free(ctx->variables);
-        free(ctx->entities);
         free(ctx->sql_buffer);
         free(ctx);
         return NULL;
@@ -117,29 +89,8 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     }
     
     CYPHER_DEBUG("Freeing transform context %p", (void*)ctx);
-    
-    /* Free entities (AGE-style) */
-    for (int i = 0; i < ctx->entity_count; i++) {
-        free(ctx->entities[i].name);
-        free(ctx->entities[i].table_alias);
-    }
-    free(ctx->entities);
-    
-    /* Free variables */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        free(ctx->variables[i].name);
-        free(ctx->variables[i].table_alias);
-    }
-    free(ctx->variables);
-    
-    /* Free path variables */
-    for (int i = 0; i < ctx->path_variable_count; i++) {
-        free(ctx->path_variables[i].name);
-        /* Note: elements list is owned by AST, don't free it */
-    }
-    free(ctx->path_variables);
 
-    /* Free unified variable context */
+    /* Free unified variable context (includes path variables) */
     transform_var_ctx_free(ctx->var_ctx);
 
     /* Free parameter names */
@@ -574,296 +525,28 @@ void prepend_cte_to_sql(cypher_transform_context *ctx)
     CYPHER_DEBUG("New SQL after CTE prepend: %s", ctx->sql_buffer);
 }
 
-/* Variable management */
-
-int register_variable(cypher_transform_context *ctx, const char *name, const char *alias)
-{
-    CYPHER_DEBUG("Registering variable %s with alias %s", name, alias);
-    
-    /* Check if variable already exists */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, name) == 0) {
-            /* Update existing variable */
-            char *new_alias = strdup(alias);
-            if (!new_alias) {
-                return -1;
-            }
-            free(ctx->variables[i].table_alias);
-            ctx->variables[i].table_alias = new_alias;
-            return 0;
-        }
-    }
-    
-    /* Grow array if needed */
-    if (ctx->variable_count >= ctx->variable_capacity) {
-        int new_capacity = ctx->variable_capacity * 2;
-        void *new_vars = realloc(ctx->variables, 
-                                new_capacity * sizeof(ctx->variables[0]));
-        if (!new_vars) {
-            return -1;
-        }
-        ctx->variables = new_vars;
-        ctx->variable_capacity = new_capacity;
-    }
-    
-    /* Add new variable */
-    char *name_copy = strdup(name);
-    char *alias_copy = strdup(alias);
-    if (!name_copy || !alias_copy) {
-        free(name_copy);
-        free(alias_copy);
-        return -1;
-    }
-    ctx->variables[ctx->variable_count].name = name_copy;
-    ctx->variables[ctx->variable_count].table_alias = alias_copy;
-    ctx->variables[ctx->variable_count].is_bound = false;
-    ctx->variables[ctx->variable_count].node_id = -1;
-    ctx->variables[ctx->variable_count].type = VAR_TYPE_NODE; /* Default to node */
-    ctx->variable_count++;
-
-    return 0;
-}
-
-const char* lookup_variable_alias(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, name) == 0) {
-            return ctx->variables[i].table_alias;
-        }
-    }
-    return NULL;
-}
-
-bool is_variable_bound(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, name) == 0) {
-            return ctx->variables[i].is_bound;
-        }
-    }
-    return false;
-}
-
-/* Register a node variable */
-int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias)
-{
-    int result = register_variable(ctx, name, alias);
-    if (result == 0) {
-        /* Find the variable and set its type to node */
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (strcmp(ctx->variables[i].name, name) == 0) {
-                ctx->variables[i].type = VAR_TYPE_NODE;
-                break;
-            }
-        }
-    }
-    return result;
-}
-
-/* Register an edge variable */
-int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias)
-{
-    int result = register_variable(ctx, name, alias);
-    if (result == 0) {
-        /* Find the variable and set its type to edge */
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (strcmp(ctx->variables[i].name, name) == 0) {
-                ctx->variables[i].type = VAR_TYPE_EDGE;
-                break;
-            }
-        }
-    }
-    return result;
-}
-
-/* Register a projected variable (from WITH clause - value is direct, no .id needed) */
-int register_projected_variable(cypher_transform_context *ctx, const char *name, const char *cte_name, const char *column_name)
-{
-    /* Build the full column reference: cte_name.column_name or just column_name */
-    char alias[128];
-    if (cte_name) {
-        snprintf(alias, sizeof(alias), "%s.%s", cte_name, column_name);
-    } else {
-        snprintf(alias, sizeof(alias), "%s", column_name);
-    }
-
-    int result = register_variable(ctx, name, alias);
-    if (result == 0) {
-        /* Find the variable and set its type to projected */
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (strcmp(ctx->variables[i].name, name) == 0) {
-                ctx->variables[i].type = VAR_TYPE_PROJECTED;
-                break;
-            }
-        }
-    }
-    return result;
-}
-
-/* Register a path variable */
+/* Register a path variable (uses unified transform_var system) */
 int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path)
 {
-    /* For path variables, we use a special alias that references the path elements */
-    char alias[64];
-    snprintf(alias, sizeof(alias), "_path_%s", name);
-
-    int result = register_variable(ctx, name, alias);
-    if (result == 0) {
-        /* Find the variable and set its type to path */
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (strcmp(ctx->variables[i].name, name) == 0) {
-                ctx->variables[i].type = VAR_TYPE_PATH;
-                break;
-            }
-        }
-
-        /* Store path variable metadata */
-        if (ctx->path_variable_count >= ctx->path_variable_capacity) {
-            int new_capacity = ctx->path_variable_capacity == 0 ? 4 : ctx->path_variable_capacity * 2;
-            path_variable *new_path_vars = realloc(ctx->path_variables, new_capacity * sizeof(path_variable));
-            if (!new_path_vars) {
-                return -1;
-            }
-            ctx->path_variables = new_path_vars;
-            ctx->path_variable_capacity = new_capacity;
-        }
-
-        char *name_copy = strdup(name);
-        if (!name_copy) {
-            return -1;
-        }
-        ctx->path_variables[ctx->path_variable_count].name = name_copy;
-        ctx->path_variables[ctx->path_variable_count].elements = path->elements;
-        /* Map AST path_type to transform path_type */
-        switch (path->type) {
-            case PATH_TYPE_SHORTEST:
-                ctx->path_variables[ctx->path_variable_count].path_type = TRANSFORM_PATH_SHORTEST;
-                break;
-            case PATH_TYPE_ALL_SHORTEST:
-                ctx->path_variables[ctx->path_variable_count].path_type = TRANSFORM_PATH_ALL_SHORTEST;
-                break;
-            default:
-                ctx->path_variables[ctx->path_variable_count].path_type = TRANSFORM_PATH_NORMAL;
-                break;
-        }
-        ctx->path_variables[ctx->path_variable_count].cte_name = NULL; /* Will be set during varlen CTE generation */
-        ctx->path_variable_count++;
+    /* Map AST path_type to var_path_type */
+    var_path_type ptype;
+    switch (path->type) {
+        case PATH_TYPE_SHORTEST:
+            ptype = VAR_PATH_SHORTEST;
+            break;
+        case PATH_TYPE_ALL_SHORTEST:
+            ptype = VAR_PATH_ALL_SHORTEST;
+            break;
+        default:
+            ptype = VAR_PATH_NORMAL;
+            break;
     }
-    return result;
+
+    /* Register in unified variable tracking system */
+    return transform_var_register_path(ctx->var_ctx, name, NULL, path->elements, ptype);
 }
 
-/* Check if a variable is an edge variable */
-bool is_edge_variable(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, name) == 0) {
-            return ctx->variables[i].type == VAR_TYPE_EDGE;
-        }
-    }
-    return false;
-}
-
-/* Check if a variable is a path variable */
-bool is_path_variable(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, name) == 0) {
-            return ctx->variables[i].type == VAR_TYPE_PATH;
-        }
-    }
-    return false;
-}
-
-bool is_projected_variable(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, name) == 0) {
-            return ctx->variables[i].type == VAR_TYPE_PROJECTED;
-        }
-    }
-    return false;
-}
-
-/* Get path variable metadata */
-path_variable* get_path_variable(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->path_variable_count; i++) {
-        if (strcmp(ctx->path_variables[i].name, name) == 0) {
-            return &ctx->path_variables[i];
-        }
-    }
-    return NULL;
-}
-
-/* Entity management (AGE-style) */
-
-/* Add a new entity (following AGE's add_entity pattern) */
-int add_entity(cypher_transform_context *ctx, const char *name, entity_type type, bool is_current_clause)
-{
-    CYPHER_DEBUG("Adding entity %s, type %d, current_clause %d", name, type, is_current_clause);
-    
-    /* Check if entity already exists */
-    for (int i = 0; i < ctx->entity_count; i++) {
-        if (strcmp(ctx->entities[i].name, name) == 0) {
-            /* Entity already exists, update its current clause status */
-            ctx->entities[i].is_current_clause = is_current_clause;
-            return 0;
-        }
-    }
-    
-    /* Grow array if needed */
-    if (ctx->entity_count >= ctx->entity_capacity) {
-        int new_capacity = ctx->entity_capacity * 2;
-        void *new_entities = realloc(ctx->entities, 
-                                   new_capacity * sizeof(ctx->entities[0]));
-        if (!new_entities) {
-            return -1;
-        }
-        ctx->entities = new_entities;
-        ctx->entity_capacity = new_capacity;
-    }
-    
-    /* Generate default alias using AGE's pattern */
-    char *alias = get_next_default_alias(ctx);
-    if (!alias) {
-        return -1;
-    }
-    
-    /* Add new entity */
-    char *name_copy = strdup(name);
-    if (!name_copy) {
-        free(alias);
-        return -1;
-    }
-    ctx->entities[ctx->entity_count].name = name_copy;
-    ctx->entities[ctx->entity_count].table_alias = alias;
-    ctx->entities[ctx->entity_count].type = type;
-    ctx->entities[ctx->entity_count].is_current_clause = is_current_clause;
-    ctx->entity_count++;
-
-    return 0;
-}
-
-/* Lookup an entity by name (following AGE's lookup pattern) */
-transform_entity* lookup_entity(cypher_transform_context *ctx, const char *name)
-{
-    for (int i = 0; i < ctx->entity_count; i++) {
-        if (strcmp(ctx->entities[i].name, name) == 0) {
-            return &ctx->entities[i];
-        }
-    }
-    return NULL;
-}
-
-/* Mark all current clause entities as inherited for next clause */
-void mark_entities_as_inherited(cypher_transform_context *ctx)
-{
-    for (int i = 0; i < ctx->entity_count; i++) {
-        ctx->entities[i].is_current_clause = false;
-    }
-}
-
-/* Generate next unique alias (AGE's pattern with default prefix) */
+/* Generate next unique alias */
 char* get_next_default_alias(cypher_transform_context *ctx)
 {
     char *alias = malloc(64);
@@ -895,13 +578,6 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     free(ctx->error_message);
     ctx->error_message = NULL;
     ctx->global_alias_counter = 0;
-
-    /* Reset entity tracking for new query (AGE-style) */
-    for (int i = 0; i < ctx->entity_count; i++) {
-        free(ctx->entities[i].name);
-        free(ctx->entities[i].table_alias);
-    }
-    ctx->entity_count = 0;
 
     /* Check if this is a UNION query */
     ast_node *root = (ast_node*)query;
@@ -959,9 +635,9 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
         
-        /* Mark entities from previous clause as inherited (AGE pattern) */
+        /* Mark variables from previous clause as inherited */
         if (i > 0) {
-            mark_entities_as_inherited(ctx);
+            transform_var_mark_inherited(ctx->var_ctx);
         }
         
         CYPHER_DEBUG("Processing clause type %s", ast_node_type_name(clause->type));
@@ -1170,7 +846,7 @@ static int transform_single_query_sql(cypher_transform_context *ctx, cypher_quer
         ast_node *clause = query->clauses->items[i];
 
         if (i > 0) {
-            mark_entities_as_inherited(ctx);
+            transform_var_mark_inherited(ctx->var_ctx);
         }
 
         switch (clause->type) {
@@ -1260,13 +936,6 @@ int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *q
     free(ctx->error_message);
     ctx->error_message = NULL;
     ctx->global_alias_counter = 0;
-
-    /* Reset entity tracking for new query */
-    for (int i = 0; i < ctx->entity_count; i++) {
-        free(ctx->entities[i].name);
-        free(ctx->entities[i].table_alias);
-    }
-    ctx->entity_count = 0;
 
     /* Check if this is a UNION query */
     ast_node *root = (ast_node*)query;

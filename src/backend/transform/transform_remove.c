@@ -109,15 +109,9 @@ static int generate_property_remove(cypher_transform_context *ctx,
     /* Get the table alias for the variable */
     const char *table_alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!table_alias) {
-        /* Try to get entity alias if unified lookup fails */
-        transform_entity *entity = lookup_entity(ctx, variable);
-        if (entity) {
-            table_alias = entity->table_alias;
-        } else {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Unknown variable in REMOVE clause - variable must be defined in MATCH clause");
-            return -1;
-        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("Unknown variable in REMOVE clause - variable must be defined in MATCH clause");
+        return -1;
     }
 
     /* Start a new statement if needed */
@@ -149,15 +143,9 @@ static int generate_label_remove(cypher_transform_context *ctx,
     /* Get the table alias for the variable */
     const char *table_alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!table_alias) {
-        /* Try to get entity alias if unified lookup fails */
-        transform_entity *entity = lookup_entity(ctx, variable);
-        if (entity) {
-            table_alias = entity->table_alias;
-        } else {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Unknown variable in REMOVE label - variable must be defined in MATCH clause");
-            return -1;
-        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("Unknown variable in REMOVE label - variable must be defined in MATCH clause");
+        return -1;
     }
 
     /* Start a new statement if needed */

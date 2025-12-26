@@ -10,6 +10,7 @@
 #include "executor/executor_internal.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_variables.h"
 
 /* Execute MATCH+REMOVE query combination */
 int execute_match_remove_query(cypher_executor *executor, cypher_match *match, cypher_remove *remove, cypher_result *result)
@@ -45,14 +46,16 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
 
         /* Select all node and edge variables found in the MATCH */
         bool first = true;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 if (!first) append_sql(ctx, ", ");
-                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                append_sql(ctx, "%s.id AS %s_id", var->table_alias, var->name);
                 first = false;
-            } else if (ctx->variables[i].type == VAR_TYPE_EDGE) {
+            } else if (var && var->kind == VAR_KIND_EDGE) {
                 if (!first) append_sql(ctx, ", ");
-                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                append_sql(ctx, "%s.id AS %s_id", var->table_alias, var->name);
                 first = false;
             }
         }
@@ -97,16 +100,18 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
 
         /* Bind variables to matched node and edge IDs */
         int col = 0;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count2 = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count2; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, ctx->variables[i].name, (int)node_id);
-                CYPHER_DEBUG("Bound variable '%s' to node %lld", ctx->variables[i].name, (long long)node_id);
+                set_variable_node_id(var_map, var->name, (int)node_id);
+                CYPHER_DEBUG("Bound variable '%s' to node %lld", var->name, (long long)node_id);
                 col++;
-            } else if (ctx->variables[i].type == VAR_TYPE_EDGE) {
+            } else if (var && var->kind == VAR_KIND_EDGE) {
                 int64_t edge_id = sqlite3_column_int64(stmt, col);
-                set_variable_edge_id(var_map, ctx->variables[i].name, (int)edge_id);
-                CYPHER_DEBUG("Bound variable '%s' to edge %lld", ctx->variables[i].name, (long long)edge_id);
+                set_variable_edge_id(var_map, var->name, (int)edge_id);
+                CYPHER_DEBUG("Bound variable '%s' to edge %lld", var->name, (long long)edge_id);
                 col++;
             }
         }

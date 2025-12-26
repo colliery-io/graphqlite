@@ -140,6 +140,9 @@ int transform_var_set_bound(transform_var_context *ctx,
 int transform_var_count(transform_var_context *ctx);
 transform_var *transform_var_at(transform_var_context *ctx, int index);
 
+/* Truncate to saved count (for pattern comprehension save/restore) */
+void transform_var_truncate_to(transform_var_context *ctx, int count);
+
 /* Debug helper */
 void transform_var_dump(transform_var_context *ctx);
 

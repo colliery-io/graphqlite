@@ -10,6 +10,7 @@
 #include "executor/executor_internal.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_variables.h"
 
 /* Find a node by label and properties, returns node_id or -1 if not found */
 int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern)
@@ -604,10 +605,12 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
 
         /* Select all node variables found in the MATCH */
         bool first = true;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 if (!first) append_sql(ctx, ", ");
-                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                append_sql(ctx, "%s.id AS %s_id", var->table_alias, var->name);
                 first = false;
             }
         }
@@ -651,11 +654,13 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
     /* Read matched node IDs */
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         int col = 0;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count2 = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count2; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, ctx->variables[i].name, (int)node_id);
-                CYPHER_DEBUG("MERGE bound variable '%s' to node %lld", ctx->variables[i].name, (long long)node_id);
+                set_variable_node_id(var_map, var->name, (int)node_id);
+                CYPHER_DEBUG("MERGE bound variable '%s' to node %lld", var->name, (long long)node_id);
                 col++;
             }
         }

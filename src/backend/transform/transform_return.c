@@ -101,8 +101,6 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
                     if (item->alias) {
                         /* Register alias so ORDER BY can reference it */
-                        register_projected_variable(ctx, item->alias, NULL, item->alias);
-                        /* Register in unified system */
                         transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
                     }
                 }
@@ -325,8 +323,6 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             for (int i = 0; i < ret->items->count; i++) {
                 cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
                 if (item->alias) {
-                    register_projected_variable(ctx, item->alias, NULL, item->alias);
-                    /* Register in unified system */
                     transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
                 }
             }
@@ -471,20 +467,20 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_IDENTIFIER:
             {
                 cypher_identifier *id = (cypher_identifier*)expr;
-                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
-                if (alias) {
-                    if (transform_var_is_path(ctx->var_ctx, id->name)) {
+
+                /* Check for path variables first - they don't have a table alias */
+                if (transform_var_is_path(ctx->var_ctx, id->name)) {
                         CYPHER_DEBUG("Processing path variable '%s' in RETURN", id->name);
                         /* This is a path variable - generate JSON with element IDs */
-                        path_variable *path_var = get_path_variable(ctx, id->name);
-                        if (path_var && path_var->elements) {
-                            CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->elements->count);
+                        transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, id->name);
+                        if (path_var && path_var->path_elements) {
+                            CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->path_elements->count);
 
                             /* Check if this is a variable-length path (shortestPath, etc.) */
                             bool has_varlen = false;
                             const char *varlen_alias = NULL;
-                            for (int i = 0; i < path_var->elements->count; i++) {
-                                ast_node *element = path_var->elements->items[i];
+                            for (int i = 0; i < path_var->path_elements->count; i++) {
+                                ast_node *element = path_var->path_elements->items[i];
                                 if (element->type == AST_NODE_REL_PATTERN) {
                                     cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
                                     if (rel->varlen) {
@@ -503,10 +499,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                             } else {
                                 /* Regular path - build from individual element IDs */
                                 append_sql(ctx, "'[");
-                                for (int i = 0; i < path_var->elements->count; i++) {
+                                for (int i = 0; i < path_var->path_elements->count; i++) {
                                     if (i > 0) append_sql(ctx, ",");
 
-                                    ast_node *element = path_var->elements->items[i];
+                                    ast_node *element = path_var->path_elements->items[i];
                                     if (element->type == AST_NODE_NODE_PATTERN) {
                                         cypher_node_pattern *node = (cypher_node_pattern*)element;
                                         if (node->variable) {
@@ -538,59 +534,64 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         } else {
                             append_sql(ctx, "'[]'");
                         }
-                    } else if (transform_var_is_projected(ctx->var_ctx, id->name)) {
-                        /* This is a projected variable from WITH - alias is the full column reference */
-                        append_sql(ctx, "%s", alias);
-                    } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
-                        /* This is an edge variable - return full relationship object */
-                        append_sql(ctx, "json_object("
-                            "'id', %s.id, "
-                            "'type', %s.type, "
-                            "'startNodeId', %s.source_id, "
-                            "'endNodeId', %s.target_id, "
-                            "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
-                                "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
-                                "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
-                                "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id))) "
-                            "FROM property_keys pk WHERE "
-                                "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id)"
-                            "), json('{}'))"
-                        ")",
-                        alias, alias, alias, alias,
-                        alias, alias, alias, alias,
-                        alias, alias, alias, alias);
-                    } else {
-                        /* This is a node variable - return full node object */
-                        append_sql(ctx, "json_object("
-                            "'id', %s.id, "
-                            "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
-                            "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
-                                "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
-                                "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
-                                "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id))) "
-                            "FROM property_keys pk WHERE "
-                                "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id)"
-                            "), json('{}'))"
-                        ")",
-                        alias, alias,
-                        alias, alias, alias, alias,
-                        alias, alias, alias, alias);
-                    }
                 } else {
-                    /* Unknown identifier */
-                    ctx->has_error = true;
-                    char error[256];
-                    snprintf(error, sizeof(error), "Unknown variable: %s", id->name);
-                    ctx->error_message = strdup(error);
-                    return -1;
+                    /* Non-path variables need an alias */
+                    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+                    if (alias) {
+                        if (transform_var_is_projected(ctx->var_ctx, id->name)) {
+                            /* This is a projected variable from WITH - alias is the full column reference */
+                            append_sql(ctx, "%s", alias);
+                        } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
+                            /* This is an edge variable - return full relationship object */
+                            append_sql(ctx, "json_object("
+                                "'id', %s.id, "
+                                "'type', %s.type, "
+                                "'startNodeId', %s.source_id, "
+                                "'endNodeId', %s.target_id, "
+                                "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                    "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
+                                    "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
+                                    "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
+                                    "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id))) "
+                                "FROM property_keys pk WHERE "
+                                    "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id)"
+                                "), json('{}'))"
+                            ")",
+                            alias, alias, alias, alias,
+                            alias, alias, alias, alias,
+                            alias, alias, alias, alias);
+                        } else {
+                            /* This is a node variable - return full node object */
+                            append_sql(ctx, "json_object("
+                                "'id', %s.id, "
+                                "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
+                                "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                    "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
+                                    "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
+                                    "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
+                                    "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id))) "
+                                "FROM property_keys pk WHERE "
+                                    "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id)"
+                                "), json('{}'))"
+                            ")",
+                            alias, alias,
+                            alias, alias, alias, alias,
+                            alias, alias, alias, alias);
+                        }
+                    } else {
+                        /* Unknown identifier */
+                        ctx->has_error = true;
+                        char error[256];
+                        snprintf(error, sizeof(error), "Unknown variable: %s", id->name);
+                        ctx->error_message = strdup(error);
+                        return -1;
+                    }
                 }
             }
             break;
@@ -872,15 +873,6 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
                 /* Register the comprehension variable to map to json_each.value */
-                register_variable(ctx, comp_var, "json_each.value");
-                /* Update the type to projected so it's treated as a direct value */
-                for (int i = 0; i < ctx->variable_count; i++) {
-                    if (strcmp(ctx->variables[i].name, comp_var) == 0) {
-                        ctx->variables[i].type = VAR_TYPE_PROJECTED;
-                        break;
-                    }
-                }
-                /* Register in unified system */
                 transform_var_register_projected(ctx->var_ctx, comp_var, "json_each.value");
 
                 /* Build the subquery */
@@ -920,8 +912,6 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
                 /* Restore the old alias if there was one, otherwise remove the variable */
                 if (saved_alias) {
-                    register_variable(ctx, comp_var, saved_alias);
-                    /* Restore in unified system */
                     transform_var_register_projected(ctx->var_ctx, comp_var, saved_alias);
                     free(saved_alias);
                 }
@@ -965,8 +955,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     return -1;
                 }
 
-                /* Save current variable state to restore later */
-                int saved_var_count = ctx->variable_count;
+                /* Save current variable count to restore later */
+                int saved_var_count = transform_var_count(ctx->var_ctx);
 
                 /* Track node aliases and whether they're external */
                 char node_aliases[10][32];
@@ -1038,8 +1028,6 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 /* Register pattern variables for use in expressions */
                 for (int i = 0; i < node_count; i++) {
                     if (node_vars[i][0] != '\0') {
-                        register_variable(ctx, node_vars[i], node_aliases[i]);
-                        /* Register in unified system */
                         transform_var_register_node(ctx->var_ctx, node_vars[i], node_aliases[i], NULL);
                     }
                 }
@@ -1203,7 +1191,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 }
 
                 /* Restore variable count (remove pattern-local variables) */
-                ctx->variable_count = saved_var_count;
+                transform_var_truncate_to(ctx->var_ctx, saved_var_count);
             }
             break;
 

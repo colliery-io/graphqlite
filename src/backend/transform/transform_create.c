@@ -147,7 +147,6 @@ static int generate_node_create(cypher_transform_context *ctx, cypher_node_patte
         if (node->variable) {
             /* Register the variable for later use */
             /* In a real implementation, we'd need to track the created node ID */
-            register_variable(ctx, node->variable, "last_insert_rowid()");
             /* Register in unified system */
             transform_var_register_node(ctx->var_ctx, node->variable, "last_insert_rowid()", NULL);
         }
@@ -216,7 +215,6 @@ static int generate_relationship_create(cypher_transform_context *ctx, cypher_re
     
     /* Register relationship variable if present */
     if (rel->variable) {
-        register_variable(ctx, rel->variable, "last_insert_rowid()");
         /* Register in unified system */
         transform_var_register_edge(ctx->var_ctx, rel->variable, "last_insert_rowid()", rel->type);
     }

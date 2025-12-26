@@ -18,6 +18,32 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node,
                                      int rel_index, bool optional, path_type ptype);
 
+/*
+ * Generate the proper node id reference for join conditions.
+ * For regular nodes: returns "alias.id"
+ * For projected variables (from WITH): returns just the alias (which IS the id)
+ *
+ * Returns a static buffer - not thread-safe, must be used immediately.
+ * If var_name is NULL, falls back to using alias.id.
+ */
+static const char *get_node_id_ref(cypher_transform_context *ctx,
+                                   const char *alias,
+                                   const char *var_name)
+{
+    static char id_ref_buf[256];
+
+    /* Check if this is a projected variable */
+    if (var_name && transform_var_is_projected(ctx->var_ctx, var_name)) {
+        /* For projected variables, the alias IS the id value */
+        snprintf(id_ref_buf, sizeof(id_ref_buf), "%s", alias);
+    } else {
+        /* For regular nodes, use alias.id */
+        snprintf(id_ref_buf, sizeof(id_ref_buf), "%s.id", alias);
+    }
+
+    return id_ref_buf;
+}
+
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
@@ -95,25 +121,33 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
             if (element->type == AST_NODE_NODE_PATTERN) {
                 cypher_node_pattern *node = (cypher_node_pattern*)element;
                 
-                /* Use entity system for node variables (AGE-style) */
+                /* Use unified variable system for node variables */
                 const char *alias;
                 if (node->variable) {
-                    transform_entity *entity = lookup_entity(ctx, node->variable);
-                    if (!entity) {
-                        /* New entity - add it */
-                        if (add_entity(ctx, node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                    transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
+                    if (!var) {
+                        /* New variable - register it */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (!gen_alias) {
                             ctx->has_error = true;
-                            ctx->error_message = strdup("Failed to add node entity");
+                            ctx->error_message = strdup("Failed to allocate alias");
                             return -1;
                         }
-                        entity = lookup_entity(ctx, node->variable);
+                        const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+                        if (transform_var_register_node(ctx->var_ctx, node->variable, gen_alias, label) < 0) {
+                            free(gen_alias);
+                            ctx->has_error = true;
+                            ctx->error_message = strdup("Failed to add node variable");
+                            return -1;
+                        }
+                        free(gen_alias);
                     }
-                    alias = entity->table_alias;
-                    /* Also register in legacy system for compatibility */
-                    register_node_variable(ctx, node->variable, alias);
-                    /* Register in unified system */
-                    const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
-                    transform_var_register_node(ctx->var_ctx, node->variable, alias, label);
+                    alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                    if (!alias) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to get node variable alias");
+                        return -1;
+                    }
                 } else {
                     /* Anonymous node - use legacy approach for now */
                     char temp_alias[32];
@@ -186,58 +220,60 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     continue;
                 }
 
-                /* Get aliases using entity system (AGE-style) */
+                /* Get aliases using unified variable system */
                 const char *source_alias, *target_alias, *edge_alias;
-                
+
                 /* Source node alias */
                 if (source_node->variable) {
-                    transform_entity *entity = lookup_entity(ctx, source_node->variable);
-                    if (!entity) {
-                        /* This should have been added already, but add if missing */
-                        if (add_entity(ctx, source_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                            continue;
+                    source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
+                    if (!source_alias) {
+                        /* Should have been added already, but add if missing */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (gen_alias) {
+                            transform_var_register_node(ctx->var_ctx, source_node->variable, gen_alias, NULL);
+                            free(gen_alias);
+                            source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
                         }
-                        entity = lookup_entity(ctx, source_node->variable);
                     }
-                    source_alias = entity->table_alias;
+                    if (!source_alias) continue;
                 } else {
                     static char temp_source[32];
                     snprintf(temp_source, sizeof(temp_source), "n_%d", j - 1);
                     source_alias = temp_source;
                 }
-                
+
                 /* Target node alias */
                 if (target_node->variable) {
-                    transform_entity *entity = lookup_entity(ctx, target_node->variable);
-                    if (!entity) {
-                        /* This should have been added already, but add if missing */
-                        if (add_entity(ctx, target_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                            continue;
+                    target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
+                    if (!target_alias) {
+                        /* Should have been added already, but add if missing */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (gen_alias) {
+                            transform_var_register_node(ctx->var_ctx, target_node->variable, gen_alias, NULL);
+                            free(gen_alias);
+                            target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
                         }
-                        entity = lookup_entity(ctx, target_node->variable);
                     }
-                    target_alias = entity->table_alias;
+                    if (!target_alias) continue;
                 } else {
                     static char temp_target[32];
                     snprintf(temp_target, sizeof(temp_target), "n_%d", j + 1);
                     target_alias = temp_target;
                 }
-                
+
                 /* Edge alias */
                 if (rel->variable) {
-                    transform_entity *entity = lookup_entity(ctx, rel->variable);
-                    if (!entity) {
-                        /* New relationship entity */
-                        if (add_entity(ctx, rel->variable, ENTITY_TYPE_EDGE, true) < 0) {
-                            continue;
+                    edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
+                    if (!edge_alias) {
+                        /* New relationship variable */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (gen_alias) {
+                            transform_var_register_edge(ctx->var_ctx, rel->variable, gen_alias, rel->type);
+                            free(gen_alias);
+                            edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                         }
-                        entity = lookup_entity(ctx, rel->variable);
                     }
-                    edge_alias = entity->table_alias;
-                    /* Register in legacy system for compatibility */
-                    register_edge_variable(ctx, rel->variable, edge_alias);
-                    /* Register in unified system */
-                    transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
+                    if (!edge_alias) continue;
                 } else {
                     /* This shouldn't happen with AGE pattern - anonymous rels get names assigned */
                     ctx->has_error = true;
@@ -254,14 +290,21 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 }
                 
                 /* Handle relationship direction */
+                /* Get proper id references (handles projected variables from WITH) */
+                char source_id_ref[256], target_id_ref[256];
+                snprintf(source_id_ref, sizeof(source_id_ref), "%s",
+                         get_node_id_ref(ctx, source_alias, source_node->variable));
+                snprintf(target_id_ref, sizeof(target_id_ref), "%s",
+                         get_node_id_ref(ctx, target_alias, target_node->variable));
+
                 if (rel->left_arrow && !rel->right_arrow) {
                     /* <-[:TYPE]- (reversed: target -> source) */
-                    append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
-                              edge_alias, target_alias, edge_alias, source_alias);
+                    append_sql(ctx, "%s.source_id = %s AND %s.target_id = %s",
+                              edge_alias, target_id_ref, edge_alias, source_id_ref);
                 } else {
                     /* -[:TYPE]-> or -[:TYPE]- (forward or undirected, treat as forward) */
-                    append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
-                              edge_alias, source_alias, edge_alias, target_alias);
+                    append_sql(ctx, "%s.source_id = %s AND %s.target_id = %s",
+                              edge_alias, source_id_ref, edge_alias, target_id_ref);
                 }
                 
                 /* Add relationship type constraint if specified */
@@ -372,16 +415,6 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             ctx->error_message = strdup("Failed to register path variable");
             return -1;
         }
-        /* Register in unified system */
-        char path_alias[64];
-        snprintf(path_alias, sizeof(path_alias), "_path_%s", path->var_name);
-        var_path_type unified_path_type;
-        switch (path->type) {
-            case PATH_TYPE_SHORTEST: unified_path_type = VAR_PATH_SHORTEST; break;
-            case PATH_TYPE_ALL_SHORTEST: unified_path_type = VAR_PATH_ALL_SHORTEST; break;
-            default: unified_path_type = VAR_PATH_NORMAL; break;
-        }
-        transform_var_register_path(ctx->var_ctx, path->var_name, path_alias, path->elements, unified_path_type);
         CYPHER_DEBUG("Successfully registered path variable: %s", path->var_name);
     } else {
         CYPHER_DEBUG("Path has no variable name - skipping registration");
@@ -396,49 +429,50 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
         if (element->type == AST_NODE_NODE_PATTERN) {
             cypher_node_pattern *node = (cypher_node_pattern*)element;
             
-            /* Use entity system (AGE-style) */
+            /* Use unified variable system */
             const char *alias;
             bool need_from_clause = false;
-            
+
             if (node->variable) {
-                /* Check if entity already exists */
-                transform_entity *entity = lookup_entity(ctx, node->variable);
-                if (entity && entity->is_current_clause) {
-                    /* Entity exists and is from current clause, reuse alias but check if we need FROM clause */
-                    alias = entity->table_alias;
-                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
-                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
-                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
-                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
-                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
-                        need_from_clause = true;
+                transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
+                if (var) {
+                    /* Variable exists - reuse alias, check if we need FROM clause */
+                    alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                    if (!alias) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to get alias for existing variable");
+                        return -1;
                     }
-                } else if (entity && !entity->is_current_clause) {
-                    /* Entity from previous clause - reuse but may need FROM clause */
-                    alias = entity->table_alias;
-                    entity->is_current_clause = true; /* Mark as used in current clause */
-                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
-                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
-                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
-                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
+                    /* Check if this alias is already in the SQL (from previous clause or current) */
+                    bool alias_in_sql = strstr(ctx->sql_buffer, alias) != NULL;
+                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, alias) != NULL;
+                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, alias) != NULL;
                     if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
                         need_from_clause = true;
                     }
                 } else {
-                    /* New entity, add it */
-                    if (add_entity(ctx, node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                    /* New variable - register it */
+                    char *gen_alias = get_next_default_alias(ctx);
+                    if (!gen_alias) {
                         ctx->has_error = true;
-                        ctx->error_message = strdup("Failed to add node entity in pattern");
+                        ctx->error_message = strdup("Failed to allocate alias");
                         return -1;
                     }
-                    entity = lookup_entity(ctx, node->variable);
-                    alias = entity->table_alias;
-                    need_from_clause = true;
-                    /* Register in legacy system for compatibility */
-                    register_node_variable(ctx, node->variable, alias);
-                    /* Register in unified system */
                     const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
-                    transform_var_register_node(ctx->var_ctx, node->variable, alias, label);
+                    if (transform_var_register_node(ctx->var_ctx, node->variable, gen_alias, label) < 0) {
+                        free(gen_alias);
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to add node variable in pattern");
+                        return -1;
+                    }
+                    free(gen_alias);
+                    alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                    if (!alias) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to get alias for node variable in pattern");
+                        return -1;
+                    }
+                    need_from_clause = true;
                 }
             } else {
                 /* Anonymous node - use generated alias */
@@ -649,11 +683,14 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 
     /* Add label JOINs if specified - one JOIN per label for multi-label support */
     if (has_labels(node)) {
+        /* Get proper node id reference (handles projected variables from WITH) */
+        const char *node_id = get_node_id_ref(ctx, alias, node->variable);
+
         for (int i = 0; i < node->labels->count; i++) {
             const char *label = get_label_string(node->labels->items[i]);
             if (label) {
-                append_sql(ctx, " JOIN node_labels AS _nl_%s_%d ON _nl_%s_%d.node_id = %s.id AND _nl_%s_%d.label = ",
-                           alias, i, alias, i, alias, alias, i);
+                append_sql(ctx, " JOIN node_labels AS _nl_%s_%d ON _nl_%s_%d.node_id = %s AND _nl_%s_%d.label = ",
+                           alias, i, alias, i, node_id, alias, i);
                 append_string_literal(ctx, label);
             }
         }
@@ -672,42 +709,40 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                  rel->type ? rel->type : "<no type>",
                  rel->varlen ? "yes" : "no");
 
-    /* Get aliases using entity system (AGE-style) */
+    /* Get aliases using unified variable system */
     const char *source_alias, *target_alias, *edge_alias;
-    
+
     /* Source node */
     if (source_node->variable) {
-        transform_entity *entity = lookup_entity(ctx, source_node->variable);
-        if (!entity) {
-            /* Add missing entity */
-            if (add_entity(ctx, source_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                return -1;
-            }
-            entity = lookup_entity(ctx, source_node->variable);
+        source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
+        if (!source_alias) {
+            /* Add missing variable */
+            char *gen_alias = get_next_default_alias(ctx);
+            if (!gen_alias) return -1;
+            transform_var_register_node(ctx->var_ctx, source_node->variable, gen_alias, NULL);
+            free(gen_alias);
+            source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
         }
-        source_alias = entity->table_alias;
+        if (!source_alias) return -1;
     } else {
         static char temp_source[32];
         snprintf(temp_source, sizeof(temp_source), "n_%d", rel_index - 1);
         source_alias = temp_source;
     }
-    
+
     /* Target node */
     if (target_node->variable) {
-        transform_entity *entity = lookup_entity(ctx, target_node->variable);
-        if (!entity) {
-            /* Add missing entity */
-            if (add_entity(ctx, target_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                return -1;
-            }
-            entity = lookup_entity(ctx, target_node->variable);
+        target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
+        if (!target_alias) {
+            /* Add missing variable */
+            char *gen_alias = get_next_default_alias(ctx);
+            if (!gen_alias) return -1;
+            const char *label = has_labels(target_node) ? get_label_string(target_node->labels->items[0]) : NULL;
+            transform_var_register_node(ctx->var_ctx, target_node->variable, gen_alias, label);
+            free(gen_alias);
+            target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
         }
-        target_alias = entity->table_alias;
-        /* Register in legacy system for compatibility */
-        register_node_variable(ctx, target_node->variable, target_alias);
-        /* Register in unified system */
-        const char *label = has_labels(target_node) ? get_label_string(target_node->labels->items[0]) : NULL;
-        transform_var_register_node(ctx->var_ctx, target_node->variable, target_alias, label);
+        if (!target_alias) return -1;
     } else {
         static char temp_target[32];
         snprintf(temp_target, sizeof(temp_target), "n_%d", rel_index + 1);
@@ -716,27 +751,30 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
     /* Edge */
     if (rel->variable) {
-        transform_entity *entity = lookup_entity(ctx, rel->variable);
-        if (!entity) {
-            /* Add new edge entity */
-            if (add_entity(ctx, rel->variable, ENTITY_TYPE_EDGE, true) < 0) {
-                return -1;
-            }
-            entity = lookup_entity(ctx, rel->variable);
+        edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
+        if (!edge_alias) {
+            /* Add new edge variable */
+            char *gen_alias = get_next_default_alias(ctx);
+            if (!gen_alias) return -1;
+            transform_var_register_edge(ctx->var_ctx, rel->variable, gen_alias, rel->type);
+            free(gen_alias);
+            edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
         }
-        edge_alias = entity->table_alias;
+        if (!edge_alias) return -1;
     } else {
-        /* With AGE pattern, anonymous relationships should have been assigned names */
-        /* But handle legacy case or if called from other contexts */
+        /* Anonymous relationship - generate name and register */
         char *default_name = get_next_default_alias(ctx);
-        if (add_entity(ctx, default_name, ENTITY_TYPE_EDGE, true) < 0) {
+        char *gen_alias = get_next_default_alias(ctx);
+        if (!default_name || !gen_alias) {
             free(default_name);
+            free(gen_alias);
             return -1;
         }
-        transform_entity *entity = lookup_entity(ctx, default_name);
-        edge_alias = entity->table_alias;
-        /* Clean up the allocated name since entity has its own copy */
+        transform_var_register_edge(ctx->var_ctx, default_name, gen_alias, rel->type);
+        edge_alias = transform_var_get_alias(ctx->var_ctx, default_name);
         free(default_name);
+        free(gen_alias);
+        if (!edge_alias) return -1;
     }
     
     /* Handle variable-length relationships differently - use recursive CTE */
@@ -820,11 +858,14 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
         /* Add label constraints for target node if specified - one JOIN per label */
         if (has_labels(target_node)) {
+            /* Get proper node id reference (handles projected variables from WITH) */
+            const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
+
             for (int i = 0; i < target_node->labels->count; i++) {
                 const char *label = get_label_string(target_node->labels->items[i]);
                 if (label) {
-                    append_sql(ctx, " JOIN node_labels AS _nl_%s_%d ON _nl_%s_%d.node_id = %s.id AND _nl_%s_%d.label = ",
-                               target_alias, i, target_alias, i, target_alias, target_alias, i);
+                    append_sql(ctx, " JOIN node_labels AS _nl_%s_%d ON _nl_%s_%d.node_id = %s AND _nl_%s_%d.label = ",
+                               target_alias, i, target_alias, i, target_id, target_alias, i);
                     append_string_literal(ctx, label);
                 }
             }
@@ -835,11 +876,9 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
         /* Store info for WHERE clause generation later */
         /* We'll add the join conditions in the relationship constraint phase */
-        if (rel->variable) {
-            register_edge_variable(ctx, rel->variable, edge_alias);
-            /* Register in unified system */
-            transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
-        }
+        /* Note: The variable was already registered earlier - no need to re-register
+         * Re-registering would cause use-after-free because edge_alias points to
+         * the stored table_alias which would be freed during re-registration */
 
         /* We need to add WHERE constraints for the CTE join */
         /* Check if this is the first constraint */
@@ -849,8 +888,15 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         } else {
             append_sql(ctx, " AND ");
         }
-        append_sql(ctx, "%s.start_id = %s.id AND %s.end_id = %s.id",
-                   edge_alias, source_alias, edge_alias, target_alias);
+        /* Get proper id references (handles projected variables from WITH) */
+        char src_id_ref[256], tgt_id_ref[256];
+        snprintf(src_id_ref, sizeof(src_id_ref), "%s",
+                 get_node_id_ref(ctx, source_alias, source_node->variable));
+        snprintf(tgt_id_ref, sizeof(tgt_id_ref), "%s",
+                 get_node_id_ref(ctx, target_alias, target_node->variable));
+
+        append_sql(ctx, "%s.start_id = %s AND %s.end_id = %s",
+                   edge_alias, src_id_ref, edge_alias, tgt_id_ref);
 
         /* Add minimum depth constraint if > 1 */
         if (min_hops > 1) {
@@ -862,8 +908,8 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             CYPHER_DEBUG("Adding shortest path filtering (type=%d)", ptype);
             /* Filter to only paths with minimum depth between the source and target */
             /* This ensures we get the shortest path(s) for the specific pair being matched */
-            append_sql(ctx, " AND %s.depth = (SELECT MIN(sp.depth) FROM %s sp WHERE sp.start_id = %s.id AND sp.end_id = %s.id)",
-                       edge_alias, cte_name, source_alias, target_alias);
+            append_sql(ctx, " AND %s.depth = (SELECT MIN(sp.depth) FROM %s sp WHERE sp.start_id = %s AND sp.end_id = %s)",
+                       edge_alias, cte_name, src_id_ref, tgt_id_ref);
         }
 
         return 0; /* Skip the rest of the relationship handling */
@@ -875,9 +921,12 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
             /* This ensures we get NULLs for unmatched patterns, not cartesian products */
 
+            /* Get proper source id reference (handles projected variables from WITH) */
+            const char *source_id = get_node_id_ref(ctx, source_alias, source_node->variable);
+
             /* First, LEFT JOIN the edges table from the source node */
-            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id",
-                              edge_alias, edge_alias, source_alias);
+            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s",
+                              edge_alias, edge_alias, source_id);
 
             /* Add relationship type constraint to edge JOIN */
             if (rel->type) {
@@ -920,9 +969,12 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
             /* This ensures we get NULLs for unmatched patterns, not cartesian products */
 
+            /* Get proper source id reference (handles projected variables from WITH) */
+            const char *source_id = get_node_id_ref(ctx, source_alias, source_node->variable);
+
             /* First, LEFT JOIN the edges table from the source node */
-            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id",
-                       edge_alias, edge_alias, source_alias);
+            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s",
+                       edge_alias, edge_alias, source_id);
 
             /* Add relationship type constraint to edge JOIN */
             if (rel->type) {
@@ -956,7 +1008,6 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     
     /* Register relationship variable if present */
     if (rel->variable) {
-        register_edge_variable(ctx, rel->variable, edge_alias);
         /* Register in unified system */
         transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
     } else {
@@ -964,7 +1015,6 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         /* Create a synthetic variable name based on position for tracking */
         char synthetic_var[32];
         snprintf(synthetic_var, sizeof(synthetic_var), "__unnamed_rel_%d", rel_index);
-        register_edge_variable(ctx, synthetic_var, edge_alias);
         /* Register in unified system */
         transform_var_register_edge(ctx->var_ctx, synthetic_var, edge_alias, rel->type);
     }

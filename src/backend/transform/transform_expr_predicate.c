@@ -261,14 +261,6 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
     /* Register the predicate variable to map to json_each.value */
-    register_variable(ctx, pred->variable, "json_each.value");
-    /* Update the type to projected so it's treated as a direct value */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, pred->variable) == 0) {
-            ctx->variables[i].type = VAR_TYPE_PROJECTED;
-            break;
-        }
-    }
     /* Register in unified system as projected */
     transform_var_register_projected(ctx->var_ctx, pred->variable, "json_each.value");
 
@@ -324,8 +316,7 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
 
     /* Restore the old alias if we saved one */
     if (saved_alias) {
-        register_variable(ctx, pred->variable, saved_alias);
-        /* Also restore in unified system */
+        /* Restore in unified system */
         transform_var_register_projected(ctx->var_ctx, pred->variable, saved_alias);
         free(saved_alias);
     }
@@ -385,24 +376,8 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
      */
     char acc_ref[64];
     snprintf(acc_ref, sizeof(acc_ref), "%s.acc", cte_name);
-    register_variable(ctx, reduce->accumulator, acc_ref);
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, reduce->accumulator) == 0) {
-            ctx->variables[i].type = VAR_TYPE_PROJECTED;
-            break;
-        }
-    }
     /* Register in unified system */
     transform_var_register_projected(ctx->var_ctx, reduce->accumulator, acc_ref);
-
-    register_variable(ctx, reduce->variable, "json_each.value");
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, reduce->variable) == 0) {
-            ctx->variables[i].type = VAR_TYPE_PROJECTED;
-            break;
-        }
-    }
-    /* Register in unified system */
     transform_var_register_projected(ctx->var_ctx, reduce->variable, "json_each.value");
 
     /* Transform the expression that computes new accumulator value */
@@ -435,12 +410,10 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
 
     /* Restore old aliases */
     if (saved_acc_alias) {
-        register_variable(ctx, reduce->accumulator, saved_acc_alias);
         transform_var_register_projected(ctx->var_ctx, reduce->accumulator, saved_acc_alias);
         free(saved_acc_alias);
     }
     if (saved_var_alias) {
-        register_variable(ctx, reduce->variable, saved_var_alias);
         transform_var_register_projected(ctx->var_ctx, reduce->variable, saved_var_alias);
         free(saved_var_alias);
     }

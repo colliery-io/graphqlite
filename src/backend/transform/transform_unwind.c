@@ -151,17 +151,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     ctx->cte_count++;
 
     /* Clear old variables - UNWIND creates a new scope */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        free(ctx->variables[i].name);
-        free(ctx->variables[i].table_alias);
-    }
-    ctx->variable_count = 0;
-    /* Clear unified system too */
     transform_var_ctx_reset(ctx->var_ctx);
 
-    /* Register the unwound variable */
-    register_projected_variable(ctx, unwind->alias, cte_name, "value");
-    /* Register in unified system */
+    /* Register the unwound variable in unified system */
     char unwind_source[256];
     snprintf(unwind_source, sizeof(unwind_source), "%s.value", cte_name);
     transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
