@@ -111,6 +111,9 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     alias = entity->table_alias;
                     /* Also register in legacy system for compatibility */
                     register_node_variable(ctx, node->variable, alias);
+                    /* Register in unified system */
+                    const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+                    transform_var_register_node(ctx->var_ctx, node->variable, alias, label);
                 } else {
                     /* Anonymous node - use legacy approach for now */
                     char temp_alias[32];
@@ -233,6 +236,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     edge_alias = entity->table_alias;
                     /* Register in legacy system for compatibility */
                     register_edge_variable(ctx, rel->variable, edge_alias);
+                    /* Register in unified system */
+                    transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
                 } else {
                     /* This shouldn't happen with AGE pattern - anonymous rels get names assigned */
                     ctx->has_error = true;
@@ -421,6 +426,9 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                     need_from_clause = true;
                     /* Register in legacy system for compatibility */
                     register_node_variable(ctx, node->variable, alias);
+                    /* Register in unified system */
+                    const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+                    transform_var_register_node(ctx->var_ctx, node->variable, alias, label);
                 }
             } else {
                 /* Anonymous node - use generated alias */
@@ -687,12 +695,15 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         target_alias = entity->table_alias;
         /* Register in legacy system for compatibility */
         register_node_variable(ctx, target_node->variable, target_alias);
+        /* Register in unified system */
+        const char *label = has_labels(target_node) ? get_label_string(target_node->labels->items[0]) : NULL;
+        transform_var_register_node(ctx->var_ctx, target_node->variable, target_alias, label);
     } else {
         static char temp_target[32];
         snprintf(temp_target, sizeof(temp_target), "n_%d", rel_index + 1);
         target_alias = temp_target;
     }
-    
+
     /* Edge */
     if (rel->variable) {
         transform_entity *entity = lookup_entity(ctx, rel->variable);
@@ -816,6 +827,8 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         /* We'll add the join conditions in the relationship constraint phase */
         if (rel->variable) {
             register_edge_variable(ctx, rel->variable, edge_alias);
+            /* Register in unified system */
+            transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
         }
 
         /* We need to add WHERE constraints for the CTE join */
@@ -934,12 +947,16 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     /* Register relationship variable if present */
     if (rel->variable) {
         register_edge_variable(ctx, rel->variable, edge_alias);
+        /* Register in unified system */
+        transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
     } else {
         /* For unnamed relationships, we need a way to track them */
         /* Create a synthetic variable name based on position for tracking */
         char synthetic_var[32];
         snprintf(synthetic_var, sizeof(synthetic_var), "__unnamed_rel_%d", rel_index);
         register_edge_variable(ctx, synthetic_var, edge_alias);
+        /* Register in unified system */
+        transform_var_register_edge(ctx->var_ctx, synthetic_var, edge_alias, rel->type);
     }
     
     CYPHER_DEBUG("Generated relationship match: %s connects %s to %s", 
