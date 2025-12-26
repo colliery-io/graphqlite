@@ -235,7 +235,37 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             append_sql(ctx, " >= ");
             break;
         case BINARY_OP_ADD:
-            append_sql(ctx, " + ");
+            /* In Cypher, + on strings is concatenation. SQLite uses || for that.
+             * Check if left operand is a string literal or a string concat chain. */
+            {
+                bool is_string_concat = false;
+                if (binary_op->left->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)binary_op->left;
+                    if (lit->literal_type == LITERAL_STRING) {
+                        is_string_concat = true;
+                    }
+                }
+                /* Also check for chained string concat like 'a' + 'b' + 'c' */
+                if (!is_string_concat && binary_op->left->type == AST_NODE_BINARY_OP) {
+                    cypher_binary_op *left_op = (cypher_binary_op*)binary_op->left;
+                    if (left_op->op_type == BINARY_OP_ADD) {
+                        /* Recursively check leftmost operand */
+                        ast_node *leftmost = left_op->left;
+                        while (leftmost->type == AST_NODE_BINARY_OP) {
+                            cypher_binary_op *inner = (cypher_binary_op*)leftmost;
+                            if (inner->op_type != BINARY_OP_ADD) break;
+                            leftmost = inner->left;
+                        }
+                        if (leftmost->type == AST_NODE_LITERAL) {
+                            cypher_literal *lit = (cypher_literal*)leftmost;
+                            if (lit->literal_type == LITERAL_STRING) {
+                                is_string_concat = true;
+                            }
+                        }
+                    }
+                }
+                append_sql(ctx, is_string_concat ? " || " : " + ");
+            }
             break;
         case BINARY_OP_SUB:
             append_sql(ctx, " - ");

@@ -59,6 +59,7 @@ typedef enum ast_node_type {
     AST_NODE_WHEN_CLAUSE,
     AST_NODE_LIST_PREDICATE,
     AST_NODE_REDUCE_EXPR,
+    AST_NODE_SUBSCRIPT,
 
     /* Return items */
     AST_NODE_RETURN_ITEM,
@@ -402,6 +403,13 @@ typedef struct cypher_reduce_expr {
     ast_node *expression;            /* Expression using acc and x */
 } cypher_reduce_expr;
 
+/* Subscript expression: expr[index] */
+typedef struct cypher_subscript {
+    ast_node base;
+    ast_node *expr;                  /* Expression being subscripted (list or map) */
+    ast_node *index;                 /* Index expression */
+} cypher_subscript;
+
 /* Map literal: {key: value, ...} */
 typedef struct cypher_map {
     ast_node base;
@@ -520,6 +528,7 @@ cypher_exists_expr* make_exists_pattern_expr(ast_list *pattern, int location);
 cypher_exists_expr* make_exists_property_expr(ast_node *property, int location);
 cypher_list_predicate* make_list_predicate(list_predicate_type pred_type, const char *variable, ast_node *list_expr, ast_node *predicate, int location);
 cypher_reduce_expr* make_reduce_expr(const char *accumulator, ast_node *initial_value, const char *variable, ast_node *list_expr, ast_node *expression, int location);
+cypher_subscript* make_subscript(ast_node *expr, ast_node *index, int location);
 cypher_map* make_map(ast_list *pairs, int location);
 cypher_map_pair* make_map_pair(char *key, ast_node *value, int location);
 cypher_map_projection* make_map_projection(ast_node *base_expr, ast_list *items, int location);

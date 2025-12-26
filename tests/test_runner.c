@@ -42,6 +42,11 @@ int init_executor_apsp_suite(void);
 int init_executor_remove_suite(void);
 int register_params_tests(void);
 int init_output_format_suite(void);
+int init_executor_expressions_suite(void);
+int init_executor_clauses_suite(void);
+int init_executor_patterns_suite(void);
+int init_executor_functions_suite(void);
+int init_executor_predicates_suite(void);
 
 int main(void)
 {
@@ -270,6 +275,36 @@ int main(void)
 
     if (init_output_format_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add output format suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_expressions_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor expressions suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_clauses_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor clauses suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_patterns_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor patterns suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_functions_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor functions suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_predicates_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor predicates suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

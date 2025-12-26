@@ -9,10 +9,58 @@
 #include <errno.h>
 #include <time.h>
 
+#include <sqlite3.h>
+
 #include "executor/cypher_executor.h"
 #include "executor/executor_internal.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
+
+/* SQLite custom function: REVERSE(string) - reverses a string */
+static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    if (argc != 1) {
+        sqlite3_result_error(context, "reverse() requires exactly 1 argument", -1);
+        return;
+    }
+
+    if (sqlite3_value_type(argv[0]) == SQLITE_NULL) {
+        sqlite3_result_null(context);
+        return;
+    }
+
+    const unsigned char *input = sqlite3_value_text(argv[0]);
+    if (!input) {
+        sqlite3_result_null(context);
+        return;
+    }
+
+    int len = sqlite3_value_bytes(argv[0]);
+    char *result = sqlite3_malloc(len + 1);
+    if (!result) {
+        sqlite3_result_error_nomem(context);
+        return;
+    }
+
+    /* Reverse the string */
+    for (int i = 0; i < len; i++) {
+        result[i] = input[len - 1 - i];
+    }
+    result[len] = '\0';
+
+    sqlite3_result_text(context, result, len, sqlite3_free);
+}
+
+/* Register custom SQLite functions needed for Cypher execution */
+static int register_custom_functions(sqlite3 *db)
+{
+    int rc = sqlite3_create_function(db, "REVERSE", 1, SQLITE_UTF8, NULL,
+                                      sqlite_reverse_func, NULL, NULL);
+    if (rc != SQLITE_OK) {
+        return -1;
+    }
+    return 0;
+}
 
 /* Helper functions moved to executor_helpers.c:
  * - get_label_string
@@ -38,7 +86,13 @@ cypher_executor* cypher_executor_create(sqlite3 *db)
     executor->db = db;
     executor->schema_initialized = false;
     executor->params_json = NULL;
-    
+
+    /* Register custom SQLite functions */
+    if (register_custom_functions(db) < 0) {
+        free(executor);
+        return NULL;
+    }
+
     /* Create schema manager */
     executor->schema_mgr = cypher_schema_create_manager(db);
     if (!executor->schema_mgr) {
@@ -124,6 +178,8 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     cypher_unwind *unwind_clause = NULL;
                     cypher_foreach *foreach_clause = NULL;
                     cypher_remove *remove_clause = NULL;
+                    bool has_optional_match = false;
+                    int match_clause_count = 0;
 
                     /* Scan for clause types */
                     for (int i = 0; i < query->clauses->count; i++) {
@@ -131,6 +187,10 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         switch (clause->type) {
                             case AST_NODE_MATCH:
                                 match_clause = (cypher_match*)clause;
+                                match_clause_count++;
+                                if (match_clause->optional) {
+                                    has_optional_match = true;
+                                }
                                 break;
                             case AST_NODE_RETURN:
                                 return_clause = (cypher_return*)clause;
@@ -195,7 +255,76 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     }
 
                     /* Execute based on query pattern */
-                    if (unwind_clause && return_clause) {
+                    if (unwind_clause && create_clause) {
+                        /* UNWIND ... CREATE pattern - iterate over list and create nodes */
+                        CYPHER_DEBUG("Executing UNWIND+CREATE query");
+
+                        /* For now, only handle list literals in UNWIND */
+                        if (unwind_clause->expr->type != AST_NODE_LIST) {
+                            set_result_error(result, "UNWIND+CREATE currently only supports list literals");
+                            return result;
+                        }
+
+                        cypher_list *list = (cypher_list*)unwind_clause->expr;
+                        if (!list->items || list->items->count == 0) {
+                            /* Empty list - nothing to create */
+                            result->success = true;
+                            return result;
+                        }
+
+                        /* Create foreach context for variable binding */
+                        foreach_context *ctx = create_foreach_context();
+                        if (!ctx) {
+                            set_result_error(result, "Failed to create foreach context");
+                            return result;
+                        }
+
+                        /* Save previous context and set ours */
+                        foreach_context *prev_ctx = g_foreach_ctx;
+                        g_foreach_ctx = ctx;
+
+                        /* Iterate over list items and create nodes */
+                        for (int i = 0; i < list->items->count; i++) {
+                            ast_node *item = list->items->items[i];
+
+                            /* Bind the loop variable based on item type */
+                            if (item->type == AST_NODE_LITERAL) {
+                                cypher_literal *lit = (cypher_literal*)item;
+                                switch (lit->literal_type) {
+                                    case LITERAL_INTEGER:
+                                        set_foreach_binding_int(ctx, unwind_clause->alias, lit->value.integer);
+                                        break;
+                                    case LITERAL_STRING:
+                                        set_foreach_binding_string(ctx, unwind_clause->alias, lit->value.string);
+                                        break;
+                                    case LITERAL_DECIMAL:
+                                        set_foreach_binding_int(ctx, unwind_clause->alias, (int64_t)lit->value.decimal);
+                                        break;
+                                    default:
+                                        CYPHER_DEBUG("Unsupported literal type in UNWIND list: %d", lit->literal_type);
+                                        continue;
+                                }
+                            } else {
+                                CYPHER_DEBUG("Unsupported item type in UNWIND list: %d", item->type);
+                                continue;
+                            }
+
+                            CYPHER_DEBUG("UNWIND+CREATE iteration %d, variable=%s", i, unwind_clause->alias);
+
+                            /* Execute CREATE for this iteration */
+                            if (execute_create_clause(executor, create_clause, result) < 0) {
+                                g_foreach_ctx = prev_ctx;
+                                free_foreach_context(ctx);
+                                return result;
+                            }
+                        }
+
+                        /* Restore previous context */
+                        g_foreach_ctx = prev_ctx;
+                        free_foreach_context(ctx);
+
+                        result->success = true;
+                    } else if (unwind_clause && return_clause) {
                         /* UNWIND ... RETURN pattern - use generic transform */
                         CYPHER_DEBUG("Executing UNWIND+RETURN query");
                         cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
@@ -223,6 +352,15 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                             result->data = NULL;
                             result->row_count = 0;
                             result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                            /* Get column names from the SQL result */
+                            result->column_names = malloc(result->column_count * sizeof(char*));
+                            if (result->column_names) {
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *name = sqlite3_column_name(transform_result->stmt, c);
+                                    result->column_names[c] = name ? strdup(name) : NULL;
+                                }
+                            }
 
                             /* Collect results */
                             while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
@@ -270,6 +408,15 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                             result->data = NULL;
                             result->row_count = 0;
                             result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                            /* Get column names from the SQL result */
+                            result->column_names = malloc(result->column_count * sizeof(char*));
+                            if (result->column_names) {
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *name = sqlite3_column_name(transform_result->stmt, c);
+                                    result->column_names[c] = name ? strdup(name) : NULL;
+                                }
+                            }
 
                             /* Collect results */
                             while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
@@ -325,8 +472,64 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         if (execute_match_merge_query(executor, match_clause, merge_clause, result) < 0) {
                             return result; /* Error already set */
                         }
+                    } else if ((has_optional_match || match_clause_count > 1) && return_clause) {
+                        /* Multiple MATCH clauses or OPTIONAL MATCH - use generic transform */
+                        CYPHER_DEBUG("Executing OPTIONAL MATCH or multi-MATCH query via transform");
+                        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                        if (!ctx) {
+                            set_result_error(result, "Failed to create transform context");
+                            return result;
+                        }
+
+                        cypher_query_result *transform_result = cypher_transform_query(ctx, query);
+                        if (!transform_result) {
+                            set_result_error(result, "Failed to transform query");
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        if (transform_result->has_error) {
+                            set_result_error(result, transform_result->error_message ? transform_result->error_message : "Transform error");
+                            free(transform_result);
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+
+                        /* Execute the prepared statement */
+                        if (transform_result->stmt) {
+                            result->data = NULL;
+                            result->row_count = 0;
+                            result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                            /* Get column names from the SQL result */
+                            result->column_names = malloc(result->column_count * sizeof(char*));
+                            if (result->column_names) {
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *name = sqlite3_column_name(transform_result->stmt, c);
+                                    result->column_names[c] = name ? strdup(name) : NULL;
+                                }
+                            }
+
+                            /* Collect results */
+                            while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
+                                /* Allocate/resize data array */
+                                result->data = realloc(result->data, (result->row_count + 1) * sizeof(char**));
+                                result->data[result->row_count] = calloc(result->column_count, sizeof(char*));
+
+                                for (int c = 0; c < result->column_count; c++) {
+                                    const char *val = (const char*)sqlite3_column_text(transform_result->stmt, c);
+                                    result->data[result->row_count][c] = val ? strdup(val) : NULL;
+                                }
+                                result->row_count++;
+                            }
+                            sqlite3_finalize(transform_result->stmt);
+                        }
+
+                        result->success = true;
+                        free(transform_result);
+                        cypher_transform_free_context(ctx);
                     } else if (match_clause && return_clause) {
-                        /* MATCH ... RETURN pattern */
+                        /* MATCH ... RETURN pattern (single non-optional MATCH) */
                         CYPHER_DEBUG("Executing MATCH+RETURN query");
                         if (execute_match_return_query(executor, match_clause, return_clause, result) < 0) {
                             return result; /* Error already set */
@@ -575,6 +778,71 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
             }
             break;
             
+        case AST_NODE_UNION:
+            /* UNION query - transform and execute via the transform layer */
+            {
+                CYPHER_DEBUG("Executing UNION query");
+                cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                if (!ctx) {
+                    set_result_error(result, "Failed to create transform context");
+                    return result;
+                }
+
+                /* The transform layer handles UNION queries directly when passed the union node */
+                cypher_query_result *transform_result = cypher_transform_query(ctx, (cypher_query*)ast);
+                if (!transform_result) {
+                    set_result_error(result, "Failed to transform UNION query");
+                    cypher_transform_free_context(ctx);
+                    return result;
+                }
+
+                if (transform_result->has_error) {
+                    set_result_error(result, transform_result->error_message ? transform_result->error_message : "UNION transform error");
+                    free(transform_result);
+                    cypher_transform_free_context(ctx);
+                    return result;
+                }
+
+                /* Execute the prepared statement */
+                if (transform_result->stmt) {
+                    result->data = NULL;
+                    result->row_count = 0;
+                    result->column_count = sqlite3_column_count(transform_result->stmt);
+
+                    /* Get column names from the SQL result */
+                    result->column_names = malloc(result->column_count * sizeof(char*));
+                    if (result->column_names) {
+                        for (int c = 0; c < result->column_count; c++) {
+                            const char *name = sqlite3_column_name(transform_result->stmt, c);
+                            result->column_names[c] = name ? strdup(name) : NULL;
+                        }
+                    }
+
+                    /* Collect results with type information */
+                    while (sqlite3_step(transform_result->stmt) == SQLITE_ROW) {
+                        /* Allocate/resize data and data_types arrays */
+                        result->data = realloc(result->data, (result->row_count + 1) * sizeof(char**));
+                        result->data[result->row_count] = calloc(result->column_count, sizeof(char*));
+                        result->data_types = realloc(result->data_types, (result->row_count + 1) * sizeof(int*));
+                        result->data_types[result->row_count] = calloc(result->column_count, sizeof(int));
+
+                        for (int c = 0; c < result->column_count; c++) {
+                            /* Store the SQLite type */
+                            result->data_types[result->row_count][c] = sqlite3_column_type(transform_result->stmt, c);
+                            const char *val = (const char*)sqlite3_column_text(transform_result->stmt, c);
+                            result->data[result->row_count][c] = val ? strdup(val) : NULL;
+                        }
+                        result->row_count++;
+                    }
+                    sqlite3_finalize(transform_result->stmt);
+                }
+
+                result->success = true;
+                free(transform_result);
+                cypher_transform_free_context(ctx);
+            }
+            break;
+
         default:
             set_result_error(result, "Unsupported query type");
             return result;

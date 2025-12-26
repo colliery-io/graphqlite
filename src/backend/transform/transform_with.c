@@ -96,12 +96,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                     const char *alias = lookup_variable_alias(ctx, id->name);
                     const char *col_name = item->alias ? item->alias : prop->property_name;
                     if (alias) {
-                        /* Use COALESCE with all property tables like transform_property_access */
+                        /* Use COALESCE with all property tables - order int/real first to preserve type */
                         col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len,
                             "(SELECT COALESCE("
+                            "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = '%s'), "
+                            "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = '%s'), "
                             "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = '%s'), "
-                            "(SELECT CAST(npi.value AS TEXT) FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = '%s'), "
-                            "(SELECT CAST(npr.value AS TEXT) FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = '%s'), "
                             "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = '%s')"
                             ")) AS %s",
                             alias, prop->property_name,
@@ -109,13 +109,13 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                             alias, prop->property_name,
                             alias, prop->property_name,
                             col_name);
-                        /* Add identifier to GROUP BY (the node id) */
+                        /* Add the projected column name to GROUP BY (not node id) */
                         if (group_by_len > 0) {
                             group_by_len += snprintf(group_by_buffer + group_by_len,
                                                     sizeof(group_by_buffer) - group_by_len, ", ");
                         }
                         group_by_len += snprintf(group_by_buffer + group_by_len,
-                                                sizeof(group_by_buffer) - group_by_len, "%s.id", alias);
+                                                sizeof(group_by_buffer) - group_by_len, "%s", col_name);
                     }
                 }
             } else if (item->expr->type == AST_NODE_FUNCTION_CALL) {

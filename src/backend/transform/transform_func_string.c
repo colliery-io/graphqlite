@@ -46,8 +46,22 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
         sql_func = "LTRIM";
     } else if (strcasecmp(func_call->function_name, "rtrim") == 0) {
         sql_func = "RTRIM";
-    } else if (strcasecmp(func_call->function_name, "length") == 0 ||
-               strcasecmp(func_call->function_name, "size") == 0) {
+    } else if (strcasecmp(func_call->function_name, "length") == 0) {
+        sql_func = "LENGTH";
+    } else if (strcasecmp(func_call->function_name, "size") == 0) {
+        /* size() works on both strings and lists.
+         * For lists (json arrays), use json_array_length.
+         * For strings, use LENGTH. */
+        if (func_call->args && func_call->args->count > 0 &&
+            func_call->args->items[0]->type == AST_NODE_LIST) {
+            append_sql(ctx, "json_array_length(");
+            if (transform_expression(ctx, func_call->args->items[0]) < 0) {
+                return -1;
+            }
+            append_sql(ctx, ")");
+            return 0;
+        }
+        /* Not a list - use LENGTH for strings */
         sql_func = "LENGTH";
     } else if (strcasecmp(func_call->function_name, "reverse") == 0) {
         sql_func = "REVERSE";

@@ -36,9 +36,10 @@ int transform_math_function(cypher_transform_context *ctx, cypher_function_call 
     const char *func_name = func_call->function_name;
 
     if (strcasecmp(func_name, "abs") == 0) {
-        append_sql(ctx, "ABS(CAST(");
+        /* SQLite's ABS preserves type - no need to cast */
+        append_sql(ctx, "ABS(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " AS REAL))");
+        append_sql(ctx, ")");
         return 0;
     } else if (strcasecmp(func_name, "ceil") == 0) {
         /* SQLite doesn't have CEIL, use CASE to handle positive/negative */

@@ -188,7 +188,12 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_apsp.c \
 	$(TEST_DIR)/test_executor_remove.c \
 	$(TEST_DIR)/test_executor_params.c \
-	$(TEST_DIR)/test_output_format.c
+	$(TEST_DIR)/test_output_format.c \
+	$(TEST_DIR)/test_executor_expressions.c \
+	$(TEST_DIR)/test_executor_clauses.c \
+	$(TEST_DIR)/test_executor_patterns.c \
+	$(TEST_DIR)/test_executor_functions.c \
+	$(TEST_DIR)/test_executor_predicates.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 

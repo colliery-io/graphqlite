@@ -960,6 +960,18 @@ primary_expr:
             free($1);
             free($3);
         }
+    | IDENTIFIER '[' expr ']'
+        {
+            /* Array subscript on identifier: items[idx] */
+            cypher_identifier *base = make_identifier($1, @1.first_line);
+            $$ = (ast_node*)make_subscript((ast_node*)base, $3, @2.first_line);
+            free($1);
+        }
+    | '(' expr ')' '[' expr ']'
+        {
+            /* Array subscript on parenthesized expression: (expr)[idx] */
+            $$ = (ast_node*)make_subscript($2, $5, @4.first_line);
+        }
     ;
 
 literal_expr:
