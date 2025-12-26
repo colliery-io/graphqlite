@@ -69,6 +69,9 @@ static struct {
     {"where", CYPHER_WHERE},
     {"with", CYPHER_WITH},
     {"xor", CYPHER_XOR},
+    {"starts", CYPHER_STARTS},
+    {"ends", CYPHER_ENDS},
+    {"contains", CYPHER_CONTAINS},
     {NULL, 0}
 };
 

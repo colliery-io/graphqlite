@@ -47,7 +47,22 @@ void csr_graph_free(csr_graph *graph);
 typedef enum {
     GRAPH_ALGO_NONE = 0,
     GRAPH_ALGO_PAGERANK,
-    GRAPH_ALGO_LABEL_PROPAGATION
+    GRAPH_ALGO_LABEL_PROPAGATION,
+    GRAPH_ALGO_DIJKSTRA,
+    GRAPH_ALGO_DEGREE_CENTRALITY,
+    GRAPH_ALGO_WCC,
+    GRAPH_ALGO_SCC,
+    GRAPH_ALGO_BETWEENNESS_CENTRALITY,
+    GRAPH_ALGO_CLOSENESS_CENTRALITY,
+    GRAPH_ALGO_LOUVAIN,
+    GRAPH_ALGO_TRIANGLE_COUNT,
+    GRAPH_ALGO_ASTAR,
+    GRAPH_ALGO_BFS,
+    GRAPH_ALGO_DFS,
+    GRAPH_ALGO_NODE_SIMILARITY,
+    GRAPH_ALGO_KNN,
+    GRAPH_ALGO_EIGENVECTOR_CENTRALITY,
+    GRAPH_ALGO_APSP
 } graph_algo_type;
 
 typedef struct {
@@ -55,6 +70,15 @@ typedef struct {
     double damping;       /* For PageRank (default 0.85) */
     int iterations;       /* Number of iterations */
     int top_k;            /* For topPageRank - return top k nodes (0 = all) */
+    char *source_id;      /* For Dijkstra - source node user ID */
+    char *target_id;      /* For Dijkstra - target node user ID */
+    char *weight_prop;    /* For Dijkstra - optional edge weight property */
+    double resolution;    /* For Louvain - resolution parameter (default 1.0) */
+    char *lat_prop;       /* For A* - latitude/y property name */
+    char *lon_prop;       /* For A* - longitude/x property name */
+    int max_depth;        /* For BFS/DFS - max traversal depth (-1 = unlimited) */
+    double threshold;     /* For Node Similarity - minimum similarity threshold (default 0.0) */
+    int k;                /* For KNN - number of neighbors to return */
 } graph_algo_params;
 
 /* Check if RETURN clause contains a graph algorithm call and extract parameters */
@@ -63,6 +87,22 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause);
 /* Algorithm implementations */
 graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations, int top_k);
 graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations);
+graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const char *target_id, const char *weight_prop);
+graph_algo_result* execute_degree_centrality(sqlite3 *db);
+graph_algo_result* execute_wcc(sqlite3 *db);
+graph_algo_result* execute_scc(sqlite3 *db);
+graph_algo_result* execute_betweenness_centrality(sqlite3 *db);
+graph_algo_result* execute_closeness_centrality(sqlite3 *db);
+graph_algo_result* execute_louvain(sqlite3 *db, double resolution);
+graph_algo_result* execute_triangle_count(sqlite3 *db);
+graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char *target_id,
+                                  const char *weight_prop, const char *lat_prop, const char *lon_prop);
+graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth);
+graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth);
+graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id, const char *node2_id, double threshold, int top_k);
+graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k);
+graph_algo_result* execute_eigenvector_centrality(sqlite3 *db, int iterations);
+graph_algo_result* execute_apsp(sqlite3 *db);
 
 /* Result management */
 void graph_algo_result_free(graph_algo_result *result);

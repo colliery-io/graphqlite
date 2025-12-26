@@ -357,3 +357,340 @@ def test_community_detection(g):
     # Check user_ids are present
     user_ids = {c["user_id"] for c in communities}
     assert user_ids == {"cd1", "cd2"}
+
+
+def test_shortest_path(g):
+    # Create a simple path: sp1 -> sp2 -> sp3
+    g.upsert_node("sp1", {"name": "SP1"})
+    g.upsert_node("sp2", {"name": "SP2"})
+    g.upsert_node("sp3", {"name": "SP3"})
+    g.upsert_edge("sp1", "sp2", {})
+    g.upsert_edge("sp2", "sp3", {})
+
+    result = g.shortest_path("sp1", "sp3")
+    assert isinstance(result, dict)
+    assert result["found"] is True
+    assert result["distance"] == 2
+    assert result["path"] == ["sp1", "sp2", "sp3"]
+
+
+def test_shortest_path_no_path(g):
+    # Create disconnected nodes
+    g.upsert_node("iso1", {"name": "ISO1"})
+    g.upsert_node("iso2", {"name": "ISO2"})
+    # No edge between them
+
+    result = g.shortest_path("iso1", "iso2")
+    assert isinstance(result, dict)
+    assert result["found"] is False
+    assert result["path"] == []
+    assert result["distance"] is None
+
+
+def test_shortest_path_same_node(g):
+    g.upsert_node("same1", {"name": "Same"})
+
+    result = g.shortest_path("same1", "same1")
+    assert result["found"] is True
+    assert result["distance"] == 0
+    assert result["path"] == ["same1"]
+
+
+def test_degree_centrality(g):
+    # Create a simple graph: dc1 -> dc2 -> dc3, dc1 -> dc3
+    g.upsert_node("dc1", {"name": "DC1"})
+    g.upsert_node("dc2", {"name": "DC2"})
+    g.upsert_node("dc3", {"name": "DC3"})
+    g.upsert_edge("dc1", "dc2", {})
+    g.upsert_edge("dc2", "dc3", {})
+    g.upsert_edge("dc1", "dc3", {})
+
+    degrees = g.degree_centrality()
+    assert isinstance(degrees, list)
+    assert len(degrees) == 3
+
+    # Check structure
+    for d in degrees:
+        assert "node_id" in d
+        assert "user_id" in d
+        assert "in_degree" in d
+        assert "out_degree" in d
+        assert "degree" in d
+
+    # Check specific values by user_id
+    by_user = {d["user_id"]: d for d in degrees}
+
+    # dc1: out=2, in=0, total=2
+    assert by_user["dc1"]["out_degree"] == 2
+    assert by_user["dc1"]["in_degree"] == 0
+    assert by_user["dc1"]["degree"] == 2
+
+    # dc2: out=1, in=1, total=2
+    assert by_user["dc2"]["out_degree"] == 1
+    assert by_user["dc2"]["in_degree"] == 1
+    assert by_user["dc2"]["degree"] == 2
+
+    # dc3: out=0, in=2, total=2
+    assert by_user["dc3"]["out_degree"] == 0
+    assert by_user["dc3"]["in_degree"] == 2
+    assert by_user["dc3"]["degree"] == 2
+
+
+# =============================================================================
+# Connected Components (WCC/SCC)
+# =============================================================================
+
+def test_weakly_connected_components(g):
+    # Create two disconnected components
+    # Component 1: wcc1 <-> wcc2 <-> wcc3
+    g.upsert_node("wcc1", {"name": "WCC1"})
+    g.upsert_node("wcc2", {"name": "WCC2"})
+    g.upsert_node("wcc3", {"name": "WCC3"})
+    g.upsert_edge("wcc1", "wcc2", {})
+    g.upsert_edge("wcc2", "wcc3", {})
+
+    # Component 2: wcc4 <-> wcc5
+    g.upsert_node("wcc4", {"name": "WCC4"})
+    g.upsert_node("wcc5", {"name": "WCC5"})
+    g.upsert_edge("wcc4", "wcc5", {})
+
+    components = g.weakly_connected_components()
+    assert isinstance(components, list)
+    assert len(components) == 5
+
+    # Check structure
+    for c in components:
+        assert "node_id" in c
+        assert "user_id" in c
+        assert "component" in c
+
+    # Group by component
+    by_component = {}
+    for c in components:
+        comp_id = c["component"]
+        if comp_id not in by_component:
+            by_component[comp_id] = set()
+        by_component[comp_id].add(c["user_id"])
+
+    # Should have exactly 2 components
+    assert len(by_component) == 2
+
+    # One component should have wcc1,2,3, the other wcc4,5
+    comp_sizes = sorted([len(v) for v in by_component.values()])
+    assert comp_sizes == [2, 3]
+
+
+def test_weakly_connected_components_single_node(g):
+    g.upsert_node("solo", {"name": "Solo"})
+
+    components = g.weakly_connected_components()
+    assert len(components) == 1
+    assert components[0]["user_id"] == "solo"
+    assert components[0]["component"] == 0
+
+
+def test_weakly_connected_components_empty_graph(g):
+    components = g.weakly_connected_components()
+    assert components == []
+
+
+def test_connected_components_alias(g):
+    """Test that connected_components is an alias for weakly_connected_components."""
+    g.upsert_node("alias1", {"name": "A1"})
+    g.upsert_node("alias2", {"name": "A2"})
+    g.upsert_edge("alias1", "alias2", {})
+
+    # Both should return the same result
+    wcc = g.weakly_connected_components()
+    cc = g.connected_components()
+
+    assert len(wcc) == len(cc) == 2
+    assert {c["user_id"] for c in wcc} == {c["user_id"] for c in cc}
+
+
+def test_strongly_connected_components_with_cycle(g):
+    # Create a cycle: scc1 -> scc2 -> scc3 -> scc1
+    g.upsert_node("scc1", {"name": "SCC1"})
+    g.upsert_node("scc2", {"name": "SCC2"})
+    g.upsert_node("scc3", {"name": "SCC3"})
+    g.upsert_edge("scc1", "scc2", {})
+    g.upsert_edge("scc2", "scc3", {})
+    g.upsert_edge("scc3", "scc1", {})
+
+    components = g.strongly_connected_components()
+    assert isinstance(components, list)
+    assert len(components) == 3
+
+    # Check structure
+    for c in components:
+        assert "node_id" in c
+        assert "user_id" in c
+        assert "component" in c
+
+    # All nodes should be in the same SCC (they form a cycle)
+    component_ids = {c["component"] for c in components}
+    assert len(component_ids) == 1
+
+
+def test_strongly_connected_components_no_cycle(g):
+    # Create a directed chain (no cycles): scc_a -> scc_b -> scc_c
+    g.upsert_node("scc_a", {"name": "SCC_A"})
+    g.upsert_node("scc_b", {"name": "SCC_B"})
+    g.upsert_node("scc_c", {"name": "SCC_C"})
+    g.upsert_edge("scc_a", "scc_b", {})
+    g.upsert_edge("scc_b", "scc_c", {})
+
+    components = g.strongly_connected_components()
+    assert len(components) == 3
+
+    # Each node should be in its own SCC (no back edges)
+    component_ids = {c["component"] for c in components}
+    assert len(component_ids) == 3
+
+
+def test_strongly_connected_components_empty_graph(g):
+    components = g.strongly_connected_components()
+    assert components == []
+
+
+def test_strongly_connected_components_mixed(g):
+    # Create a graph with multiple SCCs:
+    # SCC 1: m1 <-> m2 (cycle)
+    # SCC 2: m3 alone (pointed to by SCC 1)
+    g.upsert_node("m1", {"name": "M1"})
+    g.upsert_node("m2", {"name": "M2"})
+    g.upsert_node("m3", {"name": "M3"})
+    g.upsert_edge("m1", "m2", {})
+    g.upsert_edge("m2", "m1", {})  # Creates cycle between m1, m2
+    g.upsert_edge("m2", "m3", {})  # m3 is separate SCC
+
+    components = g.strongly_connected_components()
+    assert len(components) == 3
+
+    # Group by component
+    by_component = {}
+    for c in components:
+        comp_id = c["component"]
+        if comp_id not in by_component:
+            by_component[comp_id] = set()
+        by_component[comp_id].add(c["user_id"])
+
+    # Should have exactly 2 SCCs
+    assert len(by_component) == 2
+
+    # One SCC has m1,m2 and another has m3
+    comp_sizes = sorted([len(v) for v in by_component.values()])
+    assert comp_sizes == [1, 2]
+
+
+# =============================================================================
+# Rustworkx Export
+# =============================================================================
+
+def test_to_rustworkx(g):
+    rx = pytest.importorskip("rustworkx")
+
+    g.upsert_node("rx1", {"name": "RX1"}, label="Test")
+    g.upsert_node("rx2", {"name": "RX2"}, label="Test")
+    g.upsert_node("rx3", {"name": "RX3"}, label="Test")
+    g.upsert_edge("rx1", "rx2", {}, rel_type="CONNECTS")
+    g.upsert_edge("rx2", "rx3", {}, rel_type="CONNECTS")
+
+    G, node_map = g.to_rustworkx()
+
+    assert isinstance(G, rx.PyDiGraph)
+    assert G.num_nodes() == 3
+    assert G.num_edges() == 2
+    assert "rx1" in node_map
+    assert "rx2" in node_map
+    assert "rx3" in node_map
+
+
+def test_to_rustworkx_empty_graph(g):
+    rx = pytest.importorskip("rustworkx")
+
+    G, node_map = g.to_rustworkx()
+
+    assert isinstance(G, rx.PyDiGraph)
+    assert G.num_nodes() == 0
+    assert G.num_edges() == 0
+    assert node_map == {}
+
+
+def test_to_rustworkx_preserves_properties(g):
+    rx = pytest.importorskip("rustworkx")
+
+    g.upsert_node("prop1", {"name": "PropNode", "value": 42}, label="Test")
+
+    G, node_map = g.to_rustworkx()
+
+    assert "prop1" in node_map
+    node_idx = node_map["prop1"]
+    node_data = G[node_idx]
+    assert node_data["name"] == "PropNode"
+    assert node_data["value"] == 42
+
+
+# =============================================================================
+# Leiden Community Detection
+# =============================================================================
+
+def test_leiden_communities(g):
+    pytest.importorskip("rustworkx")
+    pytest.importorskip("graspologic")
+
+    # Create a graph with clear community structure
+    # Community 1: ld1, ld2, ld3 (densely connected)
+    g.upsert_node("ld1", {"name": "LD1"}, label="Test")
+    g.upsert_node("ld2", {"name": "LD2"}, label="Test")
+    g.upsert_node("ld3", {"name": "LD3"}, label="Test")
+    g.upsert_edge("ld1", "ld2", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld2", "ld3", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld1", "ld3", {}, rel_type="CONNECTS")
+
+    # Community 2: ld4, ld5, ld6 (densely connected)
+    g.upsert_node("ld4", {"name": "LD4"}, label="Test")
+    g.upsert_node("ld5", {"name": "LD5"}, label="Test")
+    g.upsert_node("ld6", {"name": "LD6"}, label="Test")
+    g.upsert_edge("ld4", "ld5", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld5", "ld6", {}, rel_type="CONNECTS")
+    g.upsert_edge("ld4", "ld6", {}, rel_type="CONNECTS")
+
+    # Single weak link between communities
+    g.upsert_edge("ld3", "ld4", {}, rel_type="BRIDGE")
+
+    communities = g.leiden_communities(random_seed=42)
+
+    assert isinstance(communities, list)
+    assert len(communities) > 0
+
+    # Check structure of results
+    for c in communities:
+        assert "node_id" in c
+        assert "community" in c
+
+
+def test_leiden_communities_empty_graph(g):
+    pytest.importorskip("rustworkx")
+    pytest.importorskip("graspologic")
+
+    communities = g.leiden_communities()
+
+    assert communities == []
+
+
+def test_leiden_communities_with_resolution(g):
+    pytest.importorskip("rustworkx")
+    pytest.importorskip("graspologic")
+
+    g.upsert_node("r1", {"name": "R1"}, label="Test")
+    g.upsert_node("r2", {"name": "R2"}, label="Test")
+    g.upsert_edge("r1", "r2", {}, rel_type="CONNECTS")
+
+    # Higher resolution should produce more communities
+    communities = g.leiden_communities(resolution=2.0, random_seed=42)
+
+    assert isinstance(communities, list)
+    node_ids = {c["node_id"] for c in communities}
+    assert "r1" in node_ids
+    assert "r2" in node_ids

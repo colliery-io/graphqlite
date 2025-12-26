@@ -426,6 +426,14 @@ void ast_node_free(ast_node *node)
             }
             break;
 
+        case AST_NODE_SUBSCRIPT:
+            {
+                cypher_subscript *subscript = (cypher_subscript*)node;
+                ast_node_free(subscript->expr);
+                ast_node_free(subscript->index);
+            }
+            break;
+
         case AST_NODE_MAP:
             {
                 cypher_map *map = (cypher_map*)node;
@@ -1155,6 +1163,18 @@ cypher_reduce_expr* make_reduce_expr(const char *accumulator, ast_node *initial_
     return reduce;
 }
 
+cypher_subscript* make_subscript(ast_node *expr, ast_node *index, int location)
+{
+    cypher_subscript *subscript = (cypher_subscript*)ast_node_create(AST_NODE_SUBSCRIPT, location, sizeof(cypher_subscript));
+    if (!subscript) {
+        return NULL;
+    }
+
+    subscript->expr = expr;
+    subscript->index = index;
+    return subscript;
+}
+
 cypher_map* make_map(ast_list *pairs, int location)
 {
     cypher_map *map = (cypher_map*)ast_node_create(AST_NODE_MAP, location, sizeof(cypher_map));
@@ -1304,6 +1324,7 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_EXISTS_EXPR:    return "EXISTS_EXPR";
         case AST_NODE_LIST_PREDICATE: return "LIST_PREDICATE";
         case AST_NODE_REDUCE_EXPR:    return "REDUCE_EXPR";
+        case AST_NODE_SUBSCRIPT:      return "SUBSCRIPT";
         case AST_NODE_LIST:           return "LIST";
         case AST_NODE_LIST_COMPREHENSION: return "LIST_COMPREHENSION";
         case AST_NODE_PATTERN_COMPREHENSION: return "PATTERN_COMPREHENSION";

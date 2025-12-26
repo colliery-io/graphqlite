@@ -617,6 +617,22 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_REDUCE_EXPR:
             return transform_reduce_expr(ctx, (cypher_reduce_expr*)expr);
 
+        case AST_NODE_SUBSCRIPT:
+            {
+                /* Transform list[index] to json_extract(list, '$[' || index || ']') */
+                cypher_subscript *subscript = (cypher_subscript*)expr;
+                append_sql(ctx, "json_extract(");
+                if (transform_expression(ctx, subscript->expr) < 0) {
+                    return -1;
+                }
+                append_sql(ctx, ", '$[' || (");
+                if (transform_expression(ctx, subscript->index) < 0) {
+                    return -1;
+                }
+                append_sql(ctx, ") || ']')");
+            }
+            break;
+
         case AST_NODE_LITERAL:
             {
                 cypher_literal *lit = (cypher_literal*)expr;

@@ -32,7 +32,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * where the parser can't immediately distinguish a node pattern from
  * a parenthesized expression until it sees more context.
  */
-%expect 3
+%expect 4
 %expect-rr 2  /* One for IDENTIFIER, one for BQIDENT in variable_opt */
 
 %union {
@@ -93,6 +93,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %token UNION ALL CASE WHEN THEN ELSE END_P ON
 %token SHORTESTPATH ALLSHORTESTPATHS PATTERN EXPLAIN
 %token LOAD CSV FROM HEADERS FIELDTERMINATOR
+%token STARTS ENDS CONTAINS
 
 /* Non-terminal types */
 %type <node> stmt union_query single_query
@@ -143,7 +144,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left XOR
 %left AND
 %right NOT
-%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH
+%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH STARTS ENDS CONTAINS
 %left '+' '-'
 %left '*' '/' '%'
 %left '^'
@@ -911,6 +912,7 @@ expr:
     | expr '-' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_SUB, $1, $3, @2.first_line); }
     | expr '*' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MUL, $1, $3, @2.first_line); }
     | expr '/' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_DIV, $1, $3, @2.first_line); }
+    | expr '%' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MOD, $1, $3, @2.first_line); }
     | expr '=' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_EQ, $1, $3, @2.first_line); }
     | expr NOT_EQ expr  { $$ = (ast_node*)make_binary_op(BINARY_OP_NEQ, $1, $3, @2.first_line); }
     | expr '<' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_LT, $1, $3, @2.first_line); }
@@ -921,6 +923,10 @@ expr:
     | expr AND expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_AND, $1, $3, @2.first_line); }
     | expr OR expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_OR, $1, $3, @2.first_line); }
     | expr XOR expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_XOR, $1, $3, @2.first_line); }
+    | expr IN expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_IN, $1, $3, @2.first_line); }
+    | expr STARTS WITH expr %prec STARTS { $$ = (ast_node*)make_binary_op(BINARY_OP_STARTS_WITH, $1, $4, @2.first_line); }
+    | expr ENDS WITH expr %prec ENDS    { $$ = (ast_node*)make_binary_op(BINARY_OP_ENDS_WITH, $1, $4, @2.first_line); }
+    | expr CONTAINS expr %prec CONTAINS { $$ = (ast_node*)make_binary_op(BINARY_OP_CONTAINS, $1, $3, @2.first_line); }
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
@@ -934,8 +940,8 @@ primary_expr:
     | function_call     { $$ = $1; }
     | list_predicate    { $$ = $1; }
     | reduce_expr       { $$ = $1; }
-    | list_literal      { $$ = $1; }
-    | list_comprehension { $$ = $1; }
+    | list_literal      { $$ = $1; } %dprec 1
+    | list_comprehension { $$ = $1; } %dprec 2
     | pattern_comprehension { $$ = $1; }
     | map_literal       { $$ = $1; }
     | map_projection    { $$ = $1; }
@@ -953,6 +959,18 @@ primary_expr:
             $$ = (ast_node*)make_label_expr((ast_node*)base, $3, @3.first_line);
             free($1);
             free($3);
+        }
+    | IDENTIFIER '[' expr ']'
+        {
+            /* Array subscript on identifier: items[idx] */
+            cypher_identifier *base = make_identifier($1, @1.first_line);
+            $$ = (ast_node*)make_subscript((ast_node*)base, $3, @2.first_line);
+            free($1);
+        }
+    | '(' expr ')' '[' expr ']'
+        {
+            /* Array subscript on parenthesized expression: (expr)[idx] */
+            $$ = (ast_node*)make_subscript($2, $5, @4.first_line);
         }
     ;
 
@@ -1030,6 +1048,21 @@ function_call:
             $$ = (ast_node*)make_exists_property_expr(prop, @1.first_line);
             free($3);
             free($5);
+        }
+    /* Allow keyword-named functions: contains(), startsWith(), endsWith() */
+    | CONTAINS '(' argument_list ')'
+        {
+            $$ = (ast_node*)make_function_call(strdup("contains"), $3, false, @1.first_line);
+        }
+    | STARTS '(' argument_list ')'
+        {
+            /* startsWith function uses STARTS keyword */
+            $$ = (ast_node*)make_function_call(strdup("startsWith"), $3, false, @1.first_line);
+        }
+    | ENDS '(' argument_list ')'
+        {
+            /* endsWith function uses ENDS keyword */
+            $$ = (ast_node*)make_function_call(strdup("endsWith"), $3, false, @1.first_line);
         }
     ;
 

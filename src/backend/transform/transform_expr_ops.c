@@ -90,7 +90,9 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     if (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||
         binary_op->op_type == BINARY_OP_LT || binary_op->op_type == BINARY_OP_GT ||
         binary_op->op_type == BINARY_OP_LTE || binary_op->op_type == BINARY_OP_GTE ||
-        binary_op->op_type == BINARY_OP_REGEX_MATCH) {
+        binary_op->op_type == BINARY_OP_REGEX_MATCH || binary_op->op_type == BINARY_OP_IN ||
+        binary_op->op_type == BINARY_OP_STARTS_WITH || binary_op->op_type == BINARY_OP_ENDS_WITH ||
+        binary_op->op_type == BINARY_OP_CONTAINS) {
         ctx->in_comparison = true;
     }
 
@@ -107,6 +109,85 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             return -1;
         }
         append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle IN operator specially - check membership in list */
+    if (binary_op->op_type == BINARY_OP_IN) {
+        append_sql(ctx, "(");
+        /* Transform the left operand (value to check) */
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " IN ");
+
+        /* Check if right side is a literal list */
+        if (binary_op->right->type == AST_NODE_LIST) {
+            /* Literal list: generate IN (val1, val2, val3) */
+            cypher_list *list = (cypher_list*)binary_op->right;
+            append_sql(ctx, "(");
+            for (int i = 0; i < list->items->count; i++) {
+                if (i > 0) append_sql(ctx, ", ");
+                if (transform_expression(ctx, list->items->items[i]) < 0) {
+                    return -1;
+                }
+            }
+            append_sql(ctx, ")");
+        } else {
+            /* Variable or expression: use json_each subquery */
+            append_sql(ctx, "(SELECT value FROM json_each(");
+            if (transform_expression(ctx, binary_op->right) < 0) {
+                return -1;
+            }
+            append_sql(ctx, "))");
+        }
+        append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle STARTS WITH operator - string starts with prefix */
+    if (binary_op->op_type == BINARY_OP_STARTS_WITH) {
+        append_sql(ctx, "(");
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " LIKE ");
+        if (transform_expression(ctx, binary_op->right) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " || '%%')");  /* %% escapes to literal % in printf */
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle ENDS WITH operator - string ends with suffix */
+    if (binary_op->op_type == BINARY_OP_ENDS_WITH) {
+        append_sql(ctx, "(");
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " LIKE '%%' || ");  /* %% escapes to literal % in printf */
+        if (transform_expression(ctx, binary_op->right) < 0) {
+            return -1;
+        }
+        append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle CONTAINS operator - string contains substring */
+    if (binary_op->op_type == BINARY_OP_CONTAINS) {
+        append_sql(ctx, "(INSTR(");
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, binary_op->right) < 0) {
+            return -1;
+        }
+        append_sql(ctx, ") > 0)");
         ctx->in_comparison = was_in_comparison;
         return 0;
     }
@@ -154,7 +235,37 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             append_sql(ctx, " >= ");
             break;
         case BINARY_OP_ADD:
-            append_sql(ctx, " + ");
+            /* In Cypher, + on strings is concatenation. SQLite uses || for that.
+             * Check if left operand is a string literal or a string concat chain. */
+            {
+                bool is_string_concat = false;
+                if (binary_op->left->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)binary_op->left;
+                    if (lit->literal_type == LITERAL_STRING) {
+                        is_string_concat = true;
+                    }
+                }
+                /* Also check for chained string concat like 'a' + 'b' + 'c' */
+                if (!is_string_concat && binary_op->left->type == AST_NODE_BINARY_OP) {
+                    cypher_binary_op *left_op = (cypher_binary_op*)binary_op->left;
+                    if (left_op->op_type == BINARY_OP_ADD) {
+                        /* Recursively check leftmost operand */
+                        ast_node *leftmost = left_op->left;
+                        while (leftmost->type == AST_NODE_BINARY_OP) {
+                            cypher_binary_op *inner = (cypher_binary_op*)leftmost;
+                            if (inner->op_type != BINARY_OP_ADD) break;
+                            leftmost = inner->left;
+                        }
+                        if (leftmost->type == AST_NODE_LITERAL) {
+                            cypher_literal *lit = (cypher_literal*)leftmost;
+                            if (lit->literal_type == LITERAL_STRING) {
+                                is_string_concat = true;
+                            }
+                        }
+                    }
+                }
+                append_sql(ctx, is_string_concat ? " || " : " + ");
+            }
             break;
         case BINARY_OP_SUB:
             append_sql(ctx, " - ");
@@ -164,6 +275,9 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             break;
         case BINARY_OP_DIV:
             append_sql(ctx, " / ");
+            break;
+        case BINARY_OP_MOD:
+            append_sql(ctx, " %% ");
             break;
         default:
             CYPHER_DEBUG("Unknown binary operator: %d", binary_op->op_type);

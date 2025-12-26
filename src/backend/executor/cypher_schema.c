@@ -901,8 +901,187 @@ int cypher_schema_set_edge_property(cypher_schema_manager *manager,
     return 0;
 }
 
+/* Delete a property from a node */
+int cypher_schema_delete_node_property(cypher_schema_manager *manager,
+                                       int node_id, const char *property_name)
+{
+    if (!manager || !manager->db || !property_name || node_id < 0) {
+        return -1;
+    }
+
+    /* Get the property key ID */
+    int key_id = cypher_schema_get_property_key_id(manager, property_name);
+    if (key_id < 0) {
+        /* Property key doesn't exist, so nothing to delete */
+        CYPHER_DEBUG("Property key '%s' not found, nothing to delete", property_name);
+        return 0;
+    }
+
+    /* Delete from all property tables - we don't know which type it is */
+    const char *tables[] = {"node_props_text", "node_props_int", "node_props_real", "node_props_bool"};
+    int deleted = 0;
+
+    for (int i = 0; i < 4; i++) {
+        char sql[256];
+        snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE node_id = ? AND key_id = ?", tables[i]);
+
+        sqlite3_stmt *stmt;
+        int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
+        if (rc != SQLITE_OK) {
+            continue;
+        }
+
+        sqlite3_bind_int(stmt, 1, node_id);
+        sqlite3_bind_int(stmt, 2, key_id);
+
+        rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE && sqlite3_changes(manager->db) > 0) {
+            deleted++;
+            CYPHER_DEBUG("Deleted property '%s' from node %d (table %s)", property_name, node_id, tables[i]);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return deleted > 0 ? 0 : -1;
+}
+
+/* Delete a property from an edge */
+int cypher_schema_delete_edge_property(cypher_schema_manager *manager,
+                                       int edge_id, const char *property_name)
+{
+    if (!manager || !manager->db || !property_name || edge_id < 0) {
+        return -1;
+    }
+
+    /* Get the property key ID */
+    int key_id = cypher_schema_get_property_key_id(manager, property_name);
+    if (key_id < 0) {
+        /* Property key doesn't exist, so nothing to delete */
+        CYPHER_DEBUG("Property key '%s' not found, nothing to delete", property_name);
+        return 0;
+    }
+
+    /* Delete from all property tables - we don't know which type it is */
+    const char *tables[] = {"edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool"};
+    int deleted = 0;
+
+    for (int i = 0; i < 4; i++) {
+        char sql[256];
+        snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE edge_id = ? AND key_id = ?", tables[i]);
+
+        sqlite3_stmt *stmt;
+        int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
+        if (rc != SQLITE_OK) {
+            continue;
+        }
+
+        sqlite3_bind_int(stmt, 1, edge_id);
+        sqlite3_bind_int(stmt, 2, key_id);
+
+        rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE && sqlite3_changes(manager->db) > 0) {
+            deleted++;
+            CYPHER_DEBUG("Deleted property '%s' from edge %d (table %s)", property_name, edge_id, tables[i]);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return deleted > 0 ? 0 : -1;
+}
+
+/* Remove a label from a node */
+int cypher_schema_remove_node_label(cypher_schema_manager *manager, int node_id, const char *label)
+{
+    if (!manager || !manager->db || !label || node_id < 0) {
+        return -1;
+    }
+
+    const char *sql = "DELETE FROM node_labels WHERE node_id = ? AND label = ?";
+    sqlite3_stmt *stmt;
+
+    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to prepare label delete statement: %s", sqlite3_errmsg(manager->db));
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, node_id);
+    sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);
+
+    rc = sqlite3_step(stmt);
+    int changes = sqlite3_changes(manager->db);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        CYPHER_DEBUG("Failed to remove label '%s' from node %d: %s", label, node_id, sqlite3_errmsg(manager->db));
+        return -1;
+    }
+
+    if (changes > 0) {
+        CYPHER_DEBUG("Removed label '%s' from node %d", label, node_id);
+        return 0;
+    } else {
+        CYPHER_DEBUG("Label '%s' not found on node %d", label, node_id);
+        return -1;
+    }
+}
+
+/* Check if a node has a specific label */
+bool cypher_schema_node_has_label(cypher_schema_manager *manager, int node_id, const char *label)
+{
+    if (!manager || !manager->db || !label || node_id < 0) {
+        return false;
+    }
+
+    const char *sql = "SELECT 1 FROM node_labels WHERE node_id = ? AND label = ? LIMIT 1";
+    sqlite3_stmt *stmt;
+
+    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return false;
+    }
+
+    sqlite3_bind_int(stmt, 1, node_id);
+    sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);
+
+    bool has_label = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+
+    return has_label;
+}
+
+/* Delete a node (basic implementation - does not check for connected edges) */
+int cypher_schema_delete_node(cypher_schema_manager *manager, int node_id)
+{
+    if (!manager || !manager->db || node_id < 0) {
+        return -1;
+    }
+
+    const char *sql = "DELETE FROM nodes WHERE id = ?";
+    sqlite3_stmt *stmt;
+
+    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to prepare node delete statement: %s", sqlite3_errmsg(manager->db));
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, node_id);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        CYPHER_DEBUG("Failed to delete node %d: %s", node_id, sqlite3_errmsg(manager->db));
+        return -1;
+    }
+
+    CYPHER_DEBUG("Deleted node %d", node_id);
+    return 0;
+}
+
 /* Statistics */
-void property_key_cache_stats(property_key_cache *cache, 
+void property_key_cache_stats(property_key_cache *cache,
                              long *hits, long *misses, long *insertions)
 {
     if (!cache) {

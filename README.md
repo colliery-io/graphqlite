@@ -70,12 +70,12 @@ SELECT cypher('MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name');
 
 GraphQLite supports a substantial subset of Cypher:
 
-**Clauses**: MATCH, OPTIONAL MATCH, CREATE, MERGE, SET, DELETE, DETACH DELETE, REMOVE, WITH, UNWIND, FOREACH, RETURN (with DISTINCT, ORDER BY, SKIP, LIMIT).
+**Clauses**: MATCH, OPTIONAL MATCH, CREATE, MERGE, SET, DELETE, DETACH DELETE, WITH, UNWIND, FOREACH, RETURN (with DISTINCT, ORDER BY, SKIP, LIMIT).
 
 **Patterns**: Nodes `(n:Label {prop: value})`, relationships `-[:TYPE]->`, variable-length paths `[*1..3]`, bidirectional matching.
 
 **Functions**:
-- **String**: `toLower`, `toUpper`, `trim`, `ltrim`, `rtrim`, `replace`, `substring`, `left`, `right`, `split`, `reverse`, `toString`
+- **String**: `toLower`, `toUpper`, `trim`, `ltrim`, `rtrim`, `replace`, `substring`, `left`, `right`, `split`, `reverse`, `toString`, `startsWith`, `endsWith`, `contains`
 - **Math**: `abs`, `ceil`, `floor`, `round`, `sign`, `sqrt`, `log`, `log10`, `exp`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `rand`, `pi`, `e`
 - **List**: `head`, `tail`, `last`, `size`, `range`, `reverse`, `keys`
 - **Aggregate**: `count`, `sum`, `avg`, `min`, `max`, `collect`
@@ -86,25 +86,55 @@ GraphQLite supports a substantial subset of Cypher:
 
 **Predicates**: `EXISTS { pattern }`, `EXISTS(n.property)`, `all(x IN list WHERE ...)`, `any(...)`, `none(...)`, `single(...)`, `reduce(acc = init, x IN list | expr)`
 
-**Operators**: `+`, `-`, `*`, `/`, `%`, `=`, `<>`, `<`, `>`, `<=`, `>=`, `AND`, `OR`, `NOT`, `XOR`, `IN`, `STARTS WITH`, `ENDS WITH`, `CONTAINS`, `IS NULL`, `IS NOT NULL`
+**Operators**: `+`, `-`, `*`, `/`, `=`, `<>`, `<`, `>`, `<=`, `>=`, `AND`, `OR`, `NOT`, `XOR`, `IS NULL`, `IS NOT NULL`
 
 ## Graph Algorithms
 
-Built-in algorithms return JSON results:
+GraphQLite includes 15+ built-in graph algorithms, all returning JSON results:
 
+**Centrality**
 ```sql
--- PageRank
-SELECT cypher('RETURN pageRank(0.85, 20)');           -- All nodes with scores
-SELECT cypher('RETURN topPageRank(10)');              -- Top 10 nodes
-SELECT cypher('RETURN personalizedPageRank([1,2])'); -- Seeded PageRank
+SELECT cypher('RETURN pageRank(0.85, 20)');           -- PageRank scores
+SELECT cypher('RETURN degreeCentrality()');           -- In/out/total degree
+SELECT cypher('RETURN betweennessCentrality()');      -- Betweenness scores
+SELECT cypher('RETURN closenessCentrality()');        -- Closeness scores
+SELECT cypher('RETURN eigenvectorCentrality(100)');   -- Eigenvector centrality
+```
 
--- Community Detection (Label Propagation)
-SELECT cypher('RETURN labelPropagation(10)');         -- All community assignments
-SELECT cypher('RETURN communityOf(n)');               -- Single node's community
-SELECT cypher('RETURN communityMembers(1)');          -- Nodes in community 1
-SELECT cypher('RETURN communityCount()');             -- Number of communities
+**Community Detection**
+```sql
+SELECT cypher('RETURN labelPropagation(10)');         -- Label propagation
+SELECT cypher('RETURN louvain(1.0)');                 -- Louvain modularity
+```
 
--- Use results in SQL
+**Connected Components**
+```sql
+SELECT cypher('RETURN wcc()');                        -- Weakly connected components
+SELECT cypher('RETURN scc()');                        -- Strongly connected components
+```
+
+**Path Finding**
+```sql
+SELECT cypher('RETURN dijkstra("alice", "bob")');     -- Shortest path
+SELECT cypher('RETURN astar("a", "z", "lat", "lon")');-- A* with heuristic
+SELECT cypher('RETURN apsp()');                       -- All-pairs shortest paths
+```
+
+**Traversal**
+```sql
+SELECT cypher('RETURN bfs("start", 3)');              -- BFS with max depth
+SELECT cypher('RETURN dfs("start")');                 -- DFS traversal
+```
+
+**Similarity**
+```sql
+SELECT cypher('RETURN nodeSimilarity()');             -- Jaccard similarity
+SELECT cypher('RETURN knn("alice", 10)');             -- K-nearest neighbors
+SELECT cypher('RETURN triangleCount()');              -- Triangles & clustering
+```
+
+**Using results in SQL**
+```sql
 SELECT json_extract(value, '$.node_id') as id,
        json_extract(value, '$.score') as score
 FROM json_each(cypher('RETURN pageRank()'));

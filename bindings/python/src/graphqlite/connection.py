@@ -170,8 +170,10 @@ class Connection:
             if isinstance(data[0], dict):
                 columns = list(data[0].keys()) if data else []
                 return CypherResult(data, columns)
-            # List of scalars
-            return CypherResult([{"value": v} for v in data], ["value"])
+            # List of scalars - this happens when C returns raw JSON array
+            # for single-cell queries (e.g., range(), tail(), graph algorithms)
+            # Treat as single row with the original JSON string as value
+            return CypherResult([{"result": result_str}], ["result"])
         elif isinstance(data, dict):
             return CypherResult([data], list(data.keys()))
         else:

@@ -49,9 +49,19 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     }
     
     /* SQL builder mode is now determined at query level */
-    
+
     /* Start SELECT clause if this is the first clause and not using builder */
-    if (!ctx->sql_builder.using_builder && ctx->sql_size == 0) {
+    /* Also start a new SELECT if we're after a UNION keyword */
+    bool needs_select = (ctx->sql_size == 0);
+    if (!needs_select && ctx->sql_size >= 7) {
+        /* Check if buffer ends with " UNION " or " UNION ALL " */
+        if (strcmp(ctx->sql_buffer + ctx->sql_size - 7, " UNION ") == 0 ||
+            (ctx->sql_size >= 11 && strcmp(ctx->sql_buffer + ctx->sql_size - 11, " UNION ALL ") == 0)) {
+            needs_select = true;
+        }
+    }
+
+    if (!ctx->sql_builder.using_builder && needs_select) {
         append_sql(ctx, "SELECT ");
         /* We'll fill in the column list later in RETURN */
         append_sql(ctx, "* ");
@@ -289,28 +299,65 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 handle_where_clause:
     /* Handle WHERE clause if present */
     if (match->where) {
-        /* For OPTIONAL MATCH, check if we need WHERE or AND */
-        bool needs_where = true;
-        if (match->optional) {
-            /* Check if there's already a WHERE clause in the SQL buffer */
-            needs_where = (strstr(ctx->sql_buffer, " WHERE ") == NULL);
+        if (ctx->sql_builder.using_builder) {
+            /* In SQL builder mode, capture WHERE expression to builder's where_clauses */
+            /* Save current sql_buffer state */
+            char *saved_buffer = NULL;
+            size_t saved_size = ctx->sql_size;
+            if (saved_size > 0) {
+                saved_buffer = strdup(ctx->sql_buffer);
+            }
+
+            /* Clear sql_buffer temporarily */
+            ctx->sql_size = 0;
+            if (ctx->sql_buffer) {
+                ctx->sql_buffer[0] = '\0';
+            }
+
+            /* Transform the WHERE expression - appends to sql_buffer */
+            if (transform_expression(ctx, match->where) < 0) {
+                free(saved_buffer);
+                return -1;
+            }
+
+            /* Move the expression to builder's where_clauses */
+            if (ctx->sql_size > 0) {
+                /* Add AND if there's already content in where_clauses */
+                if (ctx->sql_builder.where_size > 0) {
+                    append_where_clause(ctx, " AND ");
+                }
+                append_where_clause(ctx, "%s", ctx->sql_buffer);
+            }
+
+            /* Restore sql_buffer */
+            ctx->sql_size = saved_size;
+            if (saved_buffer) {
+                strcpy(ctx->sql_buffer, saved_buffer);
+                free(saved_buffer);
+            } else if (ctx->sql_buffer) {
+                ctx->sql_buffer[0] = '\0';
+            }
         } else {
-            /* For regular MATCH, use the first_constraint variable */
-            needs_where = first_constraint;
-        }
-        
-        /* Add WHERE or AND */
-        if (needs_where) {
-            append_sql(ctx, " WHERE ");
-        } else {
-            append_sql(ctx, " AND ");
-        }
-        
-        if (transform_expression(ctx, match->where) < 0) {
-            return -1;
+            /* Traditional mode - append directly to SQL buffer */
+            bool needs_where = true;
+            if (match->optional) {
+                needs_where = (strstr(ctx->sql_buffer, " WHERE ") == NULL);
+            } else {
+                needs_where = first_constraint;
+            }
+
+            if (needs_where) {
+                append_sql(ctx, " WHERE ");
+            } else {
+                append_sql(ctx, " AND ");
+            }
+
+            if (transform_expression(ctx, match->where) < 0) {
+                return -1;
+            }
         }
     }
-    
+
     return 0;
 }
 
@@ -353,15 +400,22 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 if (entity && entity->is_current_clause) {
                     /* Entity exists and is from current clause, reuse alias but check if we need FROM clause */
                     alias = entity->table_alias;
-                    /* Check if this alias is already in the FROM clause */
-                    if (!strstr(ctx->sql_buffer, entity->table_alias)) {
+                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
+                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
+                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
+                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
+                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
                         need_from_clause = true;
                     }
                 } else if (entity && !entity->is_current_clause) {
                     /* Entity from previous clause - reuse but may need FROM clause */
                     alias = entity->table_alias;
                     entity->is_current_clause = true; /* Mark as used in current clause */
-                    if (!strstr(ctx->sql_buffer, entity->table_alias)) {
+                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
+                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
+                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
+                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
+                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
                         need_from_clause = true;
                     }
                 } else {
@@ -450,7 +504,25 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                  first_label ? first_label : "<no label>",
                  node->labels ? node->labels->count : 0);
 
-    bool has_from = (strstr(ctx->sql_buffer, "FROM") != NULL);
+    /* Check if there's already a FROM clause in the current query.
+     * For UNION queries, we need to check only after the most recent UNION keyword. */
+    bool has_from = false;
+    char *from_pos = strstr(ctx->sql_buffer, "FROM");
+    if (from_pos) {
+        /* Check if there's a UNION after this FROM - if so, FROM is from previous query */
+        char *union_pos = strstr(from_pos, " UNION ");
+        if (!union_pos) {
+            union_pos = strstr(from_pos, " UNION\n");  /* Edge case */
+        }
+        if (!union_pos) {
+            /* No UNION after FROM, so FROM is in current query */
+            has_from = true;
+        } else {
+            /* There's a UNION after FROM - check if there's another FROM after UNION */
+            char *from_after_union = strstr(union_pos, "FROM");
+            has_from = (from_after_union != NULL);
+        }
+    }
     const char *join_type = optional ? " LEFT JOIN " : " JOIN ";
 
     /* Check if node has properties - if so, start from property table for better selectivity */
@@ -786,25 +858,14 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     else if (ctx->sql_builder.using_builder) {
         /* Using SQL builder */
         if (optional) {
-            /* For OPTIONAL MATCH, we need to LEFT JOIN both the target node and the edge */
-            /* Check if target node is already added to avoid duplicates */
-            bool target_already_added = false;
-            if (ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, target_alias)) {
-                target_already_added = true;
-            }
-            if (!target_already_added && ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, target_alias)) {
-                target_already_added = true;
-            }
+            /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
+            /* This ensures we get NULLs for unmatched patterns, not cartesian products */
 
-            if (!target_already_added) {
-                append_join_clause(ctx, " LEFT JOIN nodes AS %s ON 1=1", target_alias);
-            }
+            /* First, LEFT JOIN the edges table from the source node */
+            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id",
+                              edge_alias, edge_alias, source_alias);
 
-            /* Always add the edge JOIN as each relationship is unique */
-            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id",
-                              edge_alias, edge_alias, source_alias, edge_alias, target_alias);
-
-            /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
+            /* Add relationship type constraint to edge JOIN */
             if (rel->type) {
                 /* Single type (legacy support) */
                 append_join_clause(ctx, " AND %s.type = '%s'", edge_alias, rel->type);
@@ -821,18 +882,35 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                 }
                 append_join_clause(ctx, ")");
             }
+
+            /* Then, LEFT JOIN target node through the edge's target_id */
+            /* Check if target node is already added to avoid duplicates */
+            bool target_already_added = false;
+            if (ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, target_alias)) {
+                target_already_added = true;
+            }
+            if (!target_already_added && ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, target_alias)) {
+                target_already_added = true;
+            }
+
+            if (!target_already_added) {
+                append_join_clause(ctx, " LEFT JOIN nodes AS %s ON %s.id = %s.target_id",
+                                  target_alias, target_alias, edge_alias);
+            }
         } else {
             append_from_clause(ctx, ", edges AS %s", edge_alias);
         }
     } else {
         /* Traditional SQL generation */
         if (optional) {
-            /* For OPTIONAL MATCH, we need to LEFT JOIN both the target node and the edge */
-            append_sql(ctx, " LEFT JOIN nodes AS %s ON 1=1", target_alias);
-            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id AND %s.target_id = %s.id",
-                       edge_alias, edge_alias, source_alias, edge_alias, target_alias);
+            /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
+            /* This ensures we get NULLs for unmatched patterns, not cartesian products */
 
-            /* Add relationship type constraint to ON clause for OPTIONAL MATCH */
+            /* First, LEFT JOIN the edges table from the source node */
+            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id",
+                       edge_alias, edge_alias, source_alias);
+
+            /* Add relationship type constraint to edge JOIN */
             if (rel->type) {
                 /* Single type (legacy support) */
                 append_sql(ctx, " AND %s.type = ", edge_alias);
@@ -851,6 +929,10 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                 }
                 append_sql(ctx, ")");
             }
+
+            /* Then, LEFT JOIN target node through the edge's target_id */
+            append_sql(ctx, " LEFT JOIN nodes AS %s ON %s.id = %s.target_id",
+                       target_alias, target_alias, edge_alias);
         } else {
             append_sql(ctx, ", edges AS %s", edge_alias);
         }

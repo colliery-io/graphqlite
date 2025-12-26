@@ -30,7 +30,7 @@ else
 CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG $(EXTRA_INCLUDES)
 EXTENSION_CFLAGS_BASE = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG
 endif
-LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3
+LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3 -lm
 
 # Extension-specific flags: enable sqlite3ext.h API pointer redirection
 EXTENSION_CFLAGS = -DGRAPHQLITE_EXTENSION
@@ -118,12 +118,28 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/executor_helpers.c \
 	$(EXECUTOR_DIR)/executor_delete.c \
 	$(EXECUTOR_DIR)/executor_set.c \
+	$(EXECUTOR_DIR)/executor_remove.c \
 	$(EXECUTOR_DIR)/executor_create.c \
 	$(EXECUTOR_DIR)/executor_foreach.c \
 	$(EXECUTOR_DIR)/executor_merge.c \
 	$(EXECUTOR_DIR)/executor_match.c \
 	$(EXECUTOR_DIR)/agtype.c \
-	$(EXECUTOR_DIR)/graph_algorithms.c
+	$(EXECUTOR_DIR)/graph_algorithms.c \
+	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
+	$(EXECUTOR_DIR)/graph_algo_community.c \
+	$(EXECUTOR_DIR)/graph_algo_paths.c \
+	$(EXECUTOR_DIR)/graph_algo_centrality.c \
+	$(EXECUTOR_DIR)/graph_algo_components.c \
+	$(EXECUTOR_DIR)/graph_algo_betweenness.c \
+	$(EXECUTOR_DIR)/graph_algo_closeness.c \
+	$(EXECUTOR_DIR)/graph_algo_louvain.c \
+	$(EXECUTOR_DIR)/graph_algo_triangle.c \
+	$(EXECUTOR_DIR)/graph_algo_astar.c \
+	$(EXECUTOR_DIR)/graph_algo_traversal.c \
+	$(EXECUTOR_DIR)/graph_algo_similarity.c \
+	$(EXECUTOR_DIR)/graph_algo_knn.c \
+	$(EXECUTOR_DIR)/graph_algo_eigenvector.c \
+	$(EXECUTOR_DIR)/graph_algo_apsp.c
 
 TRANSFORM_OBJS = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.o)
 TRANSFORM_OBJS_COV = $(TRANSFORM_SRCS:$(TRANSFORM_DIR)/%.c=$(BUILD_TRANSFORM_DIR)/%.cov.o)
@@ -157,8 +173,27 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_merge.c \
 	$(TEST_DIR)/test_executor_pagerank.c \
 	$(TEST_DIR)/test_executor_label_propagation.c \
+	$(TEST_DIR)/test_executor_dijkstra.c \
+	$(TEST_DIR)/test_executor_degree_centrality.c \
+	$(TEST_DIR)/test_executor_components.c \
+	$(TEST_DIR)/test_executor_betweenness.c \
+	$(TEST_DIR)/test_executor_closeness.c \
+	$(TEST_DIR)/test_executor_louvain.c \
+	$(TEST_DIR)/test_executor_triangle.c \
+	$(TEST_DIR)/test_executor_astar.c \
+	$(TEST_DIR)/test_executor_traversal.c \
+	$(TEST_DIR)/test_executor_similarity.c \
+	$(TEST_DIR)/test_executor_knn.c \
+	$(TEST_DIR)/test_executor_eigenvector.c \
+	$(TEST_DIR)/test_executor_apsp.c \
+	$(TEST_DIR)/test_executor_remove.c \
 	$(TEST_DIR)/test_executor_params.c \
-	$(TEST_DIR)/test_output_format.c
+	$(TEST_DIR)/test_output_format.c \
+	$(TEST_DIR)/test_executor_expressions.c \
+	$(TEST_DIR)/test_executor_clauses.c \
+	$(TEST_DIR)/test_executor_patterns.c \
+	$(TEST_DIR)/test_executor_functions.c \
+	$(TEST_DIR)/test_executor_predicates.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 

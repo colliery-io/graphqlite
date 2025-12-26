@@ -455,6 +455,11 @@ int finalize_sql_generation(cypher_transform_context *ctx)
             append_sql(ctx, "%s", ctx->sql_builder.join_clauses);
         }
 
+        /* Add WHERE clause from builder if present */
+        if (ctx->sql_builder.where_clauses && ctx->sql_builder.where_size > 0) {
+            append_sql(ctx, " WHERE %s", ctx->sql_builder.where_clauses);
+        }
+
         free(existing);
         return 0;
     }

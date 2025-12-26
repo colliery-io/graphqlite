@@ -117,10 +117,46 @@ let g = graph(":memory:")?;
 
 #### Graph Algorithms
 
+**Centrality**
 | Method | Description |
 |--------|-------------|
-| `pagerank(damping, iterations)` | Run PageRank algorithm |
-| `community_detection(iterations)` | Community detection via label propagation |
+| `pagerank(damping, iterations)` | PageRank importance scores |
+| `degree_centrality()` | In/out/total degree for each node |
+| `betweenness_centrality()` | Betweenness centrality scores |
+| `closeness_centrality()` | Closeness centrality scores |
+| `eigenvector_centrality(iterations)` | Eigenvector centrality scores |
+
+**Community Detection**
+| Method | Description |
+|--------|-------------|
+| `community_detection(iterations)` | Label propagation communities |
+| `louvain(resolution)` | Louvain modularity optimization |
+
+**Connected Components**
+| Method | Description |
+|--------|-------------|
+| `wcc()` | Weakly connected components |
+| `scc()` | Strongly connected components |
+
+**Path Finding**
+| Method | Description |
+|--------|-------------|
+| `shortest_path(src, dst, weight)` | Dijkstra's shortest path |
+| `astar(src, dst, lat, lon)` | A* with optional heuristic |
+| `apsp()` | All-pairs shortest paths (Floyd-Warshall) |
+
+**Traversal**
+| Method | Description |
+|--------|-------------|
+| `bfs(start, max_depth)` | Breadth-first search |
+| `dfs(start, max_depth)` | Depth-first search |
+
+**Similarity**
+| Method | Description |
+|--------|-------------|
+| `node_similarity(n1, n2, threshold, k)` | Jaccard similarity |
+| `knn(node, k)` | K-nearest neighbors |
+| `triangle_count()` | Triangle counts and clustering coefficients |
 
 #### Batch Operations
 

@@ -32,6 +32,8 @@ Repository = "https://github.com/colliery-io/graphqlite"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov"]
+leiden = ["graspologic>=3.0"]
+rustworkx = ["rustworkx>=0.13"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
