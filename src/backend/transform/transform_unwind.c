@@ -39,6 +39,11 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     char *inner_sql = NULL;
     if (ctx->sql_size > 0) {
         inner_sql = strdup(ctx->sql_buffer);
+        if (!inner_sql) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Memory allocation failed");
+            return -1;
+        }
     }
 
     /* Start building CTE prefix */

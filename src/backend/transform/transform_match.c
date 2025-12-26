@@ -292,6 +292,11 @@ handle_where_clause:
             size_t saved_size = ctx->sql_size;
             if (saved_size > 0) {
                 saved_buffer = strdup(ctx->sql_buffer);
+                if (!saved_buffer) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Memory allocation failed");
+                    return -1;
+                }
             }
 
             /* Clear sql_buffer temporarily */

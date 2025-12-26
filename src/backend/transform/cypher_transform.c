@@ -438,6 +438,11 @@ int finalize_sql_generation(cypher_transform_context *ctx)
         ctx->sql_size > 0) {
         /* Save existing content (FROM ... JOIN ... WHERE ...) */
         char *existing = strdup(ctx->sql_buffer);
+        if (!existing) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Memory allocation failed");
+            return -1;
+        }
 
         /* Clear buffer and rebuild with SELECT * prefix */
         ctx->sql_size = 0;
@@ -537,6 +542,8 @@ void prepend_cte_to_sql(cypher_transform_context *ctx)
     /* Allocate new buffer */
     char *new_buffer = malloc(new_size);
     if (!new_buffer) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Memory allocation failed during CTE prepend");
         return;
     }
 
@@ -564,8 +571,12 @@ int register_variable(cypher_transform_context *ctx, const char *name, const cha
     for (int i = 0; i < ctx->variable_count; i++) {
         if (strcmp(ctx->variables[i].name, name) == 0) {
             /* Update existing variable */
+            char *new_alias = strdup(alias);
+            if (!new_alias) {
+                return -1;
+            }
             free(ctx->variables[i].table_alias);
-            ctx->variables[i].table_alias = strdup(alias);
+            ctx->variables[i].table_alias = new_alias;
             return 0;
         }
     }
@@ -583,13 +594,20 @@ int register_variable(cypher_transform_context *ctx, const char *name, const cha
     }
     
     /* Add new variable */
-    ctx->variables[ctx->variable_count].name = strdup(name);
-    ctx->variables[ctx->variable_count].table_alias = strdup(alias);
+    char *name_copy = strdup(name);
+    char *alias_copy = strdup(alias);
+    if (!name_copy || !alias_copy) {
+        free(name_copy);
+        free(alias_copy);
+        return -1;
+    }
+    ctx->variables[ctx->variable_count].name = name_copy;
+    ctx->variables[ctx->variable_count].table_alias = alias_copy;
     ctx->variables[ctx->variable_count].is_bound = false;
     ctx->variables[ctx->variable_count].node_id = -1;
     ctx->variables[ctx->variable_count].type = VAR_TYPE_NODE; /* Default to node */
     ctx->variable_count++;
-    
+
     return 0;
 }
 
@@ -697,7 +715,11 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
             ctx->path_variable_capacity = new_capacity;
         }
 
-        ctx->path_variables[ctx->path_variable_count].name = strdup(name);
+        char *name_copy = strdup(name);
+        if (!name_copy) {
+            return -1;
+        }
+        ctx->path_variables[ctx->path_variable_count].name = name_copy;
         ctx->path_variables[ctx->path_variable_count].elements = path->elements;
         /* Map AST path_type to transform path_type */
         switch (path->type) {
@@ -795,12 +817,17 @@ int add_entity(cypher_transform_context *ctx, const char *name, entity_type type
     }
     
     /* Add new entity */
-    ctx->entities[ctx->entity_count].name = strdup(name);
+    char *name_copy = strdup(name);
+    if (!name_copy) {
+        free(alias);
+        return -1;
+    }
+    ctx->entities[ctx->entity_count].name = name_copy;
     ctx->entities[ctx->entity_count].table_alias = alias;
     ctx->entities[ctx->entity_count].type = type;
     ctx->entities[ctx->entity_count].is_current_clause = is_current_clause;
     ctx->entity_count++;
-    
+
     return 0;
 }
 

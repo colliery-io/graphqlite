@@ -244,6 +244,11 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         char *after_star = select_pos + strlen("SELECT *");
         while (*after_star == ' ') after_star++; /* Skip any extra spaces */
         char *temp = strdup(after_star);
+        if (!temp) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Memory allocation failed");
+            return -1;
+        }
 
         /* Truncate at SELECT */
         ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
@@ -275,25 +280,35 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 size_t suffix_len = strlen(where_pos);
                 size_t new_len = strlen(temp) + pending_prop_joins_len + 1;
                 char *new_temp = malloc(new_len);
-                if (new_temp) {
-                    memcpy(new_temp, temp, prefix_len);
-                    memcpy(new_temp + prefix_len, pending_prop_joins, pending_prop_joins_len);
-                    memcpy(new_temp + prefix_len + pending_prop_joins_len, where_pos, suffix_len + 1);
+                if (!new_temp) {
                     free(temp);
-                    temp = new_temp;
-                    CYPHER_DEBUG("Injected property JOINs before WHERE: %s", pending_prop_joins);
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Memory allocation failed");
+                    reset_pending_prop_joins();
+                    return -1;
                 }
+                memcpy(new_temp, temp, prefix_len);
+                memcpy(new_temp + prefix_len, pending_prop_joins, pending_prop_joins_len);
+                memcpy(new_temp + prefix_len + pending_prop_joins_len, where_pos, suffix_len + 1);
+                free(temp);
+                temp = new_temp;
+                CYPHER_DEBUG("Injected property JOINs before WHERE: %s", pending_prop_joins);
             } else {
                 /* No WHERE, append JOINs at end of FROM section */
                 size_t new_len = strlen(temp) + pending_prop_joins_len + 1;
                 char *new_temp = malloc(new_len);
-                if (new_temp) {
-                    strcpy(new_temp, temp);
-                    strcat(new_temp, pending_prop_joins);
+                if (!new_temp) {
                     free(temp);
-                    temp = new_temp;
-                    CYPHER_DEBUG("Appended property JOINs: %s", pending_prop_joins);
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Memory allocation failed");
+                    reset_pending_prop_joins();
+                    return -1;
                 }
+                strcpy(new_temp, temp);
+                strcat(new_temp, pending_prop_joins);
+                free(temp);
+                temp = new_temp;
+                CYPHER_DEBUG("Appended property JOINs: %s", pending_prop_joins);
             }
             reset_pending_prop_joins();
         }
