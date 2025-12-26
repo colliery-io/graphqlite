@@ -7,7 +7,7 @@ from .graph import Graph, graph
 from .utils import escape_string, sanitize_rel_type, CYPHER_RESERVED
 from ._platform import get_loadable_path
 
-__version__ = "0.1.0b3"
+__version__ = "0.1.0b4"
 __all__ = [
     "Connection", "connect", "wrap", "load", "loadable_path",
     "Graph", "graph", "escape_string", "sanitize_rel_type", "CYPHER_RESERVED"

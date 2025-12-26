@@ -30,7 +30,7 @@ else
 CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG $(EXTRA_INCLUDES)
 EXTENSION_CFLAGS_BASE = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG
 endif
-LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3
+LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3 -lm
 
 # Extension-specific flags: enable sqlite3ext.h API pointer redirection
 EXTENSION_CFLAGS = -DGRAPHQLITE_EXTENSION

@@ -299,28 +299,65 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 handle_where_clause:
     /* Handle WHERE clause if present */
     if (match->where) {
-        /* For OPTIONAL MATCH, check if we need WHERE or AND */
-        bool needs_where = true;
-        if (match->optional) {
-            /* Check if there's already a WHERE clause in the SQL buffer */
-            needs_where = (strstr(ctx->sql_buffer, " WHERE ") == NULL);
+        if (ctx->sql_builder.using_builder) {
+            /* In SQL builder mode, capture WHERE expression to builder's where_clauses */
+            /* Save current sql_buffer state */
+            char *saved_buffer = NULL;
+            size_t saved_size = ctx->sql_size;
+            if (saved_size > 0) {
+                saved_buffer = strdup(ctx->sql_buffer);
+            }
+
+            /* Clear sql_buffer temporarily */
+            ctx->sql_size = 0;
+            if (ctx->sql_buffer) {
+                ctx->sql_buffer[0] = '\0';
+            }
+
+            /* Transform the WHERE expression - appends to sql_buffer */
+            if (transform_expression(ctx, match->where) < 0) {
+                free(saved_buffer);
+                return -1;
+            }
+
+            /* Move the expression to builder's where_clauses */
+            if (ctx->sql_size > 0) {
+                /* Add AND if there's already content in where_clauses */
+                if (ctx->sql_builder.where_size > 0) {
+                    append_where_clause(ctx, " AND ");
+                }
+                append_where_clause(ctx, "%s", ctx->sql_buffer);
+            }
+
+            /* Restore sql_buffer */
+            ctx->sql_size = saved_size;
+            if (saved_buffer) {
+                strcpy(ctx->sql_buffer, saved_buffer);
+                free(saved_buffer);
+            } else if (ctx->sql_buffer) {
+                ctx->sql_buffer[0] = '\0';
+            }
         } else {
-            /* For regular MATCH, use the first_constraint variable */
-            needs_where = first_constraint;
-        }
-        
-        /* Add WHERE or AND */
-        if (needs_where) {
-            append_sql(ctx, " WHERE ");
-        } else {
-            append_sql(ctx, " AND ");
-        }
-        
-        if (transform_expression(ctx, match->where) < 0) {
-            return -1;
+            /* Traditional mode - append directly to SQL buffer */
+            bool needs_where = true;
+            if (match->optional) {
+                needs_where = (strstr(ctx->sql_buffer, " WHERE ") == NULL);
+            } else {
+                needs_where = first_constraint;
+            }
+
+            if (needs_where) {
+                append_sql(ctx, " WHERE ");
+            } else {
+                append_sql(ctx, " AND ");
+            }
+
+            if (transform_expression(ctx, match->where) < 0) {
+                return -1;
+            }
         }
     }
-    
+
     return 0;
 }
 
