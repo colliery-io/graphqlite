@@ -90,7 +90,9 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     if (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||
         binary_op->op_type == BINARY_OP_LT || binary_op->op_type == BINARY_OP_GT ||
         binary_op->op_type == BINARY_OP_LTE || binary_op->op_type == BINARY_OP_GTE ||
-        binary_op->op_type == BINARY_OP_REGEX_MATCH || binary_op->op_type == BINARY_OP_IN) {
+        binary_op->op_type == BINARY_OP_REGEX_MATCH || binary_op->op_type == BINARY_OP_IN ||
+        binary_op->op_type == BINARY_OP_STARTS_WITH || binary_op->op_type == BINARY_OP_ENDS_WITH ||
+        binary_op->op_type == BINARY_OP_CONTAINS) {
         ctx->in_comparison = true;
     }
 
@@ -141,6 +143,51 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             append_sql(ctx, "))");
         }
         append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle STARTS WITH operator - string starts with prefix */
+    if (binary_op->op_type == BINARY_OP_STARTS_WITH) {
+        append_sql(ctx, "(");
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " LIKE ");
+        if (transform_expression(ctx, binary_op->right) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " || '%%')");  /* %% escapes to literal % in printf */
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle ENDS WITH operator - string ends with suffix */
+    if (binary_op->op_type == BINARY_OP_ENDS_WITH) {
+        append_sql(ctx, "(");
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, " LIKE '%%' || ");  /* %% escapes to literal % in printf */
+        if (transform_expression(ctx, binary_op->right) < 0) {
+            return -1;
+        }
+        append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* Handle CONTAINS operator - string contains substring */
+    if (binary_op->op_type == BINARY_OP_CONTAINS) {
+        append_sql(ctx, "(INSTR(");
+        if (transform_expression(ctx, binary_op->left) < 0) {
+            return -1;
+        }
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, binary_op->right) < 0) {
+            return -1;
+        }
+        append_sql(ctx, ") > 0)");
         ctx->in_comparison = was_in_comparison;
         return 0;
     }

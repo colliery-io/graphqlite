@@ -84,7 +84,10 @@ typedef enum {
     BINARY_OP_DIV,
     BINARY_OP_MOD,
     BINARY_OP_REGEX_MATCH,
-    BINARY_OP_IN
+    BINARY_OP_IN,
+    BINARY_OP_STARTS_WITH,
+    BINARY_OP_ENDS_WITH,
+    BINARY_OP_CONTAINS
 } binary_op_type;
 
 /* EXISTS expression types */

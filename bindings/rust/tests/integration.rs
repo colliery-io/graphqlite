@@ -1005,3 +1005,122 @@ fn test_utility_functions() {
     assert_eq!(sanitize_rel_type("has-items"), "has_items");
     assert_eq!(sanitize_rel_type("CREATE"), "REL_CREATE");
 }
+
+// =============================================================================
+// STARTS WITH, ENDS WITH, CONTAINS Tests
+// =============================================================================
+
+#[test]
+fn test_starts_with_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'hello world' STARTS WITH 'hello'").unwrap();
+    assert_eq!(results.len(), 1);
+    // Result should be truthy (1 or true)
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 1);
+}
+
+#[test]
+fn test_starts_with_no_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'hello world' STARTS WITH 'world'").unwrap();
+    assert_eq!(results.len(), 1);
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 0);
+}
+
+#[test]
+fn test_ends_with_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'hello world' ENDS WITH 'world'").unwrap();
+    assert_eq!(results.len(), 1);
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 1);
+}
+
+#[test]
+fn test_ends_with_no_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'hello world' ENDS WITH 'hello'").unwrap();
+    assert_eq!(results.len(), 1);
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 0);
+}
+
+#[test]
+fn test_contains_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'hello world' CONTAINS 'lo wo'").unwrap();
+    assert_eq!(results.len(), 1);
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 1);
+}
+
+#[test]
+fn test_contains_no_match() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    let results = conn.cypher("RETURN 'hello world' CONTAINS 'xyz'").unwrap();
+    assert_eq!(results.len(), 1);
+    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
+    assert_eq!(val, 0);
+}
+
+#[test]
+fn test_string_operators_in_where() {
+    let Some(conn) = test_connection() else {
+        eprintln!("Skipping: extension not found");
+        return;
+    };
+
+    conn.cypher("CREATE (n:StringTest {name: 'John Smith', email: 'john@example.com'})").unwrap();
+    conn.cypher("CREATE (n:StringTest {name: 'Jane Doe', email: 'jane@test.org'})").unwrap();
+    conn.cypher("CREATE (n:StringTest {name: 'Bob Johnson', email: 'bob@example.com'})").unwrap();
+
+    // Test STARTS WITH
+    let results = conn
+        .cypher("MATCH (n:StringTest) WHERE n.name STARTS WITH 'J' RETURN n.name ORDER BY n.name")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Jane Doe");
+    assert_eq!(results[1].get::<String>("n.name").unwrap(), "John Smith");
+
+    // Test ENDS WITH
+    let results = conn
+        .cypher("MATCH (n:StringTest) WHERE n.email ENDS WITH '.com' RETURN n.name ORDER BY n.name")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Bob Johnson");
+    assert_eq!(results[1].get::<String>("n.name").unwrap(), "John Smith");
+
+    // Test CONTAINS
+    let results = conn
+        .cypher("MATCH (n:StringTest) WHERE n.name CONTAINS 'ohn' RETURN n.name ORDER BY n.name")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Bob Johnson");
+    assert_eq!(results[1].get::<String>("n.name").unwrap(), "John Smith");
+}

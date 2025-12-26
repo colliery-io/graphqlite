@@ -93,6 +93,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %token UNION ALL CASE WHEN THEN ELSE END_P ON
 %token SHORTESTPATH ALLSHORTESTPATHS PATTERN EXPLAIN
 %token LOAD CSV FROM HEADERS FIELDTERMINATOR
+%token STARTS ENDS CONTAINS
 
 /* Non-terminal types */
 %type <node> stmt union_query single_query
@@ -143,7 +144,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left XOR
 %left AND
 %right NOT
-%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH
+%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH STARTS ENDS CONTAINS
 %left '+' '-'
 %left '*' '/' '%'
 %left '^'
@@ -923,6 +924,9 @@ expr:
     | expr OR expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_OR, $1, $3, @2.first_line); }
     | expr XOR expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_XOR, $1, $3, @2.first_line); }
     | expr IN expr      { $$ = (ast_node*)make_binary_op(BINARY_OP_IN, $1, $3, @2.first_line); }
+    | expr STARTS WITH expr %prec STARTS { $$ = (ast_node*)make_binary_op(BINARY_OP_STARTS_WITH, $1, $4, @2.first_line); }
+    | expr ENDS WITH expr %prec ENDS    { $$ = (ast_node*)make_binary_op(BINARY_OP_ENDS_WITH, $1, $4, @2.first_line); }
+    | expr CONTAINS expr %prec CONTAINS { $$ = (ast_node*)make_binary_op(BINARY_OP_CONTAINS, $1, $3, @2.first_line); }
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
@@ -1032,6 +1036,21 @@ function_call:
             $$ = (ast_node*)make_exists_property_expr(prop, @1.first_line);
             free($3);
             free($5);
+        }
+    /* Allow keyword-named functions: contains(), startsWith(), endsWith() */
+    | CONTAINS '(' argument_list ')'
+        {
+            $$ = (ast_node*)make_function_call(strdup("contains"), $3, false, @1.first_line);
+        }
+    | STARTS '(' argument_list ')'
+        {
+            /* startsWith function uses STARTS keyword */
+            $$ = (ast_node*)make_function_call(strdup("startsWith"), $3, false, @1.first_line);
+        }
+    | ENDS '(' argument_list ')'
+        {
+            /* endsWith function uses ENDS keyword */
+            $$ = (ast_node*)make_function_call(strdup("endsWith"), $3, false, @1.first_line);
         }
     ;
 

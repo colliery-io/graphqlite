@@ -496,3 +496,107 @@ def test_in_empty_result(db):
         "MATCH (n:InEmptyTest) WHERE n.status IN ['active', 'pending'] RETURN n.name"
     )
     assert len(results) == 0
+
+
+# Tests for STARTS WITH, ENDS WITH, CONTAINS operators
+def test_starts_with_match(db):
+    """Test STARTS WITH operator - matching prefix."""
+    results = db.cypher("RETURN 'hello world' STARTS WITH 'hello'")
+    assert len(results) == 1
+    assert results[0][list(results[0].keys())[0]] in [1, True, "1", "true"]
+
+
+def test_starts_with_no_match(db):
+    """Test STARTS WITH operator - non-matching prefix."""
+    results = db.cypher("RETURN 'hello world' STARTS WITH 'world'")
+    assert len(results) == 1
+    assert results[0][list(results[0].keys())[0]] in [0, False, "0", "false"]
+
+
+def test_ends_with_match(db):
+    """Test ENDS WITH operator - matching suffix."""
+    results = db.cypher("RETURN 'hello world' ENDS WITH 'world'")
+    assert len(results) == 1
+    assert results[0][list(results[0].keys())[0]] in [1, True, "1", "true"]
+
+
+def test_ends_with_no_match(db):
+    """Test ENDS WITH operator - non-matching suffix."""
+    results = db.cypher("RETURN 'hello world' ENDS WITH 'hello'")
+    assert len(results) == 1
+    assert results[0][list(results[0].keys())[0]] in [0, False, "0", "false"]
+
+
+def test_contains_match(db):
+    """Test CONTAINS operator - substring exists."""
+    results = db.cypher("RETURN 'hello world' CONTAINS 'lo wo'")
+    assert len(results) == 1
+    assert results[0][list(results[0].keys())[0]] in [1, True, "1", "true"]
+
+
+def test_contains_no_match(db):
+    """Test CONTAINS operator - substring does not exist."""
+    results = db.cypher("RETURN 'hello world' CONTAINS 'xyz'")
+    assert len(results) == 1
+    assert results[0][list(results[0].keys())[0]] in [0, False, "0", "false"]
+
+
+def test_string_operators_in_where(db):
+    """Test string operators in WHERE clause."""
+    db.cypher("CREATE (n:StringTest {name: 'John Smith', email: 'john@example.com'})")
+    db.cypher("CREATE (n:StringTest {name: 'Jane Doe', email: 'jane@test.org'})")
+    db.cypher("CREATE (n:StringTest {name: 'Bob Johnson', email: 'bob@example.com'})")
+
+    # Test STARTS WITH
+    results = db.cypher(
+        "MATCH (n:StringTest) WHERE n.name STARTS WITH 'J' RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "Jane Doe"
+    assert results[1]["n.name"] == "John Smith"
+
+    # Test ENDS WITH
+    results = db.cypher(
+        "MATCH (n:StringTest) WHERE n.email ENDS WITH '.com' RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "Bob Johnson"
+    assert results[1]["n.name"] == "John Smith"
+
+    # Test CONTAINS
+    results = db.cypher(
+        "MATCH (n:StringTest) WHERE n.name CONTAINS 'ohn' RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "Bob Johnson"
+    assert results[1]["n.name"] == "John Smith"
+
+
+def test_string_operators_with_property(db):
+    """Test string operators comparing property to literal."""
+    db.cypher("CREATE (n:Product {name: 'iPhone 15 Pro Max', category: 'electronics'})")
+    db.cypher("CREATE (n:Product {name: 'iPad Pro', category: 'electronics'})")
+    db.cypher("CREATE (n:Product {name: 'MacBook Air', category: 'electronics'})")
+
+    # Products starting with "i" (case-sensitive)
+    results = db.cypher(
+        "MATCH (n:Product) WHERE n.name STARTS WITH 'i' RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "iPad Pro"
+    assert results[1]["n.name"] == "iPhone 15 Pro Max"
+
+    # Products ending with "Pro"
+    results = db.cypher(
+        "MATCH (n:Product) WHERE n.name ENDS WITH 'Pro' RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 1
+    assert results[0]["n.name"] == "iPad Pro"
+
+    # Products containing "Pro"
+    results = db.cypher(
+        "MATCH (n:Product) WHERE n.name CONTAINS 'Pro' RETURN n.name ORDER BY n.name"
+    )
+    assert len(results) == 2
+    assert results[0]["n.name"] == "iPad Pro"
+    assert results[1]["n.name"] == "iPhone 15 Pro Max"
