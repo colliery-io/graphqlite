@@ -61,7 +61,17 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->path_variables = NULL;
     ctx->path_variable_count = 0;
     ctx->path_variable_capacity = 0;
-    
+
+    /* Initialize unified variable context (new system) */
+    ctx->var_ctx = transform_var_ctx_create();
+    if (!ctx->var_ctx) {
+        free(ctx->variables);
+        free(ctx->entities);
+        free(ctx->sql_buffer);
+        free(ctx);
+        return NULL;
+    }
+
     ctx->query_type = QUERY_TYPE_UNKNOWN;
     ctx->has_error = false;
     ctx->global_alias_counter = 0;
@@ -128,6 +138,9 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         /* Note: elements list is owned by AST, don't free it */
     }
     free(ctx->path_variables);
+
+    /* Free unified variable context */
+    transform_var_ctx_free(ctx->var_ctx);
 
     /* Free parameter names */
     for (int i = 0; i < ctx->param_count; i++) {

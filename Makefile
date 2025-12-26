@@ -104,6 +104,7 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_func_aggregate.c \
 	$(TRANSFORM_DIR)/transform_func_dispatch.c \
 	$(TRANSFORM_DIR)/transform_helpers.c \
+	$(TRANSFORM_DIR)/transform_variables.c \
 	$(TRANSFORM_DIR)/transform_expr_predicate.c \
 	$(TRANSFORM_DIR)/transform_with.c \
 	$(TRANSFORM_DIR)/transform_unwind.c \

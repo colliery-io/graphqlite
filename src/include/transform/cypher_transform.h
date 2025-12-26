@@ -3,6 +3,7 @@
 
 #include "graphqlite_sqlite.h"
 #include "parser/cypher_ast.h"
+#include "transform/transform_variables.h"
 
 /* Forward declarations */
 typedef struct cypher_transform_context cypher_transform_context;
@@ -41,7 +42,10 @@ typedef struct path_variable {
 /* Transform context - tracks state during AST transformation */
 struct cypher_transform_context {
     sqlite3 *db;                    /* SQLite database connection */
-    
+
+    /* Unified variable tracking (new system - being phased in) */
+    transform_var_context *var_ctx;
+
     /* Entity tracking (AGE-style) */
     transform_entity *entities;     /* List of entities */
     int entity_count;
