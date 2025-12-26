@@ -56,8 +56,8 @@ static int generate_delete_operations(cypher_transform_context *ctx, cypher_dele
         CYPHER_DEBUG("Processing DELETE for variable: %s", item->variable);
         
         /* Check if variable exists and its type */
-        bool is_edge = is_edge_variable(ctx, item->variable);
-        const char *alias = lookup_variable_alias(ctx, item->variable);
+        bool is_edge = transform_var_is_edge(ctx->var_ctx, item->variable);
+        const char *alias = transform_var_get_alias(ctx->var_ctx, item->variable);
         
         if (!alias) {
             ctx->has_error = true;
@@ -101,7 +101,7 @@ static int generate_delete_operations(cypher_transform_context *ctx, cypher_dele
  */
 static int generate_node_delete(cypher_transform_context *ctx, const char *variable)
 {
-    const char *alias = lookup_variable_alias(ctx, variable);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!alias) {
         return -1;
     }
@@ -133,7 +133,7 @@ static int generate_node_delete(cypher_transform_context *ctx, const char *varia
  */
 static int generate_edge_delete(cypher_transform_context *ctx, const char *variable)
 {
-    const char *alias = lookup_variable_alias(ctx, variable);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!alias) {
         return -1;
     }
@@ -165,7 +165,7 @@ static int generate_edge_delete(cypher_transform_context *ctx, const char *varia
  */
 static int check_node_constraints(cypher_transform_context *ctx, const char *variable)
 {
-    const char *alias = lookup_variable_alias(ctx, variable);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!alias) {
         return -1;
     }

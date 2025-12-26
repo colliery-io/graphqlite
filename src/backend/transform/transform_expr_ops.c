@@ -27,7 +27,7 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
     }
     
     cypher_identifier *id = (cypher_identifier*)label_expr->expr;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -323,7 +323,7 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     }
 
     cypher_identifier *id = (cypher_identifier*)prop->expr;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -333,8 +333,8 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     }
 
     /* Check if this is a projected variable from WITH - if so, alias IS the node id */
-    bool is_projected = is_projected_variable(ctx, id->name);
-    bool is_edge = is_edge_variable(ctx, id->name);
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
 
     /* Generate property access query using our actual schema */
     /* We need to check multiple property tables based on type */

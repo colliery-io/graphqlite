@@ -372,6 +372,16 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             ctx->error_message = strdup("Failed to register path variable");
             return -1;
         }
+        /* Register in unified system */
+        char path_alias[64];
+        snprintf(path_alias, sizeof(path_alias), "_path_%s", path->var_name);
+        var_path_type unified_path_type;
+        switch (path->type) {
+            case PATH_TYPE_SHORTEST: unified_path_type = VAR_PATH_SHORTEST; break;
+            case PATH_TYPE_ALL_SHORTEST: unified_path_type = VAR_PATH_ALL_SHORTEST; break;
+            default: unified_path_type = VAR_PATH_NORMAL; break;
+        }
+        transform_var_register_path(ctx->var_ctx, path->var_name, path_alias, path->elements, unified_path_type);
         CYPHER_DEBUG("Successfully registered path variable: %s", path->var_name);
     } else {
         CYPHER_DEBUG("Path has no variable name - skipping registration");

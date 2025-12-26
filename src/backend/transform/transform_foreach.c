@@ -107,7 +107,7 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
                 }
             } else if (elem->type == AST_NODE_IDENTIFIER) {
                 cypher_identifier *id = (cypher_identifier*)elem;
-                const char *alias = lookup_variable_alias(ctx, id->name);
+                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                 if (alias) {
                     append_cte_prefix(ctx, "%s", alias);
                 } else {
@@ -122,7 +122,7 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
     } else if (foreach->list_expr->type == AST_NODE_IDENTIFIER) {
         /* Variable reference - assume it's a JSON array already */
         cypher_identifier *id = (cypher_identifier*)foreach->list_expr;
-        const char *alias = lookup_variable_alias(ctx, id->name);
+        const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
         if (alias) {
             append_cte_prefix(ctx, "%s", alias);
         } else {
@@ -141,6 +141,8 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
     char var_alias[128];
     snprintf(var_alias, sizeof(var_alias), "%s.\"%s\"", cte_name, foreach->variable);
     register_projected_variable(ctx, foreach->variable, cte_name, foreach->variable);
+    /* Register in unified system */
+    transform_var_register_projected(ctx->var_ctx, foreach->variable, var_alias);
 
     /*
      * FOREACH is now handled in the executor via execute_foreach_clause().

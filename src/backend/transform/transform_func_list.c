@@ -238,7 +238,7 @@ int transform_length_function(cypher_transform_context *ctx, cypher_function_cal
         func_call->args->items[0] &&
         func_call->args->items[0]->type == AST_NODE_IDENTIFIER) {
         cypher_identifier *id = (cypher_identifier*)func_call->args->items[0];
-        if (is_path_variable(ctx, id->name)) {
+        if (transform_var_is_path(ctx->var_ctx, id->name)) {
             return transform_path_length_function(ctx, func_call);
         }
     }

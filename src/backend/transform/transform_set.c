@@ -115,20 +115,20 @@ static int generate_property_update(cypher_transform_context *ctx,
     CYPHER_DEBUG("Generating property update for %s.%s", variable, property_name);
     
     /* Check if variable is bound (from a previous MATCH) */
-    if (!is_variable_bound(ctx, variable)) {
+    if (!transform_var_is_bound(ctx->var_ctx, variable)) {
         /* For now, assume the variable exists - in a real implementation
          * we'd need to handle unbound variables properly */
         CYPHER_DEBUG("Warning: Variable %s not bound, assuming it exists", variable);
     }
     
     /* Get the table alias for the variable */
-    const char *table_alias = lookup_variable_alias(ctx, variable);
+    const char *table_alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!table_alias) {
         ctx->has_error = true;
         ctx->error_message = strdup("Unknown variable in SET clause");
         return -1;
     }
-    
+
     /* Start a new statement if needed */
     if (ctx->sql_size > 0) {
         append_sql(ctx, "; ");
@@ -209,7 +209,7 @@ static int generate_label_add(cypher_transform_context *ctx,
     CYPHER_DEBUG("Generating label add for %s:%s", variable, label_name);
     
     /* Get the table alias for the variable - if it doesn't exist, this is an error */
-    const char *table_alias = lookup_variable_alias(ctx, variable);
+    const char *table_alias = transform_var_get_alias(ctx->var_ctx, variable);
     if (!table_alias) {
         /* Try to get entity alias if legacy lookup fails */
         transform_entity *entity = lookup_entity(ctx, variable);

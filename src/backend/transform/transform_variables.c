@@ -279,7 +279,13 @@ const char *transform_var_get_alias(transform_var_context *ctx,
                                    const char *name)
 {
     transform_var *var = transform_var_lookup(ctx, name);
-    return var ? var->table_alias : NULL;
+    if (!var) return NULL;
+
+    /* For projected variables, source_expr contains the alias (e.g., "_with_0.name") */
+    if (var->kind == VAR_KIND_PROJECTED && var->source_expr) {
+        return var->source_expr;
+    }
+    return var->table_alias;
 }
 
 bool transform_var_is_edge(transform_var_context *ctx, const char *name)

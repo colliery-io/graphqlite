@@ -72,7 +72,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                 /* Check if this node variable exists in outer context */
                                 const char *outer_alias = NULL;
                                 if (node->variable) {
-                                    outer_alias = lookup_variable_alias(ctx, node->variable);
+                                    outer_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                                 }
 
                                 if (outer_alias) {
@@ -192,7 +192,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                     if (prop->expr->type == AST_NODE_IDENTIFIER) {
                         cypher_identifier *id = (cypher_identifier*)prop->expr;
-                        const char *alias = lookup_variable_alias(ctx, id->name);
+                        const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
 
                         if (!alias) {
                             ctx->has_error = true;
@@ -257,7 +257,7 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     }
 
     /* Save the old alias if this variable name already exists */
-    const char *old_alias = lookup_variable_alias(ctx, pred->variable);
+    const char *old_alias = transform_var_get_alias(ctx->var_ctx, pred->variable);
     char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
     /* Register the predicate variable to map to json_each.value */
@@ -359,8 +359,8 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
     snprintf(cte_name, sizeof(cte_name), "_reduce_%d", reduce_counter++);
 
     /* Save existing aliases for accumulator and variable names */
-    const char *old_acc_alias = lookup_variable_alias(ctx, reduce->accumulator);
-    const char *old_var_alias = lookup_variable_alias(ctx, reduce->variable);
+    const char *old_acc_alias = transform_var_get_alias(ctx->var_ctx, reduce->accumulator);
+    const char *old_var_alias = transform_var_get_alias(ctx->var_ctx, reduce->variable);
     char *saved_acc_alias = old_acc_alias ? strdup(old_acc_alias) : NULL;
     char *saved_var_alias = old_var_alias ? strdup(old_var_alias) : NULL;
 

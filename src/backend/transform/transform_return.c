@@ -149,7 +149,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
                     if (item->expr->type == AST_NODE_IDENTIFIER) {
                         cypher_identifier *id = (cypher_identifier*)item->expr;
-                        if (!is_projected_variable(ctx, id->name)) {
+                        if (!transform_var_is_projected(ctx->var_ctx, id->name)) {
                             can_use_existing = false;
                             break;
                         }
@@ -422,7 +422,7 @@ static int transform_return_item(cypher_transform_context *ctx, cypher_return_it
     /* Special handling for identifiers with aliases */
     if (item->alias && item->expr->type == AST_NODE_IDENTIFIER) {
         cypher_identifier *id = (cypher_identifier*)item->expr;
-        const char *table_alias = lookup_variable_alias(ctx, id->name);
+        const char *table_alias = transform_var_get_alias(ctx->var_ctx, id->name);
         if (table_alias) {
             /* For variables with alias, select the ID and alias it */
             append_sql(ctx, "%s.id AS ", table_alias);
@@ -467,9 +467,9 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_IDENTIFIER:
             {
                 cypher_identifier *id = (cypher_identifier*)expr;
-                const char *alias = lookup_variable_alias(ctx, id->name);
+                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                 if (alias) {
-                    if (is_path_variable(ctx, id->name)) {
+                    if (transform_var_is_path(ctx->var_ctx, id->name)) {
                         CYPHER_DEBUG("Processing path variable '%s' in RETURN", id->name);
                         /* This is a path variable - generate JSON with element IDs */
                         path_variable *path_var = get_path_variable(ctx, id->name);
@@ -486,7 +486,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     if (rel->varlen) {
                                         has_varlen = true;
                                         if (rel->variable) {
-                                            varlen_alias = lookup_variable_alias(ctx, rel->variable);
+                                            varlen_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                                         }
                                         break;
                                     }
@@ -506,7 +506,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     if (element->type == AST_NODE_NODE_PATTERN) {
                                         cypher_node_pattern *node = (cypher_node_pattern*)element;
                                         if (node->variable) {
-                                            const char *node_alias = lookup_variable_alias(ctx, node->variable);
+                                            const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                                             if (node_alias) {
                                                 append_sql(ctx, "' || %s.id || '", node_alias);
                                             } else {
@@ -518,7 +518,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     } else if (element->type == AST_NODE_REL_PATTERN) {
                                         cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
                                         if (rel->variable) {
-                                            const char *rel_alias = lookup_variable_alias(ctx, rel->variable);
+                                            const char *rel_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                                             if (rel_alias) {
                                                 append_sql(ctx, "' || %s.id || '", rel_alias);
                                             } else {
@@ -534,10 +534,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         } else {
                             append_sql(ctx, "'[]'");
                         }
-                    } else if (is_projected_variable(ctx, id->name)) {
+                    } else if (transform_var_is_projected(ctx->var_ctx, id->name)) {
                         /* This is a projected variable from WITH - alias is the full column reference */
                         append_sql(ctx, "%s", alias);
-                    } else if (is_edge_variable(ctx, id->name)) {
+                    } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
                         /* This is an edge variable - return full relationship object */
                         append_sql(ctx, "json_object("
                             "'id', %s.id, "
@@ -763,7 +763,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 if (proj->base_expr && proj->base_expr->type == AST_NODE_IDENTIFIER) {
                     cypher_identifier *ident = (cypher_identifier*)proj->base_expr;
                     base_name = ident->name;
-                    base_alias = lookup_variable_alias(ctx, ident->name);
+                    base_alias = transform_var_get_alias(ctx->var_ctx, ident->name);
                     if (!base_alias) {
                         ctx->has_error = true;
                         char error[256];
@@ -773,7 +773,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     }
                 }
 
-                bool is_projected = is_projected_variable(ctx, base_name);
+                bool is_projected = transform_var_is_projected(ctx->var_ctx, base_name);
 
                 /* Check if we have .* (all properties) - use properties() function approach */
                 bool has_all_props = false;
@@ -864,7 +864,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 const char *comp_var = comp->variable;
 
                 /* Save the old alias if this variable name already exists */
-                const char *old_alias = lookup_variable_alias(ctx, comp_var);
+                const char *old_alias = transform_var_get_alias(ctx->var_ctx, comp_var);
                 char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
                 /* Register the comprehension variable to map to json_each.value */
@@ -988,7 +988,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         /* Check if this node variable exists in outer context */
                         const char *outer_alias = NULL;
                         if (node->variable) {
-                            outer_alias = lookup_variable_alias(ctx, node->variable);
+                            outer_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                         }
 
                         if (outer_alias) {

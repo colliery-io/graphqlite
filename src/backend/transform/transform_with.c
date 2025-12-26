@@ -72,7 +72,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             /* Get the expression as SQL */
             if (item->expr->type == AST_NODE_IDENTIFIER) {
                 cypher_identifier *id = (cypher_identifier*)item->expr;
-                const char *alias = lookup_variable_alias(ctx, id->name);
+                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                 if (alias) {
                     /* Determine column name */
                     const char *col_name = item->alias ? item->alias : id->name;
@@ -93,7 +93,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 cypher_property *prop = (cypher_property*)item->expr;
                 if (prop->expr->type == AST_NODE_IDENTIFIER) {
                     cypher_identifier *id = (cypher_identifier*)prop->expr;
-                    const char *alias = lookup_variable_alias(ctx, id->name);
+                    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                     const char *col_name = item->alias ? item->alias : prop->property_name;
                     if (alias) {
                         /* Use COALESCE with all property tables - order int/real first to preserve type */
@@ -261,6 +261,8 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         free(ctx->variables[i].table_alias);
     }
     ctx->variable_count = 0;
+    /* Clear unified system too */
+    transform_var_ctx_reset(ctx->var_ctx);
 
     /* Register new variables from WITH projections and build SELECT list */
     for (int i = 0; i < with->items->count; i++) {
@@ -290,6 +292,10 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             /* The variable name is the alias (or original name) */
             /* The full reference is cte_name.col_name */
             register_projected_variable(ctx, col_name, cte_name, col_name);
+            /* Register in unified system */
+            char proj_source[256];
+            snprintf(proj_source, sizeof(proj_source), "%s.%s", cte_name, col_name);
+            transform_var_register_projected(ctx->var_ctx, col_name, proj_source);
             CYPHER_DEBUG("WITH: Registered projected variable '%s' -> %s.%s", col_name, cte_name, col_name);
         } else {
             append_sql(ctx, "*");

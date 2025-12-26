@@ -105,8 +105,8 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         if (prop->expr->type == AST_NODE_IDENTIFIER) {
             cypher_identifier *id = (cypher_identifier*)prop->expr;
-            const char *alias = lookup_variable_alias(ctx, id->name);
-            bool is_projected = is_projected_variable(ctx, id->name);
+            const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+            bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
 
             /* Build json_each on the property value */
             append_cte_prefix(ctx, "SELECT json_each.value AS value FROM ");
@@ -131,7 +131,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     } else if (unwind->expr->type == AST_NODE_IDENTIFIER) {
         /* Variable reference - assume it's a list variable from previous clause */
         cypher_identifier *id = (cypher_identifier*)unwind->expr;
-        const char *alias = lookup_variable_alias(ctx, id->name);
+        const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
 
         append_cte_prefix(ctx, "SELECT json_each.value AS value FROM ");
 
@@ -156,9 +156,15 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         free(ctx->variables[i].table_alias);
     }
     ctx->variable_count = 0;
+    /* Clear unified system too */
+    transform_var_ctx_reset(ctx->var_ctx);
 
     /* Register the unwound variable */
     register_projected_variable(ctx, unwind->alias, cte_name, "value");
+    /* Register in unified system */
+    char unwind_source[256];
+    snprintf(unwind_source, sizeof(unwind_source), "%s.value", cte_name);
+    transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
 
     /* Build the outer SELECT */
     ctx->sql_size = 0;
