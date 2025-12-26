@@ -102,6 +102,8 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     if (item->alias) {
                         /* Register alias so ORDER BY can reference it */
                         register_projected_variable(ctx, item->alias, NULL, item->alias);
+                        /* Register in unified system */
+                        transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
                     }
                 }
             }
@@ -324,6 +326,8 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
                 if (item->alias) {
                     register_projected_variable(ctx, item->alias, NULL, item->alias);
+                    /* Register in unified system */
+                    transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
                 }
             }
 
@@ -876,6 +880,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         break;
                     }
                 }
+                /* Register in unified system */
+                transform_var_register_projected(ctx->var_ctx, comp_var, "json_each.value");
 
                 /* Build the subquery */
                 append_sql(ctx, "(SELECT json_group_array(");
@@ -915,6 +921,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 /* Restore the old alias if there was one, otherwise remove the variable */
                 if (saved_alias) {
                     register_variable(ctx, comp_var, saved_alias);
+                    /* Restore in unified system */
+                    transform_var_register_projected(ctx->var_ctx, comp_var, saved_alias);
                     free(saved_alias);
                 }
                 /* If there was no old alias, leave the variable as is - it won't conflict
@@ -1031,6 +1039,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 for (int i = 0; i < node_count; i++) {
                     if (node_vars[i][0] != '\0') {
                         register_variable(ctx, node_vars[i], node_aliases[i]);
+                        /* Register in unified system */
+                        transform_var_register_node(ctx->var_ctx, node_vars[i], node_aliases[i], NULL);
                     }
                 }
 
