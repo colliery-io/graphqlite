@@ -525,10 +525,21 @@ static void test_sql_builder_cte(void)
         sql_from(b, "nodes", "n");
         sql_where(b, "n.id IN (SELECT target_id FROM friends)");
 
+        /* CTEs are stored in the cte buffer, not included in sql_builder_to_string() output.
+         * They are prepended later by prepend_cte_to_sql() in the transform layer. */
+        CU_ASSERT(!dbuf_is_empty(&b->cte));
+        const char *cte_content = dbuf_get(&b->cte);
+        CU_ASSERT(cte_content != NULL);
+        if (cte_content) {
+            CU_ASSERT(strstr(cte_content, "WITH friends AS") != NULL);
+        }
+
         char *sql = sql_builder_to_string(b);
         CU_ASSERT_PTR_NOT_NULL(sql);
         if (sql) {
-            CU_ASSERT(strstr(sql, "WITH friends AS") != NULL);
+            /* Verify the main query is correct */
+            CU_ASSERT(strstr(sql, "SELECT n.name") != NULL);
+            CU_ASSERT(strstr(sql, "FROM nodes") != NULL);
             free(sql);
         }
         sql_builder_free(b);
@@ -546,10 +557,20 @@ static void test_sql_builder_cte_recursive(void)
         sql_select(b, "*", NULL);
         sql_from(b, "paths", NULL);
 
+        /* CTEs are stored in the cte buffer, not included in sql_builder_to_string() output. */
+        CU_ASSERT(!dbuf_is_empty(&b->cte));
+        const char *cte_content = dbuf_get(&b->cte);
+        CU_ASSERT(cte_content != NULL);
+        if (cte_content) {
+            CU_ASSERT(strstr(cte_content, "WITH RECURSIVE paths AS") != NULL);
+        }
+
         char *sql = sql_builder_to_string(b);
         CU_ASSERT_PTR_NOT_NULL(sql);
         if (sql) {
-            CU_ASSERT(strstr(sql, "WITH RECURSIVE paths AS") != NULL);
+            /* Verify the main query is correct */
+            CU_ASSERT(strstr(sql, "SELECT *") != NULL);
+            CU_ASSERT(strstr(sql, "FROM paths") != NULL);
             free(sql);
         }
         sql_builder_free(b);

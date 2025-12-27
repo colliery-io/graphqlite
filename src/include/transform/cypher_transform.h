@@ -29,10 +29,7 @@ struct cypher_transform_context {
     size_t sql_size;
     size_t sql_capacity;
 
-    /* CTE prefix for recursive queries (variable-length relationships) */
-    char *cte_prefix;
-    size_t cte_prefix_size;
-    size_t cte_prefix_capacity;
+    /* CTE count for generating unique CTE names */
     int cte_count;
 
     /* Parameter tracking for parameterized queries */
@@ -140,7 +137,6 @@ int finalize_sql_generation(cypher_transform_context *ctx);
 int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                        const char *source_alias, const char *target_alias,
                        const char *cte_name);
-void append_cte_prefix(cypher_transform_context *ctx, const char *format, ...);
 void prepend_cte_to_sql(cypher_transform_context *ctx);
 
 /* Result management */

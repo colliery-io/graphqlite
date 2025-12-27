@@ -236,4 +236,13 @@ void sql_cte(sql_builder *b, const char *name, const char *query, bool recursive
  */
 char *sql_builder_to_string(sql_builder *b);
 
+/*
+ * Build a subquery (SELECT/FROM/JOIN/WHERE) WITHOUT CTEs.
+ * Use this when the result will become the body of a new CTE.
+ * CTEs in the builder are preserved and can be retrieved separately.
+ * Returns owned string that caller must free.
+ * Returns NULL if builder is empty or on error.
+ */
+char *sql_builder_to_subquery(sql_builder *b);
+
 #endif /* SQL_BUILDER_H */

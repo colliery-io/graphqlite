@@ -790,7 +790,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         char cte_name[64];
         snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", rel_index);
 
-        /* Generate the recursive CTE (appended to cte_prefix) */
+        /* Generate the recursive CTE (added to unified builder) */
         if (generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name) < 0) {
             ctx->has_error = true;
             ctx->error_message = strdup("Failed to generate variable-length CTE");

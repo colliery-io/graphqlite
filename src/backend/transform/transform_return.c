@@ -238,63 +238,79 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         }
 
         if (is_standalone) {
-            /* Standalone RETURN clause - generate simple SELECT for literals */
-            CYPHER_DEBUG("Standalone RETURN clause - generating SELECT");
-            append_sql(ctx, "SELECT ");
+            /* Standalone RETURN clause - use unified builder for simple SELECT */
+            CYPHER_DEBUG("Standalone RETURN clause - using unified builder");
 
-            /* Add DISTINCT if needed */
+            /* Handle DISTINCT */
             if (ret->distinct) {
-                append_sql(ctx, "DISTINCT ");
+                sql_distinct(ctx->unified_builder);
             }
 
-            /* Process return items */
+            /* Add SELECT columns to unified builder */
             for (int i = 0; i < ret->items->count; i++) {
                 cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                if (transform_return_item(ctx, item, i == 0) < 0) {
+
+                /* Transform the expression to a string */
+                char *expr_str = transform_expression_to_string(ctx, item->expr);
+                if (!expr_str) {
+                    if (!ctx->error_message) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to transform return item expression");
+                    }
                     return -1;
                 }
-            }
 
-            /* Register aliases for ORDER BY to reference */
-            if (ret->order_by && ret->order_by->count > 0) {
-                for (int i = 0; i < ret->items->count; i++) {
-                    cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                    if (item->alias) {
-                        /* Register alias so ORDER BY can reference it */
-                        transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
-                    }
+                /* Add to unified builder */
+                sql_select(ctx->unified_builder, expr_str, item->alias);
+                free(expr_str);
+
+                /* Register alias for ORDER BY reference */
+                if (item->alias) {
+                    transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
                 }
             }
 
-            /* Handle ORDER BY, LIMIT, SKIP */
+            /* Add ORDER BY */
             if (ret->order_by && ret->order_by->count > 0) {
-                append_sql(ctx, " ORDER BY ");
                 for (int i = 0; i < ret->order_by->count; i++) {
-                    if (i > 0) {
-                        append_sql(ctx, ", ");
-                    }
                     cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                    if (transform_expression(ctx, order_item->expr) < 0) {
-                        return -1;
+                    char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                    if (order_expr) {
+                        sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                        free(order_expr);
                     }
-                    if (order_item->descending) {
-                        append_sql(ctx, " DESC");
-                    }
-                }
-            }
-            if (ret->limit) {
-                append_sql(ctx, " LIMIT ");
-                if (transform_expression(ctx, ret->limit) < 0) {
-                    return -1;
-                }
-            }
-            if (ret->skip) {
-                append_sql(ctx, " OFFSET ");
-                if (transform_expression(ctx, ret->skip) < 0) {
-                    return -1;
                 }
             }
 
+            /* Add LIMIT/OFFSET */
+            if (ret->limit || ret->skip) {
+                int limit_val = -1;
+                int offset_val = -1;
+
+                if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)ret->limit;
+                    if (lit->literal_type == LITERAL_INTEGER) {
+                        limit_val = (int)lit->value.integer;
+                    }
+                }
+                if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)ret->skip;
+                    if (lit->literal_type == LITERAL_INTEGER) {
+                        offset_val = (int)lit->value.integer;
+                    }
+                }
+
+                sql_limit(ctx->unified_builder, limit_val, offset_val);
+            }
+
+            /* Finalize the unified builder into sql_buffer */
+            if (finalize_sql_generation(ctx) < 0) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Failed to finalize SQL generation");
+                return -1;
+            }
+
+            CYPHER_DEBUG("Standalone RETURN complete, SQL: %s", ctx->sql_buffer);
             return 0;
         }
 

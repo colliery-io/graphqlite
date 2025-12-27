@@ -490,8 +490,92 @@ void sql_cte(sql_builder *b, const char *name, const char *query, bool recursive
 
 /*
  * Build the final SQL string.
+ *
+ * NOTE: CTEs are NOT included here. They are handled separately by
+ * prepend_cte_to_sql() which runs at the end of transformation.
+ * This ensures CTEs are only added once and are preserved across
+ * multiple calls to sql_builder_to_string() during clause processing.
  */
 char *sql_builder_to_string(sql_builder *b)
+{
+    if (!b) return NULL;
+
+    /* Need at least SELECT items or FROM clause */
+    if (b->select_count == 0 && dbuf_is_empty(&b->from)) {
+        return NULL;
+    }
+
+    dynamic_buffer result;
+    dbuf_init(&result);
+
+    /* NOTE: CTEs are intentionally NOT included here.
+     * They are handled by prepend_cte_to_sql() at the end. */
+
+    /* SELECT */
+    if (b->distinct) {
+        dbuf_append(&result, "SELECT DISTINCT ");
+    } else {
+        dbuf_append(&result, "SELECT ");
+    }
+    if (b->select_count > 0) {
+        dbuf_append(&result, dbuf_get(&b->select));
+    } else {
+        dbuf_append(&result, "*");
+    }
+
+    /* FROM (optional for standalone SELECT like "SELECT 1 + 2") */
+    if (!dbuf_is_empty(&b->from)) {
+        dbuf_append(&result, " FROM ");
+        dbuf_append(&result, dbuf_get(&b->from));
+
+        /* JOINs (only valid with FROM) */
+        if (!dbuf_is_empty(&b->joins)) {
+            dbuf_append(&result, dbuf_get(&b->joins));
+        }
+    }
+
+    /* WHERE */
+    if (!dbuf_is_empty(&b->where)) {
+        dbuf_append(&result, " WHERE ");
+        dbuf_append(&result, dbuf_get(&b->where));
+    }
+
+    /* GROUP BY */
+    if (!dbuf_is_empty(&b->group_by)) {
+        dbuf_append(&result, " GROUP BY ");
+        dbuf_append(&result, dbuf_get(&b->group_by));
+    }
+
+    /* ORDER BY */
+    if (!dbuf_is_empty(&b->order_by)) {
+        dbuf_append(&result, " ORDER BY ");
+        dbuf_append(&result, dbuf_get(&b->order_by));
+    }
+
+    /* LIMIT */
+    if (b->limit >= 0) {
+        dbuf_appendf(&result, " LIMIT %d", b->limit);
+    } else if (b->offset >= 0) {
+        /* SQLite requires LIMIT before OFFSET - use -1 for unlimited */
+        dbuf_append(&result, " LIMIT -1");
+    }
+
+    /* OFFSET */
+    if (b->offset >= 0) {
+        dbuf_appendf(&result, " OFFSET %d", b->offset);
+    }
+
+    b->finalized = true;
+    return dbuf_finish(&result);
+}
+
+/*
+ * Build a subquery (SELECT/FROM/JOIN/WHERE) WITHOUT CTEs.
+ * Use this when the result will become the body of a new CTE.
+ * CTEs are NOT included - they should be preserved in the builder
+ * and merged with the parent query's CTEs later.
+ */
+char *sql_builder_to_subquery(sql_builder *b)
 {
     if (!b) return NULL;
 
@@ -503,11 +587,8 @@ char *sql_builder_to_string(sql_builder *b)
     dynamic_buffer result;
     dbuf_init(&result);
 
-    /* CTE */
-    if (!dbuf_is_empty(&b->cte)) {
-        dbuf_append(&result, dbuf_get(&b->cte));
-        dbuf_append(&result, " ");
-    }
+    /* NOTE: CTEs are intentionally NOT included here.
+     * They will be handled separately by the caller. */
 
     /* SELECT */
     if (b->distinct) {
@@ -552,7 +633,6 @@ char *sql_builder_to_string(sql_builder *b)
     if (b->limit >= 0) {
         dbuf_appendf(&result, " LIMIT %d", b->limit);
     } else if (b->offset >= 0) {
-        /* SQLite requires LIMIT before OFFSET - use -1 for unlimited */
         dbuf_append(&result, " LIMIT -1");
     }
 
@@ -561,6 +641,5 @@ char *sql_builder_to_string(sql_builder *b)
         dbuf_appendf(&result, " OFFSET %d", b->offset);
     }
 
-    b->finalized = true;
     return dbuf_finish(&result);
 }

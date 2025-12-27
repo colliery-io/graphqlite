@@ -14,6 +14,50 @@
 #include "parser/cypher_debug.h"
 
 /*
+ * Transform an expression to a dynamically allocated string.
+ * Uses a temporary buffer to capture output, then returns the result.
+ * Caller must free the returned string.
+ * Returns NULL on error.
+ */
+static char *transform_expression_to_string(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!ctx || !expr) return NULL;
+
+    /* Save current buffer state */
+    char *saved_buffer = ctx->sql_buffer;
+    size_t saved_size = ctx->sql_size;
+    size_t saved_capacity = ctx->sql_capacity;
+
+    /* Allocate temporary buffer */
+    size_t temp_capacity = 4096;
+    char *temp_buffer = malloc(temp_capacity);
+    if (!temp_buffer) return NULL;
+    temp_buffer[0] = '\0';
+
+    /* Switch to temporary buffer */
+    ctx->sql_buffer = temp_buffer;
+    ctx->sql_size = 0;
+    ctx->sql_capacity = temp_capacity;
+
+    /* Transform the expression */
+    int result = transform_expression(ctx, expr);
+
+    /* Capture the result */
+    char *output = NULL;
+    if (result == 0 && ctx->sql_size > 0) {
+        output = strdup(ctx->sql_buffer);
+    }
+
+    /* Restore original buffer */
+    free(temp_buffer);
+    ctx->sql_buffer = saved_buffer;
+    ctx->sql_size = saved_size;
+    ctx->sql_capacity = saved_capacity;
+
+    return output;
+}
+
+/*
  * Transform a WITH clause
  * WITH acts like an intermediate RETURN, projecting columns and optionally filtering
  * with a WHERE clause. The result becomes a CTE that subsequent clauses query from.
@@ -34,23 +78,46 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_with_%d", with_cte_counter++);
 
-    /* Find the SELECT clause and build the projected columns */
-    char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
-    if (!select_pos) {
-        select_pos = strstr(ctx->sql_buffer, "SELECT ");
+    /* Get the inner SQL from the unified builder (WITHOUT CTEs - they'll be preserved) */
+    char *inner_sql = NULL;
+    char *saved_cte = NULL;
+    int saved_cte_count = 0;
+    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
+        /* Use subquery (no CTEs) - CTEs will be merged at the parent level */
+        inner_sql = sql_builder_to_subquery(ctx->unified_builder);
+
+        /* Save CTE buffer before reset */
+        if (!dbuf_is_empty(&ctx->unified_builder->cte)) {
+            saved_cte = strdup(dbuf_get(&ctx->unified_builder->cte));
+            saved_cte_count = ctx->unified_builder->cte_count;
+        }
+
+        sql_builder_reset(ctx->unified_builder);
+
+        /* Restore CTE buffer after reset */
+        if (saved_cte) {
+            dbuf_append(&ctx->unified_builder->cte, saved_cte);
+            ctx->unified_builder->cte_count = saved_cte_count;
+            free(saved_cte);
+        }
     }
 
-    if (!select_pos) {
+    if (!inner_sql) {
         ctx->has_error = true;
         ctx->error_message = strdup("WITH clause requires a preceding MATCH");
         return -1;
     }
 
-    /* Build the column list for the inner SELECT */
-    char *inner_sql = strdup(ctx->sql_buffer);
-    if (!inner_sql) {
+    /* Find the SELECT clause and build the projected columns */
+    char *select_pos = strstr(inner_sql, "SELECT *");
+    if (!select_pos) {
+        select_pos = strstr(inner_sql, "SELECT ");
+    }
+
+    if (!select_pos) {
         ctx->has_error = true;
-        ctx->error_message = strdup("Memory allocation failed");
+        ctx->error_message = strdup("WITH clause requires a preceding MATCH with SELECT");
+        free(inner_sql);
         return -1;
     }
 
@@ -313,38 +380,25 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         reset_pending_prop_joins();
     }
 
-    /* Build the CTE and new SELECT */
-    ctx->sql_size = 0;
-    ctx->sql_buffer[0] = '\0';
-
-    /* Add to CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
-    append_cte_prefix(ctx, "%s AS (%s)", cte_name, inner_sql);
+    /* Add CTE to unified builder */
+    sql_cte(ctx->unified_builder, cte_name, inner_sql, false);
     ctx->cte_count++;
-
     free(inner_sql);
-
-    /* Build the outer SELECT from the CTE */
-    append_sql(ctx, "SELECT ");
-
-    if (with->distinct) {
-        append_sql(ctx, "DISTINCT ");
-    }
 
     /* Clear old variables - WITH creates a new scope */
     transform_var_ctx_reset(ctx->var_ctx);
 
+    /* Handle DISTINCT */
+    if (with->distinct) {
+        sql_distinct(ctx->unified_builder);
+    }
+
+    /* Set FROM to the CTE */
+    sql_from(ctx->unified_builder, cte_name, NULL);
+
     /* Register new variables from WITH projections and build SELECT list */
     for (int i = 0; i < with->items->count; i++) {
         cypher_return_item *item = (cypher_return_item*)with->items->items[i];
-
-        if (i > 0) {
-            append_sql(ctx, ", ");
-        }
 
         /* Determine the column name (alias or expression name) */
         const char *col_name = NULL;
@@ -360,71 +414,65 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         }
 
         if (col_name) {
-            append_sql(ctx, "%s.%s", cte_name, col_name);
+            /* Add SELECT column */
+            char select_expr[256];
+            snprintf(select_expr, sizeof(select_expr), "%s.%s", cte_name, col_name);
+            sql_select(ctx->unified_builder, select_expr, NULL);
 
             /* Register the new projected variable */
-            /* The variable name is the alias (or original name) */
-            /* The full reference is cte_name.col_name */
-            /* Register in unified system */
-            char proj_source[256];
-            snprintf(proj_source, sizeof(proj_source), "%s.%s", cte_name, col_name);
-            transform_var_register_projected(ctx->var_ctx, col_name, proj_source);
+            transform_var_register_projected(ctx->var_ctx, col_name, select_expr);
             CYPHER_DEBUG("WITH: Registered projected variable '%s' -> %s.%s", col_name, cte_name, col_name);
-        } else {
-            append_sql(ctx, "*");
         }
     }
 
-    append_sql(ctx, " FROM %s", cte_name);
-
     /* Handle WHERE clause (applied after projection) */
     if (with->where) {
-        append_sql(ctx, " WHERE ");
-        if (transform_expression(ctx, with->where) < 0) {
+        char *where_str = transform_expression_to_string(ctx, with->where);
+        if (where_str) {
+            sql_where(ctx->unified_builder, where_str);
+            free(where_str);
+        } else {
             return -1;
         }
     }
 
     /* Handle ORDER BY */
     if (with->order_by && with->order_by->count > 0) {
-        append_sql(ctx, " ORDER BY ");
         for (int i = 0; i < with->order_by->count; i++) {
-            if (i > 0) {
-                append_sql(ctx, ", ");
-            }
             cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
-            if (transform_expression(ctx, order_item->expr) < 0) {
-                return -1;
-            }
-            if (order_item->descending) {
-                append_sql(ctx, " DESC");
+            char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+            if (order_expr) {
+                sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                free(order_expr);
             }
         }
     }
 
-    /* Handle LIMIT */
+    /* Handle LIMIT and SKIP */
+    int limit_val = -1;
+    int offset_val = -1;
+
     if (with->limit) {
-        append_sql(ctx, " LIMIT ");
-        if (transform_expression(ctx, with->limit) < 0) {
-            return -1;
+        char *limit_str = transform_expression_to_string(ctx, with->limit);
+        if (limit_str) {
+            limit_val = atoi(limit_str);
+            free(limit_str);
         }
     }
 
-    /* Handle SKIP */
     if (with->skip) {
-        append_sql(ctx, " OFFSET ");
-        if (transform_expression(ctx, with->skip) < 0) {
-            return -1;
+        char *skip_str = transform_expression_to_string(ctx, with->skip);
+        if (skip_str) {
+            offset_val = atoi(skip_str);
+            free(skip_str);
         }
     }
 
-    /* Reset the unified builder - WITH creates a new scope and the subsequent
-     * clauses should query from the CTE, not the original tables */
-    if (ctx->unified_builder) {
-        sql_builder_reset(ctx->unified_builder);
+    if (limit_val >= 0 || offset_val >= 0) {
+        sql_limit(ctx->unified_builder, limit_val, offset_val);
     }
 
-    CYPHER_DEBUG("WITH clause generated CTE: %s", cte_name);
+    CYPHER_DEBUG("WITH clause generated CTE via unified builder: %s", cte_name);
     return 0;
 }
 
