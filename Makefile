@@ -152,6 +152,7 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/executor_match.c \
 	$(EXECUTOR_DIR)/query_dispatch.c \
 	$(EXECUTOR_DIR)/agtype.c \
+	$(EXECUTOR_DIR)/json_builder.c \
 	$(EXECUTOR_DIR)/graph_algorithms.c \
 	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
 	$(EXECUTOR_DIR)/graph_algo_community.c \
