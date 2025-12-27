@@ -19,19 +19,26 @@
  * Pending property JOINs buffer for aggregation optimization.
  * These are accumulated during RETURN item processing and injected
  * into the FROM clause before it's appended back.
+ *
+ * Uses a dynamically growing buffer to handle arbitrary query complexity.
  */
-static char pending_prop_joins[16384] = "";
+static char *pending_prop_joins = NULL;
 static size_t pending_prop_joins_len = 0;
+static size_t pending_prop_joins_cap = 0;
+
+#define PENDING_JOINS_INITIAL_CAP 1024
 
 void reset_pending_prop_joins(void)
 {
-    pending_prop_joins[0] = '\0';
+    if (pending_prop_joins) {
+        pending_prop_joins[0] = '\0';
+    }
     pending_prop_joins_len = 0;
 }
 
 const char* get_pending_prop_joins(void)
 {
-    return pending_prop_joins;
+    return pending_prop_joins ? pending_prop_joins : "";
 }
 
 size_t get_pending_prop_joins_len(void)
@@ -42,11 +49,33 @@ size_t get_pending_prop_joins_len(void)
 /* Used by transform_func_aggregate.c for optimized property aggregation */
 void add_pending_prop_join(const char *join_sql)
 {
+    if (!join_sql) return;
+
     size_t len = strlen(join_sql);
-    if (pending_prop_joins_len + len < sizeof(pending_prop_joins) - 1) {
-        strcat(pending_prop_joins, join_sql);
-        pending_prop_joins_len += len;
+    size_t needed = pending_prop_joins_len + len + 1;
+
+    /* Initialize buffer on first use */
+    if (!pending_prop_joins) {
+        size_t cap = PENDING_JOINS_INITIAL_CAP;
+        while (cap < needed) cap *= 2;
+        pending_prop_joins = malloc(cap);
+        if (!pending_prop_joins) return;
+        pending_prop_joins[0] = '\0';
+        pending_prop_joins_cap = cap;
     }
+
+    /* Grow buffer if needed */
+    if (needed > pending_prop_joins_cap) {
+        size_t new_cap = pending_prop_joins_cap * 2;
+        while (new_cap < needed) new_cap *= 2;
+        char *new_buf = realloc(pending_prop_joins, new_cap);
+        if (!new_buf) return;
+        pending_prop_joins = new_buf;
+        pending_prop_joins_cap = new_cap;
+    }
+
+    memcpy(pending_prop_joins + pending_prop_joins_len, join_sql, len + 1);
+    pending_prop_joins_len += len;
 }
 
 /*

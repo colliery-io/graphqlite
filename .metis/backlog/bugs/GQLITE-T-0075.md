@@ -4,15 +4,15 @@ level: task
 title: "Implement proper string escaping in cypher_transform.c"
 short_code: "GQLITE-T-0075"
 created_at: 2025-12-27T20:34:10.868281+00:00
-updated_at: 2025-12-27T20:34:10.868281+00:00
+updated_at: 2025-12-27T21:15:11.202019+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -63,6 +63,12 @@ The sql_builder.c already has `sql_builder_escape_string()` for escaping single 
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

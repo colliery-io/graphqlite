@@ -4,15 +4,15 @@ level: task
 title: "Address memory management TODOs in agtype.c"
 short_code: "GQLITE-T-0074"
 created_at: 2025-12-27T20:34:10.653686+00:00
-updated_at: 2025-12-27T20:34:10.653686+00:00
+updated_at: 2025-12-27T21:15:10.988247+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#tech-debt"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -77,6 +77,12 @@ Address incomplete memory management TODOs in agtype.c to prevent memory leaks a
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

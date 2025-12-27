@@ -4,15 +4,15 @@ level: task
 title: "Fix SQL injection vulnerability in executor_merge.c"
 short_code: "GQLITE-T-0072"
 created_at: 2025-12-27T20:34:10.266740+00:00
-updated_at: 2025-12-27T20:34:10.266740+00:00
+updated_at: 2025-12-27T21:15:10.590269+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -73,6 +73,12 @@ sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);  // Safe
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
