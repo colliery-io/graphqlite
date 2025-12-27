@@ -35,13 +35,13 @@ Create a dedicated builder pattern for SQL INSERT/UPDATE/DELETE statements gener
 
 ## Current State
 
-WRITE clauses currently use `append_sql()` directly:
+WRITE clauses currently use `append_sql()` directly (45 total calls):
 - `transform_set.c` - 18 calls
 - `transform_create.c` - 14 calls
 - `transform_remove.c` - 7 calls
 - `transform_delete.c` - 6 calls
 
-This works correctly but doesn't benefit from the structured builder pattern used for READ queries.
+These generate INSERT/UPDATE/DELETE SQL which has different patterns than SELECT queries.
 
 ## Acceptance Criteria
 
