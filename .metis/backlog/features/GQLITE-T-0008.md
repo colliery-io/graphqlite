@@ -76,6 +76,42 @@ CREATE UNIQUE INDEX unique_person_id ON node_props_text(value) WHERE ...
 - Need to create indexes on each relevant table
 - Unique constraints need triggers to check across tables
 
-## Status Updates
+## Investigation Notes (Dec 2025)
 
-*To be added during implementation*
+### Indexing Already Complete
+
+All properties and edges are already fully indexed in `cypher_schema.c`:
+
+| Table | Index | Columns |
+|-------|-------|---------|
+| edges | idx_edges_source | (source_id, type) |
+| edges | idx_edges_target | (target_id, type) |
+| edges | idx_edges_type | (type) |
+| node_labels | idx_node_labels_label | (label, node_id) |
+| node_props_* | idx_node_props_*_key_value | (key_id, value, node_id) |
+| edge_props_* | idx_edge_props_*_key_value | (key_id, value, edge_id) |
+
+**Conclusion**: `CREATE INDEX` syntax provides no performance benefit - SQLite already uses these indexes for property lookups.
+
+### UNIQUE Constraint Complexity
+
+SQLite partial indexes don't support subqueries in WHERE clauses, so label-scoped unique indexes aren't possible directly.
+
+**Option 1: Triggers** - Need 4 triggers per constraint (one per property table) plus 4 more for UPDATE. Complex and slow.
+
+**Option 2: Denormalized column** - Add computed column to nodes table, create unique index on it. Simpler indexing but requires maintaining denormalized values.
+
+### EXISTS Constraint Timing Problem
+
+Labels are inserted before properties in CREATE, so a trigger on `node_labels` fires before properties exist. Would need either:
+- Deferred validation (SQLite doesn't support natively)
+- Application-level validation in executor after CREATE completes
+
+### Recommendation
+
+Hold off on this feature. Complexity vs. value tradeoff isn't favorable:
+- Indexing: Already done automatically
+- UNIQUE: Complex trigger approach or schema changes needed
+- EXISTS: Timing issues require application-level handling
+
+Revisit if users specifically request constraint enforcement for data integrity.

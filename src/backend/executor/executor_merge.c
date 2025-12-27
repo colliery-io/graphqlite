@@ -10,6 +10,48 @@
 #include "executor/executor_internal.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_variables.h"
+
+/* Parameter binding types for prepared statements */
+typedef enum {
+    BIND_TEXT,
+    BIND_INT,
+    BIND_DOUBLE
+} bind_type;
+
+typedef struct {
+    bind_type type;
+    union {
+        const char *text;
+        int integer;
+        double real;
+    } value;
+} param_binding;
+
+#define MAX_BINDINGS 64
+
+/* Helper to bind all parameters to a prepared statement */
+static int bind_all_params(sqlite3_stmt *stmt, param_binding *bindings, int count)
+{
+    for (int i = 0; i < count; i++) {
+        int rc;
+        switch (bindings[i].type) {
+            case BIND_TEXT:
+                rc = sqlite3_bind_text(stmt, i + 1, bindings[i].value.text, -1, SQLITE_STATIC);
+                break;
+            case BIND_INT:
+                rc = sqlite3_bind_int(stmt, i + 1, bindings[i].value.integer);
+                break;
+            case BIND_DOUBLE:
+                rc = sqlite3_bind_double(stmt, i + 1, bindings[i].value.real);
+                break;
+            default:
+                return -1;
+        }
+        if (rc != SQLITE_OK) return -1;
+    }
+    return 0;
+}
 
 /* Find a node by label and properties, returns node_id or -1 if not found */
 int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern)
@@ -18,9 +60,11 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
         return -1;
     }
 
-    /* Build SQL query to find matching node */
+    /* Build SQL query with parameterized values */
     char sql[2048];
     int offset = 0;
+    param_binding bindings[MAX_BINDINGS];
+    int bind_count = 0;
 
     offset += snprintf(sql + offset, sizeof(sql) - offset,
                        "SELECT n.id FROM nodes n");
@@ -29,10 +73,13 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     if (has_labels(node_pattern)) {
         for (int li = 0; li < node_pattern->labels->count; li++) {
             const char *label = get_label_string(node_pattern->labels->items[li]);
-            if (label) {
+            if (label && bind_count < MAX_BINDINGS) {
                 offset += snprintf(sql + offset, sizeof(sql) - offset,
-                                  " JOIN node_labels nl%d ON n.id = nl%d.node_id AND nl%d.label = '%s'",
-                                  li, li, li, label);
+                                  " JOIN node_labels nl%d ON n.id = nl%d.node_id AND nl%d.label = ?",
+                                  li, li, li);
+                bindings[bind_count].type = BIND_TEXT;
+                bindings[bind_count].value.text = label;
+                bind_count++;
             }
         }
     }
@@ -46,38 +93,71 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                 if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
 
+                    if (bind_count + 2 > MAX_BINDINGS) break;
+
                     /* Determine which property table to join */
                     const char *prop_table = "node_props_text";
-                    char value_str[256];
 
                     switch (lit->literal_type) {
                         case LITERAL_STRING:
                             prop_table = "node_props_text";
-                            snprintf(value_str, sizeof(value_str), "'%s'", lit->value.string);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " JOIN %s np%d ON n.id = np%d.node_id"
+                                              " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
+                                              " AND np%d.value = ?",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = lit->value.string;
+                            bind_count++;
                             break;
                         case LITERAL_INTEGER:
                             prop_table = "node_props_int";
-                            snprintf(value_str, sizeof(value_str), "%d", lit->value.integer);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " JOIN %s np%d ON n.id = np%d.node_id"
+                                              " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
+                                              " AND np%d.value = ?",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_INT;
+                            bindings[bind_count].value.integer = lit->value.integer;
+                            bind_count++;
                             break;
                         case LITERAL_DECIMAL:
                             prop_table = "node_props_real";
-                            snprintf(value_str, sizeof(value_str), "%f", lit->value.decimal);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " JOIN %s np%d ON n.id = np%d.node_id"
+                                              " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
+                                              " AND np%d.value = ?",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_DOUBLE;
+                            bindings[bind_count].value.real = lit->value.decimal;
+                            bind_count++;
                             break;
                         case LITERAL_BOOLEAN:
                             prop_table = "node_props_bool";
-                            snprintf(value_str, sizeof(value_str), "%d", lit->value.boolean ? 1 : 0);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " JOIN %s np%d ON n.id = np%d.node_id"
+                                              " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
+                                              " AND np%d.value = ?",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_INT;
+                            bindings[bind_count].value.integer = lit->value.boolean ? 1 : 0;
+                            bind_count++;
                             break;
                         default:
                             continue;
                     }
-
-                    offset += snprintf(sql + offset, sizeof(sql) - offset,
-                                      " JOIN %s np%d ON n.id = np%d.node_id"
-                                      " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = '%s'"
-                                      " AND np%d.value = %s",
-                                      prop_table, i, i,
-                                      i, i, i, i, pair->key,
-                                      i, value_str);
                 }
             }
         }
@@ -85,13 +165,19 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
 
     offset += snprintf(sql + offset, sizeof(sql) - offset, " LIMIT 1");
 
-    CYPHER_DEBUG("MERGE find query: %s", sql);
+    CYPHER_DEBUG("MERGE find query: %s (with %d bound params)", sql, bind_count);
 
-    /* Execute the query */
+    /* Execute the query with bound parameters */
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("MERGE find query prepare failed: %s", sqlite3_errmsg(executor->db));
+        return -1;
+    }
+
+    if (bind_all_params(stmt, bindings, bind_count) != 0) {
+        CYPHER_DEBUG("MERGE find query bind failed");
+        sqlite3_finalize(stmt);
         return -1;
     }
 
@@ -113,17 +199,23 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
         return -1;
     }
 
-    /* Build SQL query to find matching edge */
+    /* Build SQL query with parameterized values */
     char sql[2048];
     int offset = 0;
+    param_binding bindings[MAX_BINDINGS];
+    int bind_count = 0;
 
+    /* source_id and target_id are integers from our own code, safe to interpolate */
     offset += snprintf(sql + offset, sizeof(sql) - offset,
                        "SELECT e.id FROM edges e WHERE e.source_id = %d AND e.target_id = %d",
                        source_id, target_id);
 
-    /* Add type filter if specified */
-    if (type) {
-        offset += snprintf(sql + offset, sizeof(sql) - offset, " AND e.type = '%s'", type);
+    /* Add type filter if specified - use parameter binding */
+    if (type && bind_count < MAX_BINDINGS) {
+        offset += snprintf(sql + offset, sizeof(sql) - offset, " AND e.type = ?");
+        bindings[bind_count].type = BIND_TEXT;
+        bindings[bind_count].value.text = type;
+        bind_count++;
     }
 
     /* Add property joins if specified */
@@ -135,38 +227,71 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                 if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
 
+                    if (bind_count + 2 > MAX_BINDINGS) break;
+
                     /* Determine which property table to join */
                     const char *prop_table = "edge_props_text";
-                    char value_str[256];
 
                     switch (lit->literal_type) {
                         case LITERAL_STRING:
                             prop_table = "edge_props_text";
-                            snprintf(value_str, sizeof(value_str), "'%s'", lit->value.string);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " AND EXISTS (SELECT 1 FROM %s ep%d"
+                                              " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
+                                              " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = lit->value.string;
+                            bind_count++;
                             break;
                         case LITERAL_INTEGER:
                             prop_table = "edge_props_int";
-                            snprintf(value_str, sizeof(value_str), "%d", lit->value.integer);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " AND EXISTS (SELECT 1 FROM %s ep%d"
+                                              " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
+                                              " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_INT;
+                            bindings[bind_count].value.integer = lit->value.integer;
+                            bind_count++;
                             break;
                         case LITERAL_DECIMAL:
                             prop_table = "edge_props_real";
-                            snprintf(value_str, sizeof(value_str), "%f", lit->value.decimal);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " AND EXISTS (SELECT 1 FROM %s ep%d"
+                                              " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
+                                              " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_DOUBLE;
+                            bindings[bind_count].value.real = lit->value.decimal;
+                            bind_count++;
                             break;
                         case LITERAL_BOOLEAN:
                             prop_table = "edge_props_bool";
-                            snprintf(value_str, sizeof(value_str), "%d", lit->value.boolean ? 1 : 0);
+                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                              " AND EXISTS (SELECT 1 FROM %s ep%d"
+                                              " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
+                                              " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
+                                              prop_table, i, i, i, i, i, i, i);
+                            bindings[bind_count].type = BIND_TEXT;
+                            bindings[bind_count].value.text = pair->key;
+                            bind_count++;
+                            bindings[bind_count].type = BIND_INT;
+                            bindings[bind_count].value.integer = lit->value.boolean ? 1 : 0;
+                            bind_count++;
                             break;
                         default:
                             continue;
                     }
-
-                    offset += snprintf(sql + offset, sizeof(sql) - offset,
-                                      " AND EXISTS (SELECT 1 FROM %s ep%d"
-                                      " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
-                                      " WHERE ep%d.edge_id = e.id AND pk%d.key = '%s' AND ep%d.value = %s)",
-                                      prop_table, i,
-                                      i, i, i,
-                                      i, i, pair->key, i, value_str);
                 }
             }
         }
@@ -174,13 +299,19 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
 
     offset += snprintf(sql + offset, sizeof(sql) - offset, " LIMIT 1");
 
-    CYPHER_DEBUG("MERGE find edge query: %s", sql);
+    CYPHER_DEBUG("MERGE find edge query: %s (with %d bound params)", sql, bind_count);
 
-    /* Execute the query */
+    /* Execute the query with bound parameters */
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("MERGE find edge query prepare failed: %s", sqlite3_errmsg(executor->db));
+        return -1;
+    }
+
+    if (bind_all_params(stmt, bindings, bind_count) != 0) {
+        CYPHER_DEBUG("MERGE find edge query bind failed");
+        sqlite3_finalize(stmt);
         return -1;
     }
 
@@ -593,6 +724,13 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
         return -1;
     }
 
+    /* Finalize to assemble unified builder content into sql_buffer */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
     /* Replace SELECT * with specific node ID selection */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
     if (select_pos) {
@@ -604,10 +742,12 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
 
         /* Select all node variables found in the MATCH */
         bool first = true;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 if (!first) append_sql(ctx, ", ");
-                append_sql(ctx, "%s.id AS %s_id", ctx->variables[i].table_alias, ctx->variables[i].name);
+                append_sql(ctx, "%s.id AS %s_id", var->table_alias, var->name);
                 first = false;
             }
         }
@@ -651,11 +791,13 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
     /* Read matched node IDs */
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         int col = 0;
-        for (int i = 0; i < ctx->variable_count; i++) {
-            if (ctx->variables[i].type == VAR_TYPE_NODE) {
+        int var_count2 = transform_var_count(ctx->var_ctx);
+        for (int i = 0; i < var_count2; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, ctx->variables[i].name, (int)node_id);
-                CYPHER_DEBUG("MERGE bound variable '%s' to node %lld", ctx->variables[i].name, (long long)node_id);
+                set_variable_node_id(var_map, var->name, (int)node_id);
+                CYPHER_DEBUG("MERGE bound variable '%s' to node %lld", var->name, (long long)node_id);
                 col++;
             }
         }

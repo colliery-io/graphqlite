@@ -11,49 +11,116 @@
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
 #include "transform/transform_functions.h"
+#include "transform/transform_helpers.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
-
-/* Helper to get label string from a label literal node */
-static const char* get_label_string(ast_node *label_node)
-{
-    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
-    cypher_literal *lit = (cypher_literal*)label_node;
-    if (lit->literal_type != LITERAL_STRING) return NULL;
-    return lit->value.string;
-}
-
-/* Helper to check if a node pattern has any labels */
-static bool has_labels(cypher_node_pattern *node)
-{
-    return node && node->labels && node->labels->count > 0;
-}
 
 /*
  * Pending property JOINs buffer for aggregation optimization.
  * These are accumulated during RETURN item processing and injected
  * into the FROM clause before it's appended back.
+ *
+ * Uses a dynamically growing buffer to handle arbitrary query complexity.
  */
-static char pending_prop_joins[16384] = "";
+static char *pending_prop_joins = NULL;
 static size_t pending_prop_joins_len = 0;
+static size_t pending_prop_joins_cap = 0;
 
-static void reset_pending_prop_joins(void)
+#define PENDING_JOINS_INITIAL_CAP 1024
+
+void reset_pending_prop_joins(void)
 {
-    pending_prop_joins[0] = '\0';
+    if (pending_prop_joins) {
+        pending_prop_joins[0] = '\0';
+    }
     pending_prop_joins_len = 0;
+}
+
+const char* get_pending_prop_joins(void)
+{
+    return pending_prop_joins ? pending_prop_joins : "";
+}
+
+size_t get_pending_prop_joins_len(void)
+{
+    return pending_prop_joins_len;
 }
 
 /* Used by transform_func_aggregate.c for optimized property aggregation */
 void add_pending_prop_join(const char *join_sql)
 {
+    if (!join_sql) return;
+
     size_t len = strlen(join_sql);
-    if (pending_prop_joins_len + len < sizeof(pending_prop_joins) - 1) {
-        strcat(pending_prop_joins, join_sql);
-        pending_prop_joins_len += len;
+    size_t needed = pending_prop_joins_len + len + 1;
+
+    /* Initialize buffer on first use */
+    if (!pending_prop_joins) {
+        size_t cap = PENDING_JOINS_INITIAL_CAP;
+        while (cap < needed) cap *= 2;
+        pending_prop_joins = malloc(cap);
+        if (!pending_prop_joins) return;
+        pending_prop_joins[0] = '\0';
+        pending_prop_joins_cap = cap;
     }
+
+    /* Grow buffer if needed */
+    if (needed > pending_prop_joins_cap) {
+        size_t new_cap = pending_prop_joins_cap * 2;
+        while (new_cap < needed) new_cap *= 2;
+        char *new_buf = realloc(pending_prop_joins, new_cap);
+        if (!new_buf) return;
+        pending_prop_joins = new_buf;
+        pending_prop_joins_cap = new_cap;
+    }
+
+    memcpy(pending_prop_joins + pending_prop_joins_len, join_sql, len + 1);
+    pending_prop_joins_len += len;
 }
 
-/* Forward declarations */
-static int transform_return_item(cypher_transform_context *ctx, cypher_return_item *item, bool first);
+/*
+ * Transform an expression to a dynamically allocated string.
+ * Uses a temporary buffer to capture output, then returns the result.
+ * Caller must free the returned string.
+ * Returns NULL on error.
+ */
+static char *transform_expression_to_string(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!ctx || !expr) return NULL;
+
+    /* Save current buffer state */
+    char *saved_buffer = ctx->sql_buffer;
+    size_t saved_size = ctx->sql_size;
+    size_t saved_capacity = ctx->sql_capacity;
+
+    /* Allocate temporary buffer */
+    size_t temp_capacity = 4096;
+    char *temp_buffer = malloc(temp_capacity);
+    if (!temp_buffer) return NULL;
+    temp_buffer[0] = '\0';
+
+    /* Switch to temporary buffer */
+    ctx->sql_buffer = temp_buffer;
+    ctx->sql_size = 0;
+    ctx->sql_capacity = temp_capacity;
+
+    /* Transform the expression */
+    int result = transform_expression(ctx, expr);
+
+    /* Capture the result */
+    char *expr_str = NULL;
+    if (result == 0 && ctx->sql_size > 0) {
+        expr_str = strdup(ctx->sql_buffer);
+    }
+
+    /* Restore original buffer */
+    free(ctx->sql_buffer);
+    ctx->sql_buffer = saved_buffer;
+    ctx->sql_size = saved_size;
+    ctx->sql_capacity = saved_capacity;
+
+    return expr_str;
+}
 
 /* Transform a RETURN clause */
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
@@ -75,7 +142,116 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         return -1;
     }
 
-    /* Find the SELECT clause and replace the * with actual columns */
+    /*
+     * NEW: Unified builder path for MATCH + RETURN
+     * When unified_builder is active and has FROM clause content,
+     * use sql_select(), sql_order_by(), sql_limit() to build the query.
+     */
+    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
+        CYPHER_DEBUG("Using unified builder path for RETURN");
+
+        /* Handle DISTINCT */
+        if (ret->distinct) {
+            sql_distinct(ctx->unified_builder);
+        }
+
+        /* Add SELECT columns to unified builder */
+        for (int i = 0; i < ret->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+
+            /* Transform the expression to a string */
+            char *expr_str = transform_expression_to_string(ctx, item->expr);
+            if (!expr_str) {
+                /* Preserve existing error message from transformation, or set generic one */
+                if (!ctx->error_message) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Failed to transform return item expression");
+                }
+                return -1;
+            }
+
+            /* Determine alias - use explicit alias, or generate one for properties */
+            const char *alias = item->alias;
+            char auto_alias[256] = "";
+            if (!alias && item->expr->type == AST_NODE_PROPERTY) {
+                cypher_property *prop = (cypher_property*)item->expr;
+                if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+                    cypher_identifier *id = (cypher_identifier*)prop->expr;
+                    snprintf(auto_alias, sizeof(auto_alias), "\"%s.%s\"", id->name, prop->property_name);
+                    alias = auto_alias;
+                }
+            }
+
+            /* Add to unified builder */
+            sql_select(ctx->unified_builder, expr_str, alias);
+            free(expr_str);
+
+            /* Register alias for ORDER BY reference */
+            if (item->alias) {
+                transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
+            }
+        }
+
+        /* Add ORDER BY */
+        if (ret->order_by && ret->order_by->count > 0) {
+            for (int i = 0; i < ret->order_by->count; i++) {
+                cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
+                char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                if (order_expr) {
+                    sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                    free(order_expr);
+                }
+            }
+        }
+
+        /* Add LIMIT/OFFSET */
+        if (ret->limit || ret->skip) {
+            int limit_val = -1;
+            int offset_val = -1;
+
+            if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+                cypher_literal *lit = (cypher_literal*)ret->limit;
+                if (lit->literal_type == LITERAL_INTEGER) {
+                    limit_val = (int)lit->value.integer;
+                }
+            }
+            if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+                cypher_literal *lit = (cypher_literal*)ret->skip;
+                if (lit->literal_type == LITERAL_INTEGER) {
+                    offset_val = (int)lit->value.integer;
+                }
+            }
+
+            /* If skip but no limit, SQLite needs LIMIT -1 */
+            if (ret->skip && !ret->limit) {
+                limit_val = -1;
+            }
+
+            sql_limit(ctx->unified_builder, limit_val, offset_val);
+        }
+
+        /* Add pending property JOINs from aggregate functions */
+        if (pending_prop_joins_len > 0) {
+            sql_join_raw(ctx->unified_builder, pending_prop_joins);
+            reset_pending_prop_joins();
+        }
+
+        /* Finalize the unified builder into sql_buffer */
+        if (finalize_sql_generation(ctx) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to finalize SQL generation");
+            return -1;
+        }
+
+        CYPHER_DEBUG("Unified builder path complete, SQL: %s", ctx->sql_buffer);
+        return 0;
+    }
+
+    /*
+     * Check for legacy SELECT * pattern - should not occur anymore.
+     * All code paths now either use the unified builder (above) or
+     * the standalone RETURN handler (below).
+     */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
     if (!select_pos) {
         /* No SELECT * - check if this is a standalone RETURN (no MATCH clause) */
@@ -92,365 +268,109 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         }
 
         if (is_standalone) {
-            /* Standalone RETURN clause - generate simple SELECT for literals */
-            CYPHER_DEBUG("Standalone RETURN clause - generating SELECT");
-            append_sql(ctx, "SELECT ");
+            /* Standalone RETURN clause - use unified builder for simple SELECT */
+            CYPHER_DEBUG("Standalone RETURN clause - using unified builder");
 
-            /* Add DISTINCT if needed */
+            /* Handle DISTINCT */
             if (ret->distinct) {
-                append_sql(ctx, "DISTINCT ");
+                sql_distinct(ctx->unified_builder);
             }
 
-            /* Process return items */
+            /* Add SELECT columns to unified builder */
             for (int i = 0; i < ret->items->count; i++) {
                 cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                if (transform_return_item(ctx, item, i == 0) < 0) {
-                    return -1;
-                }
-            }
 
-            /* Register aliases for ORDER BY to reference */
-            if (ret->order_by && ret->order_by->count > 0) {
-                for (int i = 0; i < ret->items->count; i++) {
-                    cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                    if (item->alias) {
-                        /* Register alias so ORDER BY can reference it */
-                        register_projected_variable(ctx, item->alias, NULL, item->alias);
-                    }
-                }
-            }
-
-            /* Handle ORDER BY, LIMIT, SKIP */
-            if (ret->order_by && ret->order_by->count > 0) {
-                append_sql(ctx, " ORDER BY ");
-                for (int i = 0; i < ret->order_by->count; i++) {
-                    if (i > 0) {
-                        append_sql(ctx, ", ");
-                    }
-                    cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                    if (transform_expression(ctx, order_item->expr) < 0) {
-                        return -1;
-                    }
-                    if (order_item->descending) {
-                        append_sql(ctx, " DESC");
-                    }
-                }
-            }
-            if (ret->limit) {
-                append_sql(ctx, " LIMIT ");
-                if (transform_expression(ctx, ret->limit) < 0) {
-                    return -1;
-                }
-            }
-            if (ret->skip) {
-                append_sql(ctx, " OFFSET ");
-                if (transform_expression(ctx, ret->skip) < 0) {
-                    return -1;
-                }
-            }
-
-            return 0;
-        }
-
-        /* Check if we're after a WITH clause */
-        if (ctx->sql_size > 0) {
-            /* Check if there's already a SELECT from a CTE (from WITH clause) */
-            char *existing_select = strstr(ctx->sql_buffer, "SELECT ");
-            if (existing_select) {
-                /* WITH already set up the SELECT - verify all RETURN items are simple projected identifiers */
-                bool can_use_existing = true;
-                for (int i = 0; i < ret->items->count; i++) {
-                    cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                    if (item->expr->type == AST_NODE_IDENTIFIER) {
-                        cypher_identifier *id = (cypher_identifier*)item->expr;
-                        if (!is_projected_variable(ctx, id->name)) {
-                            can_use_existing = false;
-                            break;
-                        }
-                    } else {
-                        /* Property access, function calls, etc. need transformation */
-                        can_use_existing = false;
-                        break;
-                    }
-                }
-                if (can_use_existing) {
-                    /* WITH already built the correct SELECT - query is ready */
-                    CYPHER_DEBUG("RETURN after WITH: all items are simple projected identifiers, query ready");
-                    return 0;
-                }
-
-                /* Need to rebuild SELECT for RETURN items that need transformation */
-                CYPHER_DEBUG("RETURN after WITH: rebuilding SELECT for complex items");
-
-                /* Find the FROM clause position in existing SELECT */
-                char *from_pos = strstr(existing_select, " FROM ");
-                if (from_pos) {
-                    /* Save the FROM clause and everything after before we modify the buffer */
-                    char *from_clause = strdup(from_pos);
-                    if (!from_clause) {
+                /* Transform the expression to a string */
+                char *expr_str = transform_expression_to_string(ctx, item->expr);
+                if (!expr_str) {
+                    if (!ctx->error_message) {
                         ctx->has_error = true;
-                        ctx->error_message = strdup("Memory allocation failed");
-                        return -1;
+                        ctx->error_message = strdup("Failed to transform return item expression");
                     }
+                    return -1;
+                }
 
-                    /* Truncate at SELECT and rebuild the column list */
-                    ctx->sql_size = existing_select + strlen("SELECT ") - ctx->sql_buffer;
-                    ctx->sql_buffer[ctx->sql_size] = '\0';
+                /* Add to unified builder */
+                sql_select(ctx->unified_builder, expr_str, item->alias);
+                free(expr_str);
 
-                    /* Add DISTINCT if needed */
-                    if (ret->distinct) {
-                        append_sql(ctx, "DISTINCT ");
-                    }
-
-                    /* Process return items */
-                    for (int i = 0; i < ret->items->count; i++) {
-                        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                        if (transform_return_item(ctx, item, i == 0) < 0) {
-                            free(from_clause);
-                            return -1;
-                        }
-                    }
-
-                    /* Append the FROM clause and everything after */
-                    append_sql(ctx, "%s", from_clause);
-                    free(from_clause);
-
-                    /* Handle ORDER BY, LIMIT, SKIP */
-                    if (ret->order_by && ret->order_by->count > 0) {
-                        append_sql(ctx, " ORDER BY ");
-                        for (int i = 0; i < ret->order_by->count; i++) {
-                            if (i > 0) {
-                                append_sql(ctx, ", ");
-                            }
-                            cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                            if (transform_expression(ctx, order_item->expr) < 0) {
-                                return -1;
-                            }
-                            if (order_item->descending) {
-                                append_sql(ctx, " DESC");
-                            }
-                        }
-                    }
-                    if (ret->limit) {
-                        append_sql(ctx, " LIMIT ");
-                        if (transform_expression(ctx, ret->limit) < 0) {
-                            return -1;
-                        }
-                    }
-                    if (ret->skip) {
-                        append_sql(ctx, " OFFSET ");
-                        if (transform_expression(ctx, ret->skip) < 0) {
-                            return -1;
-                        }
-                    }
-
-                    return 0;
+                /* Register alias for ORDER BY reference */
+                if (item->alias) {
+                    transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
                 }
             }
-            ctx->has_error = true;
-            ctx->error_message = strdup("RETURN without MATCH not supported");
-            return -1;
-        }
-        append_sql(ctx, "SELECT ");
-    } else {
-        /* Replace the * with actual column list */
-        /* Find the end of "SELECT *" and skip any spaces */
-        char *after_star = select_pos + strlen("SELECT *");
-        while (*after_star == ' ') after_star++; /* Skip any extra spaces */
-        char *temp = strdup(after_star);
 
-        /* Truncate at SELECT */
-        ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
-        ctx->sql_buffer[ctx->sql_size] = '\0';
+            /* Add ORDER BY */
+            if (ret->order_by && ret->order_by->count > 0) {
+                for (int i = 0; i < ret->order_by->count; i++) {
+                    cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
+                    char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                    if (order_expr) {
+                        sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                        free(order_expr);
+                    }
+                }
+            }
 
-        /* Add DISTINCT if needed */
-        if (ret->distinct) {
-            append_sql(ctx, "DISTINCT ");
-        }
+            /* Add LIMIT/OFFSET */
+            if (ret->limit || ret->skip) {
+                int limit_val = -1;
+                int offset_val = -1;
 
-        /* Process return items (this may add to pending_prop_joins) */
-        for (int i = 0; i < ret->items->count; i++) {
-            cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-            if (transform_return_item(ctx, item, i == 0) < 0) {
-                free(temp);
+                if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)ret->limit;
+                    if (lit->literal_type == LITERAL_INTEGER) {
+                        limit_val = (int)lit->value.integer;
+                    }
+                }
+                if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)ret->skip;
+                    if (lit->literal_type == LITERAL_INTEGER) {
+                        offset_val = (int)lit->value.integer;
+                    }
+                }
+
+                sql_limit(ctx->unified_builder, limit_val, offset_val);
+            }
+
+            /* Finalize the unified builder into sql_buffer */
+            if (finalize_sql_generation(ctx) < 0) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Failed to finalize SQL generation");
                 return -1;
             }
+
+            CYPHER_DEBUG("Standalone RETURN complete, SQL: %s", ctx->sql_buffer);
+            return 0;
         }
 
         /*
-         * If any property JOINs were accumulated during item processing,
-         * inject them into temp before WHERE clause (or at end if no WHERE).
+         * Legacy "RETURN after WITH" path - should not be reached anymore.
+         * WITH now populates unified_builder->from, so RETURN takes the
+         * unified builder path at line 124. If we reach here, it indicates
+         * a bug in the transformation pipeline.
          */
-        if (pending_prop_joins_len > 0) {
-            char *where_pos = strstr(temp, " WHERE ");
-            if (where_pos) {
-                /* Insert JOINs before WHERE */
-                size_t prefix_len = where_pos - temp;
-                size_t suffix_len = strlen(where_pos);
-                size_t new_len = strlen(temp) + pending_prop_joins_len + 1;
-                char *new_temp = malloc(new_len);
-                if (new_temp) {
-                    memcpy(new_temp, temp, prefix_len);
-                    memcpy(new_temp + prefix_len, pending_prop_joins, pending_prop_joins_len);
-                    memcpy(new_temp + prefix_len + pending_prop_joins_len, where_pos, suffix_len + 1);
-                    free(temp);
-                    temp = new_temp;
-                    CYPHER_DEBUG("Injected property JOINs before WHERE: %s", pending_prop_joins);
-                }
-            } else {
-                /* No WHERE, append JOINs at end of FROM section */
-                size_t new_len = strlen(temp) + pending_prop_joins_len + 1;
-                char *new_temp = malloc(new_len);
-                if (new_temp) {
-                    strcpy(new_temp, temp);
-                    strcat(new_temp, pending_prop_joins);
-                    free(temp);
-                    temp = new_temp;
-                    CYPHER_DEBUG("Appended property JOINs: %s", pending_prop_joins);
-                }
-            }
-            reset_pending_prop_joins();
-        }
-
-        /* Append the rest of the query */
-        append_sql(ctx, " %s", temp);
-        free(temp);
-
-        /* Handle ORDER BY, LIMIT, SKIP for MATCH + RETURN queries */
-        if (ret->order_by && ret->order_by->count > 0) {
-            /* Register aliases so ORDER BY can reference them */
-            for (int i = 0; i < ret->items->count; i++) {
-                cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                if (item->alias) {
-                    register_projected_variable(ctx, item->alias, NULL, item->alias);
-                }
-            }
-
-            append_sql(ctx, " ORDER BY ");
-            for (int i = 0; i < ret->order_by->count; i++) {
-                if (i > 0) {
-                    append_sql(ctx, ", ");
-                }
-                cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                if (transform_expression(ctx, order_item->expr) < 0) {
-                    return -1;
-                }
-                if (order_item->descending) {
-                    append_sql(ctx, " DESC");
-                }
-            }
-        }
-        if (ret->limit) {
-            append_sql(ctx, " LIMIT ");
-            if (transform_expression(ctx, ret->limit) < 0) {
-                return -1;
-            }
-        } else if (ret->skip) {
-            /* SQLite requires LIMIT before OFFSET - use -1 for unlimited */
-            append_sql(ctx, " LIMIT -1");
-        }
-        if (ret->skip) {
-            append_sql(ctx, " OFFSET ");
-            if (transform_expression(ctx, ret->skip) < 0) {
-                return -1;
-            }
-        }
-
-        return 0;
-    }
-
-    /* Add DISTINCT if specified */
-    if (ret->distinct) {
-        append_sql(ctx, "DISTINCT ");
-    }
-    
-    /* Process each return item */
-    for (int i = 0; i < ret->items->count; i++) {
-        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-        if (transform_return_item(ctx, item, i == 0) < 0) {
-            return -1;
-        }
-    }
-    
-    /* Handle ORDER BY */
-    if (ret->order_by && ret->order_by->count > 0) {
-        append_sql(ctx, " ORDER BY ");
-        for (int i = 0; i < ret->order_by->count; i++) {
-            if (i > 0) {
-                append_sql(ctx, ", ");
-            }
-            cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-            if (transform_expression(ctx, order_item->expr) < 0) {
-                return -1;
-            }
-            /* Add sort direction */
-            if (order_item->descending) {
-                append_sql(ctx, " DESC");
-            } else {
-                append_sql(ctx, " ASC");
-            }
-        }
-    }
-    
-    /* Handle LIMIT */
-    if (ret->limit) {
-        append_sql(ctx, " LIMIT ");
-        if (transform_expression(ctx, ret->limit) < 0) {
-            return -1;
-        }
-    }
-    
-    /* Handle SKIP (using SQLite OFFSET) */
-    if (ret->skip) {
-        append_sql(ctx, " OFFSET ");
-        if (transform_expression(ctx, ret->skip) < 0) {
-            return -1;
-        }
-    }
-    
-    return 0;
-}
-
-/* Transform a single return item */
-static int transform_return_item(cypher_transform_context *ctx, cypher_return_item *item, bool first)
-{
-    if (!first) {
-        append_sql(ctx, ", ");
-    }
-
-    /* Special handling for identifiers with aliases */
-    if (item->alias && item->expr->type == AST_NODE_IDENTIFIER) {
-        cypher_identifier *id = (cypher_identifier*)item->expr;
-        const char *table_alias = lookup_variable_alias(ctx, id->name);
-        if (table_alias) {
-            /* For variables with alias, select the ID and alias it */
-            append_sql(ctx, "%s.id AS ", table_alias);
-            append_identifier(ctx, item->alias);
-            return 0;
-        }
-    }
-
-    /* Transform the expression */
-    if (transform_expression(ctx, item->expr) < 0) {
+        /*
+         * If sql_size > 0 but not standalone (and no UNION suffix), this is an
+         * unexpected state - unified builder path should have handled it.
+         */
+        CYPHER_DEBUG("ERROR: Legacy RETURN path reached, sql_size=%zu, sql_buffer: %s",
+                     ctx->sql_size, ctx->sql_buffer);
+        ctx->has_error = true;
+        ctx->error_message = strdup("Internal error: Legacy RETURN path should not be reached");
+        return -1;
+    } else {
+        /*
+         * SELECT * found in sql_buffer - this should not happen anymore.
+         * WITH and UNWIND now use builder state extraction, and RETURN
+         * adds explicit SELECT columns before finalizing. If we reach here,
+         * it indicates a bug in the transformation pipeline.
+         */
+        CYPHER_DEBUG("ERROR: Unexpected SELECT * found in sql_buffer: %s", ctx->sql_buffer);
+        ctx->has_error = true;
+        ctx->error_message = strdup("Internal error: SELECT * pattern should not occur");
         return -1;
     }
-
-    /* Add alias if specified (for non-wildcard expressions) */
-    if (item->alias && item->expr->type != AST_NODE_IDENTIFIER) {
-        append_sql(ctx, " AS ");
-        append_identifier(ctx, item->alias);
-    } else if (!item->alias && item->expr->type == AST_NODE_PROPERTY) {
-        /* Auto-generate alias for property expressions (e.g., n.name -> "n.name") */
-        cypher_property *prop = (cypher_property*)item->expr;
-        if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
-            cypher_identifier *id = (cypher_identifier*)prop->expr;
-            char auto_alias[256];
-            snprintf(auto_alias, sizeof(auto_alias), "%s.%s", id->name, prop->property_name);
-            append_sql(ctx, " AS \"%s\"", auto_alias);
-        }
-    }
-
-    return 0;
 }
 
 /* Transform an expression */
@@ -466,26 +386,26 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
         case AST_NODE_IDENTIFIER:
             {
                 cypher_identifier *id = (cypher_identifier*)expr;
-                const char *alias = lookup_variable_alias(ctx, id->name);
-                if (alias) {
-                    if (is_path_variable(ctx, id->name)) {
+
+                /* Check for path variables first - they don't have a table alias */
+                if (transform_var_is_path(ctx->var_ctx, id->name)) {
                         CYPHER_DEBUG("Processing path variable '%s' in RETURN", id->name);
                         /* This is a path variable - generate JSON with element IDs */
-                        path_variable *path_var = get_path_variable(ctx, id->name);
-                        if (path_var && path_var->elements) {
-                            CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->elements->count);
+                        transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, id->name);
+                        if (path_var && path_var->path_elements) {
+                            CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->path_elements->count);
 
                             /* Check if this is a variable-length path (shortestPath, etc.) */
                             bool has_varlen = false;
                             const char *varlen_alias = NULL;
-                            for (int i = 0; i < path_var->elements->count; i++) {
-                                ast_node *element = path_var->elements->items[i];
+                            for (int i = 0; i < path_var->path_elements->count; i++) {
+                                ast_node *element = path_var->path_elements->items[i];
                                 if (element->type == AST_NODE_REL_PATTERN) {
                                     cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
                                     if (rel->varlen) {
                                         has_varlen = true;
                                         if (rel->variable) {
-                                            varlen_alias = lookup_variable_alias(ctx, rel->variable);
+                                            varlen_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                                         }
                                         break;
                                     }
@@ -498,14 +418,14 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                             } else {
                                 /* Regular path - build from individual element IDs */
                                 append_sql(ctx, "'[");
-                                for (int i = 0; i < path_var->elements->count; i++) {
+                                for (int i = 0; i < path_var->path_elements->count; i++) {
                                     if (i > 0) append_sql(ctx, ",");
 
-                                    ast_node *element = path_var->elements->items[i];
+                                    ast_node *element = path_var->path_elements->items[i];
                                     if (element->type == AST_NODE_NODE_PATTERN) {
                                         cypher_node_pattern *node = (cypher_node_pattern*)element;
                                         if (node->variable) {
-                                            const char *node_alias = lookup_variable_alias(ctx, node->variable);
+                                            const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                                             if (node_alias) {
                                                 append_sql(ctx, "' || %s.id || '", node_alias);
                                             } else {
@@ -517,7 +437,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     } else if (element->type == AST_NODE_REL_PATTERN) {
                                         cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
                                         if (rel->variable) {
-                                            const char *rel_alias = lookup_variable_alias(ctx, rel->variable);
+                                            const char *rel_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                                             if (rel_alias) {
                                                 append_sql(ctx, "' || %s.id || '", rel_alias);
                                             } else {
@@ -533,59 +453,64 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         } else {
                             append_sql(ctx, "'[]'");
                         }
-                    } else if (is_projected_variable(ctx, id->name)) {
-                        /* This is a projected variable from WITH - alias is the full column reference */
-                        append_sql(ctx, "%s", alias);
-                    } else if (is_edge_variable(ctx, id->name)) {
-                        /* This is an edge variable - return full relationship object */
-                        append_sql(ctx, "json_object("
-                            "'id', %s.id, "
-                            "'type', %s.type, "
-                            "'startNodeId', %s.source_id, "
-                            "'endNodeId', %s.target_id, "
-                            "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
-                                "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
-                                "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
-                                "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id))) "
-                            "FROM property_keys pk WHERE "
-                                "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id)"
-                            "), json('{}'))"
-                        ")",
-                        alias, alias, alias, alias,
-                        alias, alias, alias, alias,
-                        alias, alias, alias, alias);
-                    } else {
-                        /* This is a node variable - return full node object */
-                        append_sql(ctx, "json_object("
-                            "'id', %s.id, "
-                            "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
-                            "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
-                                "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
-                                "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
-                                "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id))) "
-                            "FROM property_keys pk WHERE "
-                                "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id)"
-                            "), json('{}'))"
-                        ")",
-                        alias, alias,
-                        alias, alias, alias, alias,
-                        alias, alias, alias, alias);
-                    }
                 } else {
-                    /* Unknown identifier */
-                    ctx->has_error = true;
-                    char error[256];
-                    snprintf(error, sizeof(error), "Unknown variable: %s", id->name);
-                    ctx->error_message = strdup(error);
-                    return -1;
+                    /* Non-path variables need an alias */
+                    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+                    if (alias) {
+                        if (transform_var_is_projected(ctx->var_ctx, id->name)) {
+                            /* This is a projected variable from WITH - alias is the full column reference */
+                            append_sql(ctx, "%s", alias);
+                        } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
+                            /* This is an edge variable - return full relationship object */
+                            append_sql(ctx, "json_object("
+                                "'id', %s.id, "
+                                "'type', %s.type, "
+                                "'startNodeId', %s.source_id, "
+                                "'endNodeId', %s.target_id, "
+                                "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                    "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
+                                    "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
+                                    "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
+                                    "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id))) "
+                                "FROM property_keys pk WHERE "
+                                    "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id)"
+                                "), json('{}'))"
+                            ")",
+                            alias, alias, alias, alias,
+                            alias, alias, alias, alias,
+                            alias, alias, alias, alias);
+                        } else {
+                            /* This is a node variable - return full node object */
+                            append_sql(ctx, "json_object("
+                                "'id', %s.id, "
+                                "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
+                                "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                    "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
+                                    "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
+                                    "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
+                                    "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id))) "
+                                "FROM property_keys pk WHERE "
+                                    "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                    "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id)"
+                                "), json('{}'))"
+                            ")",
+                            alias, alias,
+                            alias, alias, alias, alias,
+                            alias, alias, alias, alias);
+                        }
+                    } else {
+                        /* Unknown identifier */
+                        ctx->has_error = true;
+                        char error[256];
+                        snprintf(error, sizeof(error), "Unknown variable: %s", id->name);
+                        ctx->error_message = strdup(error);
+                        return -1;
+                    }
                 }
             }
             break;
@@ -762,7 +687,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 if (proj->base_expr && proj->base_expr->type == AST_NODE_IDENTIFIER) {
                     cypher_identifier *ident = (cypher_identifier*)proj->base_expr;
                     base_name = ident->name;
-                    base_alias = lookup_variable_alias(ctx, ident->name);
+                    base_alias = transform_var_get_alias(ctx->var_ctx, ident->name);
                     if (!base_alias) {
                         ctx->has_error = true;
                         char error[256];
@@ -772,7 +697,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     }
                 }
 
-                bool is_projected = is_projected_variable(ctx, base_name);
+                bool is_projected = transform_var_is_projected(ctx->var_ctx, base_name);
 
                 /* Check if we have .* (all properties) - use properties() function approach */
                 bool has_all_props = false;
@@ -863,18 +788,11 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 const char *comp_var = comp->variable;
 
                 /* Save the old alias if this variable name already exists */
-                const char *old_alias = lookup_variable_alias(ctx, comp_var);
+                const char *old_alias = transform_var_get_alias(ctx->var_ctx, comp_var);
                 char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
                 /* Register the comprehension variable to map to json_each.value */
-                register_variable(ctx, comp_var, "json_each.value");
-                /* Update the type to projected so it's treated as a direct value */
-                for (int i = 0; i < ctx->variable_count; i++) {
-                    if (strcmp(ctx->variables[i].name, comp_var) == 0) {
-                        ctx->variables[i].type = VAR_TYPE_PROJECTED;
-                        break;
-                    }
-                }
+                transform_var_register_projected(ctx->var_ctx, comp_var, "json_each.value");
 
                 /* Build the subquery */
                 append_sql(ctx, "(SELECT json_group_array(");
@@ -913,7 +831,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
                 /* Restore the old alias if there was one, otherwise remove the variable */
                 if (saved_alias) {
-                    register_variable(ctx, comp_var, saved_alias);
+                    transform_var_register_projected(ctx->var_ctx, comp_var, saved_alias);
                     free(saved_alias);
                 }
                 /* If there was no old alias, leave the variable as is - it won't conflict
@@ -956,8 +874,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     return -1;
                 }
 
-                /* Save current variable state to restore later */
-                int saved_var_count = ctx->variable_count;
+                /* Save current variable count to restore later */
+                int saved_var_count = transform_var_count(ctx->var_ctx);
 
                 /* Track node aliases and whether they're external */
                 char node_aliases[10][32];
@@ -987,7 +905,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         /* Check if this node variable exists in outer context */
                         const char *outer_alias = NULL;
                         if (node->variable) {
-                            outer_alias = lookup_variable_alias(ctx, node->variable);
+                            outer_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                         }
 
                         if (outer_alias) {
@@ -1029,7 +947,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 /* Register pattern variables for use in expressions */
                 for (int i = 0; i < node_count; i++) {
                     if (node_vars[i][0] != '\0') {
-                        register_variable(ctx, node_vars[i], node_aliases[i]);
+                        transform_var_register_node(ctx->var_ctx, node_vars[i], node_aliases[i], NULL);
                     }
                 }
 
@@ -1192,7 +1110,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 }
 
                 /* Restore variable count (remove pattern-local variables) */
-                ctx->variable_count = saved_var_count;
+                transform_var_truncate_to(ctx->var_ctx, saved_var_count);
             }
             break;
 

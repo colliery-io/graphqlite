@@ -9,10 +9,33 @@ SQLITE ?= sqlite3
 PYTHON ?= python3.11
 
 # Platform-specific paths for test builds (CUnit headers/libs)
-# macOS with MacPorts: make EXTRA_LIBS=-L/opt/local/lib EXTRA_INCLUDES=-I/opt/local/include
-# macOS with Homebrew: make EXTRA_INCLUDES=-I$(brew --prefix)/include EXTRA_LIBS=-L$(brew --prefix)/lib
-EXTRA_LIBS ?=
-EXTRA_INCLUDES ?=
+# Auto-detect MacPorts (/opt/local) or Homebrew paths
+# Can override with: make EXTRA_LIBS=-L/path/to/lib EXTRA_INCLUDES=-I/path/to/include
+
+# Auto-detect CUnit from MacPorts
+ifneq ($(wildcard /opt/local/include/CUnit/CUnit.h),)
+    MACPORTS_INCLUDES = -I/opt/local/include
+    MACPORTS_LIBS = -L/opt/local/lib
+else
+    MACPORTS_INCLUDES =
+    MACPORTS_LIBS =
+endif
+
+# Auto-detect CUnit from Homebrew (common paths)
+ifneq ($(wildcard /usr/local/include/CUnit/CUnit.h),)
+    HOMEBREW_INCLUDES = -I/usr/local/include
+    HOMEBREW_LIBS = -L/usr/local/lib
+else ifneq ($(wildcard /opt/homebrew/include/CUnit/CUnit.h),)
+    HOMEBREW_INCLUDES = -I/opt/homebrew/include
+    HOMEBREW_LIBS = -L/opt/homebrew/lib
+else
+    HOMEBREW_INCLUDES =
+    HOMEBREW_LIBS =
+endif
+
+# Combine detected paths (MacPorts takes priority, then Homebrew)
+EXTRA_LIBS ?= $(MACPORTS_LIBS) $(HOMEBREW_LIBS)
+EXTRA_INCLUDES ?= $(MACPORTS_INCLUDES) $(HOMEBREW_INCLUDES)
 
 # Vendored SQLite headers for consistent extension builds
 VENDOR_SQLITE_DIR = bindings/python/vendor/sqlite
@@ -102,10 +125,14 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_func_list.c \
 	$(TRANSFORM_DIR)/transform_func_graph.c \
 	$(TRANSFORM_DIR)/transform_func_aggregate.c \
+	$(TRANSFORM_DIR)/transform_func_dispatch.c \
+	$(TRANSFORM_DIR)/transform_helpers.c \
+	$(TRANSFORM_DIR)/transform_variables.c \
 	$(TRANSFORM_DIR)/transform_expr_predicate.c \
 	$(TRANSFORM_DIR)/transform_with.c \
 	$(TRANSFORM_DIR)/transform_unwind.c \
-	$(TRANSFORM_DIR)/transform_expr_ops.c
+	$(TRANSFORM_DIR)/transform_expr_ops.c \
+	$(TRANSFORM_DIR)/sql_builder.c
 
 # Executor sources
 EXECUTOR_DIR = $(SRC_DIR)/backend/executor
@@ -123,7 +150,9 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/executor_foreach.c \
 	$(EXECUTOR_DIR)/executor_merge.c \
 	$(EXECUTOR_DIR)/executor_match.c \
+	$(EXECUTOR_DIR)/query_dispatch.c \
 	$(EXECUTOR_DIR)/agtype.c \
+	$(EXECUTOR_DIR)/json_builder.c \
 	$(EXECUTOR_DIR)/graph_algorithms.c \
 	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
 	$(EXECUTOR_DIR)/graph_algo_community.c \
@@ -193,7 +222,9 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_clauses.c \
 	$(TEST_DIR)/test_executor_patterns.c \
 	$(TEST_DIR)/test_executor_functions.c \
-	$(TEST_DIR)/test_executor_predicates.c
+	$(TEST_DIR)/test_executor_predicates.c \
+	$(TEST_DIR)/test_sql_builder.c \
+	$(TEST_DIR)/test_query_dispatch.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 

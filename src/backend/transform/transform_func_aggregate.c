@@ -122,7 +122,7 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
     }
 
     cypher_identifier *id = (cypher_identifier *)prop->expr;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -132,7 +132,7 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
     }
 
     /* Check if this is a projected variable from WITH */
-    bool is_projected = is_projected_variable(ctx, id->name);
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
     const char *node_id_ref = is_projected ? alias : NULL;
     char node_id_buf[256];
     if (!is_projected) {
@@ -170,10 +170,10 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
              "(SELECT id FROM property_keys WHERE key = '%s')", prop->property_name);
 
     /*
-     * When using sql_builder, accumulate property JOINs in the pending buffer.
+     * When using unified_builder, accumulate property JOINs in the pending buffer.
      * These will be injected into the FROM clause by transform_return_clause.
      */
-    if (ctx->sql_builder.using_builder) {
+    if (ctx->unified_builder) {
         /* Build the JOIN clauses and add to pending buffer */
         char join_sql[2048];
         snprintf(join_sql, sizeof(join_sql),
@@ -262,7 +262,7 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
     cypher_identifier *id = (cypher_identifier*)arg;
 
     /* Check if the variable is registered */
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -272,7 +272,7 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
     }
 
     /* Check if the variable is a relationship/edge variable */
-    if (!is_edge_variable(ctx, id->name)) {
+    if (!transform_var_is_edge(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
         ctx->error_message = strdup("type() function argument must be a relationship variable");
         return -1;

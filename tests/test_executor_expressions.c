@@ -679,7 +679,7 @@ static void test_not_null_property_where(void)
 /* Test basic arithmetic operators */
 static void test_arithmetic_basic(void)
 {
-    const char *query = "RETURN 10 + 5 AS add, 10 - 5 AS sub, 10 * 5 AS mul, 10 / 5 AS div";
+    const char *query = "RETURN 10 + 5 AS addition, 10 - 5 AS subtraction, 10 * 5 AS multiplication, 10 / 5 AS division";
 
     cypher_result *result = cypher_executor_execute(executor, query);
     CU_ASSERT_PTR_NOT_NULL(result);

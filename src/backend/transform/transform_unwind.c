@@ -10,6 +10,7 @@
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /**
@@ -35,20 +36,57 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_unwind_%d", unwind_cte_counter++);
 
-    /* Save the inner SQL if any (from previous clauses like MATCH) */
+    /*
+     * Build inner SQL from builder state directly.
+     * This avoids the SELECT * pattern - we explicitly build the subquery.
+     */
     char *inner_sql = NULL;
-    if (ctx->sql_size > 0) {
-        inner_sql = strdup(ctx->sql_buffer);
+    char *saved_cte = NULL;
+    int saved_cte_count = 0;
+
+    if (ctx->unified_builder && sql_builder_has_from(ctx->unified_builder)) {
+        /* Extract builder state */
+        const char *from_clause = sql_builder_get_from(ctx->unified_builder);
+        const char *joins_clause = sql_builder_get_joins(ctx->unified_builder);
+        const char *where_clause = sql_builder_get_where(ctx->unified_builder);
+
+        /* Build subquery: SELECT * FROM <from><joins> WHERE <where> */
+        dynamic_buffer subquery;
+        dbuf_init(&subquery);
+
+        dbuf_append(&subquery, "SELECT * FROM ");
+        dbuf_append(&subquery, from_clause);
+
+        if (joins_clause) {
+            dbuf_append(&subquery, joins_clause);
+        }
+
+        if (where_clause) {
+            dbuf_append(&subquery, " WHERE ");
+            dbuf_append(&subquery, where_clause);
+        }
+
+        inner_sql = dbuf_finish(&subquery);
+
+        /* Save CTE buffer before reset */
+        if (!dbuf_is_empty(&ctx->unified_builder->cte)) {
+            saved_cte = strdup(dbuf_get(&ctx->unified_builder->cte));
+            saved_cte_count = ctx->unified_builder->cte_count;
+        }
+
+        sql_builder_reset(ctx->unified_builder);
+
+        /* Restore CTE buffer after reset */
+        if (saved_cte) {
+            dbuf_append(&ctx->unified_builder->cte, saved_cte);
+            ctx->unified_builder->cte_count = saved_cte_count;
+            free(saved_cte);
+        }
     }
 
-    /* Start building CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
-
-    append_cte_prefix(ctx, "%s AS (", cte_name);
+    /* Build CTE query in a local buffer */
+    dynamic_buffer cte_query;
+    dbuf_init(&cte_query);
 
     /* Check expression type and generate appropriate SQL */
     if (unwind->expr->type == AST_NODE_LIST) {
@@ -57,13 +95,13 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         if (!list->items || list->items->count == 0) {
             /* Empty list: return no rows using impossible condition */
-            append_cte_prefix(ctx, "SELECT NULL AS value WHERE 0");
+            dbuf_append(&cte_query, "SELECT NULL AS value WHERE 0");
         } else {
             for (int i = 0; i < list->items->count; i++) {
                 if (i > 0) {
-                    append_cte_prefix(ctx, " UNION ALL ");
+                    dbuf_append(&cte_query, " UNION ALL ");
                 }
-                append_cte_prefix(ctx, "SELECT ");
+                dbuf_append(&cte_query, "SELECT ");
 
                 /* Transform the expression to get its SQL value */
                 ast_node *item = list->items->items[i];
@@ -71,27 +109,27 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     cypher_literal *lit = (cypher_literal*)item;
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            append_cte_prefix(ctx, "%d", lit->value.integer);
+                            dbuf_appendf(&cte_query, "%d", lit->value.integer);
                             break;
                         case LITERAL_DECIMAL:
-                            append_cte_prefix(ctx, "%g", lit->value.decimal);
+                            dbuf_appendf(&cte_query, "%g", lit->value.decimal);
                             break;
                         case LITERAL_STRING:
-                            append_cte_prefix(ctx, "'%s'", lit->value.string ? lit->value.string : "");
+                            dbuf_appendf(&cte_query, "'%s'", lit->value.string ? lit->value.string : "");
                             break;
                         case LITERAL_BOOLEAN:
-                            append_cte_prefix(ctx, "%s", lit->value.boolean ? "1" : "0");
+                            dbuf_appendf(&cte_query, "%s", lit->value.boolean ? "1" : "0");
                             break;
                         case LITERAL_NULL:
-                            append_cte_prefix(ctx, "NULL");
+                            dbuf_append(&cte_query, "NULL");
                             break;
                     }
                 } else {
                     /* For other expression types, we'd need to transform them */
                     /* For now, just handle literals */
-                    append_cte_prefix(ctx, "NULL");
+                    dbuf_append(&cte_query, "NULL");
                 }
-                append_cte_prefix(ctx, " AS value");
+                dbuf_append(&cte_query, " AS value");
             }
         }
     } else if (unwind->expr->type == AST_NODE_PROPERTY) {
@@ -100,18 +138,18 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         if (prop->expr->type == AST_NODE_IDENTIFIER) {
             cypher_identifier *id = (cypher_identifier*)prop->expr;
-            const char *alias = lookup_variable_alias(ctx, id->name);
-            bool is_projected = is_projected_variable(ctx, id->name);
+            const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+            bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
 
             /* Build json_each on the property value */
-            append_cte_prefix(ctx, "SELECT json_each.value AS value FROM ");
+            dbuf_append(&cte_query, "SELECT json_each.value AS value FROM ");
 
             if (inner_sql && strlen(inner_sql) > 0) {
-                append_cte_prefix(ctx, "(%s) AS _prev, ", inner_sql);
+                dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
             }
 
             /* Get property from appropriate property table */
-            append_cte_prefix(ctx, "json_each(COALESCE("
+            dbuf_appendf(&cte_query, "json_each(COALESCE("
                 "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id "
                 "WHERE npt.node_id = %s%s AND pk.key = '%s'), '[]'))",
                 alias ? alias : id->name,
@@ -120,47 +158,50 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         } else {
             ctx->has_error = true;
             ctx->error_message = strdup("UNWIND property access requires identifier base");
+            dbuf_free(&cte_query);
             free(inner_sql);
             return -1;
         }
     } else if (unwind->expr->type == AST_NODE_IDENTIFIER) {
         /* Variable reference - assume it's a list variable from previous clause */
         cypher_identifier *id = (cypher_identifier*)unwind->expr;
-        const char *alias = lookup_variable_alias(ctx, id->name);
+        const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
 
-        append_cte_prefix(ctx, "SELECT json_each.value AS value FROM ");
+        dbuf_append(&cte_query, "SELECT json_each.value AS value FROM ");
 
         if (inner_sql && strlen(inner_sql) > 0) {
-            append_cte_prefix(ctx, "(%s) AS _prev, ", inner_sql);
+            dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
         }
 
-        append_cte_prefix(ctx, "json_each(%s)", alias ? alias : id->name);
+        dbuf_appendf(&cte_query, "json_each(%s)", alias ? alias : id->name);
     } else {
         ctx->has_error = true;
         ctx->error_message = strdup("UNWIND requires list literal, property access, or variable");
+        dbuf_free(&cte_query);
         free(inner_sql);
         return -1;
     }
 
-    append_cte_prefix(ctx, ")");
+    /* Add CTE to unified builder */
+    sql_cte(ctx->unified_builder, cte_name, dbuf_get(&cte_query), false);
+    dbuf_free(&cte_query);
     ctx->cte_count++;
 
     /* Clear old variables - UNWIND creates a new scope */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        free(ctx->variables[i].name);
-        free(ctx->variables[i].table_alias);
-    }
-    ctx->variable_count = 0;
+    transform_var_ctx_reset(ctx->var_ctx);
 
-    /* Register the unwound variable */
-    register_projected_variable(ctx, unwind->alias, cte_name, "value");
+    /* Register the unwound variable in unified system */
+    char unwind_source[256];
+    snprintf(unwind_source, sizeof(unwind_source), "%s.value", cte_name);
+    transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
 
-    /* Build the outer SELECT */
-    ctx->sql_size = 0;
-    ctx->sql_buffer[0] = '\0';
-    append_sql(ctx, "SELECT %s.value AS %s FROM %s", cte_name, unwind->alias, cte_name);
+    /* Build the outer query using unified builder */
+    char select_expr[256];
+    snprintf(select_expr, sizeof(select_expr), "%s.value", cte_name);
+    sql_select(ctx->unified_builder, select_expr, unwind->alias);
+    sql_from(ctx->unified_builder, cte_name, NULL);
 
     free(inner_sql);
-    CYPHER_DEBUG("UNWIND clause generated CTE: %s", cte_name);
+    CYPHER_DEBUG("UNWIND clause generated CTE via unified builder: %s", cte_name);
     return 0;
 }

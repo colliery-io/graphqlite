@@ -64,37 +64,37 @@ int transform_pagerank_function(cypher_transform_context *ctx, cypher_function_c
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_pagerank_%d", ctx->cte_count);
 
-    /* Start CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    /* Build CTEs using unified builder */
+    char cte_name[128], cte_query[1024];
 
     /* Node count CTE */
-    append_cte_prefix(ctx, "%s_nc AS (SELECT CAST(COUNT(*) AS REAL) AS n FROM nodes), ", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_nc", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT CAST(COUNT(*) AS REAL) AS n FROM nodes", false);
 
     /* Out-degree CTE */
-    append_cte_prefix(ctx, "%s_od AS (SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id), ", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_od", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id", false);
 
     /* Initial PageRank (iteration 0): uniform distribution */
-    append_cte_prefix(ctx, "%s_pr0 AS (SELECT id AS node_id, 1.0/(SELECT n FROM %s_nc) AS score FROM nodes)",
-                      cte_base, cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_pr0", cte_base);
+    snprintf(cte_query, sizeof(cte_query), "SELECT id AS node_id, 1.0/(SELECT n FROM %s_nc) AS score FROM nodes", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
 
     /* Generate iterations 1 through N using JOINs (faster than correlated subqueries) */
     for (int i = 1; i <= iterations; i++) {
-        append_cte_prefix(ctx, ", %s_pr%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_pr%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT n.id AS node_id, "
             "%.4f/(SELECT nc.n FROM %s_nc nc) + %.4f * COALESCE(SUM(p.score / COALESCE(od.deg, 1.0)), 0.0) AS score "
             "FROM nodes n "
             "LEFT JOIN edges e ON e.target_id = n.id "
             "LEFT JOIN %s_pr%d p ON p.node_id = e.source_id "
             "LEFT JOIN %s_od od ON od.source_id = e.source_id "
-            "GROUP BY n.id)",
-            cte_base, i,
+            "GROUP BY n.id",
             (1.0 - damping), cte_base, damping,
             cte_base, i - 1,
             cte_base);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;
@@ -158,34 +158,39 @@ int transform_top_pagerank_function(cypher_transform_context *ctx, cypher_functi
         }
     }
 
-    /* Generate PageRank CTEs (reuse logic from pagerank) */
+    /* Generate PageRank CTEs using unified builder */
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_pagerank_%d", ctx->cte_count);
 
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    char cte_name[128], cte_query[1024];
 
-    append_cte_prefix(ctx, "%s_nc AS (SELECT CAST(COUNT(*) AS REAL) AS n FROM nodes), ", cte_base);
-    append_cte_prefix(ctx, "%s_od AS (SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id), ", cte_base);
-    append_cte_prefix(ctx, "%s_pr0 AS (SELECT id AS node_id, 1.0/(SELECT n FROM %s_nc) AS score FROM nodes)",
-                      cte_base, cte_base);
+    /* Node count CTE */
+    snprintf(cte_name, sizeof(cte_name), "%s_nc", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT CAST(COUNT(*) AS REAL) AS n FROM nodes", false);
+
+    /* Out-degree CTE */
+    snprintf(cte_name, sizeof(cte_name), "%s_od", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id", false);
+
+    /* Initial PageRank */
+    snprintf(cte_name, sizeof(cte_name), "%s_pr0", cte_base);
+    snprintf(cte_query, sizeof(cte_query), "SELECT id AS node_id, 1.0/(SELECT n FROM %s_nc) AS score FROM nodes", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
 
     for (int i = 1; i <= iterations; i++) {
-        append_cte_prefix(ctx, ", %s_pr%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_pr%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT n.id AS node_id, "
             "%.4f/(SELECT nc.n FROM %s_nc nc) + %.4f * COALESCE(SUM(p.score / COALESCE(od.deg, 1.0)), 0.0) AS score "
             "FROM nodes n "
             "LEFT JOIN edges e ON e.target_id = n.id "
             "LEFT JOIN %s_pr%d p ON p.node_id = e.source_id "
             "LEFT JOIN %s_od od ON od.source_id = e.source_id "
-            "GROUP BY n.id)",
-            cte_base, i,
+            "GROUP BY n.id",
             (1.0 - damping), cte_base, damping,
             cte_base, i - 1,
             cte_base);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;
@@ -254,36 +259,40 @@ int transform_personalized_pagerank_function(cypher_transform_context *ctx, cyph
         }
     }
 
-    /* Generate PageRank CTEs with personalization */
+    /* Generate PageRank CTEs with personalization using unified builder */
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_ppr_%d", ctx->cte_count);
 
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    char cte_name[128], cte_query[1024];
 
     /* Seed nodes CTE - parse the JSON array into a table */
-    append_cte_prefix(ctx, "%s_seeds AS (SELECT value AS node_id FROM json_each('%s')), ", cte_base, seeds_json);
+    snprintf(cte_name, sizeof(cte_name), "%s_seeds", cte_base);
+    snprintf(cte_query, sizeof(cte_query), "SELECT value AS node_id FROM json_each('%s')", seeds_json);
+    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
 
     /* Seed count for normalization */
-    append_cte_prefix(ctx, "%s_seed_count AS (SELECT CAST(COUNT(*) AS REAL) AS n FROM %s_seeds), ", cte_base, cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_seed_count", cte_base);
+    snprintf(cte_query, sizeof(cte_query), "SELECT CAST(COUNT(*) AS REAL) AS n FROM %s_seeds", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
 
     /* Out-degree CTE */
-    append_cte_prefix(ctx, "%s_od AS (SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id), ", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_od", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id", false);
 
     /* Initial PageRank: seeds get 1/|seeds|, others get 0 */
-    append_cte_prefix(ctx, "%s_pr0 AS ("
+    snprintf(cte_name, sizeof(cte_name), "%s_pr0", cte_base);
+    snprintf(cte_query, sizeof(cte_query),
         "SELECT n.id AS node_id, "
         "CASE WHEN n.id IN (SELECT node_id FROM %s_seeds) "
         "THEN 1.0 / (SELECT n FROM %s_seed_count) ELSE 0.0 END AS score "
-        "FROM nodes n)",
-        cte_base, cte_base, cte_base);
+        "FROM nodes n",
+        cte_base, cte_base);
+    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
 
     /* Personalized PageRank iterations - teleport goes to seeds, not uniform */
     for (int i = 1; i <= iterations; i++) {
-        append_cte_prefix(ctx, ", %s_pr%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_pr%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT n.id AS node_id, "
             /* Teleport term: (1-d)/|seeds| if seed, else 0 */
             "CASE WHEN n.id IN (SELECT node_id FROM %s_seeds) "
@@ -294,13 +303,13 @@ int transform_personalized_pagerank_function(cypher_transform_context *ctx, cyph
             "LEFT JOIN edges e ON e.target_id = n.id "
             "LEFT JOIN %s_pr%d p ON p.node_id = e.source_id "
             "LEFT JOIN %s_od od ON od.source_id = e.source_id "
-            "GROUP BY n.id)",
-            cte_base, i,
+            "GROUP BY n.id",
             cte_base,
             (1.0 - damping), cte_base,
             damping,
             cte_base, i - 1,
             cte_base);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;
@@ -346,29 +355,26 @@ int transform_label_propagation_function(cypher_transform_context *ctx, cypher_f
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
 
-    /* Start CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    char cte_name[128], cte_query[1024];
 
     /* Initial labels: each node gets its own ID */
-    append_cte_prefix(ctx, "%s_lbl0 AS (SELECT id AS node_id, id AS label FROM nodes)", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
 
     /* Generate iterations using window functions to avoid correlated subqueries */
     for (int i = 1; i <= iterations; i++) {
         /* Each iteration: count neighbor label votes, pick most frequent */
-        append_cte_prefix(ctx, ", %s_lbl%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
             "SELECT n.id AS node_id, p.label, "
             "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
             "FROM nodes n "
             "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
             "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1)",
-            cte_base, i,
+            "GROUP BY n.id, p.label) WHERE rn = 1",
             cte_base, i - 1);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;
@@ -425,28 +431,25 @@ int transform_community_of_function(cypher_transform_context *ctx, cypher_functi
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
 
-    /* Start CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    char cte_name[128], cte_query[1024];
 
     /* Initial labels */
-    append_cte_prefix(ctx, "%s_lbl0 AS (SELECT id AS node_id, id AS label FROM nodes)", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
 
     /* Generate iterations using window functions */
     for (int i = 1; i <= iterations; i++) {
-        append_cte_prefix(ctx, ", %s_lbl%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
             "SELECT n.id AS node_id, p.label, "
             "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
             "FROM nodes n "
             "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
             "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1)",
-            cte_base, i,
+            "GROUP BY n.id, p.label) WHERE rn = 1",
             cte_base, i - 1);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;
@@ -502,28 +505,25 @@ int transform_community_members_function(cypher_transform_context *ctx, cypher_f
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
 
-    /* Start CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    char cte_name[128], cte_query[1024];
 
     /* Initial labels */
-    append_cte_prefix(ctx, "%s_lbl0 AS (SELECT id AS node_id, id AS label FROM nodes)", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
 
     /* Generate iterations using window functions */
     for (int i = 1; i <= iterations; i++) {
-        append_cte_prefix(ctx, ", %s_lbl%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
             "SELECT n.id AS node_id, p.label, "
             "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
             "FROM nodes n "
             "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
             "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1)",
-            cte_base, i,
+            "GROUP BY n.id, p.label) WHERE rn = 1",
             cte_base, i - 1);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;
@@ -561,28 +561,25 @@ int transform_community_count_function(cypher_transform_context *ctx, cypher_fun
     char cte_base[64];
     snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
 
-    /* Start CTE prefix */
-    if (ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else {
-        append_cte_prefix(ctx, ", ");
-    }
+    char cte_name[128], cte_query[1024];
 
     /* Initial labels */
-    append_cte_prefix(ctx, "%s_lbl0 AS (SELECT id AS node_id, id AS label FROM nodes)", cte_base);
+    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
+    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
 
     /* Generate iterations using window functions */
     for (int i = 1; i <= iterations; i++) {
-        append_cte_prefix(ctx, ", %s_lbl%d AS ("
+        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
+        snprintf(cte_query, sizeof(cte_query),
             "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
             "SELECT n.id AS node_id, p.label, "
             "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
             "FROM nodes n "
             "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
             "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1)",
-            cte_base, i,
+            "GROUP BY n.id, p.label) WHERE rn = 1",
             cte_base, i - 1);
+        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
     }
 
     ctx->cte_count++;

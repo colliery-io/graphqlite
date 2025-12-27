@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
@@ -17,19 +19,30 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node,
                                      int rel_index, bool optional, path_type ptype);
 
-/* Helper to get label string from a label literal node */
-static const char* get_label_string(ast_node *label_node)
+/*
+ * Generate the proper node id reference for join conditions.
+ * For regular nodes: returns "alias.id"
+ * For projected variables (from WITH): returns just the alias (which IS the id)
+ *
+ * Returns a static buffer - not thread-safe, must be used immediately.
+ * If var_name is NULL, falls back to using alias.id.
+ */
+static const char *get_node_id_ref(cypher_transform_context *ctx,
+                                   const char *alias,
+                                   const char *var_name)
 {
-    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
-    cypher_literal *lit = (cypher_literal*)label_node;
-    if (lit->literal_type != LITERAL_STRING) return NULL;
-    return lit->value.string;
-}
+    static char id_ref_buf[256];
 
-/* Helper to check if a node pattern has any labels */
-static bool has_labels(cypher_node_pattern *node)
-{
-    return node && node->labels && node->labels->count > 0;
+    /* Check if this is a projected variable */
+    if (var_name && transform_var_is_projected(ctx->var_ctx, var_name)) {
+        /* For projected variables, the alias IS the id value */
+        snprintf(id_ref_buf, sizeof(id_ref_buf), "%s", alias);
+    } else {
+        /* For regular nodes, use alias.id */
+        snprintf(id_ref_buf, sizeof(id_ref_buf), "%s.id", alias);
+    }
+
+    return id_ref_buf;
 }
 
 /* Transform a MATCH clause into SQL */
@@ -50,49 +63,25 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     
     /* SQL builder mode is now determined at query level */
 
-    /* Start SELECT clause if this is the first clause and not using builder */
-    /* Also start a new SELECT if we're after a UNION keyword */
-    bool needs_select = (ctx->sql_size == 0);
-    if (!needs_select && ctx->sql_size >= 7) {
-        /* Check if buffer ends with " UNION " or " UNION ALL " */
-        if (strcmp(ctx->sql_buffer + ctx->sql_size - 7, " UNION ") == 0 ||
-            (ctx->sql_size >= 11 && strcmp(ctx->sql_buffer + ctx->sql_size - 11, " UNION ALL ") == 0)) {
-            needs_select = true;
-        }
-    }
+    /* Unified builder handles SELECT in RETURN clause - no need to start SELECT here */
 
-    if (!ctx->sql_builder.using_builder && needs_select) {
-        append_sql(ctx, "SELECT ");
-        /* We'll fill in the column list later in RETURN */
-        append_sql(ctx, "* ");
-    }
-    
     /* Process each pattern in the MATCH - this only adds table joins */
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
-        
+
         if (pattern->type != AST_NODE_PATH) {
             ctx->has_error = true;
             ctx->error_message = strdup("Invalid pattern type in MATCH");
             return -1;
         }
-        
+
         if (transform_match_pattern(ctx, pattern, match->optional) < 0) {
             return -1;
         }
     }
-    
+
     /* Now add WHERE constraints for all patterns */
-    /* Determine constraint logic based on SQL builder mode */
-    bool first_constraint;
-    if (ctx->sql_builder.using_builder) {
-        /* In SQL builder mode, check if builder has WHERE clauses */
-        first_constraint = (ctx->sql_builder.where_size == 0);
-    } else {
-        /* In traditional mode, check SQL buffer for WHERE clause */
-        bool has_where_clause = (strstr(ctx->sql_buffer, " WHERE ") != NULL);
-        first_constraint = !has_where_clause;
-    }
+    /* All constraints go through unified builder's sql_where() */
     
     /* For OPTIONAL MATCH, skip pattern constraint generation (constraints are in JOIN ON clauses) */
     if (match->optional) {
@@ -109,22 +98,33 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
             if (element->type == AST_NODE_NODE_PATTERN) {
                 cypher_node_pattern *node = (cypher_node_pattern*)element;
                 
-                /* Use entity system for node variables (AGE-style) */
+                /* Use unified variable system for node variables */
                 const char *alias;
                 if (node->variable) {
-                    transform_entity *entity = lookup_entity(ctx, node->variable);
-                    if (!entity) {
-                        /* New entity - add it */
-                        if (add_entity(ctx, node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                    transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
+                    if (!var) {
+                        /* New variable - register it */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (!gen_alias) {
                             ctx->has_error = true;
-                            ctx->error_message = strdup("Failed to add node entity");
+                            ctx->error_message = strdup("Failed to allocate alias");
                             return -1;
                         }
-                        entity = lookup_entity(ctx, node->variable);
+                        const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+                        if (transform_var_register_node(ctx->var_ctx, node->variable, gen_alias, label) < 0) {
+                            free(gen_alias);
+                            ctx->has_error = true;
+                            ctx->error_message = strdup("Failed to add node variable");
+                            return -1;
+                        }
+                        free(gen_alias);
                     }
-                    alias = entity->table_alias;
-                    /* Also register in legacy system for compatibility */
-                    register_node_variable(ctx, node->variable, alias);
+                    alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                    if (!alias) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to get node variable alias");
+                        return -1;
+                    }
                 } else {
                     /* Anonymous node - use legacy approach for now */
                     char temp_alias[32];
@@ -143,34 +143,38 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                             /* Skip if key is NULL (already handled in JOIN) */
                             if (!pair->key) continue;
                             if (pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                if (first_constraint) {
-                                    append_sql(ctx, " WHERE ");
-                                    first_constraint = false;
-                                } else {
-                                    append_sql(ctx, " AND ");
-                                }
+                                dynamic_buffer cond;
+                                dbuf_init(&cond);
 
                                 cypher_literal *lit = (cypher_literal*)pair->value;
                                 /* Property value constraint - _prop_<alias> was added in generate_node_match */
                                 switch (lit->literal_type) {
-                                    case LITERAL_STRING:
-                                        append_sql(ctx, "_prop_%s.value = ", alias);
-                                        append_string_literal(ctx, lit->value.string);
+                                    case LITERAL_STRING: {
+                                        /* Escape single quotes in string */
+                                        char *escaped = escape_sql_string(lit->value.string);
+                                        dbuf_appendf(&cond, "_prop_%s.value = '%s'", alias, escaped ? escaped : lit->value.string);
+                                        free(escaped);
                                         break;
+                                    }
                                     case LITERAL_INTEGER:
-                                        append_sql(ctx, "_prop_%s.value = %d", alias, lit->value.integer);
+                                        dbuf_appendf(&cond, "_prop_%s.value = %d", alias, lit->value.integer);
                                         break;
                                     case LITERAL_DECIMAL:
-                                        append_sql(ctx, "_prop_%s.value = %f", alias, lit->value.decimal);
+                                        dbuf_appendf(&cond, "_prop_%s.value = %f", alias, lit->value.decimal);
                                         break;
                                     case LITERAL_BOOLEAN:
-                                        append_sql(ctx, "_prop_%s.value = %d", alias, lit->value.boolean ? 1 : 0);
+                                        dbuf_appendf(&cond, "_prop_%s.value = %d", alias, lit->value.boolean ? 1 : 0);
                                         break;
                                     case LITERAL_NULL:
                                         /* NULL check - property should not exist */
-                                        append_sql(ctx, "_prop_%s.node_id IS NULL", alias);
+                                        dbuf_appendf(&cond, "_prop_%s.node_id IS NULL", alias);
                                         break;
                                 }
+
+                                if (!dbuf_is_empty(&cond)) {
+                                    sql_where(ctx->unified_builder, dbuf_get(&cond));
+                                }
+                                dbuf_free(&cond);
                             }
                         }
                     }
@@ -197,56 +201,60 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     continue;
                 }
 
-                /* Get aliases using entity system (AGE-style) */
+                /* Get aliases using unified variable system */
                 const char *source_alias, *target_alias, *edge_alias;
-                
+
                 /* Source node alias */
                 if (source_node->variable) {
-                    transform_entity *entity = lookup_entity(ctx, source_node->variable);
-                    if (!entity) {
-                        /* This should have been added already, but add if missing */
-                        if (add_entity(ctx, source_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                            continue;
+                    source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
+                    if (!source_alias) {
+                        /* Should have been added already, but add if missing */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (gen_alias) {
+                            transform_var_register_node(ctx->var_ctx, source_node->variable, gen_alias, NULL);
+                            free(gen_alias);
+                            source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
                         }
-                        entity = lookup_entity(ctx, source_node->variable);
                     }
-                    source_alias = entity->table_alias;
+                    if (!source_alias) continue;
                 } else {
                     static char temp_source[32];
                     snprintf(temp_source, sizeof(temp_source), "n_%d", j - 1);
                     source_alias = temp_source;
                 }
-                
+
                 /* Target node alias */
                 if (target_node->variable) {
-                    transform_entity *entity = lookup_entity(ctx, target_node->variable);
-                    if (!entity) {
-                        /* This should have been added already, but add if missing */
-                        if (add_entity(ctx, target_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                            continue;
+                    target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
+                    if (!target_alias) {
+                        /* Should have been added already, but add if missing */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (gen_alias) {
+                            transform_var_register_node(ctx->var_ctx, target_node->variable, gen_alias, NULL);
+                            free(gen_alias);
+                            target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
                         }
-                        entity = lookup_entity(ctx, target_node->variable);
                     }
-                    target_alias = entity->table_alias;
+                    if (!target_alias) continue;
                 } else {
                     static char temp_target[32];
                     snprintf(temp_target, sizeof(temp_target), "n_%d", j + 1);
                     target_alias = temp_target;
                 }
-                
+
                 /* Edge alias */
                 if (rel->variable) {
-                    transform_entity *entity = lookup_entity(ctx, rel->variable);
-                    if (!entity) {
-                        /* New relationship entity */
-                        if (add_entity(ctx, rel->variable, ENTITY_TYPE_EDGE, true) < 0) {
-                            continue;
+                    edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
+                    if (!edge_alias) {
+                        /* New relationship variable */
+                        char *gen_alias = get_next_default_alias(ctx);
+                        if (gen_alias) {
+                            transform_var_register_edge(ctx->var_ctx, rel->variable, gen_alias, rel->type);
+                            free(gen_alias);
+                            edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                         }
-                        entity = lookup_entity(ctx, rel->variable);
                     }
-                    edge_alias = entity->table_alias;
-                    /* Register in legacy system for compatibility */
-                    register_edge_variable(ctx, rel->variable, edge_alias);
+                    if (!edge_alias) continue;
                 } else {
                     /* This shouldn't happen with AGE pattern - anonymous rels get names assigned */
                     ctx->has_error = true;
@@ -254,107 +262,95 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     return -1;
                 }
                 
-                /* Add relationship direction constraints */
-                if (first_constraint) {
-                    append_sql(ctx, " WHERE ");
-                    first_constraint = false;
-                } else {
-                    append_sql(ctx, " AND ");
-                }
-                
+                /* Add relationship direction constraints using unified builder */
+                dynamic_buffer rel_cond;
+                dbuf_init(&rel_cond);
+
                 /* Handle relationship direction */
+                /* Get proper id references (handles projected variables from WITH) */
+                char source_id_ref[256], target_id_ref[256];
+                snprintf(source_id_ref, sizeof(source_id_ref), "%s",
+                         get_node_id_ref(ctx, source_alias, source_node->variable));
+                snprintf(target_id_ref, sizeof(target_id_ref), "%s",
+                         get_node_id_ref(ctx, target_alias, target_node->variable));
+
                 if (rel->left_arrow && !rel->right_arrow) {
                     /* <-[:TYPE]- (reversed: target -> source) */
-                    append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
-                              edge_alias, target_alias, edge_alias, source_alias);
+                    dbuf_appendf(&rel_cond, "%s.source_id = %s AND %s.target_id = %s",
+                              edge_alias, target_id_ref, edge_alias, source_id_ref);
                 } else {
                     /* -[:TYPE]-> or -[:TYPE]- (forward or undirected, treat as forward) */
-                    append_sql(ctx, "%s.source_id = %s.id AND %s.target_id = %s.id", 
-                              edge_alias, source_alias, edge_alias, target_alias);
+                    dbuf_appendf(&rel_cond, "%s.source_id = %s AND %s.target_id = %s",
+                              edge_alias, source_id_ref, edge_alias, target_id_ref);
                 }
-                
+
                 /* Add relationship type constraint if specified */
                 if (rel->type) {
                     /* Single type (legacy support) */
-                    append_sql(ctx, " AND %s.type = ", edge_alias);
-                    append_string_literal(ctx, rel->type);
+                    char *escaped = escape_sql_string(rel->type);
+                    dbuf_appendf(&rel_cond, " AND %s.type = '%s'", edge_alias, escaped ? escaped : rel->type);
+                    free(escaped);
                 } else if (rel->types && rel->types->count > 0) {
                     /* Multiple types - generate OR conditions */
-                    append_sql(ctx, " AND (");
+                    dbuf_appendf(&rel_cond, " AND (");
                     for (int t = 0; t < rel->types->count; t++) {
                         if (t > 0) {
-                            append_sql(ctx, " OR ");
+                            dbuf_appendf(&rel_cond, " OR ");
                         }
                         /* Type names are stored as string literals in the list */
                         cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
-                        append_sql(ctx, "%s.type = ", edge_alias);
-                        append_string_literal(ctx, type_lit->value.string);
+                        char *type_escaped = escape_sql_string(type_lit->value.string);
+                        dbuf_appendf(&rel_cond, "%s.type = '%s'", edge_alias, type_escaped ? type_escaped : type_lit->value.string);
+                        free(type_escaped);
                     }
-                    append_sql(ctx, ")");
+                    dbuf_appendf(&rel_cond, ")");
                 }
+
+                sql_where(ctx->unified_builder, dbuf_get(&rel_cond));
+                dbuf_free(&rel_cond);
             }
         }
     }
     
 handle_where_clause:
-    /* Handle WHERE clause if present */
+    /* Handle WHERE clause if present - capture expression to unified builder */
     if (match->where) {
-        if (ctx->sql_builder.using_builder) {
-            /* In SQL builder mode, capture WHERE expression to builder's where_clauses */
-            /* Save current sql_buffer state */
-            char *saved_buffer = NULL;
-            size_t saved_size = ctx->sql_size;
-            if (saved_size > 0) {
-                saved_buffer = strdup(ctx->sql_buffer);
-            }
-
-            /* Clear sql_buffer temporarily */
-            ctx->sql_size = 0;
-            if (ctx->sql_buffer) {
-                ctx->sql_buffer[0] = '\0';
-            }
-
-            /* Transform the WHERE expression - appends to sql_buffer */
-            if (transform_expression(ctx, match->where) < 0) {
-                free(saved_buffer);
+        /* Save current sql_buffer state (transform_expression uses it temporarily) */
+        char *saved_buffer = NULL;
+        size_t saved_size = ctx->sql_size;
+        if (saved_size > 0) {
+            saved_buffer = strdup(ctx->sql_buffer);
+            if (!saved_buffer) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Memory allocation failed");
                 return -1;
             }
+        }
 
-            /* Move the expression to builder's where_clauses */
-            if (ctx->sql_size > 0) {
-                /* Add AND if there's already content in where_clauses */
-                if (ctx->sql_builder.where_size > 0) {
-                    append_where_clause(ctx, " AND ");
-                }
-                append_where_clause(ctx, "%s", ctx->sql_buffer);
-            }
+        /* Clear sql_buffer temporarily */
+        ctx->sql_size = 0;
+        if (ctx->sql_buffer) {
+            ctx->sql_buffer[0] = '\0';
+        }
 
-            /* Restore sql_buffer */
-            ctx->sql_size = saved_size;
-            if (saved_buffer) {
-                strcpy(ctx->sql_buffer, saved_buffer);
-                free(saved_buffer);
-            } else if (ctx->sql_buffer) {
-                ctx->sql_buffer[0] = '\0';
-            }
-        } else {
-            /* Traditional mode - append directly to SQL buffer */
-            bool needs_where = true;
-            if (match->optional) {
-                needs_where = (strstr(ctx->sql_buffer, " WHERE ") == NULL);
-            } else {
-                needs_where = first_constraint;
-            }
+        /* Transform the WHERE expression - appends to sql_buffer */
+        if (transform_expression(ctx, match->where) < 0) {
+            free(saved_buffer);
+            return -1;
+        }
 
-            if (needs_where) {
-                append_sql(ctx, " WHERE ");
-            } else {
-                append_sql(ctx, " AND ");
-            }
+        /* Add the expression to unified builder's WHERE clause */
+        if (ctx->sql_size > 0) {
+            sql_where(ctx->unified_builder, ctx->sql_buffer);
+        }
 
-            if (transform_expression(ctx, match->where) < 0) {
-                return -1;
-            }
+        /* Restore sql_buffer */
+        ctx->sql_size = saved_size;
+        if (saved_buffer) {
+            strcpy(ctx->sql_buffer, saved_buffer);
+            free(saved_buffer);
+        } else if (ctx->sql_buffer) {
+            ctx->sql_buffer[0] = '\0';
         }
     }
 
@@ -390,46 +386,88 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
         if (element->type == AST_NODE_NODE_PATTERN) {
             cypher_node_pattern *node = (cypher_node_pattern*)element;
             
-            /* Use entity system (AGE-style) */
+            /* Use unified variable system */
             const char *alias;
             bool need_from_clause = false;
-            
+
             if (node->variable) {
-                /* Check if entity already exists */
-                transform_entity *entity = lookup_entity(ctx, node->variable);
-                if (entity && entity->is_current_clause) {
-                    /* Entity exists and is from current clause, reuse alias but check if we need FROM clause */
-                    alias = entity->table_alias;
-                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
-                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
-                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
-                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
-                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
-                        need_from_clause = true;
-                    }
-                } else if (entity && !entity->is_current_clause) {
-                    /* Entity from previous clause - reuse but may need FROM clause */
-                    alias = entity->table_alias;
-                    entity->is_current_clause = true; /* Mark as used in current clause */
-                    /* Check if this alias is already in the FROM clause (check both sql_buffer and sql_builder) */
-                    bool alias_in_sql = strstr(ctx->sql_buffer, entity->table_alias) != NULL;
-                    bool alias_in_builder_from = ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, entity->table_alias) != NULL;
-                    bool alias_in_builder_joins = ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, entity->table_alias) != NULL;
-                    if (!alias_in_sql && !alias_in_builder_from && !alias_in_builder_joins) {
-                        need_from_clause = true;
+                transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
+                if (var) {
+                    /* Variable exists - check if it's from WITH (projected) */
+                    if (var->kind == VAR_KIND_PROJECTED) {
+                        /* Projected variable from WITH - use the CTE, don't add nodes table */
+                        alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                        if (!alias) {
+                            ctx->has_error = true;
+                            ctx->error_message = strdup("Failed to get alias for projected variable");
+                            return -1;
+                        }
+                        /* Extract CTE name from source_expr (e.g., "_with_0.p" -> "_with_0") */
+                        char cte_name[64];
+                        const char *dot = strchr(alias, '.');
+                        if (dot) {
+                            size_t len = dot - alias;
+                            if (len >= sizeof(cte_name)) len = sizeof(cte_name) - 1;
+                            strncpy(cte_name, alias, len);
+                            cte_name[len] = '\0';
+                        } else {
+                            strncpy(cte_name, alias, sizeof(cte_name) - 1);
+                            cte_name[sizeof(cte_name) - 1] = '\0';
+                        }
+                        /* Add CTE to FROM clause if not already there */
+                        bool cte_in_from = !dbuf_is_empty(&ctx->unified_builder->from) &&
+                                           strstr(dbuf_get(&ctx->unified_builder->from), cte_name) != NULL;
+                        bool cte_in_joins = !dbuf_is_empty(&ctx->unified_builder->joins) &&
+                                            strstr(dbuf_get(&ctx->unified_builder->joins), cte_name) != NULL;
+                        if (!cte_in_from && !cte_in_joins) {
+                            /* Add as CROSS JOIN if FROM already exists, otherwise as FROM */
+                            if (!dbuf_is_empty(&ctx->unified_builder->from)) {
+                                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, NULL, NULL);
+                            } else {
+                                sql_from(ctx->unified_builder, cte_name, NULL);
+                            }
+                        }
+                        need_from_clause = false; /* Don't add nodes table */
+                    } else {
+                        /* Regular variable - reuse alias, check if we need FROM clause */
+                        alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                        if (!alias) {
+                            ctx->has_error = true;
+                            ctx->error_message = strdup("Failed to get alias for existing variable");
+                            return -1;
+                        }
+                        /* Check if this alias is already in the unified builder */
+                        bool alias_in_builder_from = !dbuf_is_empty(&ctx->unified_builder->from) &&
+                                                     strstr(dbuf_get(&ctx->unified_builder->from), alias) != NULL;
+                        bool alias_in_builder_joins = !dbuf_is_empty(&ctx->unified_builder->joins) &&
+                                                      strstr(dbuf_get(&ctx->unified_builder->joins), alias) != NULL;
+                        if (!alias_in_builder_from && !alias_in_builder_joins) {
+                            need_from_clause = true;
+                        }
                     }
                 } else {
-                    /* New entity, add it */
-                    if (add_entity(ctx, node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
+                    /* New variable - register it */
+                    char *gen_alias = get_next_default_alias(ctx);
+                    if (!gen_alias) {
                         ctx->has_error = true;
-                        ctx->error_message = strdup("Failed to add node entity in pattern");
+                        ctx->error_message = strdup("Failed to allocate alias");
                         return -1;
                     }
-                    entity = lookup_entity(ctx, node->variable);
-                    alias = entity->table_alias;
+                    const char *label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+                    if (transform_var_register_node(ctx->var_ctx, node->variable, gen_alias, label) < 0) {
+                        free(gen_alias);
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to add node variable in pattern");
+                        return -1;
+                    }
+                    free(gen_alias);
+                    alias = transform_var_get_alias(ctx->var_ctx, node->variable);
+                    if (!alias) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup("Failed to get alias for node variable in pattern");
+                        return -1;
+                    }
                     need_from_clause = true;
-                    /* Register in legacy system for compatibility */
-                    register_node_variable(ctx, node->variable, alias);
                 }
             } else {
                 /* Anonymous node - use generated alias */
@@ -504,31 +542,18 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                  first_label ? first_label : "<no label>",
                  node->labels ? node->labels->count : 0);
 
-    /* Check if there's already a FROM clause in the current query.
-     * For UNION queries, we need to check only after the most recent UNION keyword. */
-    bool has_from = false;
-    char *from_pos = strstr(ctx->sql_buffer, "FROM");
-    if (from_pos) {
-        /* Check if there's a UNION after this FROM - if so, FROM is from previous query */
-        char *union_pos = strstr(from_pos, " UNION ");
-        if (!union_pos) {
-            union_pos = strstr(from_pos, " UNION\n");  /* Edge case */
-        }
-        if (!union_pos) {
-            /* No UNION after FROM, so FROM is in current query */
-            has_from = true;
-        } else {
-            /* There's a UNION after FROM - check if there's another FROM after UNION */
-            char *from_after_union = strstr(union_pos, "FROM");
-            has_from = (from_after_union != NULL);
-        }
-    }
-    const char *join_type = optional ? " LEFT JOIN " : " JOIN ";
+    /* Check if there's already a FROM clause using the unified builder */
+    bool has_from = !dbuf_is_empty(&ctx->unified_builder->from);
+    sql_join_type jtype = optional ? SQL_JOIN_LEFT : SQL_JOIN_INNER;
 
     /* Check if node has properties - if so, start from property table for better selectivity */
     bool has_properties = (node->properties && node->properties->type == AST_NODE_MAP);
     cypher_map *prop_map = has_properties ? (cypher_map*)node->properties : NULL;
     bool has_prop_pairs = has_properties && prop_map->pairs && prop_map->pairs->count > 0;
+
+    /* Buffer for building ON conditions */
+    dynamic_buffer on_cond;
+    char prop_alias[64], pk_alias[64], node_alias_buf[64];
 
     if (!has_from) {
         /* First table in query - use FROM */
@@ -546,42 +571,50 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     default: break;
                 }
                 if (prop_table) {
-                    /* FROM property_table JOIN property_keys JOIN nodes
-                     * Include value filter in JOIN for maximum selectivity */
-                    append_sql(ctx, "FROM %s AS _prop_%s", prop_table, alias);
-                    append_sql(ctx, " JOIN property_keys AS _pk_%s ON _pk_%s.id = _prop_%s.key_id AND _pk_%s.key = ",
-                               alias, alias, alias, alias);
-                    append_string_literal(ctx, first_pair->key);
-                    /* Add value filter to property table constraint */
+                    /* FROM property_table */
+                    snprintf(prop_alias, sizeof(prop_alias), "_prop_%s", alias);
+                    sql_from(ctx->unified_builder, prop_table, prop_alias);
+
+                    /* JOIN property_keys with key filter and value filter */
+                    snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", alias);
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.id = %s.key_id AND %s.key = '%s'",
+                                 pk_alias, prop_alias, pk_alias, first_pair->key);
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            append_sql(ctx, " AND _prop_%s.value = %d", alias, lit->value.integer);
+                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.integer);
                             break;
                         case LITERAL_STRING:
-                            append_sql(ctx, " AND _prop_%s.value = ", alias);
-                            append_string_literal(ctx, lit->value.string);
+                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
                             break;
                         case LITERAL_DECIMAL:
-                            append_sql(ctx, " AND _prop_%s.value = %f", alias, lit->value.decimal);
+                            dbuf_appendf(&on_cond, " AND %s.value = %f", prop_alias, lit->value.decimal);
                             break;
                         case LITERAL_BOOLEAN:
-                            append_sql(ctx, " AND _prop_%s.value = %d", alias, lit->value.boolean ? 1 : 0);
+                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
                             break;
                         default:
                             break;
                     }
-                    append_sql(ctx, " JOIN nodes AS %s ON %s.id = _prop_%s.node_id", alias, alias, alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "property_keys", pk_alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
+
+                    /* JOIN nodes */
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.id = %s.node_id", alias, prop_alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "nodes", alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
 
                     /* Mark first property as handled */
-                    first_pair->key = NULL;  /* Signal to skip in WHERE clause */
+                    first_pair->key = NULL;
                 } else {
-                    append_sql(ctx, "FROM nodes AS %s", alias);
+                    sql_from(ctx->unified_builder, "nodes", alias);
                 }
             } else {
-                append_sql(ctx, "FROM nodes AS %s", alias);
+                sql_from(ctx->unified_builder, "nodes", alias);
             }
         } else {
-            append_sql(ctx, "FROM nodes AS %s", alias);
+            sql_from(ctx->unified_builder, "nodes", alias);
         }
     } else {
         /* Subsequent tables - use JOIN */
@@ -599,53 +632,71 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     default: break;
                 }
                 if (prop_table) {
-                    append_sql(ctx, "%s%s AS _prop_%s ON 1=1", join_type, prop_table, alias);
-                    append_sql(ctx, " JOIN property_keys AS _pk_%s ON _pk_%s.id = _prop_%s.key_id AND _pk_%s.key = ",
-                               alias, alias, alias, alias);
-                    append_string_literal(ctx, first_pair->key);
-                    /* Add value filter */
+                    /* JOIN property_table */
+                    snprintf(prop_alias, sizeof(prop_alias), "_prop_%s", alias);
+                    sql_join(ctx->unified_builder, jtype, prop_table, prop_alias, "1=1");
+
+                    /* JOIN property_keys with key filter and value filter */
+                    snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", alias);
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.id = %s.key_id AND %s.key = '%s'",
+                                 pk_alias, prop_alias, pk_alias, first_pair->key);
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            append_sql(ctx, " AND _prop_%s.value = %d", alias, lit->value.integer);
+                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.integer);
                             break;
                         case LITERAL_STRING:
-                            append_sql(ctx, " AND _prop_%s.value = ", alias);
-                            append_string_literal(ctx, lit->value.string);
+                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
                             break;
                         case LITERAL_DECIMAL:
-                            append_sql(ctx, " AND _prop_%s.value = %f", alias, lit->value.decimal);
+                            dbuf_appendf(&on_cond, " AND %s.value = %f", prop_alias, lit->value.decimal);
                             break;
                         case LITERAL_BOOLEAN:
-                            append_sql(ctx, " AND _prop_%s.value = %d", alias, lit->value.boolean ? 1 : 0);
+                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
                             break;
                         default:
                             break;
                     }
-                    append_sql(ctx, " JOIN nodes AS %s ON %s.id = _prop_%s.node_id", alias, alias, alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "property_keys", pk_alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
+
+                    /* JOIN nodes */
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.id = %s.node_id", alias, prop_alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "nodes", alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
+
                     first_pair->key = NULL;
                 } else {
-                    append_sql(ctx, "%snodes AS %s ON 1=1", join_type, alias);
+                    sql_join(ctx->unified_builder, jtype, "nodes", alias, "1=1");
                 }
             } else {
-                append_sql(ctx, "%snodes AS %s ON 1=1", join_type, alias);
+                sql_join(ctx->unified_builder, jtype, "nodes", alias, "1=1");
             }
         } else {
             if (optional) {
-                append_sql(ctx, " LEFT JOIN nodes AS %s ON 1=1", alias);
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "nodes", alias, "1=1");
             } else {
-                append_sql(ctx, ", nodes AS %s", alias);
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", alias, NULL);
             }
         }
     }
 
     /* Add label JOINs if specified - one JOIN per label for multi-label support */
     if (has_labels(node)) {
+        /* Get proper node id reference (handles projected variables from WITH) */
+        const char *node_id = get_node_id_ref(ctx, alias, node->variable);
+
         for (int i = 0; i < node->labels->count; i++) {
             const char *label = get_label_string(node->labels->items[i]);
             if (label) {
-                append_sql(ctx, " JOIN node_labels AS _nl_%s_%d ON _nl_%s_%d.node_id = %s.id AND _nl_%s_%d.label = ",
-                           alias, i, alias, i, alias, alias, i);
-                append_string_literal(ctx, label);
+                char nl_alias[64];
+                snprintf(nl_alias, sizeof(nl_alias), "_nl_%s_%d", alias, i);
+                dbuf_init(&on_cond);
+                dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
+                             nl_alias, node_id, nl_alias, label);
+                sql_join(ctx->unified_builder, SQL_JOIN_INNER, "node_labels", nl_alias, dbuf_get(&on_cond));
+                dbuf_free(&on_cond);
             }
         }
     }
@@ -663,68 +714,72 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                  rel->type ? rel->type : "<no type>",
                  rel->varlen ? "yes" : "no");
 
-    /* Get aliases using entity system (AGE-style) */
+    /* Get aliases using unified variable system */
     const char *source_alias, *target_alias, *edge_alias;
-    
+
     /* Source node */
     if (source_node->variable) {
-        transform_entity *entity = lookup_entity(ctx, source_node->variable);
-        if (!entity) {
-            /* Add missing entity */
-            if (add_entity(ctx, source_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                return -1;
-            }
-            entity = lookup_entity(ctx, source_node->variable);
+        source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
+        if (!source_alias) {
+            /* Add missing variable */
+            char *gen_alias = get_next_default_alias(ctx);
+            if (!gen_alias) return -1;
+            transform_var_register_node(ctx->var_ctx, source_node->variable, gen_alias, NULL);
+            free(gen_alias);
+            source_alias = transform_var_get_alias(ctx->var_ctx, source_node->variable);
         }
-        source_alias = entity->table_alias;
+        if (!source_alias) return -1;
     } else {
         static char temp_source[32];
         snprintf(temp_source, sizeof(temp_source), "n_%d", rel_index - 1);
         source_alias = temp_source;
     }
-    
+
     /* Target node */
     if (target_node->variable) {
-        transform_entity *entity = lookup_entity(ctx, target_node->variable);
-        if (!entity) {
-            /* Add missing entity */
-            if (add_entity(ctx, target_node->variable, ENTITY_TYPE_VERTEX, true) < 0) {
-                return -1;
-            }
-            entity = lookup_entity(ctx, target_node->variable);
+        target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
+        if (!target_alias) {
+            /* Add missing variable */
+            char *gen_alias = get_next_default_alias(ctx);
+            if (!gen_alias) return -1;
+            const char *label = has_labels(target_node) ? get_label_string(target_node->labels->items[0]) : NULL;
+            transform_var_register_node(ctx->var_ctx, target_node->variable, gen_alias, label);
+            free(gen_alias);
+            target_alias = transform_var_get_alias(ctx->var_ctx, target_node->variable);
         }
-        target_alias = entity->table_alias;
-        /* Register in legacy system for compatibility */
-        register_node_variable(ctx, target_node->variable, target_alias);
+        if (!target_alias) return -1;
     } else {
         static char temp_target[32];
         snprintf(temp_target, sizeof(temp_target), "n_%d", rel_index + 1);
         target_alias = temp_target;
     }
-    
+
     /* Edge */
     if (rel->variable) {
-        transform_entity *entity = lookup_entity(ctx, rel->variable);
-        if (!entity) {
-            /* Add new edge entity */
-            if (add_entity(ctx, rel->variable, ENTITY_TYPE_EDGE, true) < 0) {
-                return -1;
-            }
-            entity = lookup_entity(ctx, rel->variable);
+        edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
+        if (!edge_alias) {
+            /* Add new edge variable */
+            char *gen_alias = get_next_default_alias(ctx);
+            if (!gen_alias) return -1;
+            transform_var_register_edge(ctx->var_ctx, rel->variable, gen_alias, rel->type);
+            free(gen_alias);
+            edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
         }
-        edge_alias = entity->table_alias;
+        if (!edge_alias) return -1;
     } else {
-        /* With AGE pattern, anonymous relationships should have been assigned names */
-        /* But handle legacy case or if called from other contexts */
+        /* Anonymous relationship - generate name and register */
         char *default_name = get_next_default_alias(ctx);
-        if (add_entity(ctx, default_name, ENTITY_TYPE_EDGE, true) < 0) {
+        char *gen_alias = get_next_default_alias(ctx);
+        if (!default_name || !gen_alias) {
             free(default_name);
+            free(gen_alias);
             return -1;
         }
-        transform_entity *entity = lookup_entity(ctx, default_name);
-        edge_alias = entity->table_alias;
-        /* Clean up the allocated name since entity has its own copy */
+        transform_var_register_edge(ctx->var_ctx, default_name, gen_alias, rel->type);
+        edge_alias = transform_var_get_alias(ctx->var_ctx, default_name);
         free(default_name);
+        free(gen_alias);
+        if (!edge_alias) return -1;
     }
     
     /* Handle variable-length relationships differently - use recursive CTE */
@@ -735,7 +790,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         char cte_name[64];
         snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", rel_index);
 
-        /* Generate the recursive CTE (appended to cte_prefix) */
+        /* Generate the recursive CTE (added to unified builder) */
         if (generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name) < 0) {
             ctx->has_error = true;
             ctx->error_message = strdup("Failed to generate variable-length CTE");
@@ -746,15 +801,16 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
         int min_hops = range->min_hops > 0 ? range->min_hops : 1;
 
-        /* Join the main query with the CTE result */
-        /* The CTE gives us (start_id, end_id, depth, path_ids, visited) */
-        append_sql(ctx, ", %s AS %s", cte_name, edge_alias);
+        /* Join the main query with the CTE result using unified builder */
+        sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, edge_alias, NULL);
 
         /* Add target node to FROM clause - needed for the CTE join */
-        /* Must handle target node properties and labels properly */
         bool target_has_properties = (target_node->properties && target_node->properties->type == AST_NODE_MAP);
         cypher_map *target_prop_map = target_has_properties ? (cypher_map*)target_node->properties : NULL;
         bool target_has_prop_pairs = target_has_properties && target_prop_map->pairs && target_prop_map->pairs->count > 0;
+
+        dynamic_buffer on_cond;
+        char prop_alias[64], pk_alias[64];
 
         if (target_has_prop_pairs) {
             /* Target node has properties - need to join via property table */
@@ -770,50 +826,65 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                     default: break;
                 }
                 if (prop_table) {
-                    /* Join property table, property_keys, and nodes for target */
-                    append_sql(ctx, ", %s AS _prop_%s", prop_table, target_alias);
-                    append_sql(ctx, " JOIN property_keys AS _pk_%s ON _pk_%s.id = _prop_%s.key_id AND _pk_%s.key = ",
-                               target_alias, target_alias, target_alias, target_alias);
-                    append_string_literal(ctx, first_pair->key);
-                    /* Add value filter */
+                    /* CROSS JOIN property table */
+                    snprintf(prop_alias, sizeof(prop_alias), "_prop_%s", target_alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, prop_table, prop_alias, NULL);
+
+                    /* JOIN property_keys with key and value filter */
+                    snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", target_alias);
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.id = %s.key_id AND %s.key = '%s'",
+                                 pk_alias, prop_alias, pk_alias, first_pair->key);
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            append_sql(ctx, " AND _prop_%s.value = %d", target_alias, lit->value.integer);
+                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.integer);
                             break;
                         case LITERAL_STRING:
-                            append_sql(ctx, " AND _prop_%s.value = ", target_alias);
-                            append_string_literal(ctx, lit->value.string);
+                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
                             break;
                         case LITERAL_DECIMAL:
-                            append_sql(ctx, " AND _prop_%s.value = %f", target_alias, lit->value.decimal);
+                            dbuf_appendf(&on_cond, " AND %s.value = %f", prop_alias, lit->value.decimal);
                             break;
                         case LITERAL_BOOLEAN:
-                            append_sql(ctx, " AND _prop_%s.value = %d", target_alias, lit->value.boolean ? 1 : 0);
+                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
                             break;
                         default:
                             break;
                     }
-                    append_sql(ctx, " JOIN nodes AS %s ON %s.id = _prop_%s.node_id", target_alias, target_alias, target_alias);
-                    /* Mark first property as handled to skip in WHERE clause */
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "property_keys", pk_alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
+
+                    /* JOIN nodes */
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.id = %s.node_id", target_alias, prop_alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "nodes", target_alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
+
                     first_pair->key = NULL;
                 } else {
-                    append_sql(ctx, ", nodes AS %s", target_alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", target_alias, NULL);
                 }
             } else {
-                append_sql(ctx, ", nodes AS %s", target_alias);
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", target_alias, NULL);
             }
         } else {
-            append_sql(ctx, ", nodes AS %s", target_alias);
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", target_alias, NULL);
         }
 
-        /* Add label constraints for target node if specified - one JOIN per label */
+        /* Add label constraints for target node if specified */
         if (has_labels(target_node)) {
+            const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
+
             for (int i = 0; i < target_node->labels->count; i++) {
                 const char *label = get_label_string(target_node->labels->items[i]);
                 if (label) {
-                    append_sql(ctx, " JOIN node_labels AS _nl_%s_%d ON _nl_%s_%d.node_id = %s.id AND _nl_%s_%d.label = ",
-                               target_alias, i, target_alias, i, target_alias, target_alias, i);
-                    append_string_literal(ctx, label);
+                    char nl_alias[64];
+                    snprintf(nl_alias, sizeof(nl_alias), "_nl_%s_%d", target_alias, i);
+                    dbuf_init(&on_cond);
+                    dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
+                                 nl_alias, target_id, nl_alias, label);
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "node_labels", nl_alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
                 }
             }
         }
@@ -821,120 +892,88 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         CYPHER_DEBUG("Added varlen CTE join: %s for relationship between %s and %s",
                      cte_name, source_alias, target_alias);
 
-        /* Store info for WHERE clause generation later */
-        /* We'll add the join conditions in the relationship constraint phase */
-        if (rel->variable) {
-            register_edge_variable(ctx, rel->variable, edge_alias);
-        }
+        /* Add WHERE constraints for the CTE join using unified builder */
+        char src_id_ref[256], tgt_id_ref[256];
+        snprintf(src_id_ref, sizeof(src_id_ref), "%s",
+                 get_node_id_ref(ctx, source_alias, source_node->variable));
+        snprintf(tgt_id_ref, sizeof(tgt_id_ref), "%s",
+                 get_node_id_ref(ctx, target_alias, target_node->variable));
 
-        /* We need to add WHERE constraints for the CTE join */
-        /* Check if this is the first constraint */
-        bool has_where = (strstr(ctx->sql_buffer, " WHERE ") != NULL);
-        if (!has_where) {
-            append_sql(ctx, " WHERE ");
-        } else {
-            append_sql(ctx, " AND ");
-        }
-        append_sql(ctx, "%s.start_id = %s.id AND %s.end_id = %s.id",
-                   edge_alias, source_alias, edge_alias, target_alias);
+        dbuf_init(&on_cond);
+        dbuf_appendf(&on_cond, "%s.start_id = %s AND %s.end_id = %s",
+                     edge_alias, src_id_ref, edge_alias, tgt_id_ref);
 
         /* Add minimum depth constraint if > 1 */
         if (min_hops > 1) {
-            append_sql(ctx, " AND %s.depth >= %d", edge_alias, min_hops);
+            dbuf_appendf(&on_cond, " AND %s.depth >= %d", edge_alias, min_hops);
         }
 
         /* Add shortest path filtering based on path type */
         if (ptype == PATH_TYPE_SHORTEST || ptype == PATH_TYPE_ALL_SHORTEST) {
             CYPHER_DEBUG("Adding shortest path filtering (type=%d)", ptype);
-            /* Filter to only paths with minimum depth between the source and target */
-            /* This ensures we get the shortest path(s) for the specific pair being matched */
-            append_sql(ctx, " AND %s.depth = (SELECT MIN(sp.depth) FROM %s sp WHERE sp.start_id = %s.id AND sp.end_id = %s.id)",
-                       edge_alias, cte_name, source_alias, target_alias);
+            dbuf_appendf(&on_cond, " AND %s.depth = (SELECT MIN(sp.depth) FROM %s sp WHERE sp.start_id = %s AND sp.end_id = %s)",
+                         edge_alias, cte_name, src_id_ref, tgt_id_ref);
         }
+
+        sql_where(ctx->unified_builder, dbuf_get(&on_cond));
+        dbuf_free(&on_cond);
 
         return 0; /* Skip the rest of the relationship handling */
     }
     /* Add edges table - use LEFT JOIN for optional relationships */
-    else if (ctx->sql_builder.using_builder) {
-        /* Using SQL builder */
+    else {
         if (optional) {
             /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
             /* This ensures we get NULLs for unmatched patterns, not cartesian products */
 
-            /* First, LEFT JOIN the edges table from the source node */
-            append_join_clause(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id",
-                              edge_alias, edge_alias, source_alias);
+            /* Get proper source id reference (handles projected variables from WITH) */
+            const char *source_id = get_node_id_ref(ctx, source_alias, source_node->variable);
+
+            /* Build the edge JOIN condition */
+            dynamic_buffer edge_cond;
+            dbuf_init(&edge_cond);
+            dbuf_appendf(&edge_cond, "%s.source_id = %s", edge_alias, source_id);
 
             /* Add relationship type constraint to edge JOIN */
             if (rel->type) {
                 /* Single type (legacy support) */
-                append_join_clause(ctx, " AND %s.type = '%s'", edge_alias, rel->type);
+                dbuf_appendf(&edge_cond, " AND %s.type = '%s'", edge_alias, rel->type);
             } else if (rel->types && rel->types->count > 0) {
                 /* Multiple types - generate OR conditions */
-                append_join_clause(ctx, " AND (");
+                dbuf_append(&edge_cond, " AND (");
                 for (int t = 0; t < rel->types->count; t++) {
                     if (t > 0) {
-                        append_join_clause(ctx, " OR ");
+                        dbuf_append(&edge_cond, " OR ");
                     }
-                    /* Type names are stored as string literals in the list */
                     cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
-                    append_join_clause(ctx, "%s.type = '%s'", edge_alias, type_lit->value.string);
+                    dbuf_appendf(&edge_cond, "%s.type = '%s'", edge_alias, type_lit->value.string);
                 }
-                append_join_clause(ctx, ")");
+                dbuf_append(&edge_cond, ")");
             }
+
+            sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "edges", edge_alias, dbuf_get(&edge_cond));
+            dbuf_free(&edge_cond);
 
             /* Then, LEFT JOIN target node through the edge's target_id */
             /* Check if target node is already added to avoid duplicates */
             bool target_already_added = false;
-            if (ctx->sql_builder.from_clause && strstr(ctx->sql_builder.from_clause, target_alias)) {
+            const char *from_str = dbuf_get(&ctx->unified_builder->from);
+            const char *joins_str = dbuf_get(&ctx->unified_builder->joins);
+            if (from_str && strstr(from_str, target_alias)) {
                 target_already_added = true;
             }
-            if (!target_already_added && ctx->sql_builder.join_clauses && strstr(ctx->sql_builder.join_clauses, target_alias)) {
+            if (!target_already_added && joins_str && strstr(joins_str, target_alias)) {
                 target_already_added = true;
             }
 
             if (!target_already_added) {
-                append_join_clause(ctx, " LEFT JOIN nodes AS %s ON %s.id = %s.target_id",
-                                  target_alias, target_alias, edge_alias);
+                char target_cond[256];
+                snprintf(target_cond, sizeof(target_cond), "%s.id = %s.target_id", target_alias, edge_alias);
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "nodes", target_alias, target_cond);
             }
         } else {
-            append_from_clause(ctx, ", edges AS %s", edge_alias);
-        }
-    } else {
-        /* Traditional SQL generation */
-        if (optional) {
-            /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
-            /* This ensures we get NULLs for unmatched patterns, not cartesian products */
-
-            /* First, LEFT JOIN the edges table from the source node */
-            append_sql(ctx, " LEFT JOIN edges AS %s ON %s.source_id = %s.id",
-                       edge_alias, edge_alias, source_alias);
-
-            /* Add relationship type constraint to edge JOIN */
-            if (rel->type) {
-                /* Single type (legacy support) */
-                append_sql(ctx, " AND %s.type = ", edge_alias);
-                append_string_literal(ctx, rel->type);
-            } else if (rel->types && rel->types->count > 0) {
-                /* Multiple types - generate OR conditions */
-                append_sql(ctx, " AND (");
-                for (int t = 0; t < rel->types->count; t++) {
-                    if (t > 0) {
-                        append_sql(ctx, " OR ");
-                    }
-                    /* Type names are stored as string literals in the list */
-                    cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
-                    append_sql(ctx, "%s.type = ", edge_alias);
-                    append_string_literal(ctx, type_lit->value.string);
-                }
-                append_sql(ctx, ")");
-            }
-
-            /* Then, LEFT JOIN target node through the edge's target_id */
-            append_sql(ctx, " LEFT JOIN nodes AS %s ON %s.id = %s.target_id",
-                       target_alias, target_alias, edge_alias);
-        } else {
-            append_sql(ctx, ", edges AS %s", edge_alias);
+            /* Non-optional: use CROSS JOIN for edges (will be filtered by WHERE) */
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "edges", edge_alias, NULL);
         }
     }
     
@@ -942,13 +981,15 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     
     /* Register relationship variable if present */
     if (rel->variable) {
-        register_edge_variable(ctx, rel->variable, edge_alias);
+        /* Register in unified system */
+        transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
     } else {
         /* For unnamed relationships, we need a way to track them */
         /* Create a synthetic variable name based on position for tracking */
         char synthetic_var[32];
         snprintf(synthetic_var, sizeof(synthetic_var), "__unnamed_rel_%d", rel_index);
-        register_edge_variable(ctx, synthetic_var, edge_alias);
+        /* Register in unified system */
+        transform_var_register_edge(ctx->var_ctx, synthetic_var, edge_alias, rel->type);
     }
     
     CYPHER_DEBUG("Generated relationship match: %s connects %s to %s", 

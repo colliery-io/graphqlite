@@ -11,6 +11,7 @@
 #include "parser/cypher_ast.h"
 #include "parser/cypher_parser.h"
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -74,12 +75,6 @@ foreach_binding* get_foreach_binding(foreach_context *ctx, const char *variable)
 /* Result helper functions */
 cypher_result* create_empty_result(void);
 void set_result_error(cypher_result *result, const char *error_msg);
-
-/* Helper to get label string from a label literal node */
-const char* get_label_string(ast_node *label_node);
-
-/* Helper to check if a node pattern has any labels */
-bool has_labels(cypher_node_pattern *node);
 
 /* Helper to bind parameters from JSON to a prepared statement */
 int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json);

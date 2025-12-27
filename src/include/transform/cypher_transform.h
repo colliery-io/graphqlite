@@ -3,25 +3,12 @@
 
 #include "graphqlite_sqlite.h"
 #include "parser/cypher_ast.h"
+#include "transform/transform_variables.h"
+#include "transform/sql_builder.h"
 
 /* Forward declarations */
 typedef struct cypher_transform_context cypher_transform_context;
 typedef struct cypher_query_result cypher_query_result;
-typedef struct transform_entity transform_entity;
-
-/* Entity types following AGE patterns */
-typedef enum {
-    ENTITY_TYPE_VERTEX,
-    ENTITY_TYPE_EDGE
-} entity_type;
-
-/* Transform entity structure (similar to AGE's transform_entity) */
-struct transform_entity {
-    char *name;                     /* Variable name (e.g., "p", "r") */
-    char *table_alias;              /* Generated SQL alias (e.g., "gql_default_alias_0") */
-    entity_type type;               /* VERTEX or EDGE */
-    bool is_current_clause;         /* True if declared in current clause, false if inherited */
-};
 
 /* Path types for shortest path support */
 typedef enum {
@@ -30,78 +17,21 @@ typedef enum {
     TRANSFORM_PATH_ALL_SHORTEST     /* allShortestPaths() - all paths of minimum length */
 } transform_path_type;
 
-/* Path variable metadata */
-typedef struct path_variable {
-    char *name;                     /* Path variable name */
-    ast_list *elements;             /* AST nodes in the path (nodes and relationships) */
-    transform_path_type path_type;  /* Type of path (normal, shortest, all_shortest) */
-    char *cte_name;                 /* CTE name for variable-length paths (for filtering) */
-} path_variable;
-
 /* Transform context - tracks state during AST transformation */
 struct cypher_transform_context {
     sqlite3 *db;                    /* SQLite database connection */
-    
-    /* Entity tracking (AGE-style) */
-    transform_entity *entities;     /* List of entities */
-    int entity_count;
-    int entity_capacity;
-    
-    /* Path variable tracking */
-    path_variable *path_variables;  /* List of path variables */
-    int path_variable_count;
-    int path_variable_capacity;
-    
-    /* Legacy variable tracking (will be phased out) */
-    struct {
-        char *name;                 /* Variable name (e.g., "n", "m") */
-        char *table_alias;          /* SQL table alias */
-        int node_id;                /* For already-bound nodes */
-        bool is_bound;              /* Whether variable has a value */
-        enum {
-            VAR_TYPE_NODE,          /* Node variable */
-            VAR_TYPE_EDGE,          /* Edge/relationship variable */
-            VAR_TYPE_PATH,          /* Path variable */
-            VAR_TYPE_PROJECTED      /* WITH-projected variable (value is direct, no .id needed) */
-        } type;                     /* Variable type */
-    } *variables;
-    int variable_count;
-    int variable_capacity;
-    
+
+    /* Unified variable tracking (includes path variables) */
+    transform_var_context *var_ctx;
+
     /* SQL generation */
     char *sql_buffer;               /* Generated SQL query */
     size_t sql_size;
     size_t sql_capacity;
 
-    /* CTE prefix for recursive queries (variable-length relationships) */
-    /* This is separate from sql_builder to work with both builder and non-builder modes */
-    char *cte_prefix;
-    size_t cte_prefix_size;
-    size_t cte_prefix_capacity;
+    /* CTE count for generating unique CTE names */
     int cte_count;
-    
-    /* SQL builder for two-pass generation (OPTIONAL MATCH support) */
-    struct {
-        char *from_clause;          /* FROM nodes AS alias */
-        size_t from_size;
-        size_t from_capacity;
 
-        char *join_clauses;         /* LEFT JOIN ... LEFT JOIN ... */
-        size_t join_size;
-        size_t join_capacity;
-
-        char *where_clauses;        /* WHERE ... AND ... AND ... */
-        size_t where_size;
-        size_t where_capacity;
-
-        char *cte_clause;           /* WITH RECURSIVE ... for variable-length paths */
-        size_t cte_size;
-        size_t cte_capacity;
-        int cte_count;              /* Number of CTEs generated */
-
-        bool using_builder;         /* True when using two-pass generation */
-    } sql_builder;
-    
     /* Parameter tracking for parameterized queries */
     char **param_names;             /* Parameter names in order of appearance */
     int param_count;
@@ -113,6 +43,7 @@ struct cypher_transform_context {
     
     /* Context flags */
     bool in_comparison;             /* True when transforming expressions in comparison context */
+    bool in_union;                  /* True when transforming UNION branches (skip buffer reset) */
     
     /* Unique alias counters */
     int global_alias_counter;       /* Global counter for all unnamed entities (like AGE) */
@@ -124,6 +55,9 @@ struct cypher_transform_context {
         QUERY_TYPE_WRITE,           /* CREATE, SET, DELETE */
         QUERY_TYPE_MIXED            /* Both read and write */
     } query_type;
+
+    /* Unified SQL builder for clause-based SQL generation */
+    sql_builder *unified_builder;
 };
 
 /* Result structure for executed queries */
@@ -164,11 +98,6 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
 int transform_load_csv_clause(cypher_transform_context *ctx, cypher_load_csv *load_csv);
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where);
 
-/* Pattern transformers */
-int transform_node_pattern(cypher_transform_context *ctx, cypher_node_pattern *node);
-int transform_rel_pattern(cypher_transform_context *ctx, cypher_rel_pattern *rel);
-int transform_path_pattern(cypher_transform_context *ctx, cypher_path *path);
-
 /* Expression transformers */
 int transform_expression(cypher_transform_context *ctx, ast_node *expr);
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop);
@@ -182,24 +111,11 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
 int transform_count_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_call *func_call);
 
-/* Entity management (AGE-style) */
-int add_entity(cypher_transform_context *ctx, const char *name, entity_type type, bool is_current_clause);
-transform_entity* lookup_entity(cypher_transform_context *ctx, const char *name);
-void mark_entities_as_inherited(cypher_transform_context *ctx);
+/* Alias generation */
 char* get_next_default_alias(cypher_transform_context *ctx);
 
-/* Legacy variable management (will be phased out) */
-int register_variable(cypher_transform_context *ctx, const char *name, const char *alias);
-int register_node_variable(cypher_transform_context *ctx, const char *name, const char *alias);
-int register_edge_variable(cypher_transform_context *ctx, const char *name, const char *alias);
-int register_projected_variable(cypher_transform_context *ctx, const char *name, const char *cte_name, const char *column_name);
+/* Path variable registration (uses unified transform_var system) */
 int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path);
-const char* lookup_variable_alias(cypher_transform_context *ctx, const char *name);
-bool is_variable_bound(cypher_transform_context *ctx, const char *name);
-bool is_edge_variable(cypher_transform_context *ctx, const char *name);
-bool is_path_variable(cypher_transform_context *ctx, const char *name);
-bool is_projected_variable(cypher_transform_context *ctx, const char *name);
-path_variable* get_path_variable(cypher_transform_context *ctx, const char *name);
 
 /* SQL generation helpers */
 void append_sql(cypher_transform_context *ctx, const char *format, ...);
@@ -209,20 +125,13 @@ void append_string_literal(cypher_transform_context *ctx, const char *value);
 /* Parameter tracking */
 int register_parameter(cypher_transform_context *ctx, const char *name);
 
-/* SQL builder functions for two-pass generation */
-int init_sql_builder(cypher_transform_context *ctx);
-void free_sql_builder(cypher_transform_context *ctx);
-void append_from_clause(cypher_transform_context *ctx, const char *format, ...);
-void append_join_clause(cypher_transform_context *ctx, const char *format, ...);
-void append_where_clause(cypher_transform_context *ctx, const char *format, ...);
-void append_cte_clause(cypher_transform_context *ctx, const char *format, ...);
+/* SQL builder finalization - assembles unified_builder into sql_buffer */
 int finalize_sql_generation(cypher_transform_context *ctx);
 
 /* Variable-length relationship SQL generation */
 int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                        const char *source_alias, const char *target_alias,
                        const char *cte_name);
-void append_cte_prefix(cypher_transform_context *ctx, const char *format, ...);
 void prepend_cte_to_sql(cypher_transform_context *ctx);
 
 /* Result management */

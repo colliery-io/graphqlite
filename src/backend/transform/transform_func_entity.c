@@ -39,7 +39,7 @@ int transform_id_function(cypher_transform_context *ctx, cypher_function_call *f
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -49,7 +49,7 @@ int transform_id_function(cypher_transform_context *ctx, cypher_function_call *f
     }
 
     /* Check if it's a projected variable (from WITH) */
-    if (is_projected_variable(ctx, id->name)) {
+    if (transform_var_is_projected(ctx->var_ctx, id->name)) {
         /* Projected variable already contains the ID value */
         append_sql(ctx, "%s", alias);
     } else {
@@ -81,7 +81,7 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -91,14 +91,14 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
     }
 
     /* labels() only works on nodes, not relationships */
-    if (is_edge_variable(ctx, id->name)) {
+    if (transform_var_is_edge(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
         ctx->error_message = strdup("labels() function argument must be a node variable, not a relationship");
         return -1;
     }
 
     /* Generate SQL to get labels as JSON array */
-    bool is_projected = is_projected_variable(ctx, id->name);
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
     append_sql(ctx, "(SELECT json_group_array(label) FROM node_labels WHERE node_id = %s%s)",
                alias, is_projected ? "" : ".id");
 
@@ -126,7 +126,7 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -135,8 +135,8 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
         return -1;
     }
 
-    bool is_projected = is_projected_variable(ctx, id->name);
-    bool is_edge = is_edge_variable(ctx, id->name);
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
     const char *id_suffix = is_projected ? "" : ".id";
 
     if (is_edge) {
@@ -193,7 +193,7 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -202,8 +202,8 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
         return -1;
     }
 
-    bool is_projected = is_projected_variable(ctx, id->name);
-    bool is_edge = is_edge_variable(ctx, id->name);
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
     const char *id_suffix = is_projected ? "" : ".id";
 
     if (is_edge) {

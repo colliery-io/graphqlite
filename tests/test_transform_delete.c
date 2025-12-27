@@ -8,6 +8,7 @@
 #include "parser/cypher_parser.h"
 #include "parser/cypher_ast.h"
 #include "transform/cypher_transform.h"
+#include "transform/transform_variables.h"
 #include "parser/cypher_debug.h"
 #include "executor/cypher_schema.h"
 
@@ -106,23 +107,23 @@ static void test_delete_variable_binding(void)
             printf("\nGenerated SQL: %s\n", ctx->sql_buffer);
             
             /* Verify that variable 'r' is registered as an edge variable */
-            const char *r_alias = lookup_variable_alias(ctx, "r");
+            const char *r_alias = transform_var_get_alias(ctx->var_ctx, "r");
             CU_ASSERT_PTR_NOT_NULL(r_alias);
-            
-            bool r_is_edge = is_edge_variable(ctx, "r");
+
+            bool r_is_edge = transform_var_is_edge(ctx->var_ctx, "r");
             CU_ASSERT_TRUE(r_is_edge);
-            
+
             /* Verify that variables 'a' and 'b' are registered as node variables */
-            const char *a_alias = lookup_variable_alias(ctx, "a");
+            const char *a_alias = transform_var_get_alias(ctx->var_ctx, "a");
             CU_ASSERT_PTR_NOT_NULL(a_alias);
-            
-            bool a_is_edge = is_edge_variable(ctx, "a");
+
+            bool a_is_edge = transform_var_is_edge(ctx->var_ctx, "a");
             CU_ASSERT_FALSE(a_is_edge); /* Should be false - it's a node */
-            
-            const char *b_alias = lookup_variable_alias(ctx, "b");
+
+            const char *b_alias = transform_var_get_alias(ctx->var_ctx, "b");
             CU_ASSERT_PTR_NOT_NULL(b_alias);
-            
-            bool b_is_edge = is_edge_variable(ctx, "b");
+
+            bool b_is_edge = transform_var_is_edge(ctx->var_ctx, "b");
             CU_ASSERT_FALSE(b_is_edge); /* Should be false - it's a node */
             
             if (r_alias) {
@@ -323,9 +324,9 @@ static void test_optional_match_sql_structure(void)
             for (int i = 0; i < query_ast->clauses->count; i++) {
                 ast_node *clause = query_ast->clauses->items[i];
                 
-                /* Mark entities from previous clause as inherited (AGE pattern) */
+                /* Mark variables from previous clause as inherited */
                 if (i > 0) {
-                    mark_entities_as_inherited(ctx);
+                    transform_var_mark_inherited(ctx->var_ctx);
                 }
                 
                 printf("Before clause %d (%s): SQL = '%s'\n", 

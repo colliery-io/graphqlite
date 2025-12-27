@@ -11,6 +11,7 @@
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
 #include "transform/transform_functions.h"
+#include "transform/transform_func_dispatch.h"
 #include "parser/cypher_debug.h"
 
 /* Transform label expression (e.g., n:Person) */
@@ -26,7 +27,7 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
     }
     
     cypher_identifier *id = (cypher_identifier*)label_expr->expr;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -322,7 +323,7 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     }
 
     cypher_identifier *id = (cypher_identifier*)prop->expr;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -332,8 +333,8 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     }
 
     /* Check if this is a projected variable from WITH - if so, alias IS the node id */
-    bool is_projected = is_projected_variable(ctx, id->name);
-    bool is_edge = is_edge_variable(ctx, id->name);
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
 
     /* Generate property access query using our actual schema */
     /* We need to check multiple property tables based on type */
@@ -420,279 +421,18 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
 int transform_function_call(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming function call");
-    
+
     if (!func_call || !func_call->function_name) {
         ctx->has_error = true;
         ctx->error_message = strdup("Invalid function call");
         return -1;
     }
-    
-    /* Handle TYPE function specifically */
-    if (strcasecmp(func_call->function_name, "type") == 0) {
-        return transform_type_function(ctx, func_call);
-    }
-    
-    /* Handle COUNT function specifically */
-    if (strcasecmp(func_call->function_name, "count") == 0) {
-        return transform_count_function(ctx, func_call);
-    }
-    
-    /* Handle other aggregate functions */
-    if (strcasecmp(func_call->function_name, "min") == 0 ||
-        strcasecmp(func_call->function_name, "max") == 0 ||
-        strcasecmp(func_call->function_name, "avg") == 0 ||
-        strcasecmp(func_call->function_name, "sum") == 0) {
-        return transform_aggregate_function(ctx, func_call);
-    }
 
-    /* Handle length() function - check for path first */
-    if (strcasecmp(func_call->function_name, "length") == 0) {
-        /* Check if argument is a path variable */
-        if (func_call->args && func_call->args->count == 1 &&
-            func_call->args->items[0] &&
-            func_call->args->items[0]->type == AST_NODE_IDENTIFIER) {
-            cypher_identifier *id = (cypher_identifier*)func_call->args->items[0];
-            if (is_path_variable(ctx, id->name)) {
-                return transform_path_length_function(ctx, func_call);
-            }
-        }
-        /* Fall through to string length */
-        return transform_string_function(ctx, func_call);
-    }
+    /* Look up handler in dispatch table */
+    transform_func_handler handler = lookup_function_handler(func_call->function_name);
 
-    /* Handle string functions */
-    if (strcasecmp(func_call->function_name, "toUpper") == 0 ||
-        strcasecmp(func_call->function_name, "toLower") == 0 ||
-        strcasecmp(func_call->function_name, "trim") == 0 ||
-        strcasecmp(func_call->function_name, "ltrim") == 0 ||
-        strcasecmp(func_call->function_name, "rtrim") == 0 ||
-        strcasecmp(func_call->function_name, "size") == 0 ||
-        strcasecmp(func_call->function_name, "reverse") == 0) {
-        return transform_string_function(ctx, func_call);
-    }
-
-    /* Handle substring function (2 or 3 args) */
-    if (strcasecmp(func_call->function_name, "substring") == 0) {
-        return transform_substring_function(ctx, func_call);
-    }
-
-    /* Handle replace function (3 args) */
-    if (strcasecmp(func_call->function_name, "replace") == 0) {
-        return transform_replace_function(ctx, func_call);
-    }
-
-    /* Handle split function (2 args) */
-    if (strcasecmp(func_call->function_name, "split") == 0) {
-        return transform_split_function(ctx, func_call);
-    }
-
-    /* Handle left/right functions (2 args) */
-    if (strcasecmp(func_call->function_name, "left") == 0 ||
-        strcasecmp(func_call->function_name, "right") == 0) {
-        return transform_leftright_function(ctx, func_call);
-    }
-
-    /* Handle pattern matching functions */
-    if (strcasecmp(func_call->function_name, "startsWith") == 0 ||
-        strcasecmp(func_call->function_name, "endsWith") == 0 ||
-        strcasecmp(func_call->function_name, "contains") == 0) {
-        return transform_pattern_match_function(ctx, func_call);
-    }
-
-    /* Handle single-arg math functions */
-    if (strcasecmp(func_call->function_name, "abs") == 0 ||
-        strcasecmp(func_call->function_name, "ceil") == 0 ||
-        strcasecmp(func_call->function_name, "floor") == 0 ||
-        strcasecmp(func_call->function_name, "sign") == 0 ||
-        strcasecmp(func_call->function_name, "sqrt") == 0 ||
-        strcasecmp(func_call->function_name, "log") == 0 ||
-        strcasecmp(func_call->function_name, "log10") == 0 ||
-        strcasecmp(func_call->function_name, "exp") == 0 ||
-        strcasecmp(func_call->function_name, "sin") == 0 ||
-        strcasecmp(func_call->function_name, "cos") == 0 ||
-        strcasecmp(func_call->function_name, "tan") == 0 ||
-        strcasecmp(func_call->function_name, "asin") == 0 ||
-        strcasecmp(func_call->function_name, "acos") == 0 ||
-        strcasecmp(func_call->function_name, "atan") == 0) {
-        return transform_math_function(ctx, func_call);
-    }
-
-    /* Handle round function (1 or 2 args) */
-    if (strcasecmp(func_call->function_name, "round") == 0) {
-        return transform_round_function(ctx, func_call);
-    }
-
-    /* Handle no-arg functions */
-    if (strcasecmp(func_call->function_name, "rand") == 0 ||
-        strcasecmp(func_call->function_name, "random") == 0 ||
-        strcasecmp(func_call->function_name, "pi") == 0 ||
-        strcasecmp(func_call->function_name, "e") == 0) {
-        return transform_noarg_function(ctx, func_call);
-    }
-
-    /* Handle coalesce function (variable args) */
-    if (strcasecmp(func_call->function_name, "coalesce") == 0) {
-        return transform_coalesce_function(ctx, func_call);
-    }
-
-    /* Handle toString function */
-    if (strcasecmp(func_call->function_name, "toString") == 0) {
-        return transform_tostring_function(ctx, func_call);
-    }
-
-    /* Handle toInteger/toFloat/toBoolean functions */
-    if (strcasecmp(func_call->function_name, "toInteger") == 0 ||
-        strcasecmp(func_call->function_name, "toFloat") == 0 ||
-        strcasecmp(func_call->function_name, "toBoolean") == 0) {
-        return transform_type_conversion_function(ctx, func_call);
-    }
-
-    /* Handle id() function */
-    if (strcasecmp(func_call->function_name, "id") == 0) {
-        return transform_id_function(ctx, func_call);
-    }
-
-    /* Handle labels() function */
-    if (strcasecmp(func_call->function_name, "labels") == 0) {
-        return transform_labels_function(ctx, func_call);
-    }
-
-    /* Handle properties() function */
-    if (strcasecmp(func_call->function_name, "properties") == 0) {
-        return transform_properties_function(ctx, func_call);
-    }
-
-    /* Handle keys() function */
-    if (strcasecmp(func_call->function_name, "keys") == 0) {
-        return transform_keys_function(ctx, func_call);
-    }
-
-    /* Handle path functions */
-    if (strcasecmp(func_call->function_name, "nodes") == 0) {
-        return transform_path_nodes_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "relationships") == 0 ||
-        strcasecmp(func_call->function_name, "rels") == 0) {
-        return transform_path_relationships_function(ctx, func_call);
-    }
-
-    /* Handle startNode/endNode functions */
-    if (strcasecmp(func_call->function_name, "startNode") == 0) {
-        return transform_startnode_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "endNode") == 0) {
-        return transform_endnode_function(ctx, func_call);
-    }
-
-    /* Handle list functions: head, tail, last, size (for lists) */
-    if (strcasecmp(func_call->function_name, "head") == 0 ||
-        strcasecmp(func_call->function_name, "tail") == 0 ||
-        strcasecmp(func_call->function_name, "last") == 0) {
-        return transform_list_function(ctx, func_call);
-    }
-
-    /* Handle range() function */
-    if (strcasecmp(func_call->function_name, "range") == 0) {
-        return transform_range_function(ctx, func_call);
-    }
-
-    /* Handle collect() aggregate function */
-    if (strcasecmp(func_call->function_name, "collect") == 0) {
-        return transform_collect_function(ctx, func_call);
-    }
-
-    /* Handle timestamp() function */
-    if (strcasecmp(func_call->function_name, "timestamp") == 0) {
-        return transform_timestamp_function(ctx, func_call);
-    }
-
-    /* Handle date() function */
-    if (strcasecmp(func_call->function_name, "date") == 0) {
-        if (func_call->args && func_call->args->count > 0) {
-            /* date(string) - parse date from string */
-            append_sql(ctx, "date(");
-            if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-            append_sql(ctx, ")");
-        } else {
-            /* date() - current date */
-            append_sql(ctx, "date('now')");
-        }
-        return 0;
-    }
-
-    /* Handle time() function */
-    if (strcasecmp(func_call->function_name, "time") == 0) {
-        if (func_call->args && func_call->args->count > 0) {
-            /* time(string) - parse time from string */
-            append_sql(ctx, "time(");
-            if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-            append_sql(ctx, ")");
-        } else {
-            /* time() - current time */
-            append_sql(ctx, "time('now')");
-        }
-        return 0;
-    }
-
-    /* Handle datetime() function */
-    if (strcasecmp(func_call->function_name, "datetime") == 0 ||
-        strcasecmp(func_call->function_name, "localdatetime") == 0) {
-        if (func_call->args && func_call->args->count > 0) {
-            /* datetime(string) - parse datetime from string */
-            append_sql(ctx, "datetime(");
-            if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-            append_sql(ctx, ")");
-        } else {
-            /* datetime() - current datetime */
-            append_sql(ctx, "datetime('now')");
-        }
-        return 0;
-    }
-
-    /* Handle randomUUID() function */
-    if (strcasecmp(func_call->function_name, "randomUUID") == 0 ||
-        strcasecmp(func_call->function_name, "randomuuid") == 0) {
-        return transform_randomuuid_function(ctx, func_call);
-    }
-
-    /* Handle PageRank graph algorithm functions */
-    if (strcasecmp(func_call->function_name, "pageRank") == 0 ||
-        strcasecmp(func_call->function_name, "pagerank") == 0) {
-        return transform_pagerank_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "topPageRank") == 0 ||
-        strcasecmp(func_call->function_name, "toppagerank") == 0) {
-        return transform_top_pagerank_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "personalizedPageRank") == 0 ||
-        strcasecmp(func_call->function_name, "personalizedpagerank") == 0) {
-        return transform_personalized_pagerank_function(ctx, func_call);
-    }
-
-    /* Handle Label Propagation community detection functions */
-    if (strcasecmp(func_call->function_name, "labelPropagation") == 0 ||
-        strcasecmp(func_call->function_name, "labelpropagation") == 0 ||
-        strcasecmp(func_call->function_name, "communities") == 0) {
-        return transform_label_propagation_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "communityOf") == 0 ||
-        strcasecmp(func_call->function_name, "communityof") == 0) {
-        return transform_community_of_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "communityMembers") == 0 ||
-        strcasecmp(func_call->function_name, "communitymembers") == 0) {
-        return transform_community_members_function(ctx, func_call);
-    }
-
-    if (strcasecmp(func_call->function_name, "communityCount") == 0 ||
-        strcasecmp(func_call->function_name, "communitycount") == 0) {
-        return transform_community_count_function(ctx, func_call);
+    if (handler) {
+        return handler(ctx, func_call);
     }
 
     /* Unsupported function */

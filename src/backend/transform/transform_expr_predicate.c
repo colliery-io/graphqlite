@@ -15,23 +15,9 @@
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_functions.h"
+#include "transform/transform_helpers.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
-
-/* Helper to get label string from a label literal node */
-static const char* get_label_string(ast_node *label_node)
-{
-    if (!label_node || label_node->type != AST_NODE_LITERAL) return NULL;
-    cypher_literal *lit = (cypher_literal*)label_node;
-    if (lit->literal_type != LITERAL_STRING) return NULL;
-    return lit->value.string;
-}
-
-/* Helper to check if a node pattern has any labels */
-static bool has_labels(cypher_node_pattern *node)
-{
-    return node && node->labels && node->labels->count > 0;
-}
 
 /* Transform EXISTS expression */
 int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
@@ -86,7 +72,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                 /* Check if this node variable exists in outer context */
                                 const char *outer_alias = NULL;
                                 if (node->variable) {
-                                    outer_alias = lookup_variable_alias(ctx, node->variable);
+                                    outer_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                                 }
 
                                 if (outer_alias) {
@@ -206,7 +192,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                     if (prop->expr->type == AST_NODE_IDENTIFIER) {
                         cypher_identifier *id = (cypher_identifier*)prop->expr;
-                        const char *alias = lookup_variable_alias(ctx, id->name);
+                        const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
 
                         if (!alias) {
                             ctx->has_error = true;
@@ -271,18 +257,12 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     }
 
     /* Save the old alias if this variable name already exists */
-    const char *old_alias = lookup_variable_alias(ctx, pred->variable);
+    const char *old_alias = transform_var_get_alias(ctx->var_ctx, pred->variable);
     char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
     /* Register the predicate variable to map to json_each.value */
-    register_variable(ctx, pred->variable, "json_each.value");
-    /* Update the type to projected so it's treated as a direct value */
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, pred->variable) == 0) {
-            ctx->variables[i].type = VAR_TYPE_PROJECTED;
-            break;
-        }
-    }
+    /* Register in unified system as projected */
+    transform_var_register_projected(ctx->var_ctx, pred->variable, "json_each.value");
 
     /* For 'all' predicate, we need to capture the list expression to compare count */
     if (pred->pred_type == LIST_PRED_ALL) {
@@ -336,7 +316,8 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
 
     /* Restore the old alias if we saved one */
     if (saved_alias) {
-        register_variable(ctx, pred->variable, saved_alias);
+        /* Restore in unified system */
+        transform_var_register_projected(ctx->var_ctx, pred->variable, saved_alias);
         free(saved_alias);
     }
 
@@ -373,8 +354,8 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
     snprintf(cte_name, sizeof(cte_name), "_reduce_%d", reduce_counter++);
 
     /* Save existing aliases for accumulator and variable names */
-    const char *old_acc_alias = lookup_variable_alias(ctx, reduce->accumulator);
-    const char *old_var_alias = lookup_variable_alias(ctx, reduce->variable);
+    const char *old_acc_alias = transform_var_get_alias(ctx->var_ctx, reduce->accumulator);
+    const char *old_var_alias = transform_var_get_alias(ctx->var_ctx, reduce->variable);
     char *saved_acc_alias = old_acc_alias ? strdup(old_acc_alias) : NULL;
     char *saved_var_alias = old_var_alias ? strdup(old_var_alias) : NULL;
 
@@ -395,21 +376,9 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
      */
     char acc_ref[64];
     snprintf(acc_ref, sizeof(acc_ref), "%s.acc", cte_name);
-    register_variable(ctx, reduce->accumulator, acc_ref);
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, reduce->accumulator) == 0) {
-            ctx->variables[i].type = VAR_TYPE_PROJECTED;
-            break;
-        }
-    }
-
-    register_variable(ctx, reduce->variable, "json_each.value");
-    for (int i = 0; i < ctx->variable_count; i++) {
-        if (strcmp(ctx->variables[i].name, reduce->variable) == 0) {
-            ctx->variables[i].type = VAR_TYPE_PROJECTED;
-            break;
-        }
-    }
+    /* Register in unified system */
+    transform_var_register_projected(ctx->var_ctx, reduce->accumulator, acc_ref);
+    transform_var_register_projected(ctx->var_ctx, reduce->variable, "json_each.value");
 
     /* Transform the expression that computes new accumulator value */
     if (transform_expression(ctx, reduce->expression) < 0) {
@@ -441,11 +410,11 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
 
     /* Restore old aliases */
     if (saved_acc_alias) {
-        register_variable(ctx, reduce->accumulator, saved_acc_alias);
+        transform_var_register_projected(ctx->var_ctx, reduce->accumulator, saved_acc_alias);
         free(saved_acc_alias);
     }
     if (saved_var_alias) {
-        register_variable(ctx, reduce->variable, saved_var_alias);
+        transform_var_register_projected(ctx->var_ctx, reduce->variable, saved_var_alias);
         free(saved_var_alias);
     }
 

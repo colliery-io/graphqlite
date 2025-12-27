@@ -28,8 +28,8 @@ int transform_path_length_function(cypher_transform_context *ctx, cypher_functio
     ast_node *arg = func_call->args->items[0];
     cypher_identifier *id = (cypher_identifier*)arg;
 
-    path_variable *path_var = get_path_variable(ctx, id->name);
-    if (!path_var || !path_var->elements) {
+    transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, id->name);
+    if (!path_var || !path_var->path_elements) {
         ctx->has_error = true;
         char error[256];
         snprintf(error, sizeof(error), "Cannot get length of path variable: %s", id->name);
@@ -40,8 +40,8 @@ int transform_path_length_function(cypher_transform_context *ctx, cypher_functio
     /* Count relationships in the path */
     /* Path length = number of relationships = (number of elements - 1) / 2 for node-rel-node pattern */
     int rel_count = 0;
-    for (int i = 0; i < path_var->elements->count; i++) {
-        if (path_var->elements->items[i]->type == AST_NODE_REL_PATTERN) {
+    for (int i = 0; i < path_var->path_elements->count; i++) {
+        if (path_var->path_elements->items[i]->type == AST_NODE_REL_PATTERN) {
             rel_count++;
         }
     }
@@ -73,7 +73,7 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
     cypher_identifier *id = (cypher_identifier*)arg;
 
     /* Check if this is a path variable */
-    if (!is_path_variable(ctx, id->name)) {
+    if (!transform_var_is_path(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
         char error[256];
         snprintf(error, sizeof(error), "nodes() function argument must be a path variable, got: %s", id->name);
@@ -81,8 +81,8 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
         return -1;
     }
 
-    path_variable *path_var = get_path_variable(ctx, id->name);
-    if (!path_var || !path_var->elements) {
+    transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, id->name);
+    if (!path_var || !path_var->path_elements) {
         ctx->has_error = true;
         ctx->error_message = strdup("Cannot get nodes from path variable");
         return -1;
@@ -91,12 +91,12 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
     /* Build JSON array of node IDs */
     append_sql(ctx, "json_array(");
     bool first = true;
-    for (int i = 0; i < path_var->elements->count; i++) {
-        ast_node *element = path_var->elements->items[i];
+    for (int i = 0; i < path_var->path_elements->count; i++) {
+        ast_node *element = path_var->path_elements->items[i];
         if (element->type == AST_NODE_NODE_PATTERN) {
             cypher_node_pattern *node = (cypher_node_pattern*)element;
             if (node->variable) {
-                const char *node_alias = lookup_variable_alias(ctx, node->variable);
+                const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                 if (node_alias) {
                     if (!first) append_sql(ctx, ", ");
                     append_sql(ctx, "%s.id", node_alias);
@@ -133,7 +133,7 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
     cypher_identifier *id = (cypher_identifier*)arg;
 
     /* Check if this is a path variable */
-    if (!is_path_variable(ctx, id->name)) {
+    if (!transform_var_is_path(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
         char error[256];
         snprintf(error, sizeof(error), "relationships() function argument must be a path variable, got: %s", id->name);
@@ -141,8 +141,8 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
         return -1;
     }
 
-    path_variable *path_var = get_path_variable(ctx, id->name);
-    if (!path_var || !path_var->elements) {
+    transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, id->name);
+    if (!path_var || !path_var->path_elements) {
         ctx->has_error = true;
         ctx->error_message = strdup("Cannot get relationships from path variable");
         return -1;
@@ -151,12 +151,12 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
     /* Build JSON array of relationship IDs */
     append_sql(ctx, "json_array(");
     bool first = true;
-    for (int i = 0; i < path_var->elements->count; i++) {
-        ast_node *element = path_var->elements->items[i];
+    for (int i = 0; i < path_var->path_elements->count; i++) {
+        ast_node *element = path_var->path_elements->items[i];
         if (element->type == AST_NODE_REL_PATTERN) {
             cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
             if (rel->variable) {
-                const char *rel_alias = lookup_variable_alias(ctx, rel->variable);
+                const char *rel_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
                 if (rel_alias) {
                     if (!first) append_sql(ctx, ", ");
                     append_sql(ctx, "%s.id", rel_alias);
@@ -191,7 +191,7 @@ int transform_startnode_function(cypher_transform_context *ctx, cypher_function_
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -201,7 +201,7 @@ int transform_startnode_function(cypher_transform_context *ctx, cypher_function_
     }
 
     /* startNode() only works on relationships */
-    if (!is_edge_variable(ctx, id->name)) {
+    if (!transform_var_is_edge(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
         ctx->error_message = strdup("startNode() function argument must be a relationship variable");
         return -1;
@@ -234,7 +234,7 @@ int transform_endnode_function(cypher_transform_context *ctx, cypher_function_ca
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = lookup_variable_alias(ctx, id->name);
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
         char error[256];
@@ -244,7 +244,7 @@ int transform_endnode_function(cypher_transform_context *ctx, cypher_function_ca
     }
 
     /* endNode() only works on relationships */
-    if (!is_edge_variable(ctx, id->name)) {
+    if (!transform_var_is_edge(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
         ctx->error_message = strdup("endNode() function argument must be a relationship variable");
         return -1;

@@ -62,25 +62,21 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
     char cte_name[64];
     snprintf(cte_name, sizeof(cte_name), "_foreach_data_%d", ctx->global_alias_counter++);
 
-    /* Start building the CTE */
-    if (ctx->cte_count == 0 && ctx->cte_prefix_size == 0) {
-        append_cte_prefix(ctx, "WITH ");
-    } else if (ctx->cte_prefix_size > 0) {
-        append_cte_prefix(ctx, ", ");
-    }
+    /* Build CTE query in a local buffer */
+    dynamic_buffer cte_query;
+    dbuf_init(&cte_query);
 
-    /* Generate CTE that expands the list */
-    append_cte_prefix(ctx, "%s AS (SELECT value AS \"%s\" FROM json_each(",
-                      cte_name, foreach->variable);
+    /* Generate CTE that expands the list using json_each */
+    dbuf_appendf(&cte_query, "SELECT value AS \"%s\" FROM json_each(", foreach->variable);
 
     /* Transform the list expression into a JSON array */
     /* For list literals like [1,2,3], we generate json_array(1,2,3) */
     if (foreach->list_expr->type == AST_NODE_LIST) {
         cypher_list *list = (cypher_list*)foreach->list_expr;
-        append_cte_prefix(ctx, "json_array(");
+        dbuf_append(&cte_query, "json_array(");
         for (int i = 0; i < list->items->count; i++) {
             if (i > 0) {
-                append_cte_prefix(ctx, ", ");
+                dbuf_append(&cte_query, ", ");
             }
             ast_node *elem = list->items->items[i];
             if (elem->type == AST_NODE_RETURN_ITEM) {
@@ -90,57 +86,62 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
                 cypher_literal *lit = (cypher_literal*)elem;
                 switch (lit->literal_type) {
                     case LITERAL_INTEGER:
-                        append_cte_prefix(ctx, "%lld", lit->value.integer);
+                        dbuf_appendf(&cte_query, "%lld", lit->value.integer);
                         break;
                     case LITERAL_DECIMAL:
-                        append_cte_prefix(ctx, "%f", lit->value.decimal);
+                        dbuf_appendf(&cte_query, "%f", lit->value.decimal);
                         break;
                     case LITERAL_STRING:
-                        append_cte_prefix(ctx, "'%s'", lit->value.string);
+                        dbuf_appendf(&cte_query, "'%s'", lit->value.string);
                         break;
                     case LITERAL_BOOLEAN:
-                        append_cte_prefix(ctx, "%s", lit->value.boolean ? "true" : "false");
+                        dbuf_appendf(&cte_query, "%s", lit->value.boolean ? "true" : "false");
                         break;
                     case LITERAL_NULL:
-                        append_cte_prefix(ctx, "null");
+                        dbuf_append(&cte_query, "null");
                         break;
                 }
             } else if (elem->type == AST_NODE_IDENTIFIER) {
                 cypher_identifier *id = (cypher_identifier*)elem;
-                const char *alias = lookup_variable_alias(ctx, id->name);
+                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                 if (alias) {
-                    append_cte_prefix(ctx, "%s", alias);
+                    dbuf_appendf(&cte_query, "%s", alias);
                 } else {
-                    append_cte_prefix(ctx, "\"%s\"", id->name);
+                    dbuf_appendf(&cte_query, "\"%s\"", id->name);
                 }
             } else {
                 /* For complex expressions, fall back to a placeholder */
-                append_cte_prefix(ctx, "null");
+                dbuf_append(&cte_query, "null");
             }
         }
-        append_cte_prefix(ctx, ")");
+        dbuf_append(&cte_query, ")");
     } else if (foreach->list_expr->type == AST_NODE_IDENTIFIER) {
         /* Variable reference - assume it's a JSON array already */
         cypher_identifier *id = (cypher_identifier*)foreach->list_expr;
-        const char *alias = lookup_variable_alias(ctx, id->name);
+        const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
         if (alias) {
-            append_cte_prefix(ctx, "%s", alias);
+            dbuf_appendf(&cte_query, "%s", alias);
         } else {
-            append_cte_prefix(ctx, "\"%s\"", id->name);
+            dbuf_appendf(&cte_query, "\"%s\"", id->name);
         }
     } else {
         ctx->has_error = true;
         ctx->error_message = strdup("FOREACH list expression must be a list literal or variable");
+        dbuf_free(&cte_query);
         return -1;
     }
 
-    append_cte_prefix(ctx, "))");
+    dbuf_append(&cte_query, ")");
+
+    /* Add CTE to unified builder */
+    sql_cte(ctx->unified_builder, cte_name, dbuf_get(&cte_query), false);
+    dbuf_free(&cte_query);
     ctx->cte_count++;
 
-    /* Register the loop variable */
+    /* Register the loop variable in unified system */
     char var_alias[128];
     snprintf(var_alias, sizeof(var_alias), "%s.\"%s\"", cte_name, foreach->variable);
-    register_projected_variable(ctx, foreach->variable, cte_name, foreach->variable);
+    transform_var_register_projected(ctx->var_ctx, foreach->variable, var_alias);
 
     /*
      * FOREACH is now handled in the executor via execute_foreach_clause().
