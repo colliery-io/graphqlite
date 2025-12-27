@@ -1,13 +1,13 @@
 ---
-id: remove-legacy-cte-prefix-and
+id: migrate-with-clause-ctes-to
 level: task
-title: "Remove legacy cte_prefix and append_cte_prefix"
-short_code: "GQLITE-T-0060"
-created_at: 2025-12-27T04:37:37.098667+00:00
-updated_at: 2025-12-27T14:04:27.588988+00:00
+title: "Migrate WITH clause CTEs to unified builder"
+short_code: "GQLITE-T-0058"
+created_at: 2025-12-27T04:37:24.578487+00:00
+updated_at: 2025-12-27T13:22:18.785051+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,64 +19,70 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Remove legacy cte_prefix and append_cte_prefix
+# Migrate WITH clause CTEs to unified builder
 
-## Phase 4: Cleanup - Remove Legacy Buffers
+## Phase 2: Migrate CTEs - WITH Clause
 
-**Depends on**: All Phase 2 and Phase 3 tasks complete
+**Depends on**: GQLITE-T-0057 (Migrate UNWIND CTEs)
 
 ## Overview
 
-Remove the legacy `cte_prefix` buffer and `append_cte_prefix()` function once all CTEs use `sql_cte()`.
+Migrate `transform_with.c` to use `sql_cte()` for WITH clause subqueries.
 
-## What to Remove
+## Current State (after rollback)
 
-### In `cypher_transform.h`
+- Uses `append_cte_prefix()` for CTE
+- Captures current sql_buffer as CTE body
+- Works but uses legacy buffer
 
-```c
-// Remove from cypher_transform_context:
-char *cte_prefix;
-size_t cte_prefix_size;
-size_t cte_prefix_capacity;
+## Target State
+
+- Finalize current unified_builder as CTE body
+- Call `sql_cte(ctx->unified_builder, name, body, false)`
+- Reset builder for next clause chain
+- Single unified code path
+
+## Key Functions
+
+1. `transform_with_clause()` - WITH clause transformation
+
+## File
+
+`src/backend/transform/transform_with.c`
+
+## WITH Transformation
+
+```cypher
+MATCH (n) WITH n.name AS name RETURN name
+```
+→
+```sql
+WITH _with_0 AS (
+  SELECT n.name AS name FROM nodes n
+)
+SELECT _with_0.name AS name FROM _with_0
 ```
 
-### In `cypher_transform.c`
+## Steps
 
-```c
-// Remove function:
-void append_cte_prefix(cypher_transform_context *ctx, const char *format, ...);
+1. Finalize current builder state via `sql_builder_to_string()`
+2. Call `sql_cte(ctx->unified_builder, cte_name, finalized_sql, false)`
+3. Reset builder for subsequent clauses
+4. Register projected variables for the new scope
 
-// Remove from context creation:
-ctx->cte_prefix = NULL;
-ctx->cte_prefix_size = 0;
-ctx->cte_prefix_capacity = 0;
+## Complexity
 
-// Remove from context cleanup:
-free(ctx->cte_prefix);
-
-// Simplify prepend_cte_to_sql():
-// Should only use unified_builder->cte now
-```
-
-## Files to Modify
-
-1. `src/backend/transform/cypher_transform.h` - Remove struct fields
-2. `src/backend/transform/cypher_transform.c` - Remove function and usages
-3. Any remaining callers of `append_cte_prefix()` (should be none after Phase 2)
-
-## Verification
-
-1. `grep -r "cte_prefix" src/` should return no results
-2. `grep -r "append_cte_prefix" src/` should return no results
-3. All tests pass
+WITH clause is tricky because:
+- It captures everything before it as a CTE
+- It creates a new variable scope
+- Multiple WITH clauses chain together
 
 ## Success Criteria
 
-- `cte_prefix` completely removed from codebase
-- `append_cte_prefix()` completely removed
-- All 716 C unit tests pass
-- All 160 Python tests pass
-- Single code path for CTE generation
+- WITH clause tests pass
+- Chained WITH clauses work
+- Variable scoping correct
+- No `append_cte_prefix()` calls
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -121,6 +127,8 @@ free(ctx->cte_prefix);
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

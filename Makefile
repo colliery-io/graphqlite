@@ -150,6 +150,7 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/executor_foreach.c \
 	$(EXECUTOR_DIR)/executor_merge.c \
 	$(EXECUTOR_DIR)/executor_match.c \
+	$(EXECUTOR_DIR)/query_dispatch.c \
 	$(EXECUTOR_DIR)/agtype.c \
 	$(EXECUTOR_DIR)/graph_algorithms.c \
 	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
@@ -221,7 +222,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_patterns.c \
 	$(TEST_DIR)/test_executor_functions.c \
 	$(TEST_DIR)/test_executor_predicates.c \
-	$(TEST_DIR)/test_sql_builder.c
+	$(TEST_DIR)/test_sql_builder.c \
+	$(TEST_DIR)/test_query_dispatch.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 

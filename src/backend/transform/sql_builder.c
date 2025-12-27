@@ -707,3 +707,168 @@ bool sql_builder_has_from(sql_builder *b)
 {
     return b && !dbuf_is_empty(&b->from);
 }
+
+/*
+ * =============================================================================
+ * Write Builder Implementation
+ * =============================================================================
+ * Builds INSERT, UPDATE, DELETE statements for WRITE clauses.
+ */
+
+/*
+ * Create a new write builder.
+ */
+write_builder *write_builder_create(void)
+{
+    write_builder *wb = calloc(1, sizeof(write_builder));
+    if (!wb) return NULL;
+
+    dbuf_init(&wb->statement);
+    wb->statement_count = 0;
+
+    return wb;
+}
+
+/*
+ * Free a write builder and all associated memory.
+ */
+void write_builder_free(write_builder *wb)
+{
+    if (!wb) return;
+
+    dbuf_free(&wb->statement);
+    free(wb);
+}
+
+/*
+ * Reset a write builder for reuse.
+ */
+void write_builder_reset(write_builder *wb)
+{
+    if (!wb) return;
+
+    dbuf_clear(&wb->statement);
+    wb->statement_count = 0;
+}
+
+/*
+ * Helper to add statement separator if needed.
+ */
+static void write_add_separator(write_builder *wb)
+{
+    if (!wb) return;
+
+    if (wb->statement_count > 0) {
+        dbuf_append(&wb->statement, "; ");
+    }
+}
+
+/*
+ * Helper to get INSERT keyword with mode.
+ */
+static const char *get_insert_keyword(sql_insert_mode mode)
+{
+    switch (mode) {
+        case SQL_INSERT_OR_REPLACE:
+            return "INSERT OR REPLACE INTO ";
+        case SQL_INSERT_OR_IGNORE:
+            return "INSERT OR IGNORE INTO ";
+        case SQL_INSERT_NORMAL:
+        default:
+            return "INSERT INTO ";
+    }
+}
+
+/*
+ * Add an INSERT statement with literal VALUES.
+ */
+void write_insert_values(write_builder *wb, sql_insert_mode mode,
+                         const char *table, const char *columns, const char *values)
+{
+    if (!wb || !table || !columns || !values) return;
+
+    write_add_separator(wb);
+
+    dbuf_append(&wb->statement, get_insert_keyword(mode));
+    dbuf_append(&wb->statement, table);
+    dbuf_appendf(&wb->statement, " (%s) VALUES (%s)", columns, values);
+
+    wb->statement_count++;
+}
+
+/*
+ * Add an INSERT ... SELECT statement.
+ */
+void write_insert_select(write_builder *wb, sql_insert_mode mode,
+                         const char *table, const char *columns, const char *select_sql)
+{
+    if (!wb || !table || !columns || !select_sql) return;
+
+    write_add_separator(wb);
+
+    dbuf_append(&wb->statement, get_insert_keyword(mode));
+    dbuf_append(&wb->statement, table);
+    dbuf_appendf(&wb->statement, " (%s) %s", columns, select_sql);
+
+    wb->statement_count++;
+}
+
+/*
+ * Add a DELETE statement.
+ */
+void write_delete(write_builder *wb, const char *table, const char *where_condition)
+{
+    if (!wb || !table) return;
+
+    write_add_separator(wb);
+
+    dbuf_appendf(&wb->statement, "DELETE FROM %s", table);
+
+    if (where_condition && where_condition[0] != '\0') {
+        dbuf_appendf(&wb->statement, " WHERE %s", where_condition);
+    }
+
+    wb->statement_count++;
+}
+
+/*
+ * Add a DELETE with subquery.
+ */
+void write_delete_where_in(write_builder *wb, const char *table,
+                           const char *id_column, const char *subquery)
+{
+    if (!wb || !table || !id_column || !subquery) return;
+
+    write_add_separator(wb);
+
+    dbuf_appendf(&wb->statement, "DELETE FROM %s WHERE %s IN (%s)",
+                 table, id_column, subquery);
+
+    wb->statement_count++;
+}
+
+/*
+ * Add a raw SQL statement.
+ */
+void write_raw(write_builder *wb, const char *sql)
+{
+    if (!wb || !sql) return;
+
+    write_add_separator(wb);
+    dbuf_append(&wb->statement, sql);
+    wb->statement_count++;
+}
+
+/*
+ * Build the final SQL string.
+ */
+char *write_builder_to_string(write_builder *wb)
+{
+    if (!wb) return NULL;
+
+    if (wb->statement_count == 0 || dbuf_is_empty(&wb->statement)) {
+        return NULL;
+    }
+
+    return dbuf_finish(&wb->statement);
+}

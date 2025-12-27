@@ -1,11 +1,11 @@
 ---
-id: migrate-transform-return-c-to
+id: extract-inline-handlers-to-named
 level: task
-title: "Migrate transform_return.c to unified sql_builder"
-short_code: "GQLITE-T-0050"
-created_at: 2025-12-26T20:34:30.365568+00:00
-updated_at: 2025-12-26T22:00:07.139192+00:00
-parent: GQLITE-I-0025
+title: "Extract inline handlers to named functions"
+short_code: "GQLITE-T-0069"
+created_at: 2025-12-27T17:40:38.097685+00:00
+updated_at: 2025-12-27T17:58:54.104495+00:00
+parent: GQLITE-I-0026
 blocked_by: []
 archived: true
 
@@ -16,20 +16,68 @@ tags:
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: GQLITE-I-0026
 ---
 
-# Migrate transform_return.c to unified sql_builder
-
-*This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
-
-## Parent Initiative **[CONDITIONAL: Assigned Task]**
-
-[[GQLITE-I-0025]]
+# Extract inline handlers to named functions
 
 ## Objective
 
-Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER BY, and LIMIT/OFFSET.
+Move inline execution code from the if-else chain into named handler functions.
+
+## Approach
+
+For each pattern with inline code (not already using a named executor function):
+
+**Before:**
+```c
+if (unwind_clause && create_clause && !return_clause) {
+    // 70 lines of inline logic
+    cypher_transform_context *ctx = ...;
+    // ... all the execution code inline
+}
+```
+
+**After:**
+```c
+// In executor_unwind.c or similar
+static int execute_unwind_create(cypher_executor *executor,
+                                  cypher_query *query,
+                                  cypher_result *result,
+                                  clause_flags present) {
+    // Same logic, now isolated
+}
+```
+
+## Patterns requiring extraction
+
+Based on T-0068 analysis - likely candidates:
+- UNWIND+CREATE (inline, ~70 lines)
+- CREATE only (inline)
+- RETURN only (may be inline)
+- Generic fallback path
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [ ] All inline handlers extracted to named functions
+- [ ] Each handler has consistent signature: `(executor, query, result, flags)`
+- [ ] Handlers placed in appropriate executor_*.c files
+- [ ] All existing tests pass
+- [ ] No behavior changes
+
+## Parent Initiative **[CONDITIONAL: Assigned Task]**
+
+[[GQLITE-I-0026]]
+
+## Objective **[REQUIRED]**
+
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -65,30 +113,11 @@ Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER 
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Migration Map
+## Acceptance Criteria **[REQUIRED]**
 
-| Old Code | New Code |
-|----------|----------|
-| `append_sql(ctx, "SELECT ...")` | `sql_select(ctx->builder, expr, alias)` |
-| `append_sql(ctx, " ORDER BY %s", e)` | `sql_order_by(ctx->builder, e, desc)` |
-| `append_sql(ctx, " LIMIT %d", n)` | `sql_limit(ctx->builder, n, offset)` |
-
-Note: Expression building within SELECT items still uses append_sql() to build the expression string, then passes to sql_select().
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-- [ ] RETURN clause uses sql_select()
-- [ ] ORDER BY uses sql_order_by()
-- [ ] LIMIT/OFFSET uses sql_limit()
-- [ ] All RETURN tests pass
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

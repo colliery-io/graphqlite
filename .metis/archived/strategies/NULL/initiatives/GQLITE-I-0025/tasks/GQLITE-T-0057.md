@@ -1,13 +1,13 @@
 ---
-id: migrate-graph-algorithm-functions
+id: migrate-unwind-clause-ctes-to
 level: task
-title: "Migrate graph algorithm functions to unified builder"
-short_code: "GQLITE-T-0061"
-created_at: 2025-12-27T04:37:37.272021+00:00
-updated_at: 2025-12-27T13:47:35.706099+00:00
+title: "Migrate UNWIND clause CTEs to unified builder"
+short_code: "GQLITE-T-0057"
+created_at: 2025-12-27T04:37:24.346760+00:00
+updated_at: 2025-12-27T13:19:13.549590+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,56 +19,62 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate graph algorithm functions to unified builder
+# Migrate UNWIND clause CTEs to unified builder
 
-## Phase 2: Migrate CTEs - Graph Algorithms
+## Phase 2: Migrate CTEs - UNWIND Clause
 
-**Depends on**: GQLITE-T-0058 (Migrate WITH CTEs)
+**Depends on**: GQLITE-T-0056 (Migrate varlen CTEs)
 
 ## Overview
 
-Migrate graph algorithm functions in `transform_func_graph.c` to use `sql_cte()`.
-
-## Functions to Migrate
-
-1. `transform_pagerank()` - PageRank algorithm CTE
-2. `transform_top_pagerank()` - Top N PageRank results
-3. `transform_personalized_pagerank()` - Personalized PageRank
-4. `transform_label_propagation()` - Label propagation clustering
-5. `transform_community_of()` - Get community for a node
-6. `transform_community_members()` - Get nodes in a community
-7. `transform_community_count()` - Count communities
-
-## File
-
-`src/backend/transform/transform_func_graph.c`
+Migrate `transform_unwind.c` to use `sql_cte()` for UNWIND expansion.
 
 ## Current State (after rollback)
 
-- Uses `append_cte_prefix()` for algorithm CTEs
-- Complex recursive CTEs for iterative algorithms
+- Uses `append_cte_prefix()` for CTE
+- Uses `append_sql()` for SELECT/FROM
+- Works but uses legacy buffer
 
 ## Target State
 
-- Build CTE in local `dynamic_buffer`
-- Call `sql_cte(ctx->unified_builder, name, query, recursive)`
-- PageRank and label propagation use recursive CTEs
+- Build CTE query in local `dynamic_buffer`
+- Call `sql_cte(ctx->unified_builder, name, query, false)`
+- Use `sql_select()` and `sql_from()` for the outer query
+- Single unified code path
 
-## Pattern
+## Key Functions
 
-```c
-dynamic_buffer cte;
-dbuf_init(&cte);
-dbuf_appendf(&cte, "WITH RECURSIVE pagerank AS (...) SELECT ...");
-sql_cte(ctx->unified_builder, "pagerank_result", dbuf_get(&cte), true);
-dbuf_free(&cte);
+1. `transform_unwind_clause()` - Main transformation
+
+## File
+
+`src/backend/transform/transform_unwind.c`
+
+## UNWIND Transformation
+
+```cypher
+UNWIND [1, 2, 3] AS x RETURN x
 ```
+→
+```sql
+WITH _unwind_0 AS (
+  SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3
+)
+SELECT _unwind_0.value AS x FROM _unwind_0
+```
+
+## Steps
+
+1. Build CTE query (UNION ALL or json_each) in local buffer
+2. Call `sql_cte(ctx->unified_builder, cte_name, query, false)`
+3. Call `sql_select(ctx->unified_builder, expr, alias)`
+4. Call `sql_from(ctx->unified_builder, cte_name, NULL)`
+5. Free local buffer
 
 ## Success Criteria
 
-- All graph algorithm tests pass
-- PageRank returns correct results
-- Label propagation returns correct communities
+- UNWIND tests pass
+- No duplicate CTEs
 - No `append_cte_prefix()` calls
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
@@ -114,6 +120,8 @@ dbuf_free(&cte);
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

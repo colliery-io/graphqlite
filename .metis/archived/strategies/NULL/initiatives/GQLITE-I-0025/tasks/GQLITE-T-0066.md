@@ -1,17 +1,17 @@
 ---
-id: migrate-unwind-clause-ctes-to
+id: remove-remaining-finalize-sql
 level: task
-title: "Migrate UNWIND clause CTEs to unified builder"
-short_code: "GQLITE-T-0057"
-created_at: 2025-12-27T04:37:24.346760+00:00
-updated_at: 2025-12-27T13:19:13.549590+00:00
+title: "Remove remaining finalize_sql_generation calls from RETURN clause"
+short_code: "GQLITE-T-0066"
+created_at: 2025-12-27T17:14:12.060873+00:00
+updated_at: 2025-12-27T17:14:12.060873+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/completed"
+  - "#phase/todo"
 
 
 exit_criteria_met: false
@@ -19,63 +19,7 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate UNWIND clause CTEs to unified builder
-
-## Phase 2: Migrate CTEs - UNWIND Clause
-
-**Depends on**: GQLITE-T-0056 (Migrate varlen CTEs)
-
-## Overview
-
-Migrate `transform_unwind.c` to use `sql_cte()` for UNWIND expansion.
-
-## Current State (after rollback)
-
-- Uses `append_cte_prefix()` for CTE
-- Uses `append_sql()` for SELECT/FROM
-- Works but uses legacy buffer
-
-## Target State
-
-- Build CTE query in local `dynamic_buffer`
-- Call `sql_cte(ctx->unified_builder, name, query, false)`
-- Use `sql_select()` and `sql_from()` for the outer query
-- Single unified code path
-
-## Key Functions
-
-1. `transform_unwind_clause()` - Main transformation
-
-## File
-
-`src/backend/transform/transform_unwind.c`
-
-## UNWIND Transformation
-
-```cypher
-UNWIND [1, 2, 3] AS x RETURN x
-```
-→
-```sql
-WITH _unwind_0 AS (
-  SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3
-)
-SELECT _unwind_0.value AS x FROM _unwind_0
-```
-
-## Steps
-
-1. Build CTE query (UNION ALL or json_each) in local buffer
-2. Call `sql_cte(ctx->unified_builder, cte_name, query, false)`
-3. Call `sql_select(ctx->unified_builder, expr, alias)`
-4. Call `sql_from(ctx->unified_builder, cte_name, NULL)`
-5. Free local buffer
-
-## Success Criteria
-
-- UNWIND tests pass
-- No duplicate CTEs
-- No `append_cte_prefix()` calls
+# Remove remaining finalize_sql_generation calls from RETURN clause
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -83,9 +27,18 @@ SELECT _unwind_0.value AS x FROM _unwind_0
 
 [[GQLITE-I-0025]]
 
-## Objective **[REQUIRED]**
+## Objective
 
-{Clear statement of what this task accomplishes}
+Remove the 2 remaining `finalize_sql_generation()` calls from transform_return.c, completing the unified builder migration.
+
+## Current State
+
+```
+src/backend/transform/transform_return.c:211:        if (finalize_sql_generation(ctx) < 0) {
+src/backend/transform/transform_return.c:308:            if (finalize_sql_generation(ctx) < 0) {
+```
+
+These are the only remaining calls - the function itself is defined in cypher_transform.c:196.
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 

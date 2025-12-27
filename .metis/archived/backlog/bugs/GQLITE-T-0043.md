@@ -4,15 +4,15 @@ level: task
 title: "Fix OPTIONAL MATCH - returns cartesian product instead of left join"
 short_code: "GQLITE-T-0043"
 created_at: 2025-12-26T03:08:11.344863+00:00
-updated_at: 2025-12-26T03:08:11.344863+00:00
+updated_at: 2025-12-27T19:22:49.095227+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -63,6 +63,14 @@ RETURN a.name, friend.name
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

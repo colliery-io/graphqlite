@@ -7,7 +7,7 @@ created_at: 2025-12-24T01:49:49.503861+00:00
 updated_at: 2025-12-24T01:49:49.503861+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -33,6 +33,8 @@ Implement CALL clause for invoking stored procedures and built-in database funct
 - **User Value**: Access to database metadata and admin functions
 - **Business Value**: OpenCypher compliance, better tooling integration
 - **Effort Estimate**: L (Large - requires procedure registry and execution framework)
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
@@ -75,6 +77,31 @@ Consider allowing user-defined procedures via:
 - SQL functions registered in SQLite
 - Plugin system for custom procedures
 
-## Status Updates
+## Decision (Dec 2025)
 
-*To be added during implementation*
+**Status**: Won't implement - using language bindings instead.
+
+### Rationale
+
+The CALL procedure syntax exists in Neo4j primarily for:
+- Schema introspection (`db.labels()`, `db.propertyKeys()`)
+- Admin operations (`dbms.killQuery()`)
+- APOC extensions (bulk operations, import/export)
+
+For GraphQLite, these use cases are better served by the language bindings:
+
+| Use Case | CALL Approach | Bindings Approach |
+|----------|---------------|-------------------|
+| List labels | `CALL db.labels()` | `graph.get_labels()` |
+| Schema info | `CALL db.schema.visualization()` | `graph.schema()` |
+| Admin ops | `CALL dbms.*` | Direct SQLite access |
+
+**Benefits of bindings approach**:
+- No grammar/parser changes needed
+- Type-safe in Python/Rust
+- Can return rich objects, not just tabular data
+- Simpler implementation
+
+**Tradeoff**: Neo4j tooling compatibility lost. Acceptable since GraphQLite is embedded, not a server with external GUI tools connecting to it.
+
+Revisit if users specifically request Neo4j-compatible introspection queries.

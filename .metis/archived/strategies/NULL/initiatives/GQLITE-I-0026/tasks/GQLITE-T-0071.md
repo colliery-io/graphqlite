@@ -1,11 +1,11 @@
 ---
-id: migrate-transform-return-c-to
+id: add-pattern-debugging-and
 level: task
-title: "Migrate transform_return.c to unified sql_builder"
-short_code: "GQLITE-T-0050"
-created_at: 2025-12-26T20:34:30.365568+00:00
-updated_at: 2025-12-26T22:00:07.139192+00:00
-parent: GQLITE-I-0025
+title: "Add pattern debugging and documentation"
+short_code: "GQLITE-T-0071"
+created_at: 2025-12-27T17:40:38.727964+00:00
+updated_at: 2025-12-27T19:10:54.457274+00:00
+parent: GQLITE-I-0026
 blocked_by: []
 archived: true
 
@@ -16,20 +16,53 @@ tags:
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: GQLITE-I-0026
 ---
 
-# Migrate transform_return.c to unified sql_builder
-
-*This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
-
-## Parent Initiative **[CONDITIONAL: Assigned Task]**
-
-[[GQLITE-I-0025]]
+# Add pattern debugging and documentation
 
 ## Objective
 
-Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER BY, and LIMIT/OFFSET.
+Add debugging support and documentation for the pattern dispatch system.
+
+## Deliverables
+
+1. **Debug logging**
+   - Log which pattern matched for each query
+   - `clause_flags_to_string()` for readable flag output
+   - EXPLAIN output shows matched pattern
+
+2. **Pattern documentation**
+   - List of all supported query patterns
+   - Which clauses each pattern supports
+   - Error messages for unsupported combinations
+
+3. **Developer guide**
+   - How to add new patterns
+   - Priority ordering rules
+   - Testing requirements for new patterns
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [ ] Debug build logs pattern matches
+- [ ] EXPLAIN shows pattern name
+- [ ] Unsupported patterns give clear error messages
+- [ ] Documentation in code comments
+- [ ] README or docs/ updated with pattern list
+
+## Parent Initiative **[CONDITIONAL: Assigned Task]**
+
+[[GQLITE-I-0026]]
+
+## Objective **[REQUIRED]**
+
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -65,30 +98,11 @@ Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER 
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Migration Map
+## Acceptance Criteria **[REQUIRED]**
 
-| Old Code | New Code |
-|----------|----------|
-| `append_sql(ctx, "SELECT ...")` | `sql_select(ctx->builder, expr, alias)` |
-| `append_sql(ctx, " ORDER BY %s", e)` | `sql_order_by(ctx->builder, e, desc)` |
-| `append_sql(ctx, " LIMIT %d", n)` | `sql_limit(ctx->builder, n, offset)` |
-
-Note: Expression building within SELECT items still uses append_sql() to build the expression string, then passes to sql_select().
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-- [ ] RETURN clause uses sql_select()
-- [ ] ORDER BY uses sql_order_by()
-- [ ] LIMIT/OFFSET uses sql_limit()
-- [ ] All RETURN tests pass
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -153,4 +167,34 @@ Note: Expression building within SELECT items still uses append_sql() to build t
 
 ## Status Updates **[REQUIRED]**
 
-*To be added during implementation*
+### 2025-12-27: Completed
+
+**Deliverables:**
+
+1. **Debug logging** - Already existed:
+   - `clause_flags_to_string()` outputs readable flag names
+   - Pattern match logged: "Matched pattern: NAME (priority N)"
+
+2. **EXPLAIN enhanced** - Now shows pattern info:
+   ```
+   Pattern: MATCH+RETURN
+   Clauses: MATCH|RETURN
+   SQL: SELECT ...
+   ```
+
+3. **Code documentation** - Added to query_patterns.h:
+   - Supported patterns list with priorities
+   - How to add new patterns
+   - Pattern matching rules
+   - Debug output examples
+
+4. **Developer guide** - Created docs/query-patterns.md:
+   - Full pattern table with required/forbidden clauses
+   - Step-by-step guide for adding patterns
+   - Priority guidelines
+   - Code examples
+
+**Files Modified:**
+- `src/backend/executor/cypher_executor.c` - Enhanced EXPLAIN output
+- `src/include/executor/query_patterns.h` - Added comprehensive documentation
+- `docs/query-patterns.md` - Created developer guide

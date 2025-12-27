@@ -1,13 +1,13 @@
 ---
-id: migrate-varlen-ctes-to-unified
+id: remove-legacy-cte-prefix-and
 level: task
-title: "Migrate varlen CTEs to unified builder"
-short_code: "GQLITE-T-0056"
-created_at: 2025-12-27T04:37:24.095518+00:00
-updated_at: 2025-12-27T13:05:04.607259+00:00
+title: "Remove legacy cte_prefix and append_cte_prefix"
+short_code: "GQLITE-T-0060"
+created_at: 2025-12-27T04:37:37.098667+00:00
+updated_at: 2025-12-27T14:04:27.588988+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,59 +19,64 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate varlen CTEs to unified builder
+# Remove legacy cte_prefix and append_cte_prefix
 
-## Phase 2: Migrate CTEs - Variable Length Relationships
+## Phase 4: Cleanup - Remove Legacy Buffers
 
-**Depends on**: GQLITE-T-0055 (Migrate RETURN)
+**Depends on**: All Phase 2 and Phase 3 tasks complete
 
 ## Overview
 
-Migrate `generate_varlen_cte()` in `cypher_transform.c` to use `sql_cte()` with recursive flag.
+Remove the legacy `cte_prefix` buffer and `append_cte_prefix()` function once all CTEs use `sql_cte()`.
 
-## Current State
+## What to Remove
 
-- Uses `append_cte_prefix()` to build recursive CTE
-- CTE prepended via `prepend_cte_to_sql()`
-- Works but uses legacy buffer
-
-## Target State
-
-- Build CTE query in local `dynamic_buffer`
-- Call `sql_cte(ctx->unified_builder, name, query, true)` for recursive CTE
-- Assembly handled automatically by `sql_builder_to_string()`
-
-## Key Functions
-
-1. `generate_varlen_cte()` - Generates recursive CTE for path traversal
-
-## File
-
-`src/backend/transform/cypher_transform.c`
-
-## Steps
-
-1. Create local `dynamic_buffer` for CTE query
-2. Build recursive CTE query in local buffer
-3. Call `sql_cte(ctx->unified_builder, cte_name, dbuf_get(&cte_query), true)`
-4. Free local buffer
-5. Remove `append_cte_prefix()` calls
-
-## Pattern
+### In `cypher_transform.h`
 
 ```c
-dynamic_buffer cte_query;
-dbuf_init(&cte_query);
-dbuf_appendf(&cte_query, "SELECT ... UNION ALL SELECT ...");
-sql_cte(ctx->unified_builder, "varlen_cte", dbuf_get(&cte_query), true);
-dbuf_free(&cte_query);
+// Remove from cypher_transform_context:
+char *cte_prefix;
+size_t cte_prefix_size;
+size_t cte_prefix_capacity;
 ```
+
+### In `cypher_transform.c`
+
+```c
+// Remove function:
+void append_cte_prefix(cypher_transform_context *ctx, const char *format, ...);
+
+// Remove from context creation:
+ctx->cte_prefix = NULL;
+ctx->cte_prefix_size = 0;
+ctx->cte_prefix_capacity = 0;
+
+// Remove from context cleanup:
+free(ctx->cte_prefix);
+
+// Simplify prepend_cte_to_sql():
+// Should only use unified_builder->cte now
+```
+
+## Files to Modify
+
+1. `src/backend/transform/cypher_transform.h` - Remove struct fields
+2. `src/backend/transform/cypher_transform.c` - Remove function and usages
+3. Any remaining callers of `append_cte_prefix()` (should be none after Phase 2)
+
+## Verification
+
+1. `grep -r "cte_prefix" src/` should return no results
+2. `grep -r "append_cte_prefix" src/` should return no results
+3. All tests pass
 
 ## Success Criteria
 
-- Variable-length relationship tests pass
-- Recursive CTEs generated correctly
-- No `append_cte_prefix()` calls for varlen
+- `cte_prefix` completely removed from codebase
+- `append_cte_prefix()` completely removed
+- All 716 C unit tests pass
+- All 160 Python tests pass
+- Single code path for CTE generation
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -116,6 +121,8 @@ dbuf_free(&cte_query);
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

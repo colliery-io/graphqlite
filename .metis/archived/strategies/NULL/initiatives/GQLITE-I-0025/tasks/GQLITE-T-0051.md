@@ -7,7 +7,7 @@ created_at: 2025-12-26T20:34:30.551046+00:00
 updated_at: 2025-12-27T14:17:52.489175+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -49,6 +49,8 @@ Migrate remaining transform files to unified sql_builder where beneficial.
 - SELECT * replacement logic (string manipulation)
 - RETURN after WITH (modifies existing SQL)
 - Expression building (json_object, COLLECT, paths) - encapsulated, acceptable
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -84,6 +84,8 @@ char *sql_builder_to_string(sql_builder *b);
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] All sql_* functions implemented
 - [ ] sql_builder_to_string produces valid SQL
 - [ ] Unit tests pass

@@ -254,7 +254,14 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
         set_result_error(result, "Memory allocation failed for result data");
         return -1;
     }
-    
+
+    /* Allocate data_types array for type preservation */
+    result->data_types = malloc(row_count * sizeof(int*));
+    if (!result->data_types) {
+        set_result_error(result, "Memory allocation failed for data types");
+        return -1;
+    }
+
     /* Allocate agtype data if we have graph entities or property access */
     if (has_agtype_values) {
         result->agtype_data = malloc(row_count * sizeof(agtype_value**));
@@ -281,8 +288,17 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                 return -1;
             }
         }
-        
+
+        /* Allocate and populate data_types for this row */
+        result->data_types[current_row] = malloc(column_count * sizeof(int));
+        if (!result->data_types[current_row]) {
+            set_result_error(result, "Memory allocation failed for row data types");
+            return -1;
+        }
+
         for (int col = 0; col < column_count; col++) {
+            /* Store SQLite column type for proper JSON formatting */
+            result->data_types[current_row][col] = sqlite3_column_type(stmt, col);
             const char *value = (const char*)sqlite3_column_text(stmt, col);
             if (value) {
                 result->data[current_row][col] = strdup(value);
@@ -333,7 +349,7 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                                 result->agtype_data[current_row][col] = agtype_value_create_edge_with_properties(executor->db, edge_id, type, source_id, target_id);
                                 free(type);
                             }
-                        } else {
+                        } else if (ctx && transform_var_lookup_node(ctx->var_ctx, ident->name)) {
                             /* This is a node variable */
                             /* Check if value is already a JSON object (from new RETURN format) */
                             if (value[0] == '{') {
@@ -365,6 +381,9 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                                 result->agtype_data[current_row][col] = agtype_value_create_vertex_with_properties(executor->db, node_id, label);
                                 free(label);
                             }
+                        } else {
+                            /* Not a graph entity - treat as scalar value */
+                            result->agtype_data[current_row][col] = create_property_agtype_value(value);
                         }
                     } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
                         /* Property access - try to detect the original data type */
@@ -375,7 +394,8 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                     }
                 }
             } else {
-                result->data[current_row][col] = strdup("NULL");
+                /* Store NULL pointer - extension.c will format as JSON null */
+                result->data[current_row][col] = NULL;
                 if (has_agtype_values) {
                     result->agtype_data[current_row][col] = agtype_value_create_null();
                 }

@@ -72,6 +72,8 @@ char *dbuf_finish(dynamic_buffer *buf);  // Returns owned string, resets buffer
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] dynamic_buffer compiles without warnings
 - [ ] Unit tests pass (test_dbuf_*)
 - [ ] Makefile updated to build new files

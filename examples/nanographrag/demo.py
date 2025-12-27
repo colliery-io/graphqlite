@@ -15,10 +15,12 @@ from pathlib import Path
 import sqlite_vec
 import graphqlite
 from graphqlite_graph import GraphQLiteGraph
+from graphqlite.utils import escape_string
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from entity_extractor import EntityExtractor
+from chunking import chunk_text, Chunk
 
 
 def serialize_float32(vec: list[float]) -> bytes:
@@ -334,40 +336,61 @@ def semantic_search_demo(graph: GraphQLiteGraph):
 
 
 def extraction_demo():
-    """Demonstrate entity extraction from markdown documents."""
+    """Demonstrate entity extraction from markdown documents with chunking."""
     print("=" * 60)
-    print("ENTITY EXTRACTION (spaCy NER)")
+    print("DOCUMENT CHUNKING & ENTITY EXTRACTION")
     print("=" * 60)
 
     # Load documents from docs/ folder
     documents = load_documents()
 
+    # Chunk documents
+    print("\nChunking documents (512 tokens, 50 token overlap)...")
+    all_chunks: list[Chunk] = []
+    for i, doc_text in enumerate(documents):
+        chunks = chunk_text(
+            text=doc_text,
+            chunk_size=512,
+            overlap=50,
+            doc_id=f"doc_{i}",
+        )
+        all_chunks.extend(chunks)
+    print(f"  Created {len(all_chunks)} chunks from {len(documents)} documents")
+
+    # Extract entities from each chunk
+    print("\nExtracting entities from chunks (spaCy NER)...")
     extractor = EntityExtractor()
 
     all_entities = []
     all_relationships = []
+    chunk_entity_links = []  # (chunk_id, entity_id) pairs
 
-    for i, doc in enumerate(documents, 1):
-        entities, relationships = extractor.extract(doc)
+    for chunk in all_chunks:
+        entities, relationships = extractor.extract(chunk.text)
         all_entities.extend(entities)
         all_relationships.extend(relationships)
 
-        # Uncomment for verbose per-document logging:
-        # title = doc.split('\n')[0].replace('#', '').strip()[:50]
-        # print(f"\n--- Document {i}: {title} ---")
-        # print(f"  Entities: {[e.name for e in entities[:10]]}{'...' if len(entities) > 10 else ''}")
-        # print(f"  Relationships: {len(relationships)}")
+        # Track which entities appear in which chunks
+        for entity in entities:
+            chunk_entity_links.append((chunk.chunk_id, entity.id))
 
     # Dedupe entities by ID
     unique_entities = {e.id: e for e in all_entities}
 
-    print(f"\nTotal: {len(unique_entities)} unique entities, {len(all_relationships)} relationships")
+    print(f"  Extracted {len(unique_entities)} unique entities, {len(all_relationships)} relationships")
+    print(f"  Found {len(chunk_entity_links)} chunk-entity connections")
 
-    return list(unique_entities.values()), all_relationships
+    return list(unique_entities.values()), all_relationships, all_chunks, chunk_entity_links
 
 
-def build_graph_from_extraction(graph: GraphQLiteGraph, entities, relationships):
-    """Build graph from extracted entities and relationships."""
+def build_graph_from_extraction(
+    graph: GraphQLiteGraph,
+    entities,
+    relationships,
+    chunks: list[Chunk] = None,
+    chunk_entity_links: list[tuple] = None,
+):
+    """Build graph from extracted entities, relationships, and chunks."""
     print("\nBuilding graph from extracted data...")
 
     def sanitize_node_id(name: str) -> str:
@@ -381,6 +404,7 @@ def build_graph_from_extraction(graph: GraphQLiteGraph, entities, relationships)
     # Map hash IDs to sanitized names for relationship lookups
     id_to_name = {}
 
+    # Add entity nodes
     for entity in entities:
         sanitized_name = sanitize_node_id(entity.name)
         id_to_name[entity.id] = sanitized_name
@@ -394,6 +418,7 @@ def build_graph_from_extraction(graph: GraphQLiteGraph, entities, relationships)
             label=entity.entity_type
         )
 
+    # Add entity-entity relationships
     import re
     for rel in relationships:
         # Map hash IDs to names
@@ -409,8 +434,157 @@ def build_graph_from_extraction(graph: GraphQLiteGraph, entities, relationships)
                 rel_type=rel.rel_type
             )
 
+    # Add chunk nodes if provided
+    chunk_id_map = {}  # Map chunk_id to node_id for edge creation
+    if chunks:
+        for chunk in chunks:
+            # Truncate text for storage (keep full text in separate table for retrieval)
+            preview = chunk.text[:200] + "..." if len(chunk.text) > 200 else chunk.text
+            graph.upsert_node(
+                node_id=chunk.chunk_id,
+                node_data={
+                    "id": chunk.chunk_id,  # Store chunk_id as property for querying
+                    "doc_id": chunk.doc_id,
+                    "chunk_index": chunk.chunk_index,
+                    "token_count": chunk.token_count,
+                    "preview": preview,
+                },
+                label="Chunk"
+            )
+            chunk_id_map[chunk.chunk_id] = chunk.chunk_id
+
+    # Add chunk-entity CONTAINS relationships
+    contains_count = 0
+    if chunk_entity_links:
+        for chunk_id, entity_id in chunk_entity_links:
+            entity_name = id_to_name.get(entity_id)
+            if entity_name:
+                has_chunk = graph.has_node(chunk_id)
+                has_entity = graph.has_node(entity_name)
+                if has_chunk and has_entity:
+                    graph.upsert_edge(
+                        source_id=chunk_id,
+                        target_id=entity_name,
+                        edge_data={},
+                        rel_type="MENTIONS"
+                    )
+                    contains_count += 1
+    print(f"  Created {contains_count} MENTIONS edges")
+
     stats = graph.stats()
     print(f"  Created {stats['nodes']} nodes and {stats['edges']} edges")
+
+
+def build_chunk_index(graph: GraphQLiteGraph, chunks: list[Chunk], model) -> VectorIndex:
+    """Build vector index for chunks."""
+    vec_index = VectorIndex(graph._conn._conn, embedding_dim=384)
+
+    # Create separate table for full chunk text
+    graph._conn._conn.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_texts (
+            chunk_id TEXT PRIMARY KEY,
+            full_text TEXT
+        )
+    """)
+
+    texts = [c.text for c in chunks]
+    ids = [c.chunk_id for c in chunks]
+
+    print(f"Embedding {len(chunks)} chunks...")
+    embeddings = model.encode(texts, show_progress_bar=True)
+
+    for chunk_id, text, emb in zip(ids, texts, embeddings):
+        vec_index.add(chunk_id, text[:500], emb.tolist())  # Store preview in vec index
+        # Store full text separately
+        graph._conn._conn.execute(
+            "INSERT OR REPLACE INTO chunk_texts (chunk_id, full_text) VALUES (?, ?)",
+            (chunk_id, text)
+        )
+
+    vec_index.conn.commit()
+    return vec_index
+
+
+def retrieval_demo(graph: GraphQLiteGraph, vec_index: VectorIndex, model):
+    """Demonstrate GraphRAG retrieval: query -> chunks -> entities -> context."""
+    print("\n" + "=" * 60)
+    print("GRAPH-AUGMENTED RETRIEVAL (GraphRAG)")
+    print("=" * 60)
+
+    queries = [
+        "Who are the major tech industry leaders?",
+        "What companies are involved in artificial intelligence?",
+        "Tell me about semiconductor manufacturing",
+    ]
+
+    for query in queries:
+        print(f"\n{'─' * 50}")
+        print(f"Query: \"{query}\"")
+        print('─' * 50)
+
+        # Step 1: Find relevant chunks via vector search
+        query_emb = model.encode([query])[0].tolist()
+        chunk_results = vec_index.search(query_emb, top_k=3)
+
+        print(f"\n1. Retrieved {len(chunk_results)} relevant chunks:")
+        chunk_ids = []
+        for chunk_id, distance, preview in chunk_results:
+            similarity = 1 / (1 + distance)
+            print(f"   [{similarity:.3f}] {preview[:80]}...")
+            chunk_ids.append(chunk_id)
+
+        # Step 2: Find entities mentioned in those chunks
+        if chunk_ids:
+            # Query each chunk individually to find connected entities
+            all_entities = []
+            for cid in chunk_ids:
+                entity_query = f"MATCH (c:Chunk {{id: '{cid}'}})-[:MENTIONS]->(e) RETURN e.name AS name, e.entity_type AS type LIMIT 5"
+                try:
+                    result = graph.query(entity_query)
+                    for r in result:
+                        if r.get('name'):
+                            all_entities.append(r)
+                except Exception:
+                    pass
+
+            if all_entities:
+                # Dedupe by name
+                seen = set()
+                unique_entities = []
+                for e in all_entities:
+                    name = e.get('name')
+                    if name and name not in seen:
+                        seen.add(name)
+                        unique_entities.append(e)
+
+                print(f"\n2. Entities in retrieved chunks:")
+                for e in unique_entities[:10]:
+                    name = e.get('name', '?')
+                    etype = e.get('type', '?')
+                    print(f"   - {name} ({etype})")
+
+                # Step 3: Find related entities (1 hop)
+                entity_names = [e.get('name') for e in unique_entities[:5] if e.get('name')]
+                if entity_names:
+                    related_entities = []
+                    for ename in entity_names:
+                        related_query = f"MATCH (e {{name: '{escape_string(ename)}'}})-[r]-(related) RETURN related.name AS name, type(r) AS rel LIMIT 3"
+                        try:
+                            result = graph.query(related_query)
+                            related_entities.extend(result)
+                        except Exception:
+                            pass
+
+                    if related_entities:
+                        print(f"\n3. Related entities (1 hop):")
+                        seen_rel = set()
+                        for r in related_entities[:5]:
+                            name = r.get('name', '?')
+                            if name not in seen_rel:
+                                seen_rel.add(name)
+                                print(f"   - {name} (via {r.get('rel', '?')})")
+            else:
+                print(f"   (No entity connections found)")
 
 
 def main():
@@ -418,8 +592,8 @@ def main():
     print("GraphQLite + sqlite-vec Knowledge Graph Demo")
     print("=" * 60)
 
-    # Part 1: Entity extraction from documents
-    entities, relationships = extraction_demo()
+    # Part 1: Document chunking and entity extraction
+    entities, relationships, chunks, chunk_entity_links = extraction_demo()
 
     # Create file-based graph (sqlite-vec needs this for extension loading)
     import tempfile
@@ -429,8 +603,10 @@ def main():
     db_file.close()
 
     with GraphQLiteGraph(db_path=db_path) as graph:
-        # Build graph from extracted entities
-        build_graph_from_extraction(graph, entities, relationships)
+        # Build graph from extracted entities, relationships, and chunks
+        build_graph_from_extraction(
+            graph, entities, relationships, chunks, chunk_entity_links
+        )
 
         # Explore with Cypher queries
         explore_graph(graph)
@@ -439,7 +615,21 @@ def main():
         analyze_pagerank(graph)
         analyze_communities(graph)
 
-        # Semantic search with sqlite-vec
+        # Load embedding model once for both demos
+        print("\n" + "=" * 60)
+        print("LOADING EMBEDDING MODEL")
+        print("=" * 60)
+        print("\nLoading embedding model: all-MiniLM-L6-v2")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        # Build chunk vector index
+        print("\nBuilding chunk vector index...")
+        chunk_index = build_chunk_index(graph, chunks, model)
+
+        # GraphRAG-style retrieval demo
+        retrieval_demo(graph, chunk_index, model)
+
+        # Also run the entity semantic search
         semantic_search_demo(graph)
 
     # Cleanup temp file

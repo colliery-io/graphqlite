@@ -7,7 +7,7 @@ created_at: 2025-12-27T14:23:21.001652+00:00
 updated_at: 2025-12-27T17:06:55.344263+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -141,6 +141,8 @@ const char *sql_builder_get_where(sql_builder *b);
 1. Remove SELECT * replacement logic from transform_return.c
 2. Ensure unified builder path handles all cases
 3. Test: All query patterns
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

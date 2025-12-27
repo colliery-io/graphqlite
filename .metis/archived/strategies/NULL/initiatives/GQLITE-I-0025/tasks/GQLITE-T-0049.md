@@ -90,6 +90,8 @@ Convert transform_match.c to use unified sql_builder. This is the most complex m
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] No `using_builder` checks in transform_match.c
 - [ ] No append_from/join/where_clause calls
 - [ ] All MATCH tests pass

@@ -1,48 +1,91 @@
 ---
-id: migrate-expression-transformation
+id: create-query-pattern-dispatch
 level: task
-title: "Migrate expression transformation from append_sql to unified builder"
-short_code: "GQLITE-T-0065"
-created_at: 2025-12-27T17:14:11.891845+00:00
-updated_at: 2025-12-27T17:14:11.891845+00:00
-parent: GQLITE-I-0025
+title: "Create query pattern dispatch infrastructure"
+short_code: "GQLITE-T-0067"
+created_at: 2025-12-27T17:40:37.538713+00:00
+updated_at: 2025-12-27T17:47:54.814426+00:00
+parent: GQLITE-I-0026
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: GQLITE-I-0026
 ---
 
-# Migrate expression transformation from append_sql to unified builder
-
-*This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
-
-## Parent Initiative **[CONDITIONAL: Assigned Task]**
-
-[[GQLITE-I-0025]]
+# Create query pattern dispatch infrastructure
 
 ## Objective
 
-Migrate the 399 `append_sql()` calls in expression transformation to use a builder pattern, completing the unified architecture.
+Create the foundational types and functions for table-driven query dispatch.
 
-## Current State
+## Deliverables
 
-| File | append_sql calls |
-|------|------------------|
-| transform_expr_ops.c | 78 |
-| transform_return.c | 74 |
-| transform_expr_predicate.c | 41 |
-| transform_func_math.c | 37 |
-| transform_func_list.c | 37 |
-| transform_func_string.c | 35 |
-| transform_func_aggregate.c | 21 |
-| Others | ~76 |
+**New files:**
+- `src/include/executor/query_patterns.h` - Pattern types and API
+- `src/backend/executor/query_dispatch.c` - Dispatch implementation
+
+**Types to create:**
+```c
+typedef enum {
+    CLAUSE_MATCH       = 1 << 0,
+    CLAUSE_OPTIONAL    = 1 << 1,
+    CLAUSE_RETURN      = 1 << 2,
+    CLAUSE_CREATE      = 1 << 3,
+    CLAUSE_MERGE       = 1 << 4,
+    CLAUSE_SET         = 1 << 5,
+    CLAUSE_DELETE      = 1 << 6,
+    CLAUSE_REMOVE      = 1 << 7,
+    CLAUSE_WITH        = 1 << 8,
+    CLAUSE_UNWIND      = 1 << 9,
+    CLAUSE_FOREACH     = 1 << 10,
+    CLAUSE_UNION       = 1 << 11,
+    CLAUSE_CALL        = 1 << 12,
+} clause_flags;
+
+typedef int (*pattern_handler)(...);
+
+typedef struct {
+    const char *name;
+    clause_flags required;
+    clause_flags forbidden;
+    pattern_handler handler;
+    int priority;
+} query_pattern;
+```
+
+**Functions to implement:**
+- `clause_flags analyze_query_clauses(cypher_query *query)`
+- `const query_pattern *find_matching_pattern(clause_flags present)`
+- `const char *clause_flags_to_string(clause_flags flags)` (debug helper)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [ ] Header file with all types defined
+- [ ] `analyze_query_clauses()` correctly identifies all clause types
+- [ ] `find_matching_pattern()` respects required/forbidden/priority
+- [ ] Unit tests for pattern matching logic
+- [ ] All existing tests still pass
+
+## Parent Initiative **[CONDITIONAL: Assigned Task]**
+
+[[GQLITE-I-0026]]
+
+## Objective **[REQUIRED]**
+
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 

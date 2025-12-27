@@ -1,100 +1,80 @@
 ---
-id: migrate-transform-return-c-to
+id: add-text-chunking-support-for
 level: task
-title: "Migrate transform_return.c to unified builder"
-short_code: "GQLITE-T-0055"
-created_at: 2025-12-27T04:37:23.915209+00:00
-updated_at: 2025-12-27T12:57:58.147094+00:00
-parent: GQLITE-I-0025
+title: "Add Text Chunking Support for Document Processing"
+short_code: "GQLITE-T-0034"
+created_at: 2025-12-24T22:50:24.542847+00:00
+updated_at: 2025-12-27T19:41:43.239063+00:00
+parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
+  - "#feature"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: NULL
 ---
 
-# Migrate transform_return.c to unified builder
-
-## Phase 1: Migrate READ Queries - RETURN Clause
-
-**Depends on**: GQLITE-T-0054 (Migrate MATCH)
-
-## Overview
-
-Migrate `transform_return.c` to use unified builder for SELECT, ORDER BY, LIMIT/OFFSET.
-
-## Current State
-
-- Uses `append_sql()` for SELECT expressions
-- Uses `append_sql()` for ORDER BY
-- Uses `append_sql()` for LIMIT/OFFSET
-- Assembles via string concatenation
-
-## Target State
-
-- Use `sql_select()` for each return item
-- Use `sql_order_by()` for ORDER BY expressions
-- Use `sql_set_limit()` for LIMIT/OFFSET
-- Assembly handled by `sql_builder_to_string()`
-
-## Key Functions to Migrate
-
-1. `transform_return_clause()` - Main entry point
-2. `transform_return_items()` - Column expressions
-3. ORDER BY handling
-4. LIMIT/OFFSET handling
-5. DISTINCT handling
-
-## File
-
-`src/backend/transform/transform_return.c`
-
-## Steps
-
-1. Replace `append_sql(ctx, "SELECT ...")` with `sql_select(ctx->unified_builder, expr, alias)`
-2. Replace ORDER BY with `sql_order_by(ctx->unified_builder, expr, desc)`
-3. Replace LIMIT with `sql_set_limit(ctx->unified_builder, limit, offset)`
-4. Handle DISTINCT via builder flag or prefix
-5. Update `finalize_sql_generation()` to assemble from unified_builder
-
-## Success Criteria
-
-- All RETURN tests pass
-- ORDER BY, LIMIT, SKIP work correctly
-- DISTINCT works correctly
-- No `append_sql()` calls for SELECT/ORDER/LIMIT in this file
+# Add Text Chunking Support for Document Processing
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[GQLITE-I-0025]]
+[[Parent Initiative]]
 
-## Objective **[REQUIRED]**
+## Objective
 
-{Clear statement of what this task accomplishes}
+Add text chunking utilities to support GraphRAG workflows - split documents into overlapping chunks with token-based sizing for entity extraction pipelines.
 
-## Backlog Item Details **[CONDITIONAL: Backlog Item]**
-
-{Delete this section when task is assigned to an initiative}
+## Details
 
 ### Type
-- [ ] Bug - Production issue that needs fixing
-- [ ] Feature - New functionality or enhancement  
-- [ ] Tech Debt - Code improvement or refactoring
-- [ ] Chore - Maintenance or setup work
+- [x] Feature - New functionality or enhancement  
 
 ### Priority
-- [ ] P0 - Critical (blocks users/revenue)
-- [ ] P1 - High (important for user experience)
-- [ ] P2 - Medium (nice to have)
-- [ ] P3 - Low (when time permits)
+- [x] P1 - High (important for user experience)
+
+### Python API
+```python
+from graphqlite.chunking import chunk_text, chunk_documents
+
+# Single document
+chunks = chunk_text(
+    text="Long document...",
+    chunk_size=512,      # tokens
+    overlap=50,          # token overlap
+    tokenizer="tiktoken" # or "huggingface"
+)
+
+# Multiple documents with metadata
+chunks = chunk_documents(
+    documents=[{"id": "doc1", "text": "..."}],
+    chunk_size=512,
+    overlap=50
+)
+```
+
+### Return Format
+```python
+[
+    {"chunk_id": "doc1_0", "text": "...", "start": 0, "end": 512, "doc_id": "doc1"},
+    {"chunk_id": "doc1_1", "text": "...", "start": 462, "end": 974, "doc_id": "doc1"},
+]
+```
+
+### Use Cases
+- Pre-processing for entity extraction
+- GraphRAG document ingestion
+- Vector embedding preparation
+
+### Dependencies
+- tiktoken (OpenAI tokenizer) or transformers (HuggingFace)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -113,6 +93,10 @@ Migrate `transform_return.c` to use unified builder for SELECT, ORDER BY, LIMIT/
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
@@ -185,6 +169,24 @@ Migrate `transform_return.c` to use unified builder for SELECT, ORDER BY, LIMIT/
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Completed (Dec 2025)
+
+**Decision**: Implemented in the nanographrag example rather than as core library functionality.
+
+**Implementation**:
+- Created `examples/nanographrag/chunking.py` with:
+  - `chunk_text()` - Split single document into overlapping chunks
+  - `chunk_documents()` - Process multiple documents
+  - `Chunk` dataclass with metadata (chunk_id, doc_id, start/end, token_count)
+  - Sentence-aware splitting for cleaner boundaries
+  - Approximate token counting (word count * 1.3)
+
+- Updated `examples/nanographrag/demo.py`:
+  - Documents chunked before entity extraction
+  - Chunks stored as graph nodes with CONTAINS edges to entities
+  - Vector index built on chunks for retrieval
+  - GraphRAG retrieval demo: query -> chunks -> entities -> related
+
+**Rationale**: Chunking is application-specific (different RAG pipelines need different strategies). Keeping it in the example makes it easy to customize without bloating the core library.

@@ -1,44 +1,86 @@
 ---
-id: remove-remaining-finalize-sql
+id: replace-if-else-chain-with-table
 level: task
-title: "Remove remaining finalize_sql_generation calls from RETURN clause"
-short_code: "GQLITE-T-0066"
-created_at: 2025-12-27T17:14:12.060873+00:00
-updated_at: 2025-12-27T17:14:12.060873+00:00
-parent: GQLITE-I-0025
+title: "Replace if-else chain with table-driven dispatch"
+short_code: "GQLITE-T-0070"
+created_at: 2025-12-27T17:40:38.404857+00:00
+updated_at: 2025-12-27T18:47:43.458020+00:00
+parent: GQLITE-I-0026
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: GQLITE-I-0026
 ---
 
-# Remove remaining finalize_sql_generation calls from RETURN clause
-
-*This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
-
-## Parent Initiative **[CONDITIONAL: Assigned Task]**
-
-[[GQLITE-I-0025]]
+# Replace if-else chain with table-driven dispatch
 
 ## Objective
 
-Remove the 2 remaining `finalize_sql_generation()` calls from transform_return.c, completing the unified builder migration.
+Replace the 500+ line if-else chain in `cypher_executor_execute_ast()` with table-driven dispatch.
 
-## Current State
+## Before (500+ lines)
 
+```c
+int cypher_executor_execute_ast(...) {
+    if (unwind && create && !return) { ... }
+    else if (match && return && !create) { ... }
+    else if (match && optional && return) { ... }
+    // ... 20+ more patterns
+}
 ```
-src/backend/transform/transform_return.c:211:        if (finalize_sql_generation(ctx) < 0) {
-src/backend/transform/transform_return.c:308:            if (finalize_sql_generation(ctx) < 0) {
+
+## After (~30 lines)
+
+```c
+int cypher_executor_execute_ast(...) {
+    // Graph algorithms handled separately (already well-structured)
+    if (is_graph_algorithm_query(query)) {
+        return execute_graph_algorithm(executor, query, result);
+    }
+    
+    // Pattern-based dispatch
+    clause_flags present = analyze_query_clauses(query);
+    const query_pattern *pattern = find_matching_pattern(present);
+    
+    if (!pattern) {
+        set_result_error(result, "Unsupported query pattern");
+        return -1;
+    }
+    
+    LOG_DEBUG("Executing via pattern: %s", pattern->name);
+    return pattern->handler(executor, query, result, present);
+}
 ```
 
-These are the only remaining calls - the function itself is defined in cypher_transform.c:196.
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [x] If-else chain completely removed
+- [x] All dispatch goes through pattern registry
+- [x] Graph algorithm dispatch preserved (don't change)
+- [x] All 748/749 C tests pass (1 pre-existing failure)
+- [x] All 160 Python tests pass
+- [x] No performance regression
+
+## Parent Initiative **[CONDITIONAL: Assigned Task]**
+
+[[GQLITE-I-0026]]
+
+## Objective **[REQUIRED]**
+
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -143,4 +185,17 @@ These are the only remaining calls - the function itself is defined in cypher_tr
 
 ## Status Updates **[REQUIRED]**
 
-*To be added during implementation*
+### 2025-12-27: Completed
+
+**Implementation Summary:**
+- Replaced 500+ line if-else chain in `cypher_executor_execute_ast()` with single `dispatch_query_pattern()` call
+- Fixed `handle_generic_transform` to properly find and use return clause for `build_query_results()`
+- Added return value check for `dispatch_query_pattern()` to properly propagate errors
+
+**Files Modified:**
+- `src/backend/executor/cypher_executor.c` - Replaced if-else chain with dispatch call
+- `src/backend/executor/query_dispatch.c` - Fixed generic handler's return clause handling
+
+**Test Results:**
+- 748/749 C tests passing (1 pre-existing failure unrelated to dispatch)
+- All 160 Python tests passing

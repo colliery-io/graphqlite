@@ -1,17 +1,17 @@
 ---
-id: remove-legacy-sql-buffer-sql
+id: migrate-expression-transformation
 level: task
-title: "Remove legacy sql_buffer, sql_builder struct, and cte_prefix"
-short_code: "GQLITE-T-0052"
-created_at: 2025-12-26T20:34:31.848840+00:00
-updated_at: 2025-12-27T14:17:52.731858+00:00
+title: "Migrate expression transformation from append_sql to unified builder"
+short_code: "GQLITE-T-0065"
+created_at: 2025-12-27T17:14:11.891845+00:00
+updated_at: 2025-12-27T17:14:11.891845+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/completed"
+  - "#phase/todo"
 
 
 exit_criteria_met: false
@@ -19,7 +19,7 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Remove legacy sql_buffer, sql_builder struct, and cte_prefix
+# Migrate expression transformation from append_sql to unified builder
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -29,49 +29,64 @@ initiative_id: GQLITE-I-0025
 
 ## Objective
 
-Remove legacy SQL generation mechanisms that are no longer needed.
+Migrate the 399 `append_sql()` calls in expression transformation to use a builder pattern, completing the unified architecture.
 
-## Status: PARTIALLY COMPLETE
+## Current State
 
-### What Was Removed
-- ✅ `cte_prefix`, `cte_prefix_size`, `cte_prefix_capacity` - removed from context
-- ✅ `append_cte_prefix()` - removed, all CTEs use sql_cte()
-- ✅ Old `sql_builder` struct (from_clause, join_clauses, using_builder) - was already removed
-- ✅ `grow_builder_buffer()` helper - removed (was only used by append_cte_prefix)
+| File | append_sql calls |
+|------|------------------|
+| transform_expr_ops.c | 78 |
+| transform_return.c | 74 |
+| transform_expr_predicate.c | 41 |
+| transform_func_math.c | 37 |
+| transform_func_list.c | 37 |
+| transform_func_string.c | 35 |
+| transform_func_aggregate.c | 21 |
+| Others | ~76 |
 
-### What Remains (by design)
-- `sql_buffer` - Still needed as final output buffer passed to sqlite3_prepare_v2()
-- `append_sql()` - Still needed for expression building and WRITE operations
-- `finalize_sql_generation()` - Assembles unified_builder into sql_buffer
-- `prepend_cte_to_sql()` - Prepends CTEs from unified_builder to final SQL
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
-### Architecture After Cleanup
-```
-unified_builder (sql_cte, sql_select, sql_from, sql_join, sql_where, sql_order_by, sql_limit)
-        ↓
-finalize_sql_generation() → sql_buffer
-        ↓
-prepend_cte_to_sql() → sql_buffer (with CTEs prepended)
-        ↓
-sqlite3_prepare_v2(sql_buffer)
-```
+{Delete this section when task is assigned to an initiative}
 
-### Why sql_buffer Can't Be Removed
-1. It's the final output passed to SQLite
-2. Expression building uses it as scratch space (via transform_expression_to_string buffer swap)
-3. WRITE operations (CREATE/SET/DELETE) build SQL directly into it
+### Type
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
+
+### Priority
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
+
+### Impact Assessment **[CONDITIONAL: Bug]**
+- **Affected Users**: {Number/percentage of users affected}
+- **Reproduction Steps**: 
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
+
+### Business Justification **[CONDITIONAL: Feature]**
+- **User Value**: {Why users need this}
+- **Business Value**: {Impact on metrics/revenue}
+- **Effort Estimate**: {Rough size - S/M/L/XL}
+
+### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
+- **Current Problems**: {What's difficult/slow/buggy now}
+- **Benefits of Fixing**: {What improves after refactoring}
+- **Risk Assessment**: {Risks of not addressing this}
 
 ## Acceptance Criteria
 
 ## Acceptance Criteria
 
-## Acceptance Criteria
+## Acceptance Criteria **[REQUIRED]**
 
-- [x] cte_prefix and append_cte_prefix() removed
-- [x] Old sql_builder struct already gone
-- [x] Architecture simplified from 3 paths to 2
-- [x] All tests pass (716 C, 160 Python)
-- [x] Clean compile
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

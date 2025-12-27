@@ -803,6 +803,239 @@ static void test_sql_builder_has_from(void)
     CU_ASSERT_FALSE(sql_builder_has_from(NULL));
 }
 
+/* =============================================================================
+ * Write Builder Tests
+ * =============================================================================
+ */
+
+/* Test write_builder create and free */
+static void test_write_builder_create_free(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        CU_ASSERT_EQUAL(wb->statement_count, 0);
+        write_builder_free(wb);
+    }
+
+    /* Free NULL is safe */
+    write_builder_free(NULL);
+}
+
+/* Test write_insert_values */
+static void test_write_builder_insert_values(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_insert_values(wb, SQL_INSERT_NORMAL, "nodes", "id, label", "1, 'Person'");
+        CU_ASSERT_EQUAL(wb->statement_count, 1);
+
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT_STRING_EQUAL(sql, "INSERT INTO nodes (id, label) VALUES (1, 'Person')");
+            free(sql);
+        }
+
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_insert_values with OR REPLACE */
+static void test_write_builder_insert_or_replace(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_insert_values(wb, SQL_INSERT_OR_REPLACE, "props", "node_id, key, value", "1, 'name', 'Alice'");
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT_STRING_EQUAL(sql, "INSERT OR REPLACE INTO props (node_id, key, value) VALUES (1, 'name', 'Alice')");
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_insert_values with OR IGNORE */
+static void test_write_builder_insert_or_ignore(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_insert_values(wb, SQL_INSERT_OR_IGNORE, "node_labels", "node_id, label_id", "1, 5");
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT_STRING_EQUAL(sql, "INSERT OR IGNORE INTO node_labels (node_id, label_id) VALUES (1, 5)");
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_insert_select */
+static void test_write_builder_insert_select(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_insert_select(wb, SQL_INSERT_OR_REPLACE, "props",
+                            "node_id, key_id, value",
+                            "SELECT n.id, 1, 'test' FROM nodes n");
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT(strstr(sql, "INSERT OR REPLACE INTO props") != NULL);
+            CU_ASSERT(strstr(sql, "SELECT n.id, 1, 'test' FROM nodes n") != NULL);
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_delete */
+static void test_write_builder_delete(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_delete(wb, "nodes", "id = 5");
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT_STRING_EQUAL(sql, "DELETE FROM nodes WHERE id = 5");
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_delete without WHERE */
+static void test_write_builder_delete_all(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_delete(wb, "nodes", NULL);
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT_STRING_EQUAL(sql, "DELETE FROM nodes");
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_delete_where_in */
+static void test_write_builder_delete_where_in(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_delete_where_in(wb, "node_props", "node_id", "SELECT id FROM nodes WHERE label = 'Person'");
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT(strstr(sql, "DELETE FROM node_props WHERE node_id IN") != NULL);
+            CU_ASSERT(strstr(sql, "SELECT id FROM nodes") != NULL);
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_raw */
+static void test_write_builder_raw(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_raw(wb, "UPDATE nodes SET label = 'Employee' WHERE id = 1");
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT_STRING_EQUAL(sql, "UPDATE nodes SET label = 'Employee' WHERE id = 1");
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test multiple statements */
+static void test_write_builder_multi_statement(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_insert_values(wb, SQL_INSERT_NORMAL, "nodes", "id", "1");
+        write_insert_values(wb, SQL_INSERT_NORMAL, "node_labels", "node_id, label_id", "1, 5");
+        write_insert_values(wb, SQL_INSERT_OR_REPLACE, "node_props", "node_id, key, value", "1, 'name', 'Alice'");
+
+        CU_ASSERT_EQUAL(wb->statement_count, 3);
+
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NOT_NULL(sql);
+        if (sql) {
+            CU_ASSERT(strstr(sql, "INSERT INTO nodes") != NULL);
+            CU_ASSERT(strstr(sql, "; INSERT INTO node_labels") != NULL);
+            CU_ASSERT(strstr(sql, "; INSERT OR REPLACE INTO node_props") != NULL);
+            free(sql);
+        }
+        write_builder_free(wb);
+    }
+}
+
+/* Test write_builder_reset */
+static void test_write_builder_reset(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        write_insert_values(wb, SQL_INSERT_NORMAL, "nodes", "id", "1");
+        CU_ASSERT_EQUAL(wb->statement_count, 1);
+
+        write_builder_reset(wb);
+        CU_ASSERT_EQUAL(wb->statement_count, 0);
+
+        /* Empty builder returns NULL */
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NULL(sql);
+
+        write_builder_free(wb);
+    }
+}
+
+/* Test empty builder returns NULL */
+static void test_write_builder_empty_returns_null(void)
+{
+    write_builder *wb = write_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(wb);
+
+    if (wb) {
+        char *sql = write_builder_to_string(wb);
+        CU_ASSERT_PTR_NULL(sql);
+        write_builder_free(wb);
+    }
+
+    /* NULL builder returns NULL */
+    CU_ASSERT_PTR_NULL(write_builder_to_string(NULL));
+}
+
 /* Register test suite */
 int init_sql_builder_suite(void)
 {
@@ -852,6 +1085,20 @@ int init_sql_builder_suite(void)
     if (!CU_add_test(suite, "sql: Get WHERE", test_sql_builder_get_where)) return -1;
     if (!CU_add_test(suite, "sql: Get GROUP BY", test_sql_builder_get_group_by)) return -1;
     if (!CU_add_test(suite, "sql: Has FROM", test_sql_builder_has_from)) return -1;
+
+    /* write_builder tests */
+    if (!CU_add_test(suite, "write: Create and free", test_write_builder_create_free)) return -1;
+    if (!CU_add_test(suite, "write: INSERT VALUES", test_write_builder_insert_values)) return -1;
+    if (!CU_add_test(suite, "write: INSERT OR REPLACE", test_write_builder_insert_or_replace)) return -1;
+    if (!CU_add_test(suite, "write: INSERT OR IGNORE", test_write_builder_insert_or_ignore)) return -1;
+    if (!CU_add_test(suite, "write: INSERT SELECT", test_write_builder_insert_select)) return -1;
+    if (!CU_add_test(suite, "write: DELETE", test_write_builder_delete)) return -1;
+    if (!CU_add_test(suite, "write: DELETE all", test_write_builder_delete_all)) return -1;
+    if (!CU_add_test(suite, "write: DELETE WHERE IN", test_write_builder_delete_where_in)) return -1;
+    if (!CU_add_test(suite, "write: Raw SQL", test_write_builder_raw)) return -1;
+    if (!CU_add_test(suite, "write: Multi-statement", test_write_builder_multi_statement)) return -1;
+    if (!CU_add_test(suite, "write: Reset", test_write_builder_reset)) return -1;
+    if (!CU_add_test(suite, "write: Empty returns NULL", test_write_builder_empty_returns_null)) return -1;
 
     return 0;
 }

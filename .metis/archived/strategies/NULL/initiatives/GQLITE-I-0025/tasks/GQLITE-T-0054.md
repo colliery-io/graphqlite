@@ -1,13 +1,13 @@
 ---
-id: rollback-partial-cte-migrations-to
+id: migrate-transform-match-c-to
 level: task
-title: "Rollback partial CTE migrations to restore tests"
-short_code: "GQLITE-T-0053"
-created_at: 2025-12-27T04:37:23.570393+00:00
-updated_at: 2025-12-27T04:44:15.182733+00:00
+title: "Migrate transform_match.c to unified builder"
+short_code: "GQLITE-T-0054"
+created_at: 2025-12-27T04:37:23.731482+00:00
+updated_at: 2025-12-27T04:46:57.397378+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,57 +19,55 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Rollback partial CTE migrations to restore tests
+# Migrate transform_match.c to unified builder
 
-## Phase 0: Immediate Fix
+## Phase 1: Migrate READ Queries - MATCH Clause
 
-**Priority**: CRITICAL - Must be done first to restore test suite
+**Depends on**: GQLITE-T-0053 (Rollback)
 
-## Problem
+## Overview
 
-The partial migration broke tests with duplicate CTEs:
-```
-WITH _unwind_0 AS (...) WITH _unwind_0 AS (...) SELECT ...
-```
+Migrate `transform_match.c` to use unified builder for ALL SQL generation, not just CTEs.
 
-## Files to Revert
+## Current State
 
-| File | Revert From | Revert To |
-|------|-------------|-----------|
-| `transform_unwind.c` | `sql_cte()` | `append_cte_prefix()` |
-| `transform_foreach.c` | `sql_cte()` | `append_cte_prefix()` |
-| `transform_func_graph.c` | `sql_cte()` | `append_cte_prefix()` |
-| `transform_with.c` | `sql_cte()` | `append_cte_prefix()` |
-| `cypher_transform.c` | `sql_cte()` in `generate_varlen_cte()` | `append_cte_prefix()` |
+- Uses `append_sql()` for SELECT, FROM, WHERE
+- Uses `sql_builder` struct for OPTIONAL MATCH (deferred WHERE)
+- Mode flag `using_builder` switches between systems
+
+## Target State
+
+- Use `sql_from()` for FROM clauses
+- Use `sql_join()` for JOIN clauses (including LEFT JOIN for OPTIONAL MATCH)
+- Use `sql_where()` for WHERE conditions
+- No mode flags, single code path
+
+## Key Functions to Migrate
+
+1. `transform_match_clause()` - Main entry point
+2. `transform_match_pattern()` - Pattern processing
+3. `build_node_match_sql()` - Node table FROM/JOIN
+4. `build_relationship_match_sql()` - Edge table JOIN
+5. OPTIONAL MATCH handling (LEFT JOIN generation)
+
+## File
+
+`src/backend/transform/transform_match.c`
 
 ## Steps
 
-1. Revert `transform_unwind.c`:
-   - Remove local `cte_appendf()` helper
-   - Replace `sql_cte(ctx->unified_builder, ...)` with `append_cte_prefix(ctx, ...)`
-   - Keep using `append_sql()` for SELECT/FROM
-
-2. Revert `transform_foreach.c`:
-   - Remove `sql_cte()` calls
-   - Use `append_cte_prefix()` for CTE generation
-
-3. Revert `transform_func_graph.c`:
-   - Revert all 6 graph algorithm functions (PageRank, labelPropagation, etc.)
-   - Replace `sql_cte()` with `append_cte_prefix()`
-
-4. Revert `transform_with.c`:
-   - Remove `sql_cte()` usage
-   - Use `append_cte_prefix()` for WITH clause CTEs
-
-5. Revert `cypher_transform.c`:
-   - Revert `generate_varlen_cte()` to use `append_cte_prefix()`
-   - Ensure `prepend_cte_to_sql()` only uses `cte_prefix` buffer
+1. Replace `append_sql(ctx, "FROM nodes ...")` with `sql_from(ctx->unified_builder, "nodes", alias)`
+2. Replace join generation with `sql_join(ctx->unified_builder, JOIN_INNER, table, alias, condition)`
+3. Replace OPTIONAL MATCH LEFT JOIN with `sql_join(ctx->unified_builder, JOIN_LEFT, ...)`
+4. Replace WHERE with `sql_where()` / `sql_where_and()`
+5. Remove `using_builder` flag checks
+6. Test OPTIONAL MATCH with WHERE thoroughly
 
 ## Success Criteria
 
-- All 716 C unit tests pass
-- All 160 Python tests pass
-- No duplicate CTEs in generated SQL
+- All MATCH tests pass
+- OPTIONAL MATCH with WHERE works correctly
+- No `append_sql()` calls for FROM/JOIN/WHERE in this file
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -114,6 +112,8 @@ WITH _unwind_0 AS (...) WITH _unwind_0 AS (...) SELECT ...
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

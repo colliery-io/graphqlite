@@ -304,10 +304,12 @@ source = { editable = "../../bindings/python" }
 
 [package.metadata]
 requires-dist = [
+    { name = "graspologic", marker = "extra == 'leiden'", specifier = ">=3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "rustworkx", marker = "extra == 'rustworkx'", specifier = ">=0.13" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "leiden", "rustworkx"]
 
 [[package]]
 name = "hf-xet"

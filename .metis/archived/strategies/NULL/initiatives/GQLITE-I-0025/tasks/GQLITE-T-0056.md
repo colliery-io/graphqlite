@@ -1,10 +1,10 @@
 ---
-id: migrate-transform-return-c-to
+id: migrate-varlen-ctes-to-unified
 level: task
-title: "Migrate transform_return.c to unified sql_builder"
-short_code: "GQLITE-T-0050"
-created_at: 2025-12-26T20:34:30.365568+00:00
-updated_at: 2025-12-26T22:00:07.139192+00:00
+title: "Migrate varlen CTEs to unified builder"
+short_code: "GQLITE-T-0056"
+created_at: 2025-12-27T04:37:24.095518+00:00
+updated_at: 2025-12-27T13:05:04.607259+00:00
 parent: GQLITE-I-0025
 blocked_by: []
 archived: true
@@ -19,7 +19,59 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate transform_return.c to unified sql_builder
+# Migrate varlen CTEs to unified builder
+
+## Phase 2: Migrate CTEs - Variable Length Relationships
+
+**Depends on**: GQLITE-T-0055 (Migrate RETURN)
+
+## Overview
+
+Migrate `generate_varlen_cte()` in `cypher_transform.c` to use `sql_cte()` with recursive flag.
+
+## Current State
+
+- Uses `append_cte_prefix()` to build recursive CTE
+- CTE prepended via `prepend_cte_to_sql()`
+- Works but uses legacy buffer
+
+## Target State
+
+- Build CTE query in local `dynamic_buffer`
+- Call `sql_cte(ctx->unified_builder, name, query, true)` for recursive CTE
+- Assembly handled automatically by `sql_builder_to_string()`
+
+## Key Functions
+
+1. `generate_varlen_cte()` - Generates recursive CTE for path traversal
+
+## File
+
+`src/backend/transform/cypher_transform.c`
+
+## Steps
+
+1. Create local `dynamic_buffer` for CTE query
+2. Build recursive CTE query in local buffer
+3. Call `sql_cte(ctx->unified_builder, cte_name, dbuf_get(&cte_query), true)`
+4. Free local buffer
+5. Remove `append_cte_prefix()` calls
+
+## Pattern
+
+```c
+dynamic_buffer cte_query;
+dbuf_init(&cte_query);
+dbuf_appendf(&cte_query, "SELECT ... UNION ALL SELECT ...");
+sql_cte(ctx->unified_builder, "varlen_cte", dbuf_get(&cte_query), true);
+dbuf_free(&cte_query);
+```
+
+## Success Criteria
+
+- Variable-length relationship tests pass
+- Recursive CTEs generated correctly
+- No `append_cte_prefix()` calls for varlen
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -27,9 +79,9 @@ initiative_id: GQLITE-I-0025
 
 [[GQLITE-I-0025]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER BY, and LIMIT/OFFSET.
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -65,30 +117,17 @@ Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER 
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Migration Map
-
-| Old Code | New Code |
-|----------|----------|
-| `append_sql(ctx, "SELECT ...")` | `sql_select(ctx->builder, expr, alias)` |
-| `append_sql(ctx, " ORDER BY %s", e)` | `sql_order_by(ctx->builder, e, desc)` |
-| `append_sql(ctx, " LIMIT %d", n)` | `sql_limit(ctx->builder, n, offset)` |
-
-Note: Expression building within SELECT items still uses append_sql() to build the expression string, then passes to sql_select().
-
 ## Acceptance Criteria
 
 ## Acceptance Criteria
 
 ## Acceptance Criteria
 
-## Acceptance Criteria
+## Acceptance Criteria **[REQUIRED]**
 
-## Acceptance Criteria
-
-- [ ] RETURN clause uses sql_select()
-- [ ] ORDER BY uses sql_order_by()
-- [ ] LIMIT/OFFSET uses sql_limit()
-- [ ] All RETURN tests pass
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

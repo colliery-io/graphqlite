@@ -1,10 +1,10 @@
 ---
-id: migrate-transform-return-c-to
+id: remove-legacy-sql-buffer-sql
 level: task
-title: "Migrate transform_return.c to unified sql_builder"
-short_code: "GQLITE-T-0050"
-created_at: 2025-12-26T20:34:30.365568+00:00
-updated_at: 2025-12-26T22:00:07.139192+00:00
+title: "Remove legacy sql_buffer, sql_builder struct, and cte_prefix"
+short_code: "GQLITE-T-0052"
+created_at: 2025-12-26T20:34:31.848840+00:00
+updated_at: 2025-12-27T14:17:52.731858+00:00
 parent: GQLITE-I-0025
 blocked_by: []
 archived: true
@@ -19,7 +19,7 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate transform_return.c to unified sql_builder
+# Remove legacy sql_buffer, sql_builder struct, and cte_prefix
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -29,51 +29,37 @@ initiative_id: GQLITE-I-0025
 
 ## Objective
 
-Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER BY, and LIMIT/OFFSET.
+Remove legacy SQL generation mechanisms that are no longer needed.
 
-## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+## Status: PARTIALLY COMPLETE
 
-{Delete this section when task is assigned to an initiative}
+### What Was Removed
+- ✅ `cte_prefix`, `cte_prefix_size`, `cte_prefix_capacity` - removed from context
+- ✅ `append_cte_prefix()` - removed, all CTEs use sql_cte()
+- ✅ Old `sql_builder` struct (from_clause, join_clauses, using_builder) - was already removed
+- ✅ `grow_builder_buffer()` helper - removed (was only used by append_cte_prefix)
 
-### Type
-- [ ] Bug - Production issue that needs fixing
-- [ ] Feature - New functionality or enhancement  
-- [ ] Tech Debt - Code improvement or refactoring
-- [ ] Chore - Maintenance or setup work
+### What Remains (by design)
+- `sql_buffer` - Still needed as final output buffer passed to sqlite3_prepare_v2()
+- `append_sql()` - Still needed for expression building and WRITE operations
+- `finalize_sql_generation()` - Assembles unified_builder into sql_buffer
+- `prepend_cte_to_sql()` - Prepends CTEs from unified_builder to final SQL
 
-### Priority
-- [ ] P0 - Critical (blocks users/revenue)
-- [ ] P1 - High (important for user experience)
-- [ ] P2 - Medium (nice to have)
-- [ ] P3 - Low (when time permits)
+### Architecture After Cleanup
+```
+unified_builder (sql_cte, sql_select, sql_from, sql_join, sql_where, sql_order_by, sql_limit)
+        ↓
+finalize_sql_generation() → sql_buffer
+        ↓
+prepend_cte_to_sql() → sql_buffer (with CTEs prepended)
+        ↓
+sqlite3_prepare_v2(sql_buffer)
+```
 
-### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: {Number/percentage of users affected}
-- **Reproduction Steps**: 
-  1. {Step 1}
-  2. {Step 2}
-  3. {Step 3}
-- **Expected vs Actual**: {What should happen vs what happens}
-
-### Business Justification **[CONDITIONAL: Feature]**
-- **User Value**: {Why users need this}
-- **Business Value**: {Impact on metrics/revenue}
-- **Effort Estimate**: {Rough size - S/M/L/XL}
-
-### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
-- **Current Problems**: {What's difficult/slow/buggy now}
-- **Benefits of Fixing**: {What improves after refactoring}
-- **Risk Assessment**: {Risks of not addressing this}
-
-## Migration Map
-
-| Old Code | New Code |
-|----------|----------|
-| `append_sql(ctx, "SELECT ...")` | `sql_select(ctx->builder, expr, alias)` |
-| `append_sql(ctx, " ORDER BY %s", e)` | `sql_order_by(ctx->builder, e, desc)` |
-| `append_sql(ctx, " LIMIT %d", n)` | `sql_limit(ctx->builder, n, offset)` |
-
-Note: Expression building within SELECT items still uses append_sql() to build the expression string, then passes to sql_select().
+### Why sql_buffer Can't Be Removed
+1. It's the final output passed to SQLite
+2. Expression building uses it as scratch space (via transform_expression_to_string buffer swap)
+3. WRITE operations (CREATE/SET/DELETE) build SQL directly into it
 
 ## Acceptance Criteria
 
@@ -83,12 +69,11 @@ Note: Expression building within SELECT items still uses append_sql() to build t
 
 ## Acceptance Criteria
 
-## Acceptance Criteria
-
-- [ ] RETURN clause uses sql_select()
-- [ ] ORDER BY uses sql_order_by()
-- [ ] LIMIT/OFFSET uses sql_limit()
-- [ ] All RETURN tests pass
+- [x] cte_prefix and append_cte_prefix() removed
+- [x] Old sql_builder struct already gone
+- [x] Architecture simplified from 3 paths to 2
+- [x] All tests pass (716 C, 160 Python)
+- [x] Clean compile
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

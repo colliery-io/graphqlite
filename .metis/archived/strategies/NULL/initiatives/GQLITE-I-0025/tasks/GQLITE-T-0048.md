@@ -87,6 +87,8 @@ struct cypher_transform_context {
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] sql_builder integrated into context
 - [ ] Context creates/frees builder correctly  
 - [ ] All existing tests pass (use_unified_builder = false)

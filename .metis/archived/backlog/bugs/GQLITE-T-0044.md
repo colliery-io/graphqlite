@@ -1,83 +1,67 @@
 ---
-id: migrate-transform-match-c-to
+id: fix-unwind-create-only-creates-one
 level: task
-title: "Migrate transform_match.c to unified builder"
-short_code: "GQLITE-T-0054"
-created_at: 2025-12-27T04:37:23.731482+00:00
-updated_at: 2025-12-27T04:46:57.397378+00:00
-parent: GQLITE-I-0025
+title: "Fix UNWIND+CREATE - only creates one node instead of iterating"
+short_code: "GQLITE-T-0044"
+created_at: 2025-12-26T03:16:29.344348+00:00
+updated_at: 2025-12-27T19:21:45.298697+00:00
+parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
+  - "#bug"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: NULL
 ---
 
-# Migrate transform_match.c to unified builder
-
-## Phase 1: Migrate READ Queries - MATCH Clause
-
-**Depends on**: GQLITE-T-0053 (Rollback)
-
-## Overview
-
-Migrate `transform_match.c` to use unified builder for ALL SQL generation, not just CTEs.
-
-## Current State
-
-- Uses `append_sql()` for SELECT, FROM, WHERE
-- Uses `sql_builder` struct for OPTIONAL MATCH (deferred WHERE)
-- Mode flag `using_builder` switches between systems
-
-## Target State
-
-- Use `sql_from()` for FROM clauses
-- Use `sql_join()` for JOIN clauses (including LEFT JOIN for OPTIONAL MATCH)
-- Use `sql_where()` for WHERE conditions
-- No mode flags, single code path
-
-## Key Functions to Migrate
-
-1. `transform_match_clause()` - Main entry point
-2. `transform_match_pattern()` - Pattern processing
-3. `build_node_match_sql()` - Node table FROM/JOIN
-4. `build_relationship_match_sql()` - Edge table JOIN
-5. OPTIONAL MATCH handling (LEFT JOIN generation)
-
-## File
-
-`src/backend/transform/transform_match.c`
-
-## Steps
-
-1. Replace `append_sql(ctx, "FROM nodes ...")` with `sql_from(ctx->unified_builder, "nodes", alias)`
-2. Replace join generation with `sql_join(ctx->unified_builder, JOIN_INNER, table, alias, condition)`
-3. Replace OPTIONAL MATCH LEFT JOIN with `sql_join(ctx->unified_builder, JOIN_LEFT, ...)`
-4. Replace WHERE with `sql_where()` / `sql_where_and()`
-5. Remove `using_builder` flag checks
-6. Test OPTIONAL MATCH with WHERE thoroughly
-
-## Success Criteria
-
-- All MATCH tests pass
-- OPTIONAL MATCH with WHERE works correctly
-- No `append_sql()` calls for FROM/JOIN/WHERE in this file
+# Fix UNWIND+CREATE - only creates one node instead of iterating
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[GQLITE-I-0025]]
+[[Parent Initiative]]
 
-## Objective **[REQUIRED]**
+## Objective
 
-{Clear statement of what this task accomplishes}
+Fix UNWIND+CREATE to properly iterate over list items and create a node for each element.
+
+## Reproduction
+
+```cypher
+UNWIND ['Alice', 'Bob', 'Carol'] AS name
+CREATE (n:Person {name: name})
+
+MATCH (n:Person) RETURN n.name
+-- Expected: 3 rows (Alice, Bob, Carol)
+-- Actual: 1 row with NULL name
+```
+
+## Root Cause
+
+The UNWIND transformation creates a CTE with the list values, but the subsequent CREATE clause doesn't properly consume the rows from the CTE. The CREATE only executes once instead of once per unwound row.
+
+## Files
+- `src/backend/transform/transform_unwind.c` - UNWIND transformation
+- `src/backend/executor/cypher_executor.c` - Executor handling of UNWIND+CREATE
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+- [ ] `UNWIND [1,2,3] AS x CREATE (:Node {val: x})` creates 3 nodes
+- [ ] Python test `test_unwind_with_create` passes
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -112,10 +96,6 @@ Migrate `transform_match.c` to use unified builder for ALL SQL generation, not j
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
-
-## Acceptance Criteria
-
-## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

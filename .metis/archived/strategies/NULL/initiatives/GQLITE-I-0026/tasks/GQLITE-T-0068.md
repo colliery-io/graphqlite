@@ -1,11 +1,11 @@
 ---
-id: migrate-transform-return-c-to
+id: document-and-enumerate-existing
 level: task
-title: "Migrate transform_return.c to unified sql_builder"
-short_code: "GQLITE-T-0050"
-created_at: 2025-12-26T20:34:30.365568+00:00
-updated_at: 2025-12-26T22:00:07.139192+00:00
-parent: GQLITE-I-0025
+title: "Document and enumerate existing query patterns"
+short_code: "GQLITE-T-0068"
+created_at: 2025-12-27T17:40:37.807415+00:00
+updated_at: 2025-12-27T17:53:19.171630+00:00
+parent: GQLITE-I-0026
 blocked_by: []
 archived: true
 
@@ -16,20 +16,69 @@ tags:
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: GQLITE-I-0026
 ---
 
-# Migrate transform_return.c to unified sql_builder
-
-*This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
-
-## Parent Initiative **[CONDITIONAL: Assigned Task]**
-
-[[GQLITE-I-0025]]
+# Document and enumerate existing query patterns
 
 ## Objective
 
-Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER BY, and LIMIT/OFFSET.
+Analyze `cypher_executor.c` if-else chain and document all existing query patterns.
+
+## Deliverables
+
+1. **Pattern inventory** - table of all patterns with:
+   - Pattern name
+   - Required clauses
+   - Forbidden clauses
+   - Current handler (inline vs named function)
+   - Line numbers in current code
+
+2. **Pattern registry array** in `query_dispatch.c`:
+```c
+static const query_pattern patterns[] = {
+    { "UNWIND+CREATE", CLAUSE_UNWIND|CLAUSE_CREATE, CLAUSE_RETURN|CLAUSE_MATCH, ... },
+    { "MATCH+RETURN", CLAUSE_MATCH|CLAUSE_RETURN, CLAUSE_CREATE|CLAUSE_SET, ... },
+    // ... all patterns
+    { "GENERIC", 0, 0, execute_generic_query, 0 },  // fallback
+    { NULL, 0, 0, NULL, 0 }  // sentinel
+};
+```
+
+## Known patterns to document
+
+| Pattern | Required | Forbidden | Handler |
+|---------|----------|-----------|---------|
+| UNWIND+CREATE | UNWIND, CREATE | RETURN, MATCH | inline (~70 lines) |
+| MATCH+RETURN | MATCH, RETURN | CREATE, SET, DELETE, MERGE | transform pipeline |
+| MATCH+OPTIONAL+RETURN | MATCH, OPTIONAL, RETURN | CREATE, SET, DELETE | transform pipeline |
+| MATCH+CREATE | MATCH, CREATE | - | execute_match_create_query |
+| MATCH+SET | MATCH, SET | - | execute_match_set_query |
+| MATCH+DELETE | MATCH, DELETE | - | execute_match_delete_query |
+| MATCH+MERGE | MATCH, MERGE | - | execute_match_merge_query |
+| CREATE only | CREATE | MATCH | direct insert |
+| RETURN only | RETURN | MATCH | transform pipeline |
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [ ] All patterns from if-else chain identified
+- [ ] Pattern registry compiles
+- [ ] No patterns missed (verified by code review)
+- [ ] Priority ordering correct (specific patterns before general)
+
+## Parent Initiative **[CONDITIONAL: Assigned Task]**
+
+[[GQLITE-I-0026]]
+
+## Objective **[REQUIRED]**
+
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -65,30 +114,11 @@ Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER 
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Migration Map
+## Acceptance Criteria **[REQUIRED]**
 
-| Old Code | New Code |
-|----------|----------|
-| `append_sql(ctx, "SELECT ...")` | `sql_select(ctx->builder, expr, alias)` |
-| `append_sql(ctx, " ORDER BY %s", e)` | `sql_order_by(ctx->builder, e, desc)` |
-| `append_sql(ctx, " LIMIT %d", n)` | `sql_limit(ctx->builder, n, offset)` |
-
-Note: Expression building within SELECT items still uses append_sql() to build the expression string, then passes to sql_select().
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-
-- [ ] RETURN clause uses sql_select()
-- [ ] ORDER BY uses sql_order_by()
-- [ ] LIMIT/OFFSET uses sql_limit()
-- [ ] All RETURN tests pass
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

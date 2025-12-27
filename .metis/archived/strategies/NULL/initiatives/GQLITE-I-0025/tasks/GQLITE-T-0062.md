@@ -1,61 +1,90 @@
 ---
-id: fix-unwind-create-only-creates-one
+id: migrate-foreach-clause-to-unified
 level: task
-title: "Fix UNWIND+CREATE - only creates one node instead of iterating"
-short_code: "GQLITE-T-0044"
-created_at: 2025-12-26T03:16:29.344348+00:00
-updated_at: 2025-12-26T03:21:24.361246+00:00
-parent: 
+title: "Migrate FOREACH clause to unified builder"
+short_code: "GQLITE-T-0062"
+created_at: 2025-12-27T04:37:37.480770+00:00
+updated_at: 2025-12-27T13:49:53.752024+00:00
+parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#bug"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0025
 ---
 
-# Fix UNWIND+CREATE - only creates one node instead of iterating
+# Migrate FOREACH clause to unified builder
+
+## Phase 2: Migrate CTEs - FOREACH Clause
+
+**Depends on**: GQLITE-T-0061 (Migrate graph algorithms)
+
+## Overview
+
+Migrate `transform_foreach.c` to use `sql_cte()` for FOREACH iteration.
+
+## File
+
+`src/backend/transform/transform_foreach.c`
+
+## Current State (after rollback)
+
+- Uses `append_cte_prefix()` for iteration CTE
+- Generates `json_each()` based CTE for list expansion
+
+## FOREACH Transformation
+
+```cypher
+FOREACH (x IN [1,2,3] | CREATE (n {val: x}))
+```
+→
+```sql
+WITH foreach_data AS (
+  SELECT value AS x FROM json_each(json_array(1,2,3))
+)
+INSERT INTO nodes (id, properties)
+SELECT generate_id(), json_object('val', x) FROM foreach_data
+```
+
+## Target State
+
+- Build CTE in local `dynamic_buffer`
+- Call `sql_cte(ctx->unified_builder, "foreach_data", query, false)`
+- Body execution handled imperatively in executor
+
+## Steps
+
+1. Build json_each CTE query in local buffer
+2. Call `sql_cte(ctx->unified_builder, cte_name, query, false)`
+3. Register loop variable with `transform_var_register_projected()`
+4. Free local buffer
+
+## Note
+
+FOREACH body is executed imperatively in the executor, not transformed to SQL.
+The CTE just provides the iteration data source.
+
+## Success Criteria
+
+- FOREACH tests pass
+- Nested data structures work
+- No `append_cte_prefix()` calls
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0025]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Fix UNWIND+CREATE to properly iterate over list items and create a node for each element.
-
-## Reproduction
-
-```cypher
-UNWIND ['Alice', 'Bob', 'Carol'] AS name
-CREATE (n:Person {name: name})
-
-MATCH (n:Person) RETURN n.name
--- Expected: 3 rows (Alice, Bob, Carol)
--- Actual: 1 row with NULL name
-```
-
-## Root Cause
-
-The UNWIND transformation creates a CTE with the list values, but the subsequent CREATE clause doesn't properly consume the rows from the CTE. The CREATE only executes once instead of once per unwound row.
-
-## Files
-- `src/backend/transform/transform_unwind.c` - UNWIND transformation
-- `src/backend/executor/cypher_executor.c` - Executor handling of UNWIND+CREATE
-
-## Acceptance Criteria
-
-## Acceptance Criteria
-- [ ] `UNWIND [1,2,3] AS x CREATE (:Node {val: x})` creates 3 nodes
-- [ ] Python test `test_unwind_with_create` passes
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -90,6 +119,12 @@ The UNWIND transformation creates a CTE with the list values, but the subsequent
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

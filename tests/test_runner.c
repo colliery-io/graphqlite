@@ -48,6 +48,7 @@ int init_executor_patterns_suite(void);
 int init_executor_functions_suite(void);
 int init_executor_predicates_suite(void);
 int init_sql_builder_suite(void);
+int init_query_dispatch_suite(void);
 
 int main(void)
 {
@@ -312,6 +313,12 @@ int main(void)
 
     if (init_sql_builder_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add SQL builder suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_query_dispatch_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add query dispatch suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

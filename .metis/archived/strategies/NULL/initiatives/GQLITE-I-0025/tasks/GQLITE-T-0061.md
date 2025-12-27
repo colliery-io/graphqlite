@@ -1,13 +1,13 @@
 ---
-id: migrate-foreach-clause-to-unified
+id: migrate-graph-algorithm-functions
 level: task
-title: "Migrate FOREACH clause to unified builder"
-short_code: "GQLITE-T-0062"
-created_at: 2025-12-27T04:37:37.480770+00:00
-updated_at: 2025-12-27T13:49:53.752024+00:00
+title: "Migrate graph algorithm functions to unified builder"
+short_code: "GQLITE-T-0061"
+created_at: 2025-12-27T04:37:37.272021+00:00
+updated_at: 2025-12-27T13:47:35.706099+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,61 +19,56 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate FOREACH clause to unified builder
+# Migrate graph algorithm functions to unified builder
 
-## Phase 2: Migrate CTEs - FOREACH Clause
+## Phase 2: Migrate CTEs - Graph Algorithms
 
-**Depends on**: GQLITE-T-0061 (Migrate graph algorithms)
+**Depends on**: GQLITE-T-0058 (Migrate WITH CTEs)
 
 ## Overview
 
-Migrate `transform_foreach.c` to use `sql_cte()` for FOREACH iteration.
+Migrate graph algorithm functions in `transform_func_graph.c` to use `sql_cte()`.
+
+## Functions to Migrate
+
+1. `transform_pagerank()` - PageRank algorithm CTE
+2. `transform_top_pagerank()` - Top N PageRank results
+3. `transform_personalized_pagerank()` - Personalized PageRank
+4. `transform_label_propagation()` - Label propagation clustering
+5. `transform_community_of()` - Get community for a node
+6. `transform_community_members()` - Get nodes in a community
+7. `transform_community_count()` - Count communities
 
 ## File
 
-`src/backend/transform/transform_foreach.c`
+`src/backend/transform/transform_func_graph.c`
 
 ## Current State (after rollback)
 
-- Uses `append_cte_prefix()` for iteration CTE
-- Generates `json_each()` based CTE for list expansion
-
-## FOREACH Transformation
-
-```cypher
-FOREACH (x IN [1,2,3] | CREATE (n {val: x}))
-```
-→
-```sql
-WITH foreach_data AS (
-  SELECT value AS x FROM json_each(json_array(1,2,3))
-)
-INSERT INTO nodes (id, properties)
-SELECT generate_id(), json_object('val', x) FROM foreach_data
-```
+- Uses `append_cte_prefix()` for algorithm CTEs
+- Complex recursive CTEs for iterative algorithms
 
 ## Target State
 
 - Build CTE in local `dynamic_buffer`
-- Call `sql_cte(ctx->unified_builder, "foreach_data", query, false)`
-- Body execution handled imperatively in executor
+- Call `sql_cte(ctx->unified_builder, name, query, recursive)`
+- PageRank and label propagation use recursive CTEs
 
-## Steps
+## Pattern
 
-1. Build json_each CTE query in local buffer
-2. Call `sql_cte(ctx->unified_builder, cte_name, query, false)`
-3. Register loop variable with `transform_var_register_projected()`
-4. Free local buffer
-
-## Note
-
-FOREACH body is executed imperatively in the executor, not transformed to SQL.
-The CTE just provides the iteration data source.
+```c
+dynamic_buffer cte;
+dbuf_init(&cte);
+dbuf_appendf(&cte, "WITH RECURSIVE pagerank AS (...) SELECT ...");
+sql_cte(ctx->unified_builder, "pagerank_result", dbuf_get(&cte), true);
+dbuf_free(&cte);
+```
 
 ## Success Criteria
 
-- FOREACH tests pass
-- Nested data structures work
+- All graph algorithm tests pass
+- PageRank returns correct results
+- Label propagation returns correct communities
 - No `append_cte_prefix()` calls
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
@@ -119,6 +114,8 @@ The CTE just provides the iteration data source.
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

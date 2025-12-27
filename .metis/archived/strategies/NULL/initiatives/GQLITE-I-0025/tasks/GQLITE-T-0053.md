@@ -1,13 +1,13 @@
 ---
-id: migrate-with-clause-ctes-to
+id: rollback-partial-cte-migrations-to
 level: task
-title: "Migrate WITH clause CTEs to unified builder"
-short_code: "GQLITE-T-0058"
-created_at: 2025-12-27T04:37:24.578487+00:00
-updated_at: 2025-12-27T13:22:18.785051+00:00
+title: "Rollback partial CTE migrations to restore tests"
+short_code: "GQLITE-T-0053"
+created_at: 2025-12-27T04:37:23.570393+00:00
+updated_at: 2025-12-27T04:44:15.182733+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,70 +19,57 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate WITH clause CTEs to unified builder
+# Rollback partial CTE migrations to restore tests
 
-## Phase 2: Migrate CTEs - WITH Clause
+## Phase 0: Immediate Fix
 
-**Depends on**: GQLITE-T-0057 (Migrate UNWIND CTEs)
+**Priority**: CRITICAL - Must be done first to restore test suite
 
-## Overview
+## Problem
 
-Migrate `transform_with.c` to use `sql_cte()` for WITH clause subqueries.
-
-## Current State (after rollback)
-
-- Uses `append_cte_prefix()` for CTE
-- Captures current sql_buffer as CTE body
-- Works but uses legacy buffer
-
-## Target State
-
-- Finalize current unified_builder as CTE body
-- Call `sql_cte(ctx->unified_builder, name, body, false)`
-- Reset builder for next clause chain
-- Single unified code path
-
-## Key Functions
-
-1. `transform_with_clause()` - WITH clause transformation
-
-## File
-
-`src/backend/transform/transform_with.c`
-
-## WITH Transformation
-
-```cypher
-MATCH (n) WITH n.name AS name RETURN name
+The partial migration broke tests with duplicate CTEs:
 ```
-→
-```sql
-WITH _with_0 AS (
-  SELECT n.name AS name FROM nodes n
-)
-SELECT _with_0.name AS name FROM _with_0
+WITH _unwind_0 AS (...) WITH _unwind_0 AS (...) SELECT ...
 ```
+
+## Files to Revert
+
+| File | Revert From | Revert To |
+|------|-------------|-----------|
+| `transform_unwind.c` | `sql_cte()` | `append_cte_prefix()` |
+| `transform_foreach.c` | `sql_cte()` | `append_cte_prefix()` |
+| `transform_func_graph.c` | `sql_cte()` | `append_cte_prefix()` |
+| `transform_with.c` | `sql_cte()` | `append_cte_prefix()` |
+| `cypher_transform.c` | `sql_cte()` in `generate_varlen_cte()` | `append_cte_prefix()` |
 
 ## Steps
 
-1. Finalize current builder state via `sql_builder_to_string()`
-2. Call `sql_cte(ctx->unified_builder, cte_name, finalized_sql, false)`
-3. Reset builder for subsequent clauses
-4. Register projected variables for the new scope
+1. Revert `transform_unwind.c`:
+   - Remove local `cte_appendf()` helper
+   - Replace `sql_cte(ctx->unified_builder, ...)` with `append_cte_prefix(ctx, ...)`
+   - Keep using `append_sql()` for SELECT/FROM
 
-## Complexity
+2. Revert `transform_foreach.c`:
+   - Remove `sql_cte()` calls
+   - Use `append_cte_prefix()` for CTE generation
 
-WITH clause is tricky because:
-- It captures everything before it as a CTE
-- It creates a new variable scope
-- Multiple WITH clauses chain together
+3. Revert `transform_func_graph.c`:
+   - Revert all 6 graph algorithm functions (PageRank, labelPropagation, etc.)
+   - Replace `sql_cte()` with `append_cte_prefix()`
+
+4. Revert `transform_with.c`:
+   - Remove `sql_cte()` usage
+   - Use `append_cte_prefix()` for WITH clause CTEs
+
+5. Revert `cypher_transform.c`:
+   - Revert `generate_varlen_cte()` to use `append_cte_prefix()`
+   - Ensure `prepend_cte_to_sql()` only uses `cte_prefix` buffer
 
 ## Success Criteria
 
-- WITH clause tests pass
-- Chained WITH clauses work
-- Variable scoping correct
-- No `append_cte_prefix()` calls
+- All 716 C unit tests pass
+- All 160 Python tests pass
+- No duplicate CTEs in generated SQL
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -127,6 +114,8 @@ WITH clause is tricky because:
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
