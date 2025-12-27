@@ -5,12 +5,93 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include "executor/agtype.h"
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
 static int load_node_properties(sqlite3 *db, int64_t node_id, agtype_pair **pairs, int *num_pairs);
 static int load_edge_properties(sqlite3 *db, int64_t edge_id, agtype_pair **pairs, int *num_pairs);
+
+/* Dynamic string buffer for safe JSON building */
+typedef struct {
+    char *data;
+    size_t len;
+    size_t capacity;
+} strbuf;
+
+static void strbuf_init(strbuf *sb, size_t initial_capacity)
+{
+    sb->capacity = initial_capacity > 64 ? initial_capacity : 64;
+    sb->data = malloc(sb->capacity);
+    sb->len = 0;
+    if (sb->data) sb->data[0] = '\0';
+}
+
+static void strbuf_free(strbuf *sb)
+{
+    free(sb->data);
+    sb->data = NULL;
+    sb->len = 0;
+    sb->capacity = 0;
+}
+
+static int strbuf_ensure(strbuf *sb, size_t additional)
+{
+    if (!sb->data) return -1;
+    size_t needed = sb->len + additional + 1;
+    if (needed <= sb->capacity) return 0;
+
+    size_t new_cap = sb->capacity * 2;
+    while (new_cap < needed) new_cap *= 2;
+
+    char *new_data = realloc(sb->data, new_cap);
+    if (!new_data) return -1;
+
+    sb->data = new_data;
+    sb->capacity = new_cap;
+    return 0;
+}
+
+static int strbuf_append(strbuf *sb, const char *str)
+{
+    if (!str) return 0;
+    size_t slen = strlen(str);
+    if (strbuf_ensure(sb, slen) != 0) return -1;
+    memcpy(sb->data + sb->len, str, slen + 1);
+    sb->len += slen;
+    return 0;
+}
+
+static int strbuf_appendf(strbuf *sb, const char *fmt, ...)
+{
+    va_list args, args_copy;
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    if (needed < 0 || strbuf_ensure(sb, needed) != 0) {
+        va_end(args_copy);
+        return -1;
+    }
+
+    vsnprintf(sb->data + sb->len, needed + 1, fmt, args_copy);
+    sb->len += needed;
+    va_end(args_copy);
+    return 0;
+}
+
+/* Take ownership of the buffer data (caller must free) */
+static char* strbuf_take(strbuf *sb)
+{
+    char *data = sb->data;
+    sb->data = NULL;
+    sb->len = 0;
+    sb->capacity = 0;
+    return data;
+}
 
 /* Create a NULL agtype value */
 agtype_value* agtype_value_create_null(void)
@@ -310,6 +391,41 @@ agtype_value* agtype_value_from_edge_json(sqlite3 *db, const char *json)
     return val;
 }
 
+/* Deep copy an agtype value */
+agtype_value* agtype_value_copy(agtype_value *src)
+{
+    if (!src) return NULL;
+
+    agtype_value *dst = malloc(sizeof(agtype_value));
+    if (!dst) return NULL;
+
+    dst->type = src->type;
+
+    switch (src->type) {
+        case AGTV_NULL:
+            break;
+        case AGTV_STRING:
+            dst->val.string.val = src->val.string.val ? strdup(src->val.string.val) : NULL;
+            dst->val.string.len = src->val.string.len;
+            break;
+        case AGTV_INTEGER:
+            dst->val.int_value = src->val.int_value;
+            break;
+        case AGTV_FLOAT:
+            dst->val.float_value = src->val.float_value;
+            break;
+        case AGTV_BOOL:
+            dst->val.boolean = src->val.boolean;
+            break;
+        default:
+            /* For complex types, just copy the value (shallow) */
+            dst->val = src->val;
+            break;
+    }
+
+    return dst;
+}
+
 /* Create a path agtype value from array of vertex/edge values */
 agtype_value* agtype_value_create_path(agtype_value **elements, int num_elements)
 {
@@ -373,13 +489,41 @@ agtype_value* agtype_value_create_path(agtype_value **elements, int num_elements
             if (elements[i]->val.entity.label) {
                 val->val.array.elems[i].val.entity.label = strdup(elements[i]->val.entity.label);
             }
-            /* TODO: Deep copy properties if needed */
+            /* Deep copy properties */
+            if (elements[i]->val.entity.pairs && elements[i]->val.entity.num_pairs > 0) {
+                int npairs = elements[i]->val.entity.num_pairs;
+                val->val.array.elems[i].val.entity.pairs = malloc(npairs * sizeof(agtype_pair));
+                if (val->val.array.elems[i].val.entity.pairs) {
+                    for (int j = 0; j < npairs; j++) {
+                        val->val.array.elems[i].val.entity.pairs[j].key =
+                            agtype_value_copy(elements[i]->val.entity.pairs[j].key);
+                        val->val.array.elems[i].val.entity.pairs[j].value =
+                            agtype_value_copy(elements[i]->val.entity.pairs[j].value);
+                    }
+                }
+            } else {
+                val->val.array.elems[i].val.entity.pairs = NULL;
+            }
         } else if (elements[i]->type == AGTV_EDGE) {
             /* Deep copy edge label string */
             if (elements[i]->val.edge.label) {
                 val->val.array.elems[i].val.edge.label = strdup(elements[i]->val.edge.label);
             }
-            /* TODO: Deep copy properties if needed */
+            /* Deep copy properties */
+            if (elements[i]->val.edge.pairs && elements[i]->val.edge.num_pairs > 0) {
+                int npairs = elements[i]->val.edge.num_pairs;
+                val->val.array.elems[i].val.edge.pairs = malloc(npairs * sizeof(agtype_pair));
+                if (val->val.array.elems[i].val.edge.pairs) {
+                    for (int j = 0; j < npairs; j++) {
+                        val->val.array.elems[i].val.edge.pairs[j].key =
+                            agtype_value_copy(elements[i]->val.edge.pairs[j].key);
+                        val->val.array.elems[i].val.edge.pairs[j].value =
+                            agtype_value_copy(elements[i]->val.edge.pairs[j].value);
+                    }
+                }
+            } else {
+                val->val.array.elems[i].val.edge.pairs = NULL;
+            }
         }
     }
     
@@ -433,17 +577,25 @@ void agtype_value_free(agtype_value *val)
             if (val->val.array.elems) {
                 for (int i = 0; i < val->val.array.num_elems; i++) {
                     CYPHER_DEBUG("agtype_value_free: Freeing path element %d of type %d", i, val->val.array.elems[i].type);
-                    /* Free allocated strings in each element */
+                    /* Free allocated strings and properties in each element */
                     if (val->val.array.elems[i].type == AGTV_VERTEX) {
                         free(val->val.array.elems[i].val.entity.label);
                         if (val->val.array.elems[i].val.entity.pairs) {
-                            /* TODO: Free properties properly */
+                            /* Free each property key/value pair */
+                            for (int j = 0; j < val->val.array.elems[i].val.entity.num_pairs; j++) {
+                                agtype_value_free(val->val.array.elems[i].val.entity.pairs[j].key);
+                                agtype_value_free(val->val.array.elems[i].val.entity.pairs[j].value);
+                            }
                             free(val->val.array.elems[i].val.entity.pairs);
                         }
                     } else if (val->val.array.elems[i].type == AGTV_EDGE) {
                         free(val->val.array.elems[i].val.edge.label);
                         if (val->val.array.elems[i].val.edge.pairs) {
-                            /* TODO: Free properties properly */
+                            /* Free each property key/value pair */
+                            for (int j = 0; j < val->val.array.elems[i].val.edge.num_pairs; j++) {
+                                agtype_value_free(val->val.array.elems[i].val.edge.pairs[j].key);
+                                agtype_value_free(val->val.array.elems[i].val.edge.pairs[j].value);
+                            }
                             free(val->val.array.elems[i].val.edge.pairs);
                         }
                     }
@@ -749,141 +901,94 @@ char* agtype_value_to_string(agtype_value *val)
             
         case AGTV_VERTEX: {
             /* OpenCypher format: {"id": 123, "labels": ["Person"], "properties": {"name": "Alice"}} */
-            int base_size = 200;
-            if (val->val.entity.label) {
-                base_size += strlen(val->val.entity.label);
+            strbuf sb;
+            strbuf_init(&sb, 256);
+
+            /* Use "labels" as array per OpenCypher spec */
+            if (val->val.entity.label && strlen(val->val.entity.label) > 0) {
+                strbuf_appendf(&sb, "{\"id\": %lld, \"labels\": [\"%s\"], \"properties\": {",
+                    (long long)val->val.entity.id,
+                    val->val.entity.label);
+            } else {
+                strbuf_appendf(&sb, "{\"id\": %lld, \"labels\": [], \"properties\": {",
+                    (long long)val->val.entity.id);
             }
 
-            /* Calculate size needed for properties */
+            /* Add properties with safe dynamic appending */
             for (int i = 0; i < val->val.entity.num_pairs; i++) {
                 if (val->val.entity.pairs[i].key && val->val.entity.pairs[i].value) {
+                    if (i > 0) strbuf_append(&sb, ", ");
+
                     char *key_str = agtype_value_to_string(val->val.entity.pairs[i].key);
                     char *value_str = agtype_value_to_string(val->val.entity.pairs[i].value);
                     if (key_str && value_str) {
-                        base_size += strlen(key_str) + strlen(value_str) + 10; /* quotes, colon, comma */
+                        strbuf_append(&sb, key_str);
+                        strbuf_append(&sb, ": ");
+                        strbuf_append(&sb, value_str);
                     }
                     free(key_str);
                     free(value_str);
                 }
             }
 
-            result = malloc(base_size);
-            if (result) {
-                /* Use "labels" as array per OpenCypher spec */
-                if (val->val.entity.label && strlen(val->val.entity.label) > 0) {
-                    snprintf(result, base_size,
-                        "{\"id\": %lld, \"labels\": [\"%s\"], \"properties\": {",
-                        (long long)val->val.entity.id,
-                        val->val.entity.label);
-                } else {
-                    snprintf(result, base_size,
-                        "{\"id\": %lld, \"labels\": [], \"properties\": {",
-                        (long long)val->val.entity.id);
-                }
-
-                /* Add properties */
-                for (int i = 0; i < val->val.entity.num_pairs; i++) {
-                    if (val->val.entity.pairs[i].key && val->val.entity.pairs[i].value) {
-                        if (i > 0) strcat(result, ", ");
-
-                        char *key_str = agtype_value_to_string(val->val.entity.pairs[i].key);
-                        char *value_str = agtype_value_to_string(val->val.entity.pairs[i].value);
-                        if (key_str && value_str) {
-                            strcat(result, key_str);
-                            strcat(result, ": ");
-                            strcat(result, value_str);
-                        }
-                        free(key_str);
-                        free(value_str);
-                    }
-                }
-
-                strcat(result, "}}");
-            }
+            strbuf_append(&sb, "}}");
+            result = strbuf_take(&sb);
             break;
         }
         
         case AGTV_EDGE: {
             /* OpenCypher format: {"id": 123, "type": "KNOWS", "startNode": 456, "endNode": 789, "properties": {...}} */
-            int base_size = 250;
-            if (val->val.edge.label) {
-                base_size += strlen(val->val.edge.label);
-            }
+            strbuf sb;
+            strbuf_init(&sb, 256);
 
-            /* Calculate size needed for properties */
+            /* Use "type" instead of "label", and "startNode"/"endNode" per OpenCypher */
+            strbuf_appendf(&sb,
+                "{\"id\": %lld, \"type\": \"%s\", \"startNode\": %lld, \"endNode\": %lld, \"properties\": {",
+                (long long)val->val.edge.id,
+                val->val.edge.label ? val->val.edge.label : "",
+                (long long)val->val.edge.start_id,
+                (long long)val->val.edge.end_id);
+
+            /* Add properties with safe dynamic appending */
             for (int i = 0; i < val->val.edge.num_pairs; i++) {
                 if (val->val.edge.pairs[i].key && val->val.edge.pairs[i].value) {
+                    if (i > 0) strbuf_append(&sb, ", ");
+
                     char *key_str = agtype_value_to_string(val->val.edge.pairs[i].key);
                     char *value_str = agtype_value_to_string(val->val.edge.pairs[i].value);
                     if (key_str && value_str) {
-                        base_size += strlen(key_str) + strlen(value_str) + 10; /* quotes, colon, comma */
+                        strbuf_append(&sb, key_str);
+                        strbuf_append(&sb, ": ");
+                        strbuf_append(&sb, value_str);
                     }
                     free(key_str);
                     free(value_str);
                 }
             }
 
-            result = malloc(base_size);
-            if (result) {
-                /* Use "type" instead of "label", and "startNode"/"endNode" per OpenCypher */
-                snprintf(result, base_size,
-                    "{\"id\": %lld, \"type\": \"%s\", \"startNode\": %lld, \"endNode\": %lld, \"properties\": {",
-                    (long long)val->val.edge.id,
-                    val->val.edge.label ? val->val.edge.label : "",
-                    (long long)val->val.edge.start_id,
-                    (long long)val->val.edge.end_id);
-
-                /* Add properties */
-                for (int i = 0; i < val->val.edge.num_pairs; i++) {
-                    if (val->val.edge.pairs[i].key && val->val.edge.pairs[i].value) {
-                        if (i > 0) strcat(result, ", ");
-
-                        char *key_str = agtype_value_to_string(val->val.edge.pairs[i].key);
-                        char *value_str = agtype_value_to_string(val->val.edge.pairs[i].value);
-                        if (key_str && value_str) {
-                            strcat(result, key_str);
-                            strcat(result, ": ");
-                            strcat(result, value_str);
-                        }
-                        free(key_str);
-                        free(value_str);
-                    }
-                }
-
-                strcat(result, "}}");
-            }
+            strbuf_append(&sb, "}}");
+            result = strbuf_take(&sb);
             break;
         }
         
         case AGTV_PATH: {
             /* Path as JSON array of alternating vertices and edges */
-            int base_size = 50;
+            strbuf sb;
+            strbuf_init(&sb, 256);
+            strbuf_append(&sb, "[");
 
-            /* Calculate size needed for all elements */
             for (int i = 0; i < val->val.array.num_elems; i++) {
+                if (i > 0) strbuf_append(&sb, ", ");
+
                 char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
                 if (elem_str) {
-                    base_size += strlen(elem_str) + 2; /* element + comma/space */
+                    strbuf_append(&sb, elem_str);
                     free(elem_str);
                 }
             }
 
-            result = malloc(base_size);
-            if (result) {
-                strcpy(result, "[");
-
-                for (int i = 0; i < val->val.array.num_elems; i++) {
-                    if (i > 0) strcat(result, ", ");
-
-                    char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
-                    if (elem_str) {
-                        strcat(result, elem_str);
-                        free(elem_str);
-                    }
-                }
-
-                strcat(result, "]");
-            }
+            strbuf_append(&sb, "]");
+            result = strbuf_take(&sb);
             break;
         }
         

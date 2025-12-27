@@ -9,6 +9,7 @@
 #include <stdarg.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /* Initial buffer sizes */
@@ -151,9 +152,15 @@ void append_identifier(cypher_transform_context *ctx, const char *name)
 
 void append_string_literal(cypher_transform_context *ctx, const char *value)
 {
-    /* SQLite uses single quotes for strings */
-    /* TODO: Proper escaping */
-    append_sql(ctx, "'%s'", value);
+    /* SQLite uses single quotes for strings - escape embedded quotes */
+    char *escaped = escape_sql_string(value);
+    if (escaped) {
+        append_sql(ctx, "'%s'", escaped);
+        free(escaped);
+    } else {
+        /* Fallback if allocation fails */
+        append_sql(ctx, "'%s'", value ? value : "");
+    }
 }
 
 /* Parameter tracking */
