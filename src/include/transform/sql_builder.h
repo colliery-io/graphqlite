@@ -245,4 +245,53 @@ char *sql_builder_to_string(sql_builder *b);
  */
 char *sql_builder_to_subquery(sql_builder *b);
 
+/*
+ * =============================================================================
+ * Builder State Extraction
+ * =============================================================================
+ * Functions to read builder state without generating full SQL.
+ * Used by WITH/UNWIND to extract FROM/JOIN/WHERE for CTE construction.
+ */
+
+/*
+ * Get the FROM clause content (table and alias).
+ * Returns NULL if no FROM clause set.
+ * Returned pointer is valid until builder is modified.
+ */
+const char *sql_builder_get_from(sql_builder *b);
+
+/*
+ * Get the JOIN clauses content.
+ * Returns NULL if no JOINs added.
+ */
+const char *sql_builder_get_joins(sql_builder *b);
+
+/*
+ * Get the WHERE clause content (conditions only, no "WHERE" keyword).
+ * Returns NULL if no WHERE conditions.
+ */
+const char *sql_builder_get_where(sql_builder *b);
+
+/*
+ * Get the GROUP BY clause content.
+ * Returns NULL if no GROUP BY.
+ */
+const char *sql_builder_get_group_by(sql_builder *b);
+
+/*
+ * Get the SELECT clause content (columns only, no "SELECT" keyword).
+ * Returns NULL if no SELECT columns added.
+ */
+const char *sql_builder_get_select(sql_builder *b);
+
+/*
+ * Check if the builder has any FROM clause content.
+ */
+bool sql_builder_has_from(sql_builder *b);
+
+/*
+ * Check if the builder has any SELECT columns.
+ */
+bool sql_builder_has_select(sql_builder *b);
+
 #endif /* SQL_BUILDER_H */

@@ -643,3 +643,87 @@ char *sql_builder_to_subquery(sql_builder *b)
 
     return dbuf_finish(&result);
 }
+
+/*
+ * =============================================================================
+ * Builder State Extraction Functions
+ * =============================================================================
+ * These functions allow reading builder state without generating full SQL.
+ * Used by WITH/UNWIND to extract FROM/JOIN/WHERE for CTE construction.
+ */
+
+/*
+ * Get the FROM clause content (table and alias).
+ * Returns NULL if no FROM clause set.
+ */
+const char *sql_builder_get_from(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->from)) {
+        return NULL;
+    }
+    return dbuf_get(&b->from);
+}
+
+/*
+ * Get the JOIN clauses content.
+ * Returns NULL if no JOINs added.
+ */
+const char *sql_builder_get_joins(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->joins)) {
+        return NULL;
+    }
+    return dbuf_get(&b->joins);
+}
+
+/*
+ * Get the WHERE clause content (conditions only, no "WHERE" keyword).
+ * Returns NULL if no WHERE conditions.
+ */
+const char *sql_builder_get_where(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->where)) {
+        return NULL;
+    }
+    return dbuf_get(&b->where);
+}
+
+/*
+ * Get the GROUP BY clause content.
+ * Returns NULL if no GROUP BY.
+ */
+const char *sql_builder_get_group_by(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->group_by)) {
+        return NULL;
+    }
+    return dbuf_get(&b->group_by);
+}
+
+/*
+ * Get the SELECT clause content (columns only, no "SELECT" keyword).
+ * Returns NULL if no SELECT columns added (would default to "*").
+ */
+const char *sql_builder_get_select(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->select)) {
+        return NULL;
+    }
+    return dbuf_get(&b->select);
+}
+
+/*
+ * Check if the builder has any FROM clause content.
+ */
+bool sql_builder_has_from(sql_builder *b)
+{
+    return b && !dbuf_is_empty(&b->from);
+}
+
+/*
+ * Check if the builder has any SELECT columns.
+ */
+bool sql_builder_has_select(sql_builder *b)
+{
+    return b && b->select_count > 0;
+}

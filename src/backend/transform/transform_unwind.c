@@ -10,6 +10,7 @@
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /**
@@ -35,13 +36,37 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_unwind_%d", unwind_cte_counter++);
 
-    /* Get inner SQL from unified builder if any (from previous clauses like MATCH) */
+    /*
+     * Build inner SQL from builder state directly.
+     * This avoids the SELECT * pattern - we explicitly build the subquery.
+     */
     char *inner_sql = NULL;
     char *saved_cte = NULL;
     int saved_cte_count = 0;
-    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
-        /* Use subquery (no CTEs) - CTEs will be preserved at parent level */
-        inner_sql = sql_builder_to_subquery(ctx->unified_builder);
+
+    if (ctx->unified_builder && sql_builder_has_from(ctx->unified_builder)) {
+        /* Extract builder state */
+        const char *from_clause = sql_builder_get_from(ctx->unified_builder);
+        const char *joins_clause = sql_builder_get_joins(ctx->unified_builder);
+        const char *where_clause = sql_builder_get_where(ctx->unified_builder);
+
+        /* Build subquery: SELECT * FROM <from><joins> WHERE <where> */
+        dynamic_buffer subquery;
+        dbuf_init(&subquery);
+
+        dbuf_append(&subquery, "SELECT * FROM ");
+        dbuf_append(&subquery, from_clause);
+
+        if (joins_clause) {
+            dbuf_append(&subquery, joins_clause);
+        }
+
+        if (where_clause) {
+            dbuf_append(&subquery, " WHERE ");
+            dbuf_append(&subquery, where_clause);
+        }
+
+        inner_sql = dbuf_finish(&subquery);
 
         /* Save CTE buffer before reset */
         if (!dbuf_is_empty(&ctx->unified_builder->cte)) {

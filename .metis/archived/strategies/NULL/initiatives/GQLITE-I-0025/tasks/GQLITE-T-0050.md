@@ -1,13 +1,13 @@
 ---
-id: migrate-remaining-clauses-with
+id: migrate-transform-return-c-to
 level: task
-title: "Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)"
-short_code: "GQLITE-T-0051"
-created_at: 2025-12-26T20:34:30.551046+00:00
-updated_at: 2025-12-27T14:17:52.489175+00:00
+title: "Migrate transform_return.c to unified sql_builder"
+short_code: "GQLITE-T-0050"
+created_at: 2025-12-26T20:34:30.365568+00:00
+updated_at: 2025-12-26T22:00:07.139192+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,7 +19,7 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)
+# Migrate transform_return.c to unified sql_builder
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -29,26 +29,51 @@ initiative_id: GQLITE-I-0025
 
 ## Objective
 
-Migrate remaining transform files to unified sql_builder where beneficial.
+Convert transform_return.c to use unified sql_builder for SELECT columns, ORDER BY, and LIMIT/OFFSET.
 
-## Status: PARTIALLY COMPLETE
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
-### What Was Completed (via other tasks)
-- ✅ transform_with.c - CTEs migrated to sql_cte(), saves/restores across reset
-- ✅ transform_unwind.c - CTEs migrated to sql_cte(), uses sql_select(), sql_from()
-- ✅ transform_foreach.c - CTEs migrated to sql_cte()
-- ✅ transform_return.c - Unified builder path for MATCH+RETURN and standalone RETURN
+{Delete this section when task is assigned to an initiative}
 
-### What Stays As-Is (by design)
-- transform_create.c - Uses append_sql() for INSERT (different SQL structure)
-- transform_set.c - Uses append_sql() for UPDATE (different SQL structure)  
-- transform_delete.c - Uses append_sql() for DELETE (different SQL structure)
-- transform_merge.c - Uses append_sql() for INSERT/UPDATE (different SQL structure)
+### Type
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
-### Remaining Legacy Paths in transform_return.c
-- SELECT * replacement logic (string manipulation)
-- RETURN after WITH (modifies existing SQL)
-- Expression building (json_object, COLLECT, paths) - encapsulated, acceptable
+### Priority
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
+
+### Impact Assessment **[CONDITIONAL: Bug]**
+- **Affected Users**: {Number/percentage of users affected}
+- **Reproduction Steps**: 
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
+
+### Business Justification **[CONDITIONAL: Feature]**
+- **User Value**: {Why users need this}
+- **Business Value**: {Impact on metrics/revenue}
+- **Effort Estimate**: {Rough size - S/M/L/XL}
+
+### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
+- **Current Problems**: {What's difficult/slow/buggy now}
+- **Benefits of Fixing**: {What improves after refactoring}
+- **Risk Assessment**: {Risks of not addressing this}
+
+## Migration Map
+
+| Old Code | New Code |
+|----------|----------|
+| `append_sql(ctx, "SELECT ...")` | `sql_select(ctx->builder, expr, alias)` |
+| `append_sql(ctx, " ORDER BY %s", e)` | `sql_order_by(ctx->builder, e, desc)` |
+| `append_sql(ctx, " LIMIT %d", n)` | `sql_limit(ctx->builder, n, offset)` |
+
+Note: Expression building within SELECT items still uses append_sql() to build the expression string, then passes to sql_select().
 
 ## Acceptance Criteria
 
@@ -56,10 +81,12 @@ Migrate remaining transform files to unified sql_builder where beneficial.
 
 ## Acceptance Criteria
 
-- [x] transform_with.c migrated where beneficial
-- [x] transform_unwind.c migrated where beneficial
-- [x] WRITE clauses evaluated - keeping append_sql() by design
-- [x] All tests pass (716 C, 160 Python)
+## Acceptance Criteria
+
+- [ ] RETURN clause uses sql_select()
+- [ ] ORDER BY uses sql_order_by()
+- [ ] LIMIT/OFFSET uses sql_limit()
+- [ ] All RETURN tests pass
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

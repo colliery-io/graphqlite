@@ -1,54 +1,85 @@
 ---
-id: migrate-remaining-clauses-with
+id: implement-all-pairs-shortest-path
 level: task
-title: "Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)"
-short_code: "GQLITE-T-0051"
-created_at: 2025-12-26T20:34:30.551046+00:00
-updated_at: 2025-12-27T14:17:52.489175+00:00
-parent: GQLITE-I-0025
+title: "Implement All Pairs Shortest Path Algorithm"
+short_code: "GQLITE-T-0035"
+created_at: 2025-12-24T22:50:24.603648+00:00
+updated_at: 2025-12-25T18:27:08.037131+00:00
+parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
+  - "#feature"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: NULL
 ---
 
-# Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)
+# Implement All Pairs Shortest Path Algorithm
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[GQLITE-I-0025]]
+[[Parent Initiative]]
 
 ## Objective
 
-Migrate remaining transform files to unified sql_builder where beneficial.
+Implement All Pairs Shortest Path (APSP) using Floyd-Warshall or Johnson's algorithm - computes shortest paths between all node pairs. O(V³) complexity, useful for small/medium graphs.
 
-## Status: PARTIALLY COMPLETE
+## Details
 
-### What Was Completed (via other tasks)
-- ✅ transform_with.c - CTEs migrated to sql_cte(), saves/restores across reset
-- ✅ transform_unwind.c - CTEs migrated to sql_cte(), uses sql_select(), sql_from()
-- ✅ transform_foreach.c - CTEs migrated to sql_cte()
-- ✅ transform_return.c - Unified builder path for MATCH+RETURN and standalone RETURN
+### Type
+- [x] Feature - New functionality or enhancement  
 
-### What Stays As-Is (by design)
-- transform_create.c - Uses append_sql() for INSERT (different SQL structure)
-- transform_set.c - Uses append_sql() for UPDATE (different SQL structure)  
-- transform_delete.c - Uses append_sql() for DELETE (different SQL structure)
-- transform_merge.c - Uses append_sql() for INSERT/UPDATE (different SQL structure)
+### Priority
+- [x] P3 - Low (when time permits)
 
-### Remaining Legacy Paths in transform_return.c
-- SELECT * replacement logic (string manipulation)
-- RETURN after WITH (modifies existing SQL)
-- Expression building (json_object, COLLECT, paths) - encapsulated, acceptable
+### Cypher Syntax
+```cypher
+RETURN allPairsShortestPath()
+RETURN apsp()
+```
+
+### Return Format
+```json
+[
+  {"source": "alice", "target": "bob", "distance": 2},
+  {"source": "alice", "target": "carol", "distance": 3}
+]
+```
+
+### Complexity
+- O(V³) Floyd-Warshall
+- O(V² log V + VE) Johnson's (better for sparse graphs)
+
+### Notes
+- Memory: O(V²) for distance matrix
+- Only practical for graphs < 10K nodes
+- Consider returning as SQLite table for large results
+
+### Impact Assessment **[CONDITIONAL: Bug]**
+- **Affected Users**: {Number/percentage of users affected}
+- **Reproduction Steps**: 
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
+
+### Business Justification **[CONDITIONAL: Feature]**
+- **User Value**: {Why users need this}
+- **Business Value**: {Impact on metrics/revenue}
+- **Effort Estimate**: {Rough size - S/M/L/XL}
+
+### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
+- **Current Problems**: {What's difficult/slow/buggy now}
+- **Benefits of Fixing**: {What improves after refactoring}
+- **Risk Assessment**: {Risks of not addressing this}
 
 ## Acceptance Criteria
 
@@ -56,10 +87,13 @@ Migrate remaining transform files to unified sql_builder where beneficial.
 
 ## Acceptance Criteria
 
-- [x] transform_with.c migrated where beneficial
-- [x] transform_unwind.c migrated where beneficial
-- [x] WRITE clauses evaluated - keeping append_sql() by design
-- [x] All tests pass (716 C, 160 Python)
+## Acceptance Criteria
+
+## Acceptance Criteria **[REQUIRED]**
+
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

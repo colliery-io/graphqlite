@@ -1,54 +1,95 @@
 ---
-id: migrate-remaining-clauses-with
+id: add-leiden-community-detection-to
 level: task
-title: "Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)"
-short_code: "GQLITE-T-0051"
-created_at: 2025-12-26T20:34:30.551046+00:00
-updated_at: 2025-12-27T14:17:52.489175+00:00
-parent: GQLITE-I-0025
+title: "Add Leiden Community Detection to Python Bindings"
+short_code: "GQLITE-T-0033"
+created_at: 2025-12-24T22:50:17.326514+00:00
+updated_at: 2025-12-26T23:08:16.518835+00:00
+parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
+  - "#feature"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0025
+initiative_id: NULL
 ---
 
-# Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)
+# Add Leiden Community Detection to Python Bindings
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[GQLITE-I-0025]]
+[[Parent Initiative]]
 
 ## Objective
 
-Migrate remaining transform files to unified sql_builder where beneficial.
+Add Leiden community detection to the Python bindings via graspologic library, providing hierarchical community detection with better quality than label propagation.
 
-## Status: PARTIALLY COMPLETE
+## Details
 
-### What Was Completed (via other tasks)
-- ✅ transform_with.c - CTEs migrated to sql_cte(), saves/restores across reset
-- ✅ transform_unwind.c - CTEs migrated to sql_cte(), uses sql_select(), sql_from()
-- ✅ transform_foreach.c - CTEs migrated to sql_cte()
-- ✅ transform_return.c - Unified builder path for MATCH+RETURN and standalone RETURN
+### Type
+- [x] Feature - New functionality or enhancement  
 
-### What Stays As-Is (by design)
-- transform_create.c - Uses append_sql() for INSERT (different SQL structure)
-- transform_set.c - Uses append_sql() for UPDATE (different SQL structure)  
-- transform_delete.c - Uses append_sql() for DELETE (different SQL structure)
-- transform_merge.c - Uses append_sql() for INSERT/UPDATE (different SQL structure)
+### Priority
+- [x] P1 - High (important for user experience)
 
-### Remaining Legacy Paths in transform_return.c
-- SELECT * replacement logic (string manipulation)
-- RETURN after WITH (modifies existing SQL)
-- Expression building (json_object, COLLECT, paths) - encapsulated, acceptable
+### Python API
+```python
+from graphqlite import Graph
+
+g = Graph("my.db")
+# ... build graph ...
+
+# Hierarchical Leiden via graspologic
+communities = g.leiden_communities(
+    max_cluster_size=100,
+    resolution=1.0,
+    random_seed=42
+)
+```
+
+### Return Format
+```python
+[
+    {"node_id": "alice", "community": 0, "level": 0},
+    {"node_id": "alice", "community": 3, "level": 1},  # hierarchical
+    {"node_id": "bob", "community": 0, "level": 0},
+]
+```
+
+### Dependencies
+- graspologic library (pip install graspologic)
+- NetworkX for graph export
+
+### Implementation
+1. Export GraphQLite graph to NetworkX format
+2. Call `graspologic.partition.hierarchical_leiden()`
+3. Return results mapped back to user node IDs
+
+### Impact Assessment **[CONDITIONAL: Bug]**
+- **Affected Users**: {Number/percentage of users affected}
+- **Reproduction Steps**: 
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
+
+### Business Justification **[CONDITIONAL: Feature]**
+- **User Value**: {Why users need this}
+- **Business Value**: {Impact on metrics/revenue}
+- **Effort Estimate**: {Rough size - S/M/L/XL}
+
+### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
+- **Current Problems**: {What's difficult/slow/buggy now}
+- **Benefits of Fixing**: {What improves after refactoring}
+- **Risk Assessment**: {Risks of not addressing this}
 
 ## Acceptance Criteria
 
@@ -56,10 +97,13 @@ Migrate remaining transform files to unified sql_builder where beneficial.
 
 ## Acceptance Criteria
 
-- [x] transform_with.c migrated where beneficial
-- [x] transform_unwind.c migrated where beneficial
-- [x] WRITE clauses evaluated - keeping append_sql() by design
-- [x] All tests pass (716 C, 160 Python)
+## Acceptance Criteria
+
+## Acceptance Criteria **[REQUIRED]**
+
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

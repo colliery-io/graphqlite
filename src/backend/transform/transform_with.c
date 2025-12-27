@@ -78,306 +78,243 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_with_%d", with_cte_counter++);
 
-    /* Get the inner SQL from the unified builder (WITHOUT CTEs - they'll be preserved) */
-    char *inner_sql = NULL;
-    char *saved_cte = NULL;
-    int saved_cte_count = 0;
-    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
-        /* Use subquery (no CTEs) - CTEs will be merged at the parent level */
-        inner_sql = sql_builder_to_subquery(ctx->unified_builder);
-
-        /* Save CTE buffer before reset */
-        if (!dbuf_is_empty(&ctx->unified_builder->cte)) {
-            saved_cte = strdup(dbuf_get(&ctx->unified_builder->cte));
-            saved_cte_count = ctx->unified_builder->cte_count;
-        }
-
-        sql_builder_reset(ctx->unified_builder);
-
-        /* Restore CTE buffer after reset */
-        if (saved_cte) {
-            dbuf_append(&ctx->unified_builder->cte, saved_cte);
-            ctx->unified_builder->cte_count = saved_cte_count;
-            free(saved_cte);
-        }
-    }
-
-    if (!inner_sql) {
+    /*
+     * Extract builder state directly instead of generating SQL and doing string manipulation.
+     * This avoids the fragile "SELECT *" replacement pattern.
+     */
+    if (!ctx->unified_builder || !sql_builder_has_from(ctx->unified_builder)) {
         ctx->has_error = true;
         ctx->error_message = strdup("WITH clause requires a preceding MATCH");
         return -1;
     }
 
-    /* Find the SELECT clause and build the projected columns */
-    char *select_pos = strstr(inner_sql, "SELECT *");
-    if (!select_pos) {
-        select_pos = strstr(inner_sql, "SELECT ");
+    /* Extract FROM, JOINs, WHERE from builder */
+    const char *from_clause = sql_builder_get_from(ctx->unified_builder);
+    const char *joins_clause = sql_builder_get_joins(ctx->unified_builder);
+    const char *where_clause = sql_builder_get_where(ctx->unified_builder);
+    const char *group_by_clause = sql_builder_get_group_by(ctx->unified_builder);
+
+    /* Save CTE buffer before reset */
+    char *saved_cte = NULL;
+    int saved_cte_count = 0;
+    if (!dbuf_is_empty(&ctx->unified_builder->cte)) {
+        saved_cte = strdup(dbuf_get(&ctx->unified_builder->cte));
+        saved_cte_count = ctx->unified_builder->cte_count;
     }
 
-    if (!select_pos) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("WITH clause requires a preceding MATCH with SELECT");
-        free(inner_sql);
-        return -1;
-    }
+    /* Build SELECT columns from WITH items */
+    dynamic_buffer col_buf;
+    dbuf_init(&col_buf);
 
-    /* If we have SELECT *, replace it with the actual columns */
-    char *star_pos = strstr(inner_sql, "SELECT *");
-    if (star_pos) {
-        /* Build new column list */
-        char col_buffer[8192] = "";
-        int col_len = 0;
+    /* Track GROUP BY columns for aggregate handling */
+    dynamic_buffer group_buf;
+    dbuf_init(&group_buf);
+    bool has_aggregate = false;
+    int group_count = 0;
 
-        /* Track GROUP BY columns for aggregate handling */
-        char group_by_buffer[2048] = "";
-        int group_by_len = 0;
-        bool has_aggregate = false;
+    for (int i = 0; i < with->items->count; i++) {
+        cypher_return_item *item = (cypher_return_item*)with->items->items[i];
 
-        for (int i = 0; i < with->items->count; i++) {
-            cypher_return_item *item = (cypher_return_item*)with->items->items[i];
+        if (i > 0) {
+            dbuf_append(&col_buf, ", ");
+        }
 
-            if (i > 0) {
-                col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len, ", ");
-            }
-
-            /* Get the expression as SQL */
-            if (item->expr->type == AST_NODE_IDENTIFIER) {
-                cypher_identifier *id = (cypher_identifier*)item->expr;
-                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
-                if (alias) {
-                    /* Determine column name */
-                    const char *col_name = item->alias ? item->alias : id->name;
-                    col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len,
-                                       "%s.id AS %s", alias, col_name);
-                    /* Add to GROUP BY */
-                    if (group_by_len > 0) {
-                        group_by_len += snprintf(group_by_buffer + group_by_len,
-                                                sizeof(group_by_buffer) - group_by_len, ", ");
-                    }
-                    group_by_len += snprintf(group_by_buffer + group_by_len,
-                                            sizeof(group_by_buffer) - group_by_len, "%s.id", alias);
-                } else {
-                    col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len,
-                                       "%s", id->name);
+        /* Get the expression as SQL */
+        if (item->expr->type == AST_NODE_IDENTIFIER) {
+            cypher_identifier *id = (cypher_identifier*)item->expr;
+            const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+            if (alias) {
+                /* Determine column name */
+                const char *col_name = item->alias ? item->alias : id->name;
+                /* Check if this is a projected variable (already just an id) vs a node alias */
+                bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+                const char *id_suffix = is_projected ? "" : ".id";
+                dbuf_appendf(&col_buf, "%s%s AS %s", alias, id_suffix, col_name);
+                /* Add to GROUP BY */
+                if (group_count > 0) {
+                    dbuf_append(&group_buf, ", ");
                 }
-            } else if (item->expr->type == AST_NODE_PROPERTY) {
-                cypher_property *prop = (cypher_property*)item->expr;
-                if (prop->expr->type == AST_NODE_IDENTIFIER) {
-                    cypher_identifier *id = (cypher_identifier*)prop->expr;
-                    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
-                    const char *col_name = item->alias ? item->alias : prop->property_name;
-                    if (alias) {
-                        /* Use COALESCE with all property tables - order int/real first to preserve type */
-                        col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len,
-                            "(SELECT COALESCE("
-                            "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = '%s'), "
-                            "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = '%s'), "
-                            "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = '%s'), "
-                            "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = '%s')"
-                            ")) AS %s",
-                            alias, prop->property_name,
-                            alias, prop->property_name,
-                            alias, prop->property_name,
-                            alias, prop->property_name,
-                            col_name);
-                        /* Add the projected column name to GROUP BY (not node id) */
-                        if (group_by_len > 0) {
-                            group_by_len += snprintf(group_by_buffer + group_by_len,
-                                                    sizeof(group_by_buffer) - group_by_len, ", ");
-                        }
-                        group_by_len += snprintf(group_by_buffer + group_by_len,
-                                                sizeof(group_by_buffer) - group_by_len, "%s", col_name);
-                    }
-                }
-            } else if (item->expr->type == AST_NODE_FUNCTION_CALL) {
-                /* Handle function calls including aggregates */
-                cypher_function_call *func = (cypher_function_call*)item->expr;
-                const char *col_name = item->alias ? item->alias : func->function_name;
-
-                /* Save current sql_buffer state */
-                size_t saved_size = ctx->sql_size;
-                char *saved_buffer = strdup(ctx->sql_buffer);
-                if (!saved_buffer) {
-                    ctx->has_error = true;
-                    ctx->error_message = strdup("Memory allocation failed");
-                    free(inner_sql);
-                    return -1;
-                }
-                ctx->sql_size = 0;
-                ctx->sql_buffer[0] = '\0';
-
-                /* Transform the function call */
-                if (transform_function_call(ctx, func) < 0) {
-                    free(saved_buffer);
-                    free(inner_sql);
-                    return -1;
-                }
-
-                /* Copy the generated SQL to col_buffer */
-                col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len,
-                                   "%s AS %s", ctx->sql_buffer, col_name);
-
-                /* Restore sql_buffer */
-                ctx->sql_size = saved_size;
-                strcpy(ctx->sql_buffer, saved_buffer);
-                free(saved_buffer);
-
-                /* Check if this is an aggregate function */
-                if (strcasecmp(func->function_name, "count") == 0 ||
-                    strcasecmp(func->function_name, "sum") == 0 ||
-                    strcasecmp(func->function_name, "avg") == 0 ||
-                    strcasecmp(func->function_name, "min") == 0 ||
-                    strcasecmp(func->function_name, "max") == 0 ||
-                    strcasecmp(func->function_name, "collect") == 0) {
-                    has_aggregate = true;
-                }
-            } else if (item->expr->type == AST_NODE_BINARY_OP ||
-                       item->expr->type == AST_NODE_CASE_EXPR ||
-                       item->expr->type == AST_NODE_LITERAL) {
-                /* Handle binary operations (arithmetic), CASE expressions, and literals */
-                const char *col_name = item->alias;
-                if (!col_name) {
-                    /* Generate a column name for expressions without alias */
-                    static char auto_col[32];
-                    snprintf(auto_col, sizeof(auto_col), "expr_%d", i);
-                    col_name = auto_col;
-                }
-
-                /* Save current sql_buffer state */
-                size_t saved_size = ctx->sql_size;
-                char *saved_buffer = strdup(ctx->sql_buffer);
-                if (!saved_buffer) {
-                    ctx->has_error = true;
-                    ctx->error_message = strdup("Memory allocation failed");
-                    free(inner_sql);
-                    return -1;
-                }
-                ctx->sql_size = 0;
-                ctx->sql_buffer[0] = '\0';
-
-                /* Transform the expression */
-                if (transform_expression(ctx, item->expr) < 0) {
-                    free(saved_buffer);
-                    free(inner_sql);
-                    return -1;
-                }
-
-                /* Copy the generated SQL to col_buffer */
-                col_len += snprintf(col_buffer + col_len, sizeof(col_buffer) - col_len,
-                                   "(%s) AS %s", ctx->sql_buffer, col_name);
-
-                /* Restore sql_buffer */
-                ctx->sql_size = saved_size;
-                strcpy(ctx->sql_buffer, saved_buffer);
-                free(saved_buffer);
+                dbuf_appendf(&group_buf, "%s%s", alias, id_suffix);
+                group_count++;
             } else {
-                /* For other expression types, we'd need more complex handling */
+                dbuf_append(&col_buf, id->name);
+            }
+        } else if (item->expr->type == AST_NODE_PROPERTY) {
+            cypher_property *prop = (cypher_property*)item->expr;
+            if (prop->expr->type == AST_NODE_IDENTIFIER) {
+                cypher_identifier *id = (cypher_identifier*)prop->expr;
+                const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+                const char *col_name = item->alias ? item->alias : prop->property_name;
+                if (alias) {
+                    /* Check if this is a projected variable (already just an id) vs a node alias */
+                    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+                    const char *id_suffix = is_projected ? "" : ".id";
+                    /* Use COALESCE with all property tables - order int/real first to preserve type */
+                    dbuf_appendf(&col_buf,
+                        "(SELECT COALESCE("
+                        "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = '%s'), "
+                        "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = '%s'), "
+                        "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = '%s'), "
+                        "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = '%s')"
+                        ")) AS %s",
+                        alias, id_suffix, prop->property_name,
+                        alias, id_suffix, prop->property_name,
+                        alias, id_suffix, prop->property_name,
+                        alias, id_suffix, prop->property_name,
+                        col_name);
+                    /* Add the projected column name to GROUP BY (not node id) */
+                    if (group_count > 0) {
+                        dbuf_append(&group_buf, ", ");
+                    }
+                    dbuf_append(&group_buf, col_name);
+                    group_count++;
+                }
+            }
+        } else if (item->expr->type == AST_NODE_FUNCTION_CALL) {
+            /* Handle function calls including aggregates */
+            cypher_function_call *func = (cypher_function_call*)item->expr;
+            const char *col_name = item->alias ? item->alias : func->function_name;
+
+            /* Save current sql_buffer state */
+            size_t saved_size = ctx->sql_size;
+            char *saved_buffer = strdup(ctx->sql_buffer);
+            if (!saved_buffer) {
                 ctx->has_error = true;
-                ctx->error_message = strdup("Complex expressions in WITH not yet supported");
-                free(inner_sql);
+                ctx->error_message = strdup("Memory allocation failed");
+                dbuf_free(&col_buf);
+                dbuf_free(&group_buf);
+                free(saved_cte);
                 return -1;
             }
-        }
+            ctx->sql_size = 0;
+            ctx->sql_buffer[0] = '\0';
 
-        /* Add GROUP BY clause if we have aggregates and non-aggregate columns */
-        char group_by_clause[2048] = "";
-        if (has_aggregate && group_by_len > 0) {
-            snprintf(group_by_clause, sizeof(group_by_clause), " GROUP BY %s", group_by_buffer);
-        }
+            /* Transform the function call */
+            if (transform_function_call(ctx, func) < 0) {
+                free(saved_buffer);
+                dbuf_free(&col_buf);
+                dbuf_free(&group_buf);
+                free(saved_cte);
+                return -1;
+            }
 
-        /* Replace SELECT * with SELECT columns and add GROUP BY if needed */
-        char *after_star = star_pos + strlen("SELECT *");
-        size_t group_by_size = strlen(group_by_clause);
-        size_t new_size = (star_pos - inner_sql) + strlen("SELECT ") + col_len + strlen(after_star) + group_by_size + 1;
-        char *new_inner = malloc(new_size);
-        if (!new_inner) {
+            /* Append to column buffer */
+            dbuf_appendf(&col_buf, "%s AS %s", ctx->sql_buffer, col_name);
+
+            /* Restore sql_buffer */
+            ctx->sql_size = saved_size;
+            strcpy(ctx->sql_buffer, saved_buffer);
+            free(saved_buffer);
+
+            /* Check if this is an aggregate function */
+            if (strcasecmp(func->function_name, "count") == 0 ||
+                strcasecmp(func->function_name, "sum") == 0 ||
+                strcasecmp(func->function_name, "avg") == 0 ||
+                strcasecmp(func->function_name, "min") == 0 ||
+                strcasecmp(func->function_name, "max") == 0 ||
+                strcasecmp(func->function_name, "collect") == 0) {
+                has_aggregate = true;
+            }
+        } else if (item->expr->type == AST_NODE_BINARY_OP ||
+                   item->expr->type == AST_NODE_CASE_EXPR ||
+                   item->expr->type == AST_NODE_LITERAL) {
+            /* Handle binary operations (arithmetic), CASE expressions, and literals */
+            const char *col_name = item->alias;
+            if (!col_name) {
+                /* Generate a column name for expressions without alias */
+                static char auto_col[32];
+                snprintf(auto_col, sizeof(auto_col), "expr_%d", i);
+                col_name = auto_col;
+            }
+
+            /* Save current sql_buffer state */
+            size_t saved_size = ctx->sql_size;
+            char *saved_buffer = strdup(ctx->sql_buffer);
+            if (!saved_buffer) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Memory allocation failed");
+                dbuf_free(&col_buf);
+                dbuf_free(&group_buf);
+                free(saved_cte);
+                return -1;
+            }
+            ctx->sql_size = 0;
+            ctx->sql_buffer[0] = '\0';
+
+            /* Transform the expression */
+            if (transform_expression(ctx, item->expr) < 0) {
+                free(saved_buffer);
+                dbuf_free(&col_buf);
+                dbuf_free(&group_buf);
+                free(saved_cte);
+                return -1;
+            }
+
+            /* Append to column buffer */
+            dbuf_appendf(&col_buf, "(%s) AS %s", ctx->sql_buffer, col_name);
+
+            /* Restore sql_buffer */
+            ctx->sql_size = saved_size;
+            strcpy(ctx->sql_buffer, saved_buffer);
+            free(saved_buffer);
+        } else {
+            /* For other expression types, we'd need more complex handling */
             ctx->has_error = true;
-            ctx->error_message = strdup("Memory allocation failed");
-            free(inner_sql);
+            ctx->error_message = strdup("Complex expressions in WITH not yet supported");
+            dbuf_free(&col_buf);
+            dbuf_free(&group_buf);
+            free(saved_cte);
             return -1;
         }
-
-        snprintf(new_inner, new_size, "%.*sSELECT %s%s%s",
-                (int)(star_pos - inner_sql), inner_sql,
-                col_buffer, after_star, group_by_clause);
-        free(inner_sql);
-        inner_sql = new_inner;
     }
 
-    /* Inject any pending property JOINs from aggregate functions */
+    /* Build CTE body: SELECT <cols> FROM <from><joins> WHERE <where> GROUP BY <group> */
+    dynamic_buffer cte_body;
+    dbuf_init(&cte_body);
+
+    dbuf_append(&cte_body, "SELECT ");
+    dbuf_append(&cte_body, dbuf_get(&col_buf));
+    dbuf_append(&cte_body, " FROM ");
+    dbuf_append(&cte_body, from_clause);
+
+    if (joins_clause) {
+        dbuf_append(&cte_body, joins_clause);
+    }
+
+    /* Add pending property JOINs from aggregate functions */
     size_t pending_len = get_pending_prop_joins_len();
     if (pending_len > 0) {
         const char *pending_joins = get_pending_prop_joins();
-
-        /*
-         * Find insertion point for JOINs. Check GROUP BY first since it's
-         * unambiguous (not found inside subqueries). WHERE may appear inside
-         * property subqueries, so we need to be careful.
-         */
-        char *insert_pos = NULL;
-
-        /* First try GROUP BY (safest - always at top level) */
-        char *group_pos = strstr(inner_sql, " GROUP BY");
-        if (group_pos) {
-            insert_pos = group_pos;
-        } else {
-            /*
-             * Find the LAST WHERE at top level (not inside parentheses).
-             * Count parentheses depth to avoid matching WHERE inside subqueries.
-             */
-            char *p = inner_sql;
-            char *last_where = NULL;
-            int paren_depth = 0;
-            while (*p) {
-                if (*p == '(') paren_depth++;
-                else if (*p == ')') paren_depth--;
-                else if (paren_depth == 0 && strncmp(p, " WHERE ", 7) == 0) {
-                    last_where = p;
-                }
-                p++;
-            }
-            insert_pos = last_where;
-        }
-
-        if (insert_pos) {
-            /* Insert JOINs at found position */
-            size_t prefix_len = insert_pos - inner_sql;
-            size_t suffix_len = strlen(insert_pos);
-            size_t new_len = prefix_len + pending_len + suffix_len + 1;
-            char *new_inner = malloc(new_len);
-            if (!new_inner) {
-                ctx->has_error = true;
-                ctx->error_message = strdup("Memory allocation failed");
-                free(inner_sql);
-                reset_pending_prop_joins();
-                return -1;
-            }
-            memcpy(new_inner, inner_sql, prefix_len);
-            memcpy(new_inner + prefix_len, pending_joins, pending_len);
-            memcpy(new_inner + prefix_len + pending_len, insert_pos, suffix_len + 1);
-            free(inner_sql);
-            inner_sql = new_inner;
-            CYPHER_DEBUG("WITH: Injected property JOINs: %s", pending_joins);
-        } else {
-            /* Just append at the end */
-            size_t old_len = strlen(inner_sql);
-            size_t new_len = old_len + pending_len + 1;
-            char *new_inner = malloc(new_len);
-            if (!new_inner) {
-                ctx->has_error = true;
-                ctx->error_message = strdup("Memory allocation failed");
-                free(inner_sql);
-                reset_pending_prop_joins();
-                return -1;
-            }
-            memcpy(new_inner, inner_sql, old_len);
-            memcpy(new_inner + old_len, pending_joins, pending_len);
-            new_inner[new_len - 1] = '\0';
-            free(inner_sql);
-            inner_sql = new_inner;
-            CYPHER_DEBUG("WITH: Appended property JOINs: %s", pending_joins);
-        }
+        dbuf_append(&cte_body, pending_joins);
+        CYPHER_DEBUG("WITH: Added property JOINs: %s", pending_joins);
         reset_pending_prop_joins();
+    }
+
+    if (where_clause) {
+        dbuf_append(&cte_body, " WHERE ");
+        dbuf_append(&cte_body, where_clause);
+    }
+
+    /* Add GROUP BY if we have aggregates and non-aggregate columns */
+    if (has_aggregate && group_count > 0) {
+        dbuf_append(&cte_body, " GROUP BY ");
+        dbuf_append(&cte_body, dbuf_get(&group_buf));
+    } else if (group_by_clause) {
+        /* Preserve existing GROUP BY from builder */
+        dbuf_append(&cte_body, " GROUP BY ");
+        dbuf_append(&cte_body, group_by_clause);
+    }
+
+    char *inner_sql = dbuf_finish(&cte_body);
+    dbuf_free(&col_buf);
+    dbuf_free(&group_buf);
+
+    /* Reset builder and restore CTEs */
+    sql_builder_reset(ctx->unified_builder);
+    if (saved_cte) {
+        dbuf_append(&ctx->unified_builder->cte, saved_cte);
+        ctx->unified_builder->cte_count = saved_cte_count;
+        free(saved_cte);
     }
 
     /* Add CTE to unified builder */

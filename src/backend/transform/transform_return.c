@@ -49,9 +49,6 @@ void add_pending_prop_join(const char *join_sql)
     }
 }
 
-/* Forward declarations */
-static int transform_return_item(cypher_transform_context *ctx, cypher_return_item *item, bool first);
-
 /*
  * Transform an expression to a dynamically allocated string.
  * Uses a temporary buffer to capture output, then returns the result.
@@ -221,7 +218,11 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         return 0;
     }
 
-    /* Legacy path: Find the SELECT clause and replace the * with actual columns */
+    /*
+     * Check for legacy SELECT * pattern - should not occur anymore.
+     * All code paths now either use the unified builder (above) or
+     * the standalone RETURN handler (below).
+     */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
     if (!select_pos) {
         /* No SELECT * - check if this is a standalone RETURN (no MATCH clause) */
@@ -314,320 +315,33 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             return 0;
         }
 
-        /* Check if we're after a WITH clause */
-        if (ctx->sql_size > 0) {
-            /* Check if there's already a SELECT from a CTE (from WITH clause) */
-            char *existing_select = strstr(ctx->sql_buffer, "SELECT ");
-            if (existing_select) {
-                /* WITH already set up the SELECT - verify all RETURN items are simple projected identifiers */
-                bool can_use_existing = true;
-                for (int i = 0; i < ret->items->count; i++) {
-                    cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                    if (item->expr->type == AST_NODE_IDENTIFIER) {
-                        cypher_identifier *id = (cypher_identifier*)item->expr;
-                        if (!transform_var_is_projected(ctx->var_ctx, id->name)) {
-                            can_use_existing = false;
-                            break;
-                        }
-                    } else {
-                        /* Property access, function calls, etc. need transformation */
-                        can_use_existing = false;
-                        break;
-                    }
-                }
-                if (can_use_existing) {
-                    /* WITH already built the correct SELECT - query is ready */
-                    CYPHER_DEBUG("RETURN after WITH: all items are simple projected identifiers, query ready");
-                    return 0;
-                }
-
-                /* Need to rebuild SELECT for RETURN items that need transformation */
-                CYPHER_DEBUG("RETURN after WITH: rebuilding SELECT for complex items");
-
-                /* Find the FROM clause position in existing SELECT */
-                char *from_pos = strstr(existing_select, " FROM ");
-                if (from_pos) {
-                    /* Save the FROM clause and everything after before we modify the buffer */
-                    char *from_clause = strdup(from_pos);
-                    if (!from_clause) {
-                        ctx->has_error = true;
-                        ctx->error_message = strdup("Memory allocation failed");
-                        return -1;
-                    }
-
-                    /* Truncate at SELECT and rebuild the column list */
-                    ctx->sql_size = existing_select + strlen("SELECT ") - ctx->sql_buffer;
-                    ctx->sql_buffer[ctx->sql_size] = '\0';
-
-                    /* Add DISTINCT if needed */
-                    if (ret->distinct) {
-                        append_sql(ctx, "DISTINCT ");
-                    }
-
-                    /* Process return items */
-                    for (int i = 0; i < ret->items->count; i++) {
-                        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                        if (transform_return_item(ctx, item, i == 0) < 0) {
-                            free(from_clause);
-                            return -1;
-                        }
-                    }
-
-                    /* Append the FROM clause and everything after */
-                    append_sql(ctx, "%s", from_clause);
-                    free(from_clause);
-
-                    /* Handle ORDER BY, LIMIT, SKIP */
-                    if (ret->order_by && ret->order_by->count > 0) {
-                        append_sql(ctx, " ORDER BY ");
-                        for (int i = 0; i < ret->order_by->count; i++) {
-                            if (i > 0) {
-                                append_sql(ctx, ", ");
-                            }
-                            cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                            if (transform_expression(ctx, order_item->expr) < 0) {
-                                return -1;
-                            }
-                            if (order_item->descending) {
-                                append_sql(ctx, " DESC");
-                            }
-                        }
-                    }
-                    if (ret->limit) {
-                        append_sql(ctx, " LIMIT ");
-                        if (transform_expression(ctx, ret->limit) < 0) {
-                            return -1;
-                        }
-                    }
-                    if (ret->skip) {
-                        append_sql(ctx, " OFFSET ");
-                        if (transform_expression(ctx, ret->skip) < 0) {
-                            return -1;
-                        }
-                    }
-
-                    return 0;
-                }
-            }
-            ctx->has_error = true;
-            ctx->error_message = strdup("RETURN without MATCH not supported");
-            return -1;
-        }
-        append_sql(ctx, "SELECT ");
-    } else {
-        /* Replace the * with actual column list */
-        /* Find the end of "SELECT *" and skip any spaces */
-        char *after_star = select_pos + strlen("SELECT *");
-        while (*after_star == ' ') after_star++; /* Skip any extra spaces */
-        char *temp = strdup(after_star);
-        if (!temp) {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Memory allocation failed");
-            return -1;
-        }
-
-        /* Truncate at SELECT */
-        ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
-        ctx->sql_buffer[ctx->sql_size] = '\0';
-
-        /* Add DISTINCT if needed */
-        if (ret->distinct) {
-            append_sql(ctx, "DISTINCT ");
-        }
-
-        /* Process return items (this may add to pending_prop_joins) */
-        for (int i = 0; i < ret->items->count; i++) {
-            cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-            if (transform_return_item(ctx, item, i == 0) < 0) {
-                free(temp);
-                return -1;
-            }
-        }
-
         /*
-         * If any property JOINs were accumulated during item processing,
-         * inject them into temp before WHERE clause (or at end if no WHERE).
+         * Legacy "RETURN after WITH" path - should not be reached anymore.
+         * WITH now populates unified_builder->from, so RETURN takes the
+         * unified builder path at line 124. If we reach here, it indicates
+         * a bug in the transformation pipeline.
          */
-        if (pending_prop_joins_len > 0) {
-            char *where_pos = strstr(temp, " WHERE ");
-            if (where_pos) {
-                /* Insert JOINs before WHERE */
-                size_t prefix_len = where_pos - temp;
-                size_t suffix_len = strlen(where_pos);
-                size_t new_len = strlen(temp) + pending_prop_joins_len + 1;
-                char *new_temp = malloc(new_len);
-                if (!new_temp) {
-                    free(temp);
-                    ctx->has_error = true;
-                    ctx->error_message = strdup("Memory allocation failed");
-                    reset_pending_prop_joins();
-                    return -1;
-                }
-                memcpy(new_temp, temp, prefix_len);
-                memcpy(new_temp + prefix_len, pending_prop_joins, pending_prop_joins_len);
-                memcpy(new_temp + prefix_len + pending_prop_joins_len, where_pos, suffix_len + 1);
-                free(temp);
-                temp = new_temp;
-                CYPHER_DEBUG("Injected property JOINs before WHERE: %s", pending_prop_joins);
-            } else {
-                /* No WHERE, append JOINs at end of FROM section */
-                size_t new_len = strlen(temp) + pending_prop_joins_len + 1;
-                char *new_temp = malloc(new_len);
-                if (!new_temp) {
-                    free(temp);
-                    ctx->has_error = true;
-                    ctx->error_message = strdup("Memory allocation failed");
-                    reset_pending_prop_joins();
-                    return -1;
-                }
-                strcpy(new_temp, temp);
-                strcat(new_temp, pending_prop_joins);
-                free(temp);
-                temp = new_temp;
-                CYPHER_DEBUG("Appended property JOINs: %s", pending_prop_joins);
-            }
-            reset_pending_prop_joins();
-        }
-
-        /* Append the rest of the query */
-        append_sql(ctx, " %s", temp);
-        free(temp);
-
-        /* Handle ORDER BY, LIMIT, SKIP for MATCH + RETURN queries */
-        if (ret->order_by && ret->order_by->count > 0) {
-            /* Register aliases so ORDER BY can reference them */
-            for (int i = 0; i < ret->items->count; i++) {
-                cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-                if (item->alias) {
-                    transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
-                }
-            }
-
-            append_sql(ctx, " ORDER BY ");
-            for (int i = 0; i < ret->order_by->count; i++) {
-                if (i > 0) {
-                    append_sql(ctx, ", ");
-                }
-                cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                if (transform_expression(ctx, order_item->expr) < 0) {
-                    return -1;
-                }
-                if (order_item->descending) {
-                    append_sql(ctx, " DESC");
-                }
-            }
-        }
-        if (ret->limit) {
-            append_sql(ctx, " LIMIT ");
-            if (transform_expression(ctx, ret->limit) < 0) {
-                return -1;
-            }
-        } else if (ret->skip) {
-            /* SQLite requires LIMIT before OFFSET - use -1 for unlimited */
-            append_sql(ctx, " LIMIT -1");
-        }
-        if (ret->skip) {
-            append_sql(ctx, " OFFSET ");
-            if (transform_expression(ctx, ret->skip) < 0) {
-                return -1;
-            }
-        }
-
-        return 0;
-    }
-
-    /* Add DISTINCT if specified */
-    if (ret->distinct) {
-        append_sql(ctx, "DISTINCT ");
-    }
-    
-    /* Process each return item */
-    for (int i = 0; i < ret->items->count; i++) {
-        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-        if (transform_return_item(ctx, item, i == 0) < 0) {
-            return -1;
-        }
-    }
-    
-    /* Handle ORDER BY */
-    if (ret->order_by && ret->order_by->count > 0) {
-        append_sql(ctx, " ORDER BY ");
-        for (int i = 0; i < ret->order_by->count; i++) {
-            if (i > 0) {
-                append_sql(ctx, ", ");
-            }
-            cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-            if (transform_expression(ctx, order_item->expr) < 0) {
-                return -1;
-            }
-            /* Add sort direction */
-            if (order_item->descending) {
-                append_sql(ctx, " DESC");
-            } else {
-                append_sql(ctx, " ASC");
-            }
-        }
-    }
-    
-    /* Handle LIMIT */
-    if (ret->limit) {
-        append_sql(ctx, " LIMIT ");
-        if (transform_expression(ctx, ret->limit) < 0) {
-            return -1;
-        }
-    }
-    
-    /* Handle SKIP (using SQLite OFFSET) */
-    if (ret->skip) {
-        append_sql(ctx, " OFFSET ");
-        if (transform_expression(ctx, ret->skip) < 0) {
-            return -1;
-        }
-    }
-    
-    return 0;
-}
-
-/* Transform a single return item */
-static int transform_return_item(cypher_transform_context *ctx, cypher_return_item *item, bool first)
-{
-    if (!first) {
-        append_sql(ctx, ", ");
-    }
-
-    /* Special handling for identifiers with aliases */
-    if (item->alias && item->expr->type == AST_NODE_IDENTIFIER) {
-        cypher_identifier *id = (cypher_identifier*)item->expr;
-        const char *table_alias = transform_var_get_alias(ctx->var_ctx, id->name);
-        if (table_alias) {
-            /* For variables with alias, select the ID and alias it */
-            append_sql(ctx, "%s.id AS ", table_alias);
-            append_identifier(ctx, item->alias);
-            return 0;
-        }
-    }
-
-    /* Transform the expression */
-    if (transform_expression(ctx, item->expr) < 0) {
+        /*
+         * If sql_size > 0 but not standalone (and no UNION suffix), this is an
+         * unexpected state - unified builder path should have handled it.
+         */
+        CYPHER_DEBUG("ERROR: Legacy RETURN path reached, sql_size=%zu, sql_buffer: %s",
+                     ctx->sql_size, ctx->sql_buffer);
+        ctx->has_error = true;
+        ctx->error_message = strdup("Internal error: Legacy RETURN path should not be reached");
+        return -1;
+    } else {
+        /*
+         * SELECT * found in sql_buffer - this should not happen anymore.
+         * WITH and UNWIND now use builder state extraction, and RETURN
+         * adds explicit SELECT columns before finalizing. If we reach here,
+         * it indicates a bug in the transformation pipeline.
+         */
+        CYPHER_DEBUG("ERROR: Unexpected SELECT * found in sql_buffer: %s", ctx->sql_buffer);
+        ctx->has_error = true;
+        ctx->error_message = strdup("Internal error: SELECT * pattern should not occur");
         return -1;
     }
-
-    /* Add alias if specified (for non-wildcard expressions) */
-    if (item->alias && item->expr->type != AST_NODE_IDENTIFIER) {
-        append_sql(ctx, " AS ");
-        append_identifier(ctx, item->alias);
-    } else if (!item->alias && item->expr->type == AST_NODE_PROPERTY) {
-        /* Auto-generate alias for property expressions (e.g., n.name -> "n.name") */
-        cypher_property *prop = (cypher_property*)item->expr;
-        if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
-            cypher_identifier *id = (cypher_identifier*)prop->expr;
-            char auto_alias[256];
-            snprintf(auto_alias, sizeof(auto_alias), "%s.%s", id->name, prop->property_name);
-            append_sql(ctx, " AS \"%s\"", auto_alias);
-        }
-    }
-
-    return 0;
 }
 
 /* Transform an expression */

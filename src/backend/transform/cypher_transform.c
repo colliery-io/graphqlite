@@ -411,32 +411,14 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 break;
 
             case AST_NODE_WITH:
-                /* If using unified builder, finalize SQL generation before WITH */
-                if (ctx->unified_builder) {
-                    CYPHER_DEBUG("Finalizing SQL generation before WITH clause");
-                    if (finalize_sql_generation(ctx) < 0) {
-                        ctx->has_error = true;
-                        ctx->error_message = strdup("Failed to finalize SQL generation");
-                        goto error;
-                    }
-                }
-
+                /* WITH clause extracts builder state directly - no finalize needed */
                 if (transform_with_clause(ctx, (cypher_with*)clause) < 0) {
                     goto error;
                 }
                 break;
 
             case AST_NODE_UNWIND:
-                /* If using unified builder, finalize SQL generation before UNWIND */
-                if (ctx->unified_builder) {
-                    CYPHER_DEBUG("Finalizing SQL generation before UNWIND clause");
-                    if (finalize_sql_generation(ctx) < 0) {
-                        ctx->has_error = true;
-                        ctx->error_message = strdup("Failed to finalize SQL generation");
-                        goto error;
-                    }
-                }
-
+                /* UNWIND clause extracts builder state directly - no finalize needed */
                 if (transform_unwind_clause(ctx, (cypher_unwind*)clause) < 0) {
                     goto error;
                 }
@@ -599,24 +581,14 @@ static int transform_single_query_sql(cypher_transform_context *ctx, cypher_quer
                 break;
 
             case AST_NODE_WITH:
-                /* Finalize unified builder before WITH */
-                if (ctx->unified_builder) {
-                    if (finalize_sql_generation(ctx) < 0) {
-                        return -1;
-                    }
-                }
+                /* WITH clause extracts builder state directly - no finalize needed */
                 if (transform_with_clause(ctx, (cypher_with*)clause) < 0) {
                     return -1;
                 }
                 break;
 
             case AST_NODE_UNWIND:
-                /* Finalize unified builder before UNWIND */
-                if (ctx->unified_builder) {
-                    if (finalize_sql_generation(ctx) < 0) {
-                        return -1;
-                    }
-                }
+                /* UNWIND clause extracts builder state directly - no finalize needed */
                 if (transform_unwind_clause(ctx, (cypher_unwind*)clause) < 0) {
                     return -1;
                 }

@@ -650,6 +650,215 @@ static void test_sql_builder_complex(void)
     }
 }
 
+/*
+ * =============================================================================
+ * Builder State Extraction Tests
+ * =============================================================================
+ */
+
+/* Test sql_builder_get_from */
+static void test_sql_builder_get_from(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder returns NULL */
+        CU_ASSERT_PTR_NULL(sql_builder_get_from(b));
+
+        sql_from(b, "nodes", "n");
+        const char *from = sql_builder_get_from(b);
+        CU_ASSERT_PTR_NOT_NULL(from);
+        if (from) {
+            CU_ASSERT_STRING_EQUAL(from, "nodes AS n");
+        }
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns NULL */
+    CU_ASSERT_PTR_NULL(sql_builder_get_from(NULL));
+}
+
+/* Test sql_builder_get_joins */
+static void test_sql_builder_get_joins(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder returns NULL */
+        CU_ASSERT_PTR_NULL(sql_builder_get_joins(b));
+
+        sql_join(b, SQL_JOIN_INNER, "edges", "e", "e.source_id = n.id");
+        const char *joins = sql_builder_get_joins(b);
+        CU_ASSERT_PTR_NOT_NULL(joins);
+        if (joins) {
+            CU_ASSERT(strstr(joins, "JOIN edges") != NULL);
+            CU_ASSERT(strstr(joins, "e.source_id = n.id") != NULL);
+        }
+
+        /* Add another join */
+        sql_join(b, SQL_JOIN_LEFT, "nodes", "m", "m.id = e.target_id");
+        joins = sql_builder_get_joins(b);
+        CU_ASSERT_PTR_NOT_NULL(joins);
+        if (joins) {
+            CU_ASSERT(strstr(joins, "LEFT JOIN nodes") != NULL);
+        }
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns NULL */
+    CU_ASSERT_PTR_NULL(sql_builder_get_joins(NULL));
+}
+
+/* Test sql_builder_get_where */
+static void test_sql_builder_get_where(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder returns NULL */
+        CU_ASSERT_PTR_NULL(sql_builder_get_where(b));
+
+        sql_where(b, "n.label = 'Person'");
+        const char *where = sql_builder_get_where(b);
+        CU_ASSERT_PTR_NOT_NULL(where);
+        if (where) {
+            CU_ASSERT_STRING_EQUAL(where, "n.label = 'Person'");
+        }
+
+        /* Add another condition */
+        sql_where(b, "n.age > 18");
+        where = sql_builder_get_where(b);
+        CU_ASSERT_PTR_NOT_NULL(where);
+        if (where) {
+            CU_ASSERT(strstr(where, "n.label = 'Person'") != NULL);
+            CU_ASSERT(strstr(where, "AND") != NULL);
+            CU_ASSERT(strstr(where, "n.age > 18") != NULL);
+        }
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns NULL */
+    CU_ASSERT_PTR_NULL(sql_builder_get_where(NULL));
+}
+
+/* Test sql_builder_get_group_by */
+static void test_sql_builder_get_group_by(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder returns NULL */
+        CU_ASSERT_PTR_NULL(sql_builder_get_group_by(b));
+
+        sql_group_by(b, "n.label");
+        const char *group = sql_builder_get_group_by(b);
+        CU_ASSERT_PTR_NOT_NULL(group);
+        if (group) {
+            CU_ASSERT_STRING_EQUAL(group, "n.label");
+        }
+
+        /* Add another group by */
+        sql_group_by(b, "n.name");
+        group = sql_builder_get_group_by(b);
+        CU_ASSERT_PTR_NOT_NULL(group);
+        if (group) {
+            CU_ASSERT(strstr(group, "n.label") != NULL);
+            CU_ASSERT(strstr(group, "n.name") != NULL);
+        }
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns NULL */
+    CU_ASSERT_PTR_NULL(sql_builder_get_group_by(NULL));
+}
+
+/* Test sql_builder_get_select */
+static void test_sql_builder_get_select(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder returns NULL */
+        CU_ASSERT_PTR_NULL(sql_builder_get_select(b));
+
+        sql_select(b, "n.id", "node_id");
+        const char *sel = sql_builder_get_select(b);
+        CU_ASSERT_PTR_NOT_NULL(sel);
+        if (sel) {
+            CU_ASSERT_STRING_EQUAL(sel, "n.id AS node_id");
+        }
+
+        /* Add another select */
+        sql_select(b, "n.name", NULL);
+        sel = sql_builder_get_select(b);
+        CU_ASSERT_PTR_NOT_NULL(sel);
+        if (sel) {
+            CU_ASSERT(strstr(sel, "n.id AS node_id") != NULL);
+            CU_ASSERT(strstr(sel, "n.name") != NULL);
+        }
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns NULL */
+    CU_ASSERT_PTR_NULL(sql_builder_get_select(NULL));
+}
+
+/* Test sql_builder_has_from */
+static void test_sql_builder_has_from(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder */
+        CU_ASSERT_FALSE(sql_builder_has_from(b));
+
+        sql_from(b, "nodes", "n");
+        CU_ASSERT_TRUE(sql_builder_has_from(b));
+
+        sql_builder_reset(b);
+        CU_ASSERT_FALSE(sql_builder_has_from(b));
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns false */
+    CU_ASSERT_FALSE(sql_builder_has_from(NULL));
+}
+
+/* Test sql_builder_has_select */
+static void test_sql_builder_has_select(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+
+    if (b) {
+        /* Empty builder */
+        CU_ASSERT_FALSE(sql_builder_has_select(b));
+
+        sql_select(b, "n.id", NULL);
+        CU_ASSERT_TRUE(sql_builder_has_select(b));
+
+        sql_builder_reset(b);
+        CU_ASSERT_FALSE(sql_builder_has_select(b));
+
+        sql_builder_free(b);
+    }
+
+    /* NULL builder returns false */
+    CU_ASSERT_FALSE(sql_builder_has_select(NULL));
+}
+
 /* Register test suite */
 int init_sql_builder_suite(void)
 {
@@ -692,6 +901,15 @@ int init_sql_builder_suite(void)
     if (!CU_add_test(suite, "sql: Reset", test_sql_builder_reset)) return -1;
     if (!CU_add_test(suite, "sql: Empty returns NULL", test_sql_builder_empty_returns_null)) return -1;
     if (!CU_add_test(suite, "sql: Complex query", test_sql_builder_complex)) return -1;
+
+    /* Builder state extraction tests */
+    if (!CU_add_test(suite, "sql: Get FROM", test_sql_builder_get_from)) return -1;
+    if (!CU_add_test(suite, "sql: Get JOINs", test_sql_builder_get_joins)) return -1;
+    if (!CU_add_test(suite, "sql: Get WHERE", test_sql_builder_get_where)) return -1;
+    if (!CU_add_test(suite, "sql: Get GROUP BY", test_sql_builder_get_group_by)) return -1;
+    if (!CU_add_test(suite, "sql: Get SELECT", test_sql_builder_get_select)) return -1;
+    if (!CU_add_test(suite, "sql: Has FROM", test_sql_builder_has_from)) return -1;
+    if (!CU_add_test(suite, "sql: Has SELECT", test_sql_builder_has_select)) return -1;
 
     return 0;
 }

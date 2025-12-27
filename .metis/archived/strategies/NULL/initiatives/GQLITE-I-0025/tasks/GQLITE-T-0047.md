@@ -1,13 +1,13 @@
 ---
-id: migrate-remaining-clauses-with
+id: implement-sql-builder-v2-core-with
 level: task
-title: "Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)"
-short_code: "GQLITE-T-0051"
-created_at: 2025-12-26T20:34:30.551046+00:00
-updated_at: 2025-12-27T14:17:52.489175+00:00
+title: "Implement sql_builder_v2 core with sql_add_* functions"
+short_code: "GQLITE-T-0047"
+created_at: 2025-12-26T20:34:29.853806+00:00
+updated_at: 2025-12-26T20:55:06.255181+00:00
 parent: GQLITE-I-0025
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,7 +19,7 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0025
 ---
 
-# Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)
+# Implement sql_builder_v2 core with sql_add_* functions
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -29,26 +29,52 @@ initiative_id: GQLITE-I-0025
 
 ## Objective
 
-Migrate remaining transform files to unified sql_builder where beneficial.
+Build the core SQL builder on top of dynamic_buffer. Provides clause-based SQL construction that assembles correctly regardless of call order.
 
-## Status: PARTIALLY COMPLETE
+## Depends On
+- GQLITE-T-0046 (dynamic_buffer utility)
 
-### What Was Completed (via other tasks)
-- ✅ transform_with.c - CTEs migrated to sql_cte(), saves/restores across reset
-- ✅ transform_unwind.c - CTEs migrated to sql_cte(), uses sql_select(), sql_from()
-- ✅ transform_foreach.c - CTEs migrated to sql_cte()
-- ✅ transform_return.c - Unified builder path for MATCH+RETURN and standalone RETURN
+## sql_builder struct
+```c
+typedef enum { SQL_JOIN_INNER, SQL_JOIN_LEFT, SQL_JOIN_CROSS } sql_join_type;
 
-### What Stays As-Is (by design)
-- transform_create.c - Uses append_sql() for INSERT (different SQL structure)
-- transform_set.c - Uses append_sql() for UPDATE (different SQL structure)  
-- transform_delete.c - Uses append_sql() for DELETE (different SQL structure)
-- transform_merge.c - Uses append_sql() for INSERT/UPDATE (different SQL structure)
+typedef struct {
+    dynamic_buffer cte;          // WITH RECURSIVE ...
+    dynamic_buffer select;       // SELECT columns
+    dynamic_buffer from;         // FROM table
+    dynamic_buffer joins;        // JOIN clauses
+    dynamic_buffer where;        // WHERE conditions
+    dynamic_buffer group_by;     // GROUP BY
+    dynamic_buffer order_by;     // ORDER BY
+    int limit;                   // -1 if not set
+    int offset;                  // -1 if not set
+    int select_count;
+    int where_count;
+    bool finalized;
+} sql_builder;
+```
 
-### Remaining Legacy Paths in transform_return.c
-- SELECT * replacement logic (string manipulation)
-- RETURN after WITH (modifies existing SQL)
-- Expression building (json_object, COLLECT, paths) - encapsulated, acceptable
+## Functions to Implement
+```c
+sql_builder *sql_builder_create(void);
+void sql_builder_free(sql_builder *b);
+void sql_builder_reset(sql_builder *b);
+
+void sql_select(sql_builder *b, const char *expr, const char *alias);
+void sql_from(sql_builder *b, const char *table, const char *alias);
+void sql_join(sql_builder *b, sql_join_type type, const char *table, 
+              const char *alias, const char *on_condition);
+void sql_where(sql_builder *b, const char *condition);
+void sql_group_by(sql_builder *b, const char *expr);
+void sql_order_by(sql_builder *b, const char *expr, bool desc);
+void sql_limit(sql_builder *b, int limit, int offset);
+void sql_cte(sql_builder *b, const char *name, const char *query);
+
+char *sql_builder_to_string(sql_builder *b);
+```
+
+## Assembly Order
+`sql_builder_to_string()` assembles: CTE → SELECT → FROM → JOIN → WHERE → GROUP BY → ORDER BY → LIMIT
 
 ## Acceptance Criteria
 
@@ -56,10 +82,12 @@ Migrate remaining transform files to unified sql_builder where beneficial.
 
 ## Acceptance Criteria
 
-- [x] transform_with.c migrated where beneficial
-- [x] transform_unwind.c migrated where beneficial
-- [x] WRITE clauses evaluated - keeping append_sql() by design
-- [x] All tests pass (716 C, 160 Python)
+## Acceptance Criteria
+
+- [ ] All sql_* functions implemented
+- [ ] sql_builder_to_string produces valid SQL
+- [ ] Unit tests pass
+- [ ] No memory leaks
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
