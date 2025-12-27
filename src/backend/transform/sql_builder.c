@@ -315,6 +315,7 @@ void sql_builder_reset(sql_builder *b)
     b->group_count = 0;
     b->order_count = 0;
     b->finalized = false;
+    b->distinct = false;
 }
 
 /*
@@ -338,6 +339,15 @@ void sql_select(sql_builder *b, const char *expr, const char *alias)
 }
 
 /*
+ * Set SELECT DISTINCT mode.
+ */
+void sql_distinct(sql_builder *b)
+{
+    if (!b) return;
+    b->distinct = true;
+}
+
+/*
  * Set the FROM clause.
  */
 void sql_from(sql_builder *b, const char *table, const char *alias)
@@ -350,6 +360,15 @@ void sql_from(sql_builder *b, const char *table, const char *alias)
     if (alias && alias[0] != '\0') {
         dbuf_appendf(&b->from, " AS %s", alias);
     }
+}
+
+/*
+ * Add raw JOIN SQL (for pending property JOINs from aggregate functions).
+ */
+void sql_join_raw(sql_builder *b, const char *raw_join_sql)
+{
+    if (!b || !raw_join_sql) return;
+    dbuf_append(&b->joins, raw_join_sql);
 }
 
 /*
@@ -491,7 +510,11 @@ char *sql_builder_to_string(sql_builder *b)
     }
 
     /* SELECT */
-    dbuf_append(&result, "SELECT ");
+    if (b->distinct) {
+        dbuf_append(&result, "SELECT DISTINCT ");
+    } else {
+        dbuf_append(&result, "SELECT ");
+    }
     if (b->select_count > 0) {
         dbuf_append(&result, dbuf_get(&b->select));
     } else {
@@ -528,6 +551,9 @@ char *sql_builder_to_string(sql_builder *b)
     /* LIMIT */
     if (b->limit >= 0) {
         dbuf_appendf(&result, " LIMIT %d", b->limit);
+    } else if (b->offset >= 0) {
+        /* SQLite requires LIMIT before OFFSET - use -1 for unlimited */
+        dbuf_append(&result, " LIMIT -1");
     }
 
     /* OFFSET */

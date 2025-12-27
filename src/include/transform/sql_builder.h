@@ -141,6 +141,7 @@ typedef struct {
     int group_count;          /* Number of GROUP BY expressions */
     int order_count;          /* Number of ORDER BY expressions */
     bool finalized;           /* True after to_string called */
+    bool distinct;            /* True for SELECT DISTINCT */
 } sql_builder;
 
 /*
@@ -169,6 +170,11 @@ void sql_builder_reset(sql_builder *b);
 void sql_select(sql_builder *b, const char *expr, const char *alias);
 
 /*
+ * Set SELECT DISTINCT mode.
+ */
+void sql_distinct(sql_builder *b);
+
+/*
  * Set the FROM clause.
  * table: Table name or subquery
  * alias: Table alias
@@ -184,6 +190,11 @@ void sql_from(sql_builder *b, const char *table, const char *alias);
  */
 void sql_join(sql_builder *b, sql_join_type type, const char *table,
               const char *alias, const char *on_condition);
+
+/*
+ * Add raw JOIN SQL (for pending property JOINs from aggregate functions).
+ */
+void sql_join_raw(sql_builder *b, const char *raw_join_sql);
 
 /*
  * Add a WHERE condition.

@@ -12,6 +12,7 @@
 #include "transform/transform_internal.h"
 #include "transform/transform_functions.h"
 #include "transform/transform_helpers.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /*
@@ -51,6 +52,50 @@ void add_pending_prop_join(const char *join_sql)
 /* Forward declarations */
 static int transform_return_item(cypher_transform_context *ctx, cypher_return_item *item, bool first);
 
+/*
+ * Transform an expression to a dynamically allocated string.
+ * Uses a temporary buffer to capture output, then returns the result.
+ * Caller must free the returned string.
+ * Returns NULL on error.
+ */
+static char *transform_expression_to_string(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!ctx || !expr) return NULL;
+
+    /* Save current buffer state */
+    char *saved_buffer = ctx->sql_buffer;
+    size_t saved_size = ctx->sql_size;
+    size_t saved_capacity = ctx->sql_capacity;
+
+    /* Allocate temporary buffer */
+    size_t temp_capacity = 4096;
+    char *temp_buffer = malloc(temp_capacity);
+    if (!temp_buffer) return NULL;
+    temp_buffer[0] = '\0';
+
+    /* Switch to temporary buffer */
+    ctx->sql_buffer = temp_buffer;
+    ctx->sql_size = 0;
+    ctx->sql_capacity = temp_capacity;
+
+    /* Transform the expression */
+    int result = transform_expression(ctx, expr);
+
+    /* Capture the result */
+    char *expr_str = NULL;
+    if (result == 0 && ctx->sql_size > 0) {
+        expr_str = strdup(ctx->sql_buffer);
+    }
+
+    /* Restore original buffer */
+    free(ctx->sql_buffer);
+    ctx->sql_buffer = saved_buffer;
+    ctx->sql_size = saved_size;
+    ctx->sql_capacity = saved_capacity;
+
+    return expr_str;
+}
+
 /* Transform a RETURN clause */
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
 {
@@ -71,7 +116,112 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         return -1;
     }
 
-    /* Find the SELECT clause and replace the * with actual columns */
+    /*
+     * NEW: Unified builder path for MATCH + RETURN
+     * When unified_builder is active and has FROM clause content,
+     * use sql_select(), sql_order_by(), sql_limit() to build the query.
+     */
+    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
+        CYPHER_DEBUG("Using unified builder path for RETURN");
+
+        /* Handle DISTINCT */
+        if (ret->distinct) {
+            sql_distinct(ctx->unified_builder);
+        }
+
+        /* Add SELECT columns to unified builder */
+        for (int i = 0; i < ret->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+
+            /* Transform the expression to a string */
+            char *expr_str = transform_expression_to_string(ctx, item->expr);
+            if (!expr_str) {
+                /* Preserve existing error message from transformation, or set generic one */
+                if (!ctx->error_message) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Failed to transform return item expression");
+                }
+                return -1;
+            }
+
+            /* Determine alias - use explicit alias, or generate one for properties */
+            const char *alias = item->alias;
+            char auto_alias[256] = "";
+            if (!alias && item->expr->type == AST_NODE_PROPERTY) {
+                cypher_property *prop = (cypher_property*)item->expr;
+                if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+                    cypher_identifier *id = (cypher_identifier*)prop->expr;
+                    snprintf(auto_alias, sizeof(auto_alias), "\"%s.%s\"", id->name, prop->property_name);
+                    alias = auto_alias;
+                }
+            }
+
+            /* Add to unified builder */
+            sql_select(ctx->unified_builder, expr_str, alias);
+            free(expr_str);
+
+            /* Register alias for ORDER BY reference */
+            if (item->alias) {
+                transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
+            }
+        }
+
+        /* Add ORDER BY */
+        if (ret->order_by && ret->order_by->count > 0) {
+            for (int i = 0; i < ret->order_by->count; i++) {
+                cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
+                char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                if (order_expr) {
+                    sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                    free(order_expr);
+                }
+            }
+        }
+
+        /* Add LIMIT/OFFSET */
+        if (ret->limit || ret->skip) {
+            int limit_val = -1;
+            int offset_val = -1;
+
+            if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+                cypher_literal *lit = (cypher_literal*)ret->limit;
+                if (lit->literal_type == LITERAL_INTEGER) {
+                    limit_val = (int)lit->value.integer;
+                }
+            }
+            if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+                cypher_literal *lit = (cypher_literal*)ret->skip;
+                if (lit->literal_type == LITERAL_INTEGER) {
+                    offset_val = (int)lit->value.integer;
+                }
+            }
+
+            /* If skip but no limit, SQLite needs LIMIT -1 */
+            if (ret->skip && !ret->limit) {
+                limit_val = -1;
+            }
+
+            sql_limit(ctx->unified_builder, limit_val, offset_val);
+        }
+
+        /* Add pending property JOINs from aggregate functions */
+        if (pending_prop_joins_len > 0) {
+            sql_join_raw(ctx->unified_builder, pending_prop_joins);
+            reset_pending_prop_joins();
+        }
+
+        /* Finalize the unified builder into sql_buffer */
+        if (finalize_sql_generation(ctx) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to finalize SQL generation");
+            return -1;
+        }
+
+        CYPHER_DEBUG("Unified builder path complete, SQL: %s", ctx->sql_buffer);
+        return 0;
+    }
+
+    /* Legacy path: Find the SELECT clause and replace the * with actual columns */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
     if (!select_pos) {
         /* No SELECT * - check if this is a standalone RETURN (no MATCH clause) */

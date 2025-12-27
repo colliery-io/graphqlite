@@ -446,17 +446,11 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 break;
 
             case AST_NODE_RETURN:
-                /* If using unified builder, finalize SQL generation before RETURN */
-                if (ctx->unified_builder) {
-                    CYPHER_DEBUG("Finalizing SQL generation before RETURN clause");
-                    if (finalize_sql_generation(ctx) < 0) {
-                        ctx->has_error = true;
-                        ctx->error_message = strdup("Failed to finalize SQL generation");
-                        goto error;
-                    }
-                } else {
-                    CYPHER_DEBUG("SQL builder NOT active before RETURN clause");
-                }
+                /* RETURN clause now handles unified builder directly */
+                /* It will add SELECT columns, ORDER BY, LIMIT to the builder */
+                /* and finalize if needed */
+                CYPHER_DEBUG("Processing RETURN clause (unified_builder=%s)",
+                            ctx->unified_builder ? "active" : "inactive");
 
                 if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
                     goto error;
@@ -645,12 +639,7 @@ static int transform_single_query_sql(cypher_transform_context *ctx, cypher_quer
                 break;
 
             case AST_NODE_RETURN:
-                /* Finalize unified builder before RETURN */
-                if (ctx->unified_builder) {
-                    if (finalize_sql_generation(ctx) < 0) {
-                        return -1;
-                    }
-                }
+                /* RETURN clause handles unified builder directly via sql_select() */
                 if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
                     return -1;
                 }

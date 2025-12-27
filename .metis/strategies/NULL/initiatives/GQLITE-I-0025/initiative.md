@@ -22,6 +22,27 @@ initiative_id: unified-sql-builder-architecture
 
 # Unified SQL Builder Architecture Initiative
 
+## Current Status: BROKEN - Needs Rollback
+
+The partial migration created **duplicate CTEs** because we mixed paths:
+- CTEs added to `unified_builder->cte` via `sql_cte()`
+- SELECT/FROM/WHERE still written to `sql_buffer` via `append_sql()`
+- `prepend_cte_to_sql()` tries to merge both, causing duplication
+
+**Test failure**: `WITH _unwind_0 AS (...) WITH _unwind_0 AS (...) SELECT ...`
+
+**Root cause**: We migrated CTE generation to `sql_cte()` but left everything else using `append_sql()`. This creates two incompatible paths.
+
+**Key insight**: For each clause type, migrate COMPLETELY or not at all. If using `unified_builder`, use it for EVERYTHING: CTE, SELECT, FROM, WHERE.
+
+## Revised Approach
+
+1. **Rollback** partial CTE migrations to get tests passing
+2. **Migrate READ queries completely** (MATCH + RETURN through unified_builder)
+3. **Migrate CTEs** once the base works
+4. **Migrate WRITE queries** last
+5. **Remove legacy** cte_prefix and append_cte_prefix()
+
 ## Context
 
 The transform layer currently uses **three incompatible SQL generation mechanisms** that don't compose cleanly:
