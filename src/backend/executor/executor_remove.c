@@ -35,6 +35,13 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
         return -1;
     }
 
+    /* Finalize to assemble unified builder content into sql_buffer */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
     /* Replace SELECT * with specific node/edge ID selection */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
     if (select_pos) {

@@ -10,6 +10,7 @@
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /*
@@ -24,6 +25,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     if (!ctx || !with) {
         return -1;
     }
+
+    /* Reset pending property JOINs for this WITH clause */
+    reset_pending_prop_joins();
 
     /* Generate a unique CTE name */
     static int with_cte_counter = 0;
@@ -233,6 +237,82 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         inner_sql = new_inner;
     }
 
+    /* Inject any pending property JOINs from aggregate functions */
+    size_t pending_len = get_pending_prop_joins_len();
+    if (pending_len > 0) {
+        const char *pending_joins = get_pending_prop_joins();
+
+        /*
+         * Find insertion point for JOINs. Check GROUP BY first since it's
+         * unambiguous (not found inside subqueries). WHERE may appear inside
+         * property subqueries, so we need to be careful.
+         */
+        char *insert_pos = NULL;
+
+        /* First try GROUP BY (safest - always at top level) */
+        char *group_pos = strstr(inner_sql, " GROUP BY");
+        if (group_pos) {
+            insert_pos = group_pos;
+        } else {
+            /*
+             * Find the LAST WHERE at top level (not inside parentheses).
+             * Count parentheses depth to avoid matching WHERE inside subqueries.
+             */
+            char *p = inner_sql;
+            char *last_where = NULL;
+            int paren_depth = 0;
+            while (*p) {
+                if (*p == '(') paren_depth++;
+                else if (*p == ')') paren_depth--;
+                else if (paren_depth == 0 && strncmp(p, " WHERE ", 7) == 0) {
+                    last_where = p;
+                }
+                p++;
+            }
+            insert_pos = last_where;
+        }
+
+        if (insert_pos) {
+            /* Insert JOINs at found position */
+            size_t prefix_len = insert_pos - inner_sql;
+            size_t suffix_len = strlen(insert_pos);
+            size_t new_len = prefix_len + pending_len + suffix_len + 1;
+            char *new_inner = malloc(new_len);
+            if (!new_inner) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Memory allocation failed");
+                free(inner_sql);
+                reset_pending_prop_joins();
+                return -1;
+            }
+            memcpy(new_inner, inner_sql, prefix_len);
+            memcpy(new_inner + prefix_len, pending_joins, pending_len);
+            memcpy(new_inner + prefix_len + pending_len, insert_pos, suffix_len + 1);
+            free(inner_sql);
+            inner_sql = new_inner;
+            CYPHER_DEBUG("WITH: Injected property JOINs: %s", pending_joins);
+        } else {
+            /* Just append at the end */
+            size_t old_len = strlen(inner_sql);
+            size_t new_len = old_len + pending_len + 1;
+            char *new_inner = malloc(new_len);
+            if (!new_inner) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Memory allocation failed");
+                free(inner_sql);
+                reset_pending_prop_joins();
+                return -1;
+            }
+            memcpy(new_inner, inner_sql, old_len);
+            memcpy(new_inner + old_len, pending_joins, pending_len);
+            new_inner[new_len - 1] = '\0';
+            free(inner_sql);
+            inner_sql = new_inner;
+            CYPHER_DEBUG("WITH: Appended property JOINs: %s", pending_joins);
+        }
+        reset_pending_prop_joins();
+    }
+
     /* Build the CTE and new SELECT */
     ctx->sql_size = 0;
     ctx->sql_buffer[0] = '\0';
@@ -336,6 +416,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         if (transform_expression(ctx, with->skip) < 0) {
             return -1;
         }
+    }
+
+    /* Reset the unified builder - WITH creates a new scope and the subsequent
+     * clauses should query from the CTE, not the original tables */
+    if (ctx->unified_builder) {
+        sql_builder_reset(ctx->unified_builder);
     }
 
     CYPHER_DEBUG("WITH clause generated CTE: %s", cte_name);

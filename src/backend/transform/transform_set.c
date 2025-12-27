@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
@@ -173,30 +174,41 @@ static int generate_property_update(cypher_transform_context *ctx,
         prop_table = "node_props_text";
     }
     
-    /* Generate UPDATE or INSERT statement */
-    /* First, try to update existing property */
-    append_sql(ctx, "INSERT OR REPLACE INTO %s (node_id, property_name, value) ", prop_table);
-    append_sql(ctx, "VALUES (");
-    
-    /* Get node ID - for now assume the variable refers to a node ID */
-    /* In a more complete implementation, this would depend on how variables are tracked */
-    if (table_alias && strstr(table_alias, "nodes")) {
-        append_sql(ctx, "%s.id", table_alias);
-    } else {
-        /* Fallback - assume the variable contains the node ID directly */
-        append_sql(ctx, "%s", table_alias);
-    }
-    
-    append_sql(ctx, ", ");
+    /* Generate INSERT ... SELECT statement using unified builder context */
+    /* Use key_id from property_keys table lookup */
+    append_sql(ctx, "INSERT OR REPLACE INTO %s (node_id, key_id, value) ", prop_table);
+    append_sql(ctx, "SELECT ");
+
+    /* Get node ID from table alias */
+    append_sql(ctx, "%s.id", table_alias);
+
+    /* Get key_id via subquery from property_keys table */
+    append_sql(ctx, ", (SELECT id FROM property_keys WHERE key = ");
     append_string_literal(ctx, property_name);
-    append_sql(ctx, ", ");
-    
+    append_sql(ctx, "), ");
+
     /* Transform the value expression */
     if (transform_expression(ctx, value_expr) < 0) {
         return -1;
     }
-    
-    append_sql(ctx, ")");
+
+    /* Add FROM clause from unified builder if available */
+    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
+        append_sql(ctx, " FROM %s", dbuf_get(&ctx->unified_builder->from));
+
+        /* Add JOINs if any */
+        if (!dbuf_is_empty(&ctx->unified_builder->joins)) {
+            append_sql(ctx, " %s", dbuf_get(&ctx->unified_builder->joins));
+        }
+
+        /* Add WHERE clause if any */
+        if (!dbuf_is_empty(&ctx->unified_builder->where)) {
+            append_sql(ctx, " WHERE %s", dbuf_get(&ctx->unified_builder->where));
+        }
+    } else {
+        /* Fallback for non-builder mode - shouldn't happen after migration */
+        append_sql(ctx, " FROM nodes AS %s", table_alias);
+    }
     
     CYPHER_DEBUG("Generated property update SQL");
     return 0;
@@ -221,14 +233,28 @@ static int generate_label_add(cypher_transform_context *ctx,
         append_sql(ctx, "; ");
     }
     
-    /* Generate INSERT OR IGNORE to add the label */
+    /* Generate INSERT OR IGNORE to add the label using unified builder context */
     append_sql(ctx, "INSERT OR IGNORE INTO node_labels (node_id, label) ");
     append_sql(ctx, "SELECT %s.id, ", table_alias);
     append_string_literal(ctx, label_name);
-    append_sql(ctx, " FROM nodes AS %s", table_alias);
-    
-    /* Add WHERE clause to match the specific nodes if needed */
-    /* The nodes are already filtered by the MATCH clause */
+
+    /* Add FROM clause from unified builder if available */
+    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
+        append_sql(ctx, " FROM %s", dbuf_get(&ctx->unified_builder->from));
+
+        /* Add JOINs if any */
+        if (!dbuf_is_empty(&ctx->unified_builder->joins)) {
+            append_sql(ctx, " %s", dbuf_get(&ctx->unified_builder->joins));
+        }
+
+        /* Add WHERE clause if any */
+        if (!dbuf_is_empty(&ctx->unified_builder->where)) {
+            append_sql(ctx, " WHERE %s", dbuf_get(&ctx->unified_builder->where));
+        }
+    } else {
+        /* Fallback for non-builder mode */
+        append_sql(ctx, " FROM nodes AS %s", table_alias);
+    }
     
     CYPHER_DEBUG("Generated label add SQL");
     return 0;

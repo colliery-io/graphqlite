@@ -74,32 +74,6 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
         return -1;
     }
 
-    /*
-     * Check if we should enable sql_builder for optimized property JOINs.
-     * Only enable for simple node-only patterns without relationships,
-     * as the MATCH transformation for relationships writes directly to sql_buffer
-     * and doesn't work well with the sql_builder pattern.
-     */
-    bool has_relationships = false;
-    for (int i = 0; i < match->pattern->count; i++) {
-        ast_node *pattern = match->pattern->items[i];
-        if (pattern->type == AST_NODE_PATH) {
-            cypher_path *path = (cypher_path *)pattern;
-            if (path->elements && path->elements->count > 1) {
-                has_relationships = true;
-                break;
-            }
-        }
-    }
-
-    if (!has_relationships) {
-        if (init_sql_builder(ctx) < 0) {
-            set_result_error(result, "Failed to initialize SQL builder");
-            cypher_transform_free_context(ctx);
-            return -1;
-        }
-    }
-
     /* Transform MATCH clause to generate FROM/WHERE */
     if (transform_match_clause(ctx, match) < 0) {
         set_result_error(result, "Failed to transform MATCH clause");
@@ -108,13 +82,11 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     }
 
     /* Finalize SQL generation before RETURN (assembles FROM + JOINs + WHERE) */
-    /* Only needed if sql_builder was initialized */
-    if (!has_relationships) {
-        if (finalize_sql_generation(ctx) < 0) {
-            set_result_error(result, "Failed to finalize SQL generation");
-            cypher_transform_free_context(ctx);
-            return -1;
-        }
+    /* Always call - function checks internally if there's anything to finalize */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
     }
 
     /* Transform RETURN clause to generate SELECT projections */
@@ -671,7 +643,14 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
         cypher_transform_free_context(ctx);
         return -1;
     }
-    
+
+    /* Finalize SQL generation to assemble unified builder content into sql_buffer */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
     /* Add a simple SELECT to get the matched node IDs */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
     if (select_pos) {

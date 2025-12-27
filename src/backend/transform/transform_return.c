@@ -22,10 +22,20 @@
 static char pending_prop_joins[16384] = "";
 static size_t pending_prop_joins_len = 0;
 
-static void reset_pending_prop_joins(void)
+void reset_pending_prop_joins(void)
 {
     pending_prop_joins[0] = '\0';
     pending_prop_joins_len = 0;
+}
+
+const char* get_pending_prop_joins(void)
+{
+    return pending_prop_joins;
+}
+
+size_t get_pending_prop_joins_len(void)
+{
+    return pending_prop_joins_len;
 }
 
 /* Used by transform_func_aggregate.c for optimized property aggregation */

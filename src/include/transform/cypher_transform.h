@@ -4,6 +4,7 @@
 #include "graphqlite_sqlite.h"
 #include "parser/cypher_ast.h"
 #include "transform/transform_variables.h"
+#include "transform/sql_builder.h"
 
 /* Forward declarations */
 typedef struct cypher_transform_context cypher_transform_context;
@@ -29,34 +30,11 @@ struct cypher_transform_context {
     size_t sql_capacity;
 
     /* CTE prefix for recursive queries (variable-length relationships) */
-    /* This is separate from sql_builder to work with both builder and non-builder modes */
     char *cte_prefix;
     size_t cte_prefix_size;
     size_t cte_prefix_capacity;
     int cte_count;
-    
-    /* SQL builder for two-pass generation (OPTIONAL MATCH support) */
-    struct {
-        char *from_clause;          /* FROM nodes AS alias */
-        size_t from_size;
-        size_t from_capacity;
 
-        char *join_clauses;         /* LEFT JOIN ... LEFT JOIN ... */
-        size_t join_size;
-        size_t join_capacity;
-
-        char *where_clauses;        /* WHERE ... AND ... AND ... */
-        size_t where_size;
-        size_t where_capacity;
-
-        char *cte_clause;           /* WITH RECURSIVE ... for variable-length paths */
-        size_t cte_size;
-        size_t cte_capacity;
-        int cte_count;              /* Number of CTEs generated */
-
-        bool using_builder;         /* True when using two-pass generation */
-    } sql_builder;
-    
     /* Parameter tracking for parameterized queries */
     char **param_names;             /* Parameter names in order of appearance */
     int param_count;
@@ -68,6 +46,7 @@ struct cypher_transform_context {
     
     /* Context flags */
     bool in_comparison;             /* True when transforming expressions in comparison context */
+    bool in_union;                  /* True when transforming UNION branches (skip buffer reset) */
     
     /* Unique alias counters */
     int global_alias_counter;       /* Global counter for all unnamed entities (like AGE) */
@@ -79,6 +58,9 @@ struct cypher_transform_context {
         QUERY_TYPE_WRITE,           /* CREATE, SET, DELETE */
         QUERY_TYPE_MIXED            /* Both read and write */
     } query_type;
+
+    /* Unified SQL builder for clause-based SQL generation */
+    sql_builder *unified_builder;
 };
 
 /* Result structure for executed queries */
@@ -151,13 +133,7 @@ void append_string_literal(cypher_transform_context *ctx, const char *value);
 /* Parameter tracking */
 int register_parameter(cypher_transform_context *ctx, const char *name);
 
-/* SQL builder functions for two-pass generation */
-int init_sql_builder(cypher_transform_context *ctx);
-void free_sql_builder(cypher_transform_context *ctx);
-void append_from_clause(cypher_transform_context *ctx, const char *format, ...);
-void append_join_clause(cypher_transform_context *ctx, const char *format, ...);
-void append_where_clause(cypher_transform_context *ctx, const char *format, ...);
-void append_cte_clause(cypher_transform_context *ctx, const char *format, ...);
+/* SQL builder finalization - assembles unified_builder into sql_buffer */
 int finalize_sql_generation(cypher_transform_context *ctx);
 
 /* Variable-length relationship SQL generation */

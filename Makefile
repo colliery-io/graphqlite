@@ -108,7 +108,8 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_expr_predicate.c \
 	$(TRANSFORM_DIR)/transform_with.c \
 	$(TRANSFORM_DIR)/transform_unwind.c \
-	$(TRANSFORM_DIR)/transform_expr_ops.c
+	$(TRANSFORM_DIR)/transform_expr_ops.c \
+	$(TRANSFORM_DIR)/sql_builder.c
 
 # Executor sources
 EXECUTOR_DIR = $(SRC_DIR)/backend/executor
@@ -196,7 +197,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_clauses.c \
 	$(TEST_DIR)/test_executor_patterns.c \
 	$(TEST_DIR)/test_executor_functions.c \
-	$(TEST_DIR)/test_executor_predicates.c
+	$(TEST_DIR)/test_executor_predicates.c \
+	$(TEST_DIR)/test_sql_builder.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 

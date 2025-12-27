@@ -61,24 +61,17 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->cte_prefix_capacity = 0;
     ctx->cte_count = 0;
 
-    /* Initialize SQL builder */
-    ctx->sql_builder.from_clause = NULL;
-    ctx->sql_builder.from_size = 0;
-    ctx->sql_builder.from_capacity = 0;
-    ctx->sql_builder.join_clauses = NULL;
-    ctx->sql_builder.join_size = 0;
-    ctx->sql_builder.join_capacity = 0;
-    ctx->sql_builder.where_clauses = NULL;
-    ctx->sql_builder.where_size = 0;
-    ctx->sql_builder.where_capacity = 0;
-    ctx->sql_builder.cte_clause = NULL;
-    ctx->sql_builder.cte_size = 0;
-    ctx->sql_builder.cte_capacity = 0;
-    ctx->sql_builder.cte_count = 0;
-    ctx->sql_builder.using_builder = false;
-    
+    /* Initialize unified SQL builder */
+    ctx->unified_builder = sql_builder_create();
+    if (!ctx->unified_builder) {
+        transform_var_ctx_free(ctx->var_ctx);
+        free(ctx->sql_buffer);
+        free(ctx);
+        return NULL;
+    }
+
     CYPHER_DEBUG("Created transform context %p", (void*)ctx);
-    
+
     return ctx;
 }
 
@@ -102,11 +95,8 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     /* Free CTE prefix buffer */
     free(ctx->cte_prefix);
 
-    /* Free SQL builder buffers */
-    free(ctx->sql_builder.from_clause);
-    free(ctx->sql_builder.join_clauses);
-    free(ctx->sql_builder.where_clauses);
-    free(ctx->sql_builder.cte_clause);
+    /* Free unified SQL builder */
+    sql_builder_free(ctx->unified_builder);
 
     /* Free buffers */
     free(ctx->sql_buffer);
@@ -207,7 +197,7 @@ int register_parameter(cypher_transform_context *ctx, const char *name)
     return ctx->param_count++;
 }
 
-/* SQL builder functions for two-pass generation */
+/* SQL finalization - assembles unified_builder content into sql_buffer */
 
 #define INITIAL_BUILDER_SIZE 256
 
@@ -218,7 +208,7 @@ static void grow_builder_buffer(char **buffer, size_t *size, size_t *capacity, s
         while (new_capacity < *size + needed + 1) {
             new_capacity *= 2;
         }
-        
+
         char *new_buffer = realloc(*buffer, new_capacity);
         if (new_buffer) {
             *buffer = new_buffer;
@@ -230,232 +220,25 @@ static void grow_builder_buffer(char **buffer, size_t *size, size_t *capacity, s
     }
 }
 
-int init_sql_builder(cypher_transform_context *ctx)
-{
-    if (!ctx) return -1;
-    
-    /* Free any existing buffers */
-    free_sql_builder(ctx);
-    
-    /* Initialize builder state */
-    ctx->sql_builder.using_builder = true;
-    return 0;
-}
-
-void free_sql_builder(cypher_transform_context *ctx)
-{
-    if (!ctx) return;
-
-    free(ctx->sql_builder.from_clause);
-    free(ctx->sql_builder.join_clauses);
-    free(ctx->sql_builder.where_clauses);
-    free(ctx->sql_builder.cte_clause);
-
-    ctx->sql_builder.from_clause = NULL;
-    ctx->sql_builder.from_size = 0;
-    ctx->sql_builder.from_capacity = 0;
-    ctx->sql_builder.join_clauses = NULL;
-    ctx->sql_builder.join_size = 0;
-    ctx->sql_builder.join_capacity = 0;
-    ctx->sql_builder.where_clauses = NULL;
-    ctx->sql_builder.where_size = 0;
-    ctx->sql_builder.where_capacity = 0;
-    ctx->sql_builder.cte_clause = NULL;
-    ctx->sql_builder.cte_size = 0;
-    ctx->sql_builder.cte_capacity = 0;
-    ctx->sql_builder.cte_count = 0;
-    ctx->sql_builder.using_builder = false;
-}
-
-void append_from_clause(cypher_transform_context *ctx, const char *format, ...)
-{
-    if (!ctx || !format) return;
-    
-    va_list args;
-    va_start(args, format);
-    
-    /* Calculate required size */
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int needed = vsnprintf(NULL, 0, format, args_copy);
-    va_end(args_copy);
-    
-    /* Grow buffer if needed */
-    grow_builder_buffer(&ctx->sql_builder.from_clause, 
-                       &ctx->sql_builder.from_size, 
-                       &ctx->sql_builder.from_capacity, 
-                       needed);
-    
-    /* Append to buffer */
-    if (ctx->sql_builder.from_clause) {
-        int written = vsnprintf(ctx->sql_builder.from_clause + ctx->sql_builder.from_size,
-                               ctx->sql_builder.from_capacity - ctx->sql_builder.from_size,
-                               format, args);
-        ctx->sql_builder.from_size += written;
-    }
-    
-    va_end(args);
-}
-
-void append_join_clause(cypher_transform_context *ctx, const char *format, ...)
-{
-    if (!ctx || !format) return;
-    
-    va_list args;
-    va_start(args, format);
-    
-    /* Calculate required size */
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int needed = vsnprintf(NULL, 0, format, args_copy);
-    va_end(args_copy);
-    
-    /* Grow buffer if needed */
-    grow_builder_buffer(&ctx->sql_builder.join_clauses, 
-                       &ctx->sql_builder.join_size, 
-                       &ctx->sql_builder.join_capacity, 
-                       needed);
-    
-    /* Append to buffer */
-    if (ctx->sql_builder.join_clauses) {
-        int written = vsnprintf(ctx->sql_builder.join_clauses + ctx->sql_builder.join_size,
-                               ctx->sql_builder.join_capacity - ctx->sql_builder.join_size,
-                               format, args);
-        ctx->sql_builder.join_size += written;
-    }
-    
-    va_end(args);
-}
-
-void append_where_clause(cypher_transform_context *ctx, const char *format, ...)
-{
-    if (!ctx || !format) return;
-
-    va_list args;
-    va_start(args, format);
-
-    /* Calculate required size */
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int needed = vsnprintf(NULL, 0, format, args_copy);
-    va_end(args_copy);
-
-    /* Grow buffer if needed */
-    grow_builder_buffer(&ctx->sql_builder.where_clauses,
-                       &ctx->sql_builder.where_size,
-                       &ctx->sql_builder.where_capacity,
-                       needed);
-
-    /* Append to buffer */
-    if (ctx->sql_builder.where_clauses) {
-        int written = vsnprintf(ctx->sql_builder.where_clauses + ctx->sql_builder.where_size,
-                               ctx->sql_builder.where_capacity - ctx->sql_builder.where_size,
-                               format, args);
-        ctx->sql_builder.where_size += written;
-    }
-
-    va_end(args);
-}
-
-void append_cte_clause(cypher_transform_context *ctx, const char *format, ...)
-{
-    if (!ctx || !format) return;
-
-    va_list args;
-    va_start(args, format);
-
-    /* Calculate required size */
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int needed = vsnprintf(NULL, 0, format, args_copy);
-    va_end(args_copy);
-
-    /* Grow buffer if needed */
-    grow_builder_buffer(&ctx->sql_builder.cte_clause,
-                       &ctx->sql_builder.cte_size,
-                       &ctx->sql_builder.cte_capacity,
-                       needed);
-
-    /* Append to buffer */
-    if (ctx->sql_builder.cte_clause) {
-        int written = vsnprintf(ctx->sql_builder.cte_clause + ctx->sql_builder.cte_size,
-                               ctx->sql_builder.cte_capacity - ctx->sql_builder.cte_size,
-                               format, args);
-        ctx->sql_builder.cte_size += written;
-    }
-
-    va_end(args);
-}
-
 int finalize_sql_generation(cypher_transform_context *ctx)
 {
-    if (!ctx || !ctx->sql_builder.using_builder) {
-        return 0; /* Not using builder, nothing to do */
-    }
-
-    /*
-     * If from_clause is empty but sql_buffer has content, the MATCH clause
-     * wrote directly to sql_buffer (common path). In this case, just prepend
-     * "SELECT * " to the existing content.
-     */
-    if ((!ctx->sql_builder.from_clause || ctx->sql_builder.from_size == 0) &&
-        ctx->sql_size > 0) {
-        /* Save existing content (FROM ... JOIN ... WHERE ...) */
-        char *existing = strdup(ctx->sql_buffer);
-        if (!existing) {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Memory allocation failed");
-            return -1;
-        }
-
-        /* Clear buffer and rebuild with SELECT * prefix */
-        ctx->sql_size = 0;
-        ctx->sql_buffer[0] = '\0';
-
-        /* Add CTE clause if present */
-        if (ctx->sql_builder.cte_clause && ctx->sql_builder.cte_size > 0) {
-            append_sql(ctx, "%s ", ctx->sql_builder.cte_clause);
-        }
-
-        append_sql(ctx, "SELECT * %s", existing);
-
-        /* Add any join_clauses from builder */
-        if (ctx->sql_builder.join_clauses && ctx->sql_builder.join_size > 0) {
-            append_sql(ctx, "%s", ctx->sql_builder.join_clauses);
-        }
-
-        /* Add WHERE clause from builder if present */
-        if (ctx->sql_builder.where_clauses && ctx->sql_builder.where_size > 0) {
-            append_sql(ctx, " WHERE %s", ctx->sql_builder.where_clauses);
-        }
-
-        free(existing);
+    if (!ctx || !ctx->unified_builder) {
         return 0;
     }
 
-    /* Standard path: combine builder buffers */
-    ctx->sql_size = 0;
-    ctx->sql_buffer[0] = '\0';
-
-    /* Add CTE clause if present (for variable-length relationships) */
-    if (ctx->sql_builder.cte_clause && ctx->sql_builder.cte_size > 0) {
-        append_sql(ctx, "%s ", ctx->sql_builder.cte_clause);
+    /* Assemble unified builder content into sql_buffer
+     * For UNION queries (in_union=true), we append to accumulate branches
+     * For regular queries, we reset the buffer first
+     */
+    char *assembled = sql_builder_to_string(ctx->unified_builder);
+    if (assembled) {
+        if (!ctx->in_union) {
+            ctx->sql_size = 0;
+            ctx->sql_buffer[0] = '\0';
+        }
+        append_sql(ctx, "%s", assembled);
+        free(assembled);
     }
-
-    append_sql(ctx, "SELECT * "); /* Will be replaced by RETURN clause */
-
-    if (ctx->sql_builder.from_clause) {
-        append_sql(ctx, "%s", ctx->sql_builder.from_clause);
-    }
-
-    if (ctx->sql_builder.join_clauses) {
-        append_sql(ctx, "%s", ctx->sql_builder.join_clauses);
-    }
-
-    if (ctx->sql_builder.where_clauses) {
-        append_sql(ctx, " WHERE %s", ctx->sql_builder.where_clauses);
-    }
-
     return 0;
 }
 
@@ -618,19 +401,8 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
         }
     }
     CYPHER_DEBUG("Query analysis complete: has_optional_match = %s", has_optional_match ? "true" : "false");
+    (void)has_optional_match; /* Analysis used for debugging - unified_builder always active */
 
-    if (has_optional_match) {
-        CYPHER_DEBUG("Query contains OPTIONAL MATCH - using SQL builder from start");
-        if (init_sql_builder(ctx) < 0) {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Failed to initialize SQL builder for OPTIONAL MATCH");
-            goto error;
-        }
-        /* Ensure SQL buffer starts clean for builder mode */
-        ctx->sql_size = 0;
-        ctx->sql_buffer[0] = '\0';
-    }
-    
     /* Process each clause in order */
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
@@ -674,8 +446,8 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 break;
 
             case AST_NODE_RETURN:
-                /* If using SQL builder, finalize SQL generation before RETURN */
-                if (ctx->sql_builder.using_builder) {
+                /* If using unified builder, finalize SQL generation before RETURN */
+                if (ctx->unified_builder) {
                     CYPHER_DEBUG("Finalizing SQL generation before RETURN clause");
                     if (finalize_sql_generation(ctx) < 0) {
                         ctx->has_error = true;
@@ -692,8 +464,8 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 break;
 
             case AST_NODE_WITH:
-                /* If using SQL builder, finalize SQL generation before WITH */
-                if (ctx->sql_builder.using_builder) {
+                /* If using unified builder, finalize SQL generation before WITH */
+                if (ctx->unified_builder) {
                     CYPHER_DEBUG("Finalizing SQL generation before WITH clause");
                     if (finalize_sql_generation(ctx) < 0) {
                         ctx->has_error = true;
@@ -708,8 +480,8 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                 break;
 
             case AST_NODE_UNWIND:
-                /* If using SQL builder, finalize SQL generation before UNWIND */
-                if (ctx->sql_builder.using_builder) {
+                /* If using unified builder, finalize SQL generation before UNWIND */
+                if (ctx->unified_builder) {
                     CYPHER_DEBUG("Finalizing SQL generation before UNWIND clause");
                     if (finalize_sql_generation(ctx) < 0) {
                         ctx->has_error = true;
@@ -778,6 +550,9 @@ static int transform_union_sql(cypher_transform_context *ctx, cypher_union *unio
 {
     CYPHER_DEBUG("Transforming UNION query (all=%s)", union_node->all ? "true" : "false");
 
+    /* Mark that we're in a UNION context so finalize_sql_generation appends instead of resets */
+    ctx->in_union = true;
+
     /* Transform left side */
     if (union_node->left->type == AST_NODE_UNION) {
         if (transform_union_sql(ctx, (cypher_union*)union_node->left) < 0) {
@@ -800,6 +575,17 @@ static int transform_union_sql(cypher_transform_context *ctx, cypher_union *unio
         append_sql(ctx, " UNION ");
     }
 
+    /*
+     * Reset state for right side of UNION:
+     * - Create fresh unified_builder so second query starts fresh
+     * - Reset variable context so variables don't leak between branches
+     */
+    if (ctx->unified_builder) {
+        sql_builder_free(ctx->unified_builder);
+        ctx->unified_builder = sql_builder_create();
+    }
+    transform_var_ctx_reset(ctx->var_ctx);
+
     /* Transform right side - must be a single query */
     if (union_node->right->type == AST_NODE_QUERY) {
         if (transform_single_query_sql(ctx, (cypher_query*)union_node->right) < 0) {
@@ -818,28 +604,6 @@ static int transform_union_sql(cypher_transform_context *ctx, cypher_union *unio
 static int transform_single_query_sql(cypher_transform_context *ctx, cypher_query *query)
 {
     CYPHER_DEBUG("Transforming single query to SQL");
-
-    /* Check if any MATCH clause is optional */
-    bool has_optional_match = false;
-    for (int i = 0; i < query->clauses->count; i++) {
-        ast_node *clause = query->clauses->items[i];
-        if (clause->type == AST_NODE_MATCH) {
-            cypher_match *match = (cypher_match*)clause;
-            if (match->optional) {
-                has_optional_match = true;
-                break;
-            }
-        }
-    }
-
-    if (has_optional_match) {
-        if (init_sql_builder(ctx) < 0) {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Failed to initialize SQL builder for OPTIONAL MATCH");
-            return -1;
-        }
-        /* Note: We don't reset sql_buffer here as we may be appending to existing UNION */
-    }
 
     /* Process each clause in order */
     for (int i = 0; i < query->clauses->count; i++) {
@@ -881,18 +645,36 @@ static int transform_single_query_sql(cypher_transform_context *ctx, cypher_quer
                 break;
 
             case AST_NODE_RETURN:
+                /* Finalize unified builder before RETURN */
+                if (ctx->unified_builder) {
+                    if (finalize_sql_generation(ctx) < 0) {
+                        return -1;
+                    }
+                }
                 if (transform_return_clause(ctx, (cypher_return*)clause) < 0) {
                     return -1;
                 }
                 break;
 
             case AST_NODE_WITH:
+                /* Finalize unified builder before WITH */
+                if (ctx->unified_builder) {
+                    if (finalize_sql_generation(ctx) < 0) {
+                        return -1;
+                    }
+                }
                 if (transform_with_clause(ctx, (cypher_with*)clause) < 0) {
                     return -1;
                 }
                 break;
 
             case AST_NODE_UNWIND:
+                /* Finalize unified builder before UNWIND */
+                if (ctx->unified_builder) {
+                    if (finalize_sql_generation(ctx) < 0) {
+                        return -1;
+                    }
+                }
                 if (transform_unwind_clause(ctx, (cypher_unwind*)clause) < 0) {
                     return -1;
                 }

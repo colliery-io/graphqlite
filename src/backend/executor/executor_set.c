@@ -44,14 +44,16 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
     }
 
     if (transform_match_clause(ctx, match) < 0) {
-        printf("DEBUG - Transform MATCH failed: %s\n", ctx->error_message ? ctx->error_message : "No error message");
         set_result_error(result, "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
 
-    if (ctx->has_error) {
-        printf("DEBUG - Transform context has error: %s\n", ctx->error_message ? ctx->error_message : "No error message");
+    /* Finalize to assemble unified builder content into sql_buffer */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
     }
 
     /* Add SELECT to get matched node and edge IDs */
@@ -85,7 +87,6 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
     }
 
     CYPHER_DEBUG("Generated MATCH SQL: %s", ctx->sql_buffer);
-    printf("\nDEBUG - Generated MATCH SQL for SET (length %zu/%zu): %s\n", ctx->sql_size, ctx->sql_capacity, ctx->sql_buffer);
 
     /* Execute the MATCH query to get node IDs */
     sqlite3_stmt *stmt;

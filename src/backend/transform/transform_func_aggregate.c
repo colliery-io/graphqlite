@@ -170,10 +170,10 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
              "(SELECT id FROM property_keys WHERE key = '%s')", prop->property_name);
 
     /*
-     * When using sql_builder, accumulate property JOINs in the pending buffer.
+     * When using unified_builder, accumulate property JOINs in the pending buffer.
      * These will be injected into the FROM clause by transform_return_clause.
      */
-    if (ctx->sql_builder.using_builder) {
+    if (ctx->unified_builder) {
         /* Build the JOIN clauses and add to pending buffer */
         char join_sql[2048];
         snprintf(join_sql, sizeof(join_sql),

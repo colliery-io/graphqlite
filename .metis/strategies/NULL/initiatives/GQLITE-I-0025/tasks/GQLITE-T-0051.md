@@ -1,77 +1,51 @@
 ---
-id: add-leiden-community-detection-to
+id: migrate-remaining-clauses-with
 level: task
-title: "Add Leiden Community Detection to Python Bindings"
-short_code: "GQLITE-T-0033"
-created_at: 2025-12-24T22:50:17.326514+00:00
-updated_at: 2025-12-26T23:08:16.518835+00:00
-parent: 
+title: "Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)"
+short_code: "GQLITE-T-0051"
+created_at: 2025-12-26T20:34:30.551046+00:00
+updated_at: 2025-12-26T20:34:30.551046+00:00
+parent: GQLITE-I-0025
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#feature"
-  - "#phase/completed"
+  - "#phase/todo"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0025
 ---
 
-# Add Leiden Community Detection to Python Bindings
+# Migrate remaining clauses (WITH, CREATE, DELETE, SET, MERGE)
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0025]]
 
 ## Objective
 
-Add Leiden community detection to the Python bindings via graspologic library, providing hierarchical community detection with better quality than label propagation.
+Migrate remaining transform files to unified sql_builder where beneficial. Some files (CREATE, SET, MERGE) may stay with append_sql() since they generate INSERT/UPDATE, not SELECT.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Feature - New functionality or enhancement  
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
 ### Priority
-- [x] P1 - High (important for user experience)
-
-### Python API
-```python
-from graphqlite import Graph
-
-g = Graph("my.db")
-# ... build graph ...
-
-# Hierarchical Leiden via graspologic
-communities = g.leiden_communities(
-    max_cluster_size=100,
-    resolution=1.0,
-    random_seed=42
-)
-```
-
-### Return Format
-```python
-[
-    {"node_id": "alice", "community": 0, "level": 0},
-    {"node_id": "alice", "community": 3, "level": 1},  # hierarchical
-    {"node_id": "bob", "community": 0, "level": 0},
-]
-```
-
-### Dependencies
-- graspologic library (pip install graspologic)
-- NetworkX for graph export
-
-### Implementation
-1. Export GraphQLite graph to NetworkX format
-2. Call `graspologic.partition.hierarchical_leiden()`
-3. Return results mapped back to user node IDs
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -91,17 +65,23 @@ communities = g.leiden_communities(
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Acceptance Criteria
+## Files to Evaluate
+
+| File | Action |
+|------|--------|
+| transform_with.c | Migrate - generates subqueries |
+| transform_delete.c | Partial - SELECT portion only |
+| transform_unwind.c | Partial - SELECT portion only |
+| transform_create.c | Keep as-is (INSERT) |
+| transform_set.c | Keep as-is (UPDATE) |
+| transform_merge.c | Keep as-is (INSERT/UPDATE) |
 
 ## Acceptance Criteria
 
-## Acceptance Criteria
-
-## Acceptance Criteria **[REQUIRED]**
-
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] transform_with.c migrated where beneficial
+- [ ] transform_delete.c SELECT portion migrated
+- [ ] All tests pass
+- [ ] No regressions in write operations
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

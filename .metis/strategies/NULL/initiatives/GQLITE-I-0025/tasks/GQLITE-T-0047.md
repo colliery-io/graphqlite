@@ -1,95 +1,80 @@
 ---
-id: add-leiden-community-detection-to
+id: implement-sql-builder-v2-core-with
 level: task
-title: "Add Leiden Community Detection to Python Bindings"
-short_code: "GQLITE-T-0033"
-created_at: 2025-12-24T22:50:17.326514+00:00
-updated_at: 2025-12-26T23:08:16.518835+00:00
-parent: 
+title: "Implement sql_builder_v2 core with sql_add_* functions"
+short_code: "GQLITE-T-0047"
+created_at: 2025-12-26T20:34:29.853806+00:00
+updated_at: 2025-12-26T20:55:06.255181+00:00
+parent: GQLITE-I-0025
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#feature"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0025
 ---
 
-# Add Leiden Community Detection to Python Bindings
+# Implement sql_builder_v2 core with sql_add_* functions
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0025]]
 
 ## Objective
 
-Add Leiden community detection to the Python bindings via graspologic library, providing hierarchical community detection with better quality than label propagation.
+Build the core SQL builder on top of dynamic_buffer. Provides clause-based SQL construction that assembles correctly regardless of call order.
 
-## Details
+## Depends On
+- GQLITE-T-0046 (dynamic_buffer utility)
 
-### Type
-- [x] Feature - New functionality or enhancement  
+## sql_builder struct
+```c
+typedef enum { SQL_JOIN_INNER, SQL_JOIN_LEFT, SQL_JOIN_CROSS } sql_join_type;
 
-### Priority
-- [x] P1 - High (important for user experience)
-
-### Python API
-```python
-from graphqlite import Graph
-
-g = Graph("my.db")
-# ... build graph ...
-
-# Hierarchical Leiden via graspologic
-communities = g.leiden_communities(
-    max_cluster_size=100,
-    resolution=1.0,
-    random_seed=42
-)
+typedef struct {
+    dynamic_buffer cte;          // WITH RECURSIVE ...
+    dynamic_buffer select;       // SELECT columns
+    dynamic_buffer from;         // FROM table
+    dynamic_buffer joins;        // JOIN clauses
+    dynamic_buffer where;        // WHERE conditions
+    dynamic_buffer group_by;     // GROUP BY
+    dynamic_buffer order_by;     // ORDER BY
+    int limit;                   // -1 if not set
+    int offset;                  // -1 if not set
+    int select_count;
+    int where_count;
+    bool finalized;
+} sql_builder;
 ```
 
-### Return Format
-```python
-[
-    {"node_id": "alice", "community": 0, "level": 0},
-    {"node_id": "alice", "community": 3, "level": 1},  # hierarchical
-    {"node_id": "bob", "community": 0, "level": 0},
-]
+## Functions to Implement
+```c
+sql_builder *sql_builder_create(void);
+void sql_builder_free(sql_builder *b);
+void sql_builder_reset(sql_builder *b);
+
+void sql_select(sql_builder *b, const char *expr, const char *alias);
+void sql_from(sql_builder *b, const char *table, const char *alias);
+void sql_join(sql_builder *b, sql_join_type type, const char *table, 
+              const char *alias, const char *on_condition);
+void sql_where(sql_builder *b, const char *condition);
+void sql_group_by(sql_builder *b, const char *expr);
+void sql_order_by(sql_builder *b, const char *expr, bool desc);
+void sql_limit(sql_builder *b, int limit, int offset);
+void sql_cte(sql_builder *b, const char *name, const char *query);
+
+char *sql_builder_to_string(sql_builder *b);
 ```
 
-### Dependencies
-- graspologic library (pip install graspologic)
-- NetworkX for graph export
-
-### Implementation
-1. Export GraphQLite graph to NetworkX format
-2. Call `graspologic.partition.hierarchical_leiden()`
-3. Return results mapped back to user node IDs
-
-### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: {Number/percentage of users affected}
-- **Reproduction Steps**: 
-  1. {Step 1}
-  2. {Step 2}
-  3. {Step 3}
-- **Expected vs Actual**: {What should happen vs what happens}
-
-### Business Justification **[CONDITIONAL: Feature]**
-- **User Value**: {Why users need this}
-- **Business Value**: {Impact on metrics/revenue}
-- **Effort Estimate**: {Rough size - S/M/L/XL}
-
-### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
-- **Current Problems**: {What's difficult/slow/buggy now}
-- **Benefits of Fixing**: {What improves after refactoring}
-- **Risk Assessment**: {Risks of not addressing this}
+## Assembly Order
+`sql_builder_to_string()` assembles: CTE → SELECT → FROM → JOIN → WHERE → GROUP BY → ORDER BY → LIMIT
 
 ## Acceptance Criteria
 
@@ -97,11 +82,10 @@ communities = g.leiden_communities(
 
 ## Acceptance Criteria
 
-## Acceptance Criteria **[REQUIRED]**
-
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] All sql_* functions implemented
+- [ ] sql_builder_to_string produces valid SQL
+- [ ] Unit tests pass
+- [ ] No memory leaks
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 

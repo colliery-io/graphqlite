@@ -1,77 +1,51 @@
 ---
-id: add-leiden-community-detection-to
+id: migrate-transform-match-c-to
 level: task
-title: "Add Leiden Community Detection to Python Bindings"
-short_code: "GQLITE-T-0033"
-created_at: 2025-12-24T22:50:17.326514+00:00
-updated_at: 2025-12-26T23:08:16.518835+00:00
-parent: 
+title: "Migrate transform_match.c to unified sql_builder"
+short_code: "GQLITE-T-0049"
+created_at: 2025-12-26T20:34:30.185804+00:00
+updated_at: 2025-12-26T21:44:39.507897+00:00
+parent: GQLITE-I-0025
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#feature"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0025
 ---
 
-# Add Leiden Community Detection to Python Bindings
+# Migrate transform_match.c to unified sql_builder
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0025]]
 
 ## Objective
 
-Add Leiden community detection to the Python bindings via graspologic library, providing hierarchical community detection with better quality than label propagation.
+Convert transform_match.c to use unified sql_builder. This is the most complex migration - handles regular MATCH, OPTIONAL MATCH, variable-length relationships, and CTEs.
 
-## Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Feature - New functionality or enhancement  
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
 ### Priority
-- [x] P1 - High (important for user experience)
-
-### Python API
-```python
-from graphqlite import Graph
-
-g = Graph("my.db")
-# ... build graph ...
-
-# Hierarchical Leiden via graspologic
-communities = g.leiden_communities(
-    max_cluster_size=100,
-    resolution=1.0,
-    random_seed=42
-)
-```
-
-### Return Format
-```python
-[
-    {"node_id": "alice", "community": 0, "level": 0},
-    {"node_id": "alice", "community": 3, "level": 1},  # hierarchical
-    {"node_id": "bob", "community": 0, "level": 0},
-]
-```
-
-### Dependencies
-- graspologic library (pip install graspologic)
-- NetworkX for graph export
-
-### Implementation
-1. Export GraphQLite graph to NetworkX format
-2. Call `graspologic.partition.hierarchical_leiden()`
-3. Return results mapped back to user node IDs
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
+- [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
 - **Affected Users**: {Number/percentage of users affected}
@@ -91,17 +65,33 @@ communities = g.leiden_communities(
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Acceptance Criteria
+## Migration Map
+
+| Old Code | New Code |
+|----------|----------|
+| `append_sql(ctx, "FROM nodes AS %s", a)` | `sql_from(ctx->builder, "nodes", a)` |
+| `append_join_clause(ctx, "LEFT JOIN...")` | `sql_join(ctx->builder, SQL_JOIN_LEFT, ...)` |
+| `append_where_clause(ctx, "...")` | `sql_where(ctx->builder, "...")` |
+| `append_cte_prefix(ctx, "WITH...")` | `sql_cte(ctx->builder, name, query)` |
+| `ctx->sql_builder.using_builder` checks | Remove entirely |
+
+## Testing Focus
+- MATCH (n) RETURN n
+- MATCH (a)-[r]->(b) RETURN a, b
+- OPTIONAL MATCH with WHERE
+- Variable-length: MATCH (a)-[*1..3]->(b)
+- Multiple MATCH clauses
 
 ## Acceptance Criteria
 
 ## Acceptance Criteria
 
-## Acceptance Criteria **[REQUIRED]**
+## Acceptance Criteria
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+- [ ] No `using_builder` checks in transform_match.c
+- [ ] No append_from/join/where_clause calls
+- [ ] All MATCH tests pass
+- [ ] OPTIONAL MATCH with WHERE works correctly
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
