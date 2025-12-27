@@ -98,11 +98,6 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
 int transform_load_csv_clause(cypher_transform_context *ctx, cypher_load_csv *load_csv);
 int transform_where_clause(cypher_transform_context *ctx, ast_node *where);
 
-/* Pattern transformers */
-int transform_node_pattern(cypher_transform_context *ctx, cypher_node_pattern *node);
-int transform_rel_pattern(cypher_transform_context *ctx, cypher_rel_pattern *rel);
-int transform_path_pattern(cypher_transform_context *ctx, cypher_path *path);
-
 /* Expression transformers */
 int transform_expression(cypher_transform_context *ctx, ast_node *expr);
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop);

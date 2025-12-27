@@ -701,29 +701,9 @@ const char *sql_builder_get_group_by(sql_builder *b)
 }
 
 /*
- * Get the SELECT clause content (columns only, no "SELECT" keyword).
- * Returns NULL if no SELECT columns added (would default to "*").
- */
-const char *sql_builder_get_select(sql_builder *b)
-{
-    if (!b || dbuf_is_empty(&b->select)) {
-        return NULL;
-    }
-    return dbuf_get(&b->select);
-}
-
-/*
  * Check if the builder has any FROM clause content.
  */
 bool sql_builder_has_from(sql_builder *b)
 {
     return b && !dbuf_is_empty(&b->from);
-}
-
-/*
- * Check if the builder has any SELECT columns.
- */
-bool sql_builder_has_select(sql_builder *b)
-{
-    return b && b->select_count > 0;
 }

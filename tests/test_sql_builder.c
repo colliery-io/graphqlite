@@ -780,39 +780,6 @@ static void test_sql_builder_get_group_by(void)
     CU_ASSERT_PTR_NULL(sql_builder_get_group_by(NULL));
 }
 
-/* Test sql_builder_get_select */
-static void test_sql_builder_get_select(void)
-{
-    sql_builder *b = sql_builder_create();
-    CU_ASSERT_PTR_NOT_NULL(b);
-
-    if (b) {
-        /* Empty builder returns NULL */
-        CU_ASSERT_PTR_NULL(sql_builder_get_select(b));
-
-        sql_select(b, "n.id", "node_id");
-        const char *sel = sql_builder_get_select(b);
-        CU_ASSERT_PTR_NOT_NULL(sel);
-        if (sel) {
-            CU_ASSERT_STRING_EQUAL(sel, "n.id AS node_id");
-        }
-
-        /* Add another select */
-        sql_select(b, "n.name", NULL);
-        sel = sql_builder_get_select(b);
-        CU_ASSERT_PTR_NOT_NULL(sel);
-        if (sel) {
-            CU_ASSERT(strstr(sel, "n.id AS node_id") != NULL);
-            CU_ASSERT(strstr(sel, "n.name") != NULL);
-        }
-
-        sql_builder_free(b);
-    }
-
-    /* NULL builder returns NULL */
-    CU_ASSERT_PTR_NULL(sql_builder_get_select(NULL));
-}
-
 /* Test sql_builder_has_from */
 static void test_sql_builder_has_from(void)
 {
@@ -834,29 +801,6 @@ static void test_sql_builder_has_from(void)
 
     /* NULL builder returns false */
     CU_ASSERT_FALSE(sql_builder_has_from(NULL));
-}
-
-/* Test sql_builder_has_select */
-static void test_sql_builder_has_select(void)
-{
-    sql_builder *b = sql_builder_create();
-    CU_ASSERT_PTR_NOT_NULL(b);
-
-    if (b) {
-        /* Empty builder */
-        CU_ASSERT_FALSE(sql_builder_has_select(b));
-
-        sql_select(b, "n.id", NULL);
-        CU_ASSERT_TRUE(sql_builder_has_select(b));
-
-        sql_builder_reset(b);
-        CU_ASSERT_FALSE(sql_builder_has_select(b));
-
-        sql_builder_free(b);
-    }
-
-    /* NULL builder returns false */
-    CU_ASSERT_FALSE(sql_builder_has_select(NULL));
 }
 
 /* Register test suite */
@@ -907,9 +851,7 @@ int init_sql_builder_suite(void)
     if (!CU_add_test(suite, "sql: Get JOINs", test_sql_builder_get_joins)) return -1;
     if (!CU_add_test(suite, "sql: Get WHERE", test_sql_builder_get_where)) return -1;
     if (!CU_add_test(suite, "sql: Get GROUP BY", test_sql_builder_get_group_by)) return -1;
-    if (!CU_add_test(suite, "sql: Get SELECT", test_sql_builder_get_select)) return -1;
     if (!CU_add_test(suite, "sql: Has FROM", test_sql_builder_has_from)) return -1;
-    if (!CU_add_test(suite, "sql: Has SELECT", test_sql_builder_has_select)) return -1;
 
     return 0;
 }
