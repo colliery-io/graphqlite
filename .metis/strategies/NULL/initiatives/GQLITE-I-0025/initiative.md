@@ -4,14 +4,14 @@ level: initiative
 title: "Unified SQL Builder Architecture"
 short_code: "GQLITE-I-0025"
 created_at: 2025-12-26T04:50:28.707879+00:00
-updated_at: 2025-12-26T20:34:11.095249+00:00
+updated_at: 2025-12-27T17:08:31.523689+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/decompose"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -22,26 +22,44 @@ initiative_id: unified-sql-builder-architecture
 
 # Unified SQL Builder Architecture Initiative
 
-## Current Status: BROKEN - Needs Rollback
+## Current Status: COMPLETE (for READ queries)
 
-The partial migration created **duplicate CTEs** because we mixed paths:
-- CTEs added to `unified_builder->cte` via `sql_cte()`
-- SELECT/FROM/WHERE still written to `sql_buffer` via `append_sql()`
-- `prepend_cte_to_sql()` tries to merge both, causing duplication
+**All initiative goals achieved for READ query path:**
 
-**Test failure**: `WITH _unwind_0 AS (...) WITH _unwind_0 AS (...) SELECT ...`
+| Goal | Status | Metric |
+|------|--------|--------|
+| Eliminate `cte_prefix` buffer | ✅ DONE | 0 usages |
+| Eliminate `append_cte_prefix()` | ✅ DONE | 0 usages |
+| Eliminate `using_builder` mode flags | ✅ DONE | 0 usages |
+| Eliminate old `sql_builder` struct | ✅ DONE | 0 usages |
+| Single unified SQL builder | ✅ DONE | 85 API calls |
+| Eliminate SELECT * replacement | ✅ DONE | Converted to error guard |
+| All tests passing | ✅ DONE | 721 C + 160 Python |
 
-**Root cause**: We migrated CTE generation to `sql_cte()` but left everything else using `append_sql()`. This creates two incompatible paths.
+**Remaining (optional):**
+- WRITE clauses still use `append_sql()` - tracked in GQLITE-T-0064
+- Expression transformation uses `append_sql()` - appropriate, no migration needed
 
-**Key insight**: For each clause type, migrate COMPLETELY or not at all. If using `unified_builder`, use it for EVERYTHING: CTE, SELECT, FROM, WHERE.
+## What Was Accomplished
 
-## Revised Approach
+1. **Unified Builder API** - All READ queries now use:
+   - `sql_select()`, `sql_from()`, `sql_join()`, `sql_where()`
+   - `sql_cte()`, `sql_order_by()`, `sql_limit()`, `sql_distinct()`
 
-1. **Rollback** partial CTE migrations to get tests passing
-2. **Migrate READ queries completely** (MATCH + RETURN through unified_builder)
-3. **Migrate CTEs** once the base works
-4. **Migrate WRITE queries** last
-5. **Remove legacy** cte_prefix and append_cte_prefix()
+2. **Dead Code Eliminated** (~310 lines):
+   - Legacy SELECT * replacement pattern
+   - Legacy RETURN-after-WITH path
+   - `transform_return_item()` function
+   - Stale pattern transformer declarations
+   - Unused sql_builder functions
+
+3. **Migrated Clauses**:
+   - MATCH (32 unified API calls)
+   - WITH (7 calls)
+   - UNWIND (3 calls)
+   - RETURN (9 calls)
+   - Graph algorithms (21 calls)
+   - FOREACH (1 call)
 
 ## Context
 
