@@ -115,6 +115,11 @@ dist/
 *.egg
 .eggs/
 *.whl
+.venv/
+
+# Example data files
+examples/**/data/
+examples/**/*.db
 
 # Rust
 target/

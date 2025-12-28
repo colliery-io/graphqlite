@@ -1,0 +1,105 @@
+<style>
+.version-selector {
+    position: relative;
+    margin-left: 10px;
+}
+
+.version-selector select {
+    padding: 5px 25px 5px 10px;
+    border: 1px solid var(--icons);
+    border-radius: 4px;
+    background-color: var(--bg);
+    color: var(--fg);
+    font-size: 14px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+}
+
+.version-selector::after {
+    content: '▼';
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: var(--icons);
+    pointer-events: none;
+}
+
+.version-selector select:hover {
+    border-color: var(--icons-hover);
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Only run on deployed site with versions
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        return;
+    }
+
+    // Fetch versions.json from root
+    const basePath = window.location.pathname.split('/').slice(0, -1);
+    let versionsUrl = '/versions.json';
+
+    // Try to detect current version from URL
+    const pathParts = window.location.pathname.split('/').filter(p => p);
+    let currentVersion = 'latest';
+    if (pathParts.length > 0 && (pathParts[0].startsWith('v') || pathParts[0] === 'dev' || pathParts[0] === 'latest')) {
+        currentVersion = pathParts[0];
+    }
+
+    fetch(versionsUrl)
+        .then(response => response.json())
+        .then(versions => {
+            if (versions.length === 0) return;
+
+            // Create version selector
+            const selector = document.createElement('div');
+            selector.className = 'version-selector';
+
+            const select = document.createElement('select');
+            select.id = 'version-select';
+
+            // Add "latest" option
+            const latestOption = document.createElement('option');
+            latestOption.value = 'latest';
+            latestOption.textContent = 'latest';
+            if (currentVersion === 'latest') latestOption.selected = true;
+            select.appendChild(latestOption);
+
+            // Add version options
+            versions.forEach(version => {
+                const option = document.createElement('option');
+                option.value = version;
+                option.textContent = version;
+                if (version === currentVersion) option.selected = true;
+                select.appendChild(option);
+            });
+
+            select.addEventListener('change', function() {
+                const newVersion = this.value;
+                const currentPath = window.location.pathname;
+                const newPath = currentPath.replace(/^\/[^\/]+/, '/' + newVersion);
+                window.location.href = newPath;
+            });
+
+            selector.appendChild(select);
+
+            // Insert after the menu bar title
+            const menuBar = document.querySelector('.menu-bar');
+            if (menuBar) {
+                const rightButtons = menuBar.querySelector('.right-buttons');
+                if (rightButtons) {
+                    rightButtons.insertBefore(selector, rightButtons.firstChild);
+                }
+            }
+        })
+        .catch(err => {
+            // Silently fail if versions.json doesn't exist
+            console.debug('No versions.json found');
+        });
+});
+</script>
