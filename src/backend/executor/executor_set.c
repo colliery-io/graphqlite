@@ -261,37 +261,72 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
         }
 
         /* Evaluate the value expression */
-        if (!item->expr || item->expr->type != AST_NODE_LITERAL) {
-            set_result_error(result, "SET value must be a literal");
+        property_type prop_type = PROP_TYPE_TEXT;
+        const void *prop_value = NULL;
+        static char set_str_buf[4096];
+        static int64_t set_int_buf;
+        static double set_real_buf;
+        static int set_bool_buf;
+
+        if (!item->expr) {
+            set_result_error(result, "SET value is missing");
             return -1;
         }
 
-        cypher_literal *lit = (cypher_literal*)item->expr;
+        if (item->expr->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)item->expr;
 
-        /* Determine property type and value */
-        property_type prop_type = PROP_TYPE_TEXT;
-        const void *prop_value = NULL;
+            switch (lit->literal_type) {
+                case LITERAL_STRING:
+                    prop_type = PROP_TYPE_TEXT;
+                    prop_value = lit->value.string;
+                    break;
+                case LITERAL_INTEGER:
+                    prop_type = PROP_TYPE_INTEGER;
+                    prop_value = &lit->value.integer;
+                    break;
+                case LITERAL_DECIMAL:
+                    prop_type = PROP_TYPE_REAL;
+                    prop_value = &lit->value.decimal;
+                    break;
+                case LITERAL_BOOLEAN:
+                    prop_type = PROP_TYPE_BOOLEAN;
+                    prop_value = &lit->value.boolean;
+                    break;
+                case LITERAL_NULL:
+                    /* Skip null properties for now */
+                    continue;
+            }
+        } else if (item->expr->type == AST_NODE_PARAMETER && executor->params_json) {
+            /* Handle parameter substitution */
+            cypher_parameter *param = (cypher_parameter*)item->expr;
 
-        switch (lit->literal_type) {
-            case LITERAL_STRING:
-                prop_type = PROP_TYPE_TEXT;
-                prop_value = lit->value.string;
-                break;
-            case LITERAL_INTEGER:
-                prop_type = PROP_TYPE_INTEGER;
-                prop_value = &lit->value.integer;
-                break;
-            case LITERAL_DECIMAL:
-                prop_type = PROP_TYPE_REAL;
-                prop_value = &lit->value.decimal;
-                break;
-            case LITERAL_BOOLEAN:
-                prop_type = PROP_TYPE_BOOLEAN;
-                prop_value = &lit->value.boolean;
-                break;
-            case LITERAL_NULL:
-                /* Skip null properties for now */
+            int rc = get_param_value(executor->params_json, param->name, &prop_type, set_str_buf, sizeof(set_str_buf));
+            if (rc == -2) {
+                /* null parameter - skip */
                 continue;
+            } else if (rc == 0) {
+                if (prop_type == PROP_TYPE_TEXT) {
+                    prop_value = set_str_buf;
+                } else if (prop_type == PROP_TYPE_INTEGER) {
+                    set_int_buf = *(int64_t*)set_str_buf;
+                    prop_value = &set_int_buf;
+                } else if (prop_type == PROP_TYPE_REAL) {
+                    set_real_buf = *(double*)set_str_buf;
+                    prop_value = &set_real_buf;
+                } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                    set_bool_buf = *(int*)set_str_buf;
+                    prop_value = &set_bool_buf;
+                }
+            } else {
+                char error[256];
+                snprintf(error, sizeof(error), "Parameter '%s' not found in params_json", param->name);
+                set_result_error(result, error);
+                return -1;
+            }
+        } else {
+            set_result_error(result, "SET value must be a literal or parameter");
+            return -1;
         }
 
         /* Set the property on the node or edge */

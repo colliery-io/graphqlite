@@ -4,38 +4,39 @@ Parameterized queries prevent SQL injection and properly handle special characte
 
 ## Basic Usage
 
-Use `$parameter` syntax in Cypher and pass a JSON object:
-
-```python
-import json
-
-# Named parameters
-params = json.dumps({"name": "Alice", "age": 30})
-results = g.query(
-    "MATCH (n:Person {name: $name}) WHERE n.age > $age RETURN n",
-    params
-)
-```
-
-## With the Graph API
-
-The `Graph.query()` method accepts parameters as the second argument:
+Use `$parameter` syntax in Cypher and pass a dictionary of parameters to `Connection.cypher()`:
 
 ```python
 from graphqlite import Graph
 
 g = Graph(":memory:")
 
+# Named parameters via the connection
+results = g.connection.cypher(
+    "MATCH (n:Person {name: $name}) WHERE n.age > $age RETURN n",
+    {"name": "Alice", "age": 30}
+)
+```
+
+## With the Connection API
+
+The `Connection.cypher()` method accepts parameters as a dictionary:
+
+```python
+from graphqlite import connect
+
+conn = connect(":memory:")
+
 # Create with parameters
-g.query(
+conn.cypher(
     "CREATE (n:Person {name: $name, age: $age})",
-    '{"name": "Bob", "age": 25}'
+    {"name": "Bob", "age": 25}
 )
 
 # Query with parameters
-results = g.query(
+results = conn.cypher(
     "MATCH (n:Person) WHERE n.age >= $min_age RETURN n.name",
-    '{"min_age": 21}'
+    {"min_age": 21}
 )
 ```
 
@@ -74,9 +75,9 @@ Always use parameters for user-provided values:
 ```python
 def search_by_name(user_input: str):
     # Safe - user input is parameterized
-    return g.query(
+    return g.connection.cypher(
         "MATCH (n:Person {name: $name}) RETURN n",
-        json.dumps({"name": user_input})
+        {"name": user_input}
     )
 ```
 
@@ -90,9 +91,9 @@ people = [
 ]
 
 for person in people:
-    g.query(
+    g.connection.cypher(
         "CREATE (n:Person {name: $name, age: $age})",
-        json.dumps(person)
+        person
     )
 ```
 
@@ -103,9 +104,9 @@ Parameters handle special characters automatically:
 ```python
 # This works correctly even with quotes and newlines
 text = "He said \"hello\"\nand then left."
-g.query(
+g.connection.cypher(
     "CREATE (n:Note {content: $text})",
-    json.dumps({"text": text})
+    {"text": text}
 )
 ```
 
@@ -134,9 +135,9 @@ def search(name: str = None, min_age: int = None):
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    return g.query(
+    return g.connection.cypher(
         f"MATCH (n:Person) {where} RETURN n",
-        json.dumps(params) if params else None
+        params if params else None
     )
 ```
 
@@ -144,8 +145,8 @@ def search(name: str = None, min_age: int = None):
 
 ```python
 names = ["Alice", "Bob", "Carol"]
-results = g.query(
+results = g.connection.cypher(
     "MATCH (n:Person) WHERE n.name IN $names RETURN n",
-    json.dumps({"names": names})
+    {"names": names}
 )
 ```

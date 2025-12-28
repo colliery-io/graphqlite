@@ -116,25 +116,22 @@ Finds shortest path between two nodes.
 RETURN dijkstra('source_id', 'target_id')
 ```
 
-**Returns**: `{"distance": int, "path": [node_ids]}`
+**Returns**: `{"found": bool, "distance": int, "path": [node_ids]}`
 
-Returns `null` if no path exists.
+The `found` field indicates whether a path exists. When `found` is false, `distance` is null and `path` is empty.
 
 ### A* Search
 
-Shortest path with heuristic for geographic/spatial graphs.
+Shortest path with heuristic. Can use geographic coordinates for distance estimation or fall back to uniform heuristic.
 
 ```cypher
+RETURN astar('source_id', 'target_id')
 RETURN astar('source_id', 'target_id', 'lat_prop', 'lon_prop')
 ```
 
-**Parameters**:
-- `source_id` - Starting node user_id
-- `target_id` - Ending node user_id
-- `lat_prop` - Property name for latitude
-- `lon_prop` - Property name for longitude
+When `lat_prop` and `lon_prop` are provided, A* uses haversine distance as the heuristic. Without these properties, it behaves similarly to Dijkstra but may explore fewer nodes.
 
-**Returns**: `{"distance": float, "path": [node_ids]}`
+**Returns**: `{"found": bool, "distance": float, "path": [node_ids], "nodes_explored": int}`
 
 ### All-Pairs Shortest Paths (APSP)
 
@@ -144,9 +141,9 @@ Computes shortest distances between all node pairs.
 RETURN apsp()
 ```
 
-**Returns**: `[{"source": int, "target": int, "distance": int}, ...]`
+**Returns**: `[{"source": string, "target": string, "distance": int}, ...]`
 
-Note: O(n²) space and time complexity.
+Note: O(n²) space and time complexity. Use with caution on large graphs.
 
 ## Traversal
 
@@ -159,7 +156,9 @@ RETURN bfs('start_id')
 RETURN bfs('start_id', 3)  -- max depth
 ```
 
-**Returns**: `[{"node_id": int, "user_id": string, "depth": int}, ...]`
+**Returns**: `[{"node_id": int, "user_id": string, "depth": int, "order": int}, ...]`
+
+The `order` field indicates the traversal order (0 = starting node, then incrementing).
 
 ### Depth-First Search (DFS)
 
@@ -167,9 +166,10 @@ Explores as far as possible along each branch.
 
 ```cypher
 RETURN dfs('start_id')
+RETURN dfs('start_id', 5)  -- max depth
 ```
 
-**Returns**: `[{"node_id": int, "user_id": string, "discovery_time": int, "finish_time": int}, ...]`
+**Returns**: `[{"node_id": int, "user_id": string, "depth": int, "order": int}, ...]`
 
 ## Similarity
 
@@ -185,13 +185,15 @@ RETURN nodeSimilarity()
 
 ### K-Nearest Neighbors (KNN)
 
-Finds k most similar nodes to a given node.
+Finds k most similar nodes to a given node based on Jaccard similarity of neighborhoods.
 
 ```cypher
 RETURN knn('node_id', 10)  -- node, k
 ```
 
-**Returns**: `[{"node_id": int, "user_id": string, "similarity": float}, ...]`
+**Returns**: `[{"neighbor": string, "similarity": float, "rank": int}, ...]`
+
+Results are ordered by similarity (highest first), with `rank` starting at 1.
 
 ### Triangle Count
 

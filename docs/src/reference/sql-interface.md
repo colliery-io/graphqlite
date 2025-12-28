@@ -106,34 +106,38 @@ SELECT cypher('
 
 ## Schema Tables
 
-GraphQLite creates these tables automatically:
+GraphQLite creates these tables automatically. See [Storage Model](../explanation/storage-model.md) for detailed documentation.
 
-### nodes
+### Core Tables
 
 ```sql
 SELECT * FROM nodes;
--- id, user_id, label
-```
+-- id (auto-increment primary key)
 
-### edges
+SELECT * FROM node_labels;
+-- node_id, label
 
-```sql
 SELECT * FROM edges;
--- id, source_id, target_id, label (relationship type)
+-- id, source_id, target_id, type
+
+SELECT * FROM property_keys;
+-- id, key (normalized property names)
 ```
 
 ### Property Tables
 
-```sql
-SELECT * FROM node_props_text;   -- id, node_id, key, value
-SELECT * FROM node_props_int;    -- id, node_id, key, value
-SELECT * FROM node_props_real;   -- id, node_id, key, value
-SELECT * FROM node_props_bool;   -- id, node_id, key, value
+Properties use `key_id` as a foreign key to `property_keys` for normalization:
 
-SELECT * FROM edge_props_text;   -- id, edge_id, key, value
-SELECT * FROM edge_props_int;    -- id, edge_id, key, value
-SELECT * FROM edge_props_real;   -- id, edge_id, key, value
-SELECT * FROM edge_props_bool;   -- id, edge_id, key, value
+```sql
+SELECT * FROM node_props_text;   -- node_id, key_id, value
+SELECT * FROM node_props_int;    -- node_id, key_id, value
+SELECT * FROM node_props_real;   -- node_id, key_id, value
+SELECT * FROM node_props_bool;   -- node_id, key_id, value
+
+SELECT * FROM edge_props_text;   -- edge_id, key_id, value
+SELECT * FROM edge_props_int;    -- edge_id, key_id, value
+SELECT * FROM edge_props_real;   -- edge_id, key_id, value
+SELECT * FROM edge_props_bool;   -- edge_id, key_id, value
 ```
 
 ## Direct SQL Access
@@ -142,19 +146,25 @@ You can query the underlying tables directly for debugging or advanced use cases
 
 ```sql
 -- Count nodes by label
-SELECT label, COUNT(*) FROM nodes GROUP BY label;
+SELECT label, COUNT(*) FROM node_labels GROUP BY label;
 
--- Find nodes with a specific property
-SELECT n.user_id, p.value
+-- Find nodes with a specific property (join through property_keys)
+SELECT n.id, pk.key, p.value
 FROM nodes n
 JOIN node_props_text p ON n.id = p.node_id
-WHERE p.key = 'name';
+JOIN property_keys pk ON p.key_id = pk.id
+WHERE pk.key = 'name';
 
--- Find edges between specific nodes
-SELECT e.*, source.user_id AS from_id, target.user_id AS to_id
+-- Find all properties for a specific node
+SELECT pk.key, p.value
+FROM node_props_text p
+JOIN property_keys pk ON p.key_id = pk.id
+WHERE p.node_id = 1;
+
+-- Find edges with their endpoint info
+SELECT e.id, e.type, e.source_id, e.target_id
 FROM edges e
-JOIN nodes source ON e.source_id = source.id
-JOIN nodes target ON e.target_id = target.id;
+WHERE e.type = 'KNOWS';
 ```
 
 ## Transaction Support

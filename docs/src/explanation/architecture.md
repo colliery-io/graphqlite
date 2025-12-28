@@ -59,7 +59,7 @@ The `cypher()` SQL function receives the query:
 
 ```c
 // In extension.c
-static void cypher_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
     const char *query = (const char *)sqlite3_value_text(argv[0]);
     // ...
 }
@@ -70,8 +70,8 @@ static void cypher_func(sqlite3_context *context, int argc, sqlite3_value **argv
 The query is tokenized and parsed:
 
 ```c
-cypher_parser_context *ctx = cypher_parser_create(query);
-ast_node *ast = cypher_parse(ctx);
+cypher_parse_result *parse_result = parse_cypher_query_ext(query);
+ast_node *ast = parse_result->root;
 ```
 
 ### 3. Pattern Dispatch
@@ -149,7 +149,8 @@ int sqlite3_graphqlite_init(
 ) {
     SQLITE_EXTENSION_INIT2(pApi);
     create_graph_schema(db);
-    sqlite3_create_function(db, "cypher", -1, SQLITE_UTF8, db, cypher_func, 0, 0);
+    sqlite3_create_function(db, "cypher", -1, SQLITE_UTF8, 0,
+                           graphqlite_cypher_func, 0, 0);
     return SQLITE_OK;
 }
 ```

@@ -7,7 +7,7 @@ created_at: 2025-12-27T20:34:11.093926+00:00
 updated_at: 2025-12-27T21:15:11.434176+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -83,6 +83,8 @@ strcat(json, "]");
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

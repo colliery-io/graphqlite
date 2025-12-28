@@ -16,7 +16,7 @@ pagerank = g.pagerank(damping=0.85, iterations=20)
 degree = g.degree_centrality()
 
 # Community detection
-communities = g.community_detection(max_iterations=10)
+communities = g.community_detection(iterations=10)
 
 # Path finding
 path = g.shortest_path("alice", "bob")
@@ -86,10 +86,10 @@ g.pagerank(damping=0.85, iterations=20)
 ### Label Propagation
 
 ```python
-g.community_detection(max_iterations=10)
+g.community_detection(iterations=10)
 ```
 
-- `max_iterations`: Maximum iterations before stopping (default: 10)
+- `iterations`: Maximum iterations before stopping (default: 10)
 
 ### Shortest Path
 
@@ -97,7 +97,7 @@ g.community_detection(max_iterations=10)
 g.shortest_path(source_id, target_id)
 ```
 
-Returns `{"distance": int, "path": [node_ids]}` or `None` if no path exists.
+Returns `{"distance": int, "path": [node_ids], "found": bool}`. When `found` is false, `distance` is None and `path` is empty.
 
 ### A* Pathfinding
 

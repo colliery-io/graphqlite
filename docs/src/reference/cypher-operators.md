@@ -43,7 +43,6 @@
 | `IN` | List membership | `n.status IN ['active', 'pending']` |
 | `+` | List concatenation | `[1, 2] + [3, 4]` → `[1, 2, 3, 4]` |
 | `[index]` | Index access | `list[0]` (first element) |
-| `[start..end]` | Slice | `list[1..3]` |
 
 ## Arithmetic Operators
 
@@ -54,7 +53,6 @@
 | `*` | Multiplication | `n.quantity * n.price` |
 | `/` | Division | `n.total / n.count` |
 | `%` | Modulo | `n.id % 10` |
-| `^` | Exponentiation | `2 ^ 8` → `256` |
 
 ## String Concatenation
 
@@ -67,23 +65,21 @@
 | Operator | Description | Example |
 |----------|-------------|---------|
 | `.` | Property access | `n.name` |
-| `[]` | Dynamic property | `n[$propName]` |
 
 ## Operator Precedence
 
 From highest to lowest:
 
-1. `.` `[]` - Property access
-2. `^` - Exponentiation
-3. `*` `/` `%` - Multiplication, division, modulo
-4. `+` `-` - Addition, subtraction
-5. `=` `<>` `<` `>` `<=` `>=` - Comparison
-6. `IS NULL` `IS NOT NULL`
-7. `IN` `STARTS WITH` `ENDS WITH` `CONTAINS` `=~`
-8. `NOT`
-9. `AND`
-10. `XOR`
-11. `OR`
+1. `.` `[]` - Property/index access
+2. `*` `/` `%` - Multiplication, division, modulo
+3. `+` `-` - Addition, subtraction
+4. `=` `<>` `<` `>` `<=` `>=` - Comparison
+5. `IS NULL` `IS NOT NULL`
+6. `IN` `STARTS WITH` `ENDS WITH` `CONTAINS` `=~`
+7. `NOT`
+8. `AND`
+9. `XOR`
+10. `OR`
 
 Use parentheses to override precedence:
 

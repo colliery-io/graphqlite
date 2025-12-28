@@ -34,10 +34,8 @@ SELECT cypher('CREATE (special:TestNode {symbols: "!@#$%^&*()", quotes: ''Simple
 SELECT cypher('MATCH (n:TestNode) RETURN n.symbols, n.quotes, n.escapes') as verification;
 
 SELECT 'Test 1.5 - Very long strings:' as test_name;
--- NOTE: length() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('CREATE (long:TestNode {long_string: "' || printf('%*s', 1000, '') || replace(printf('%*s', 1000, ''), ' ', 'A') || '"})') as result;
--- SELECT cypher('MATCH (n:TestNode) RETURN length(n.long_string) as string_length') as verification;
-SELECT 'SKIPPED: length() function not implemented' as result;
+SELECT cypher('CREATE (long:TestNode {long_string: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})') as result;
+SELECT cypher('MATCH (n:TestNode) WHERE n.long_string IS NOT NULL RETURN length(n.long_string) as string_length') as verification;
 
 -- =======================================================================
 -- SECTION 2: NULL and Missing Value Handling
@@ -78,9 +76,7 @@ SELECT 'Test 3.4 - Complex empty patterns:' as test_name;
 SELECT cypher('MATCH (a:TestNode)-[:KNOWS]->(b:TestNode) WHERE a.zero > 100 RETURN a, b') as result;
 
 SELECT 'Test 3.5 - Empty result with aggregation:' as test_name;
--- NOTE: Aggregate functions not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:NonExistent) RETURN count(n), max(n.value), min(n.value)') as result;
-SELECT 'SKIPPED: Aggregate functions not implemented' as result;
+SELECT cypher('MATCH (n:NonExistent) RETURN count(n), max(n.value), min(n.value)') as result;
 
 -- =======================================================================
 -- SECTION 4: Boundary Conditions and Limits
@@ -161,9 +157,7 @@ SELECT '=== Section 7: Complex Edge Cases ===' as section;
 SELECT 'Test 7.1 - Self-referencing nodes:' as test_name;
 SELECT cypher('CREATE (self:SelfRef {name: "Self"})') as setup;
 SELECT cypher('MATCH (self:SelfRef) CREATE (self)-[:SELF_REF]->(self)') as result;
--- NOTE: SQL generation bug with self-referencing patterns - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:SelfRef)-[:SELF_REF]->(n) RETURN n.name') as verification;
-SELECT 'SKIPPED: SQL generation bug - self-referencing pattern ambiguity' as verification;
+SELECT cypher('MATCH (n:SelfRef)-[:SELF_REF]->(n) RETURN n.name') as verification;
 
 SELECT 'Test 7.2 - Circular relationships:' as test_name;
 SELECT cypher('CREATE (a:Circle {name: "A"}), (b:Circle {name: "B"}), (c:Circle {name: "C"})') as setup;
@@ -173,9 +167,7 @@ SELECT cypher('MATCH (start:Circle)-[:NEXT]->(next:Circle) RETURN start.name, ne
 SELECT 'Test 7.3 - Multiple relationships between same nodes:' as test_name;
 SELECT cypher('CREATE (multi1:MultiRel {name: "Node1"}), (multi2:MultiRel {name: "Node2"})') as setup;
 SELECT cypher('MATCH (a:MultiRel {name: "Node1"}), (b:MultiRel {name: "Node2"}) CREATE (a)-[:TYPE1]->(b), (a)-[:TYPE2]->(b), (a)-[:TYPE3]->(b)') as result;
--- NOTE: type() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (a:MultiRel)-[r]->(b:MultiRel) RETURN a.name, type(r), b.name') as verification;
-SELECT 'SKIPPED: type() function not implemented' as verification;
+SELECT cypher('MATCH (a:MultiRel)-[r]->(b:MultiRel) RETURN a.name, type(r), b.name') as verification;
 
 SELECT 'Test 7.4 - Overlapping property names across node types:' as test_name;
 SELECT cypher('CREATE (overlap1:TypeA {shared: "A", unique_a: "only_a"}), (overlap2:TypeB {shared: "B", unique_b: "only_b"})') as result;
@@ -245,9 +237,7 @@ SELECT 'Null property handling verification:' as test_name;
 SELECT cypher('MATCH (n) WHERE n.explicit_null IS NULL RETURN count(n)') as null_count;
 
 SELECT 'Self-referencing relationships:' as test_name;
--- NOTE: Self-referencing patterns cause SQL ambiguous column errors - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n)-[r]->(n) RETURN count(r)') as self_refs;
-SELECT 'SKIPPED: SQL generation bug - ambiguous column references in self-referencing patterns' as self_refs;
+SELECT cypher('MATCH (n)-[r]->(n) RETURN count(r)') as self_refs;
 
 SELECT 'Multiple relationship types between nodes:' as test_name;
 -- COUNT function now implemented

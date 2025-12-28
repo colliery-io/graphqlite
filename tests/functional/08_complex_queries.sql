@@ -76,9 +76,7 @@ SELECT cypher('MATCH (lead:Person)-[:LEADS]->(project:Project)<-[:WORKS_ON]-(dev
 SELECT '=== Section 2: Complex Pattern Matching ===' as section;
 
 SELECT 'Test 2.1 - Multiple relationship types from same node:' as test_name;
--- NOTE: Complex patterns with reused variables generate ambiguous SQL - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (p:Person)-[:WORKS_FOR]->(company), (p)-[:LIVES_IN]->(city) RETURN p.name, company.name, city.name') as result;
-SELECT 'SKIPPED: SQL generation bug - ambiguous column references' as result;
+SELECT cypher('MATCH (p:Person)-[:WORKS_FOR]->(company), (p)-[:LIVES_IN]->(city) RETURN p.name, company.name, city.name') as result;
 
 SELECT 'Test 2.2 - Fan-out pattern (one-to-many):' as test_name;
 -- COUNT function now implemented
@@ -89,9 +87,7 @@ SELECT 'Test 2.3 - Fan-in pattern (many-to-one):' as test_name;
 SELECT cypher('MATCH (person:Person)-[:WORKS_FOR]->(company:Company) RETURN company.name, count(person.name) as employee_count') as result;
 
 SELECT 'Test 2.4 - Diamond pattern (diverge and converge):' as test_name;
--- NOTE: Complex patterns with reused variables generate ambiguous SQL - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (start:Person)-[:MANAGES]->(middle:Person)-[:WORKS_FOR]->(end:Company), (start)-[:WORKS_FOR]->(end) RETURN start.name, middle.name, end.name') as result;
-SELECT 'SKIPPED: SQL generation bug - ambiguous column references' as result;
+SELECT cypher('MATCH (mgr:Person)-[:MANAGES]->(emp:Person)-[:WORKS_FOR]->(company:Company), (mgr)-[:WORKS_FOR]->(company) RETURN mgr.name, emp.name, company.name') as result;
 
 -- =======================================================================
 -- SECTION 3: Advanced WHERE Clause Patterns
@@ -121,19 +117,13 @@ SELECT cypher('MATCH (eve:Person {name: "Eve"}), (megacorp:Company {name: "MegaC
 SELECT cypher('MATCH (startup:Company {name: "StartupInc"}), (sf:City {name: "San Francisco"}) CREATE (startup)-[:LOCATED_IN]->(sf)') as setup;
 
 SELECT 'Test 4.1 - Find all people in the same city as their company:' as test_name;
--- NOTE: Complex patterns with reused variables generate ambiguous SQL - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (p:Person)-[:LIVES_IN]->(city:City)<-[:LOCATED_IN]-(c:Company)<-[:WORKS_FOR]-(p) RETURN p.name, city.name, c.name') as result;
-SELECT 'SKIPPED: SQL generation bug - ambiguous column references' as result;
+SELECT cypher('MATCH (p:Person)-[:LIVES_IN]->(city:City)<-[:LOCATED_IN]-(c:Company)<-[:WORKS_FOR]-(p) RETURN p.name, city.name, c.name') as result;
 
 SELECT 'Test 4.2 - Find people who work on projects led by their manager:' as test_name;
--- NOTE: Complex patterns with reused variables generate ambiguous SQL - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (manager:Person)-[:MANAGES]->(employee:Person)-[:WORKS_ON]->(project:Project)<-[:LEADS]-(manager) RETURN manager.name, employee.name, project.name') as result;
-SELECT 'SKIPPED: SQL generation bug - ambiguous column references' as result;
+SELECT cypher('MATCH (manager:Person)-[:MANAGES]->(employee:Person)-[:WORKS_ON]->(project:Project)<-[:LEADS]-(manager) RETURN manager.name, employee.name, project.name') as result;
 
 SELECT 'Test 4.3 - Complex company ecosystem:' as test_name;
--- NOTE: Multiple relationship types (|) syntax not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name, company.name, count(*) as relationships') as result;
-SELECT 'SKIPPED: Multiple relationship type syntax (|) not implemented' as result;
+SELECT cypher('MATCH (person:Person)-[:WORKS_FOR|CONSULTS_FOR]->(company:Company) RETURN person.name, company.name') as result;
 
 -- =======================================================================
 -- SECTION 5: Graph Traversal Patterns
@@ -141,14 +131,10 @@ SELECT 'SKIPPED: Multiple relationship type syntax (|) not implemented' as resul
 SELECT '=== Section 5: Graph Traversal Patterns ===' as section;
 
 SELECT 'Test 5.1 - Find all connections from a specific person:' as test_name;
--- NOTE: type() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (alice:Person {name: "Alice"})-[r]->(connected) RETURN alice.name, type(r), connected') as result;
-SELECT 'SKIPPED: type() function not implemented' as result;
+SELECT cypher('MATCH (alice:Person {name: "Alice"})-[r]->(connected) RETURN alice.name, type(r), connected') as result;
 
 SELECT 'Test 5.2 - Find paths between specific nodes:' as test_name;
--- NOTE: path variable assignment syntax not supported - documented in BUG_FIXES.md
--- SELECT cypher('MATCH path = (alice:Person {name: "Alice"})-[:WORKS_FOR]->(company:Company)-[:LOCATED_IN]->(city:City) RETURN alice.name, company.name, city.name') as result;
-SELECT 'SKIPPED: path variable assignment not supported' as result;
+SELECT cypher('MATCH path = (alice:Person {name: "Alice"})-[:WORKS_FOR]->(company:Company)-[:LOCATED_IN]->(city:City) RETURN alice.name, company.name, city.name, path') as result;
 
 SELECT 'Test 5.3 - Bidirectional relationship traversal:' as test_name;
 SELECT cypher('MATCH (a:Person)-[:MANAGES]-(b:Person) RETURN a.name, b.name') as result;
@@ -162,9 +148,7 @@ SELECT cypher('MATCH (a:Person)-[:WORKS_FOR]->(company:Company)<-[:WORKS_FOR]-(c
 SELECT '=== Section 6: Aggregation and Grouping Patterns ===' as section;
 
 SELECT 'Test 6.1 - Count relationships by type:' as test_name;
--- NOTE: type() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH ()-[r]->() RETURN type(r) as relationship_type, count(r) as count ORDER BY count DESC') as result;
-SELECT 'SKIPPED: type() function not implemented' as result;
+SELECT cypher('MATCH ()-[r]->() RETURN type(r) as relationship_type, count(r) as count ORDER BY count DESC') as result;
 
 SELECT 'Test 6.2 - Aggregate by department:' as test_name;
 -- COUNT, AVG functions and ORDER BY DESC now implemented
@@ -196,9 +180,7 @@ SELECT 'Test 8.1 - Empty result complex query:' as test_name;
 SELECT cypher('MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WHERE c.founded > 2025 RETURN p.name, c.name') as result;
 
 SELECT 'Test 8.2 - Self-referential patterns:' as test_name;
--- NOTE: Self-referential patterns with same variable generate ambiguous SQL - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (p:Person)-[:MANAGES]->(p) RETURN p.name') as result; -- Should be empty unless someone manages themselves
-SELECT 'SKIPPED: SQL generation bug - self-referential variable ambiguity' as result;
+SELECT cypher('MATCH (p:Person)-[:MANAGES]->(p) RETURN p.name') as result;
 
 SELECT 'Test 8.3 - Complex NULL handling:' as test_name;
 SELECT cypher('MATCH (p:Person) WHERE p.nonexistent IS NULL RETURN p.name, p.nonexistent LIMIT 3') as result;

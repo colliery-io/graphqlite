@@ -20,13 +20,13 @@ Characters that need special handling:
 
 ## Solution 1: Use Parameterized Queries (Recommended)
 
-The safest approach is to use parameterized queries:
+The safest approach is to use parameterized queries via the `Connection.cypher()` method:
 
 ```python
-import json
-
-params = json.dumps({"text": "Line1\nLine2"})
-g.query("CREATE (n:Note {text: $text})", params)
+g.connection.cypher(
+    "CREATE (n:Note {text: $text})",
+    {"text": "Line1\nLine2"}
+)
 ```
 
 Parameters are properly escaped automatically.
@@ -83,7 +83,7 @@ g.query("CREATE (n:Quote {text: 'It's a test'})")
 g.query("CREATE (n:Quote {text: 'It\\'s a test'})")
 
 # Better - use parameters
-g.query("CREATE (n:Quote {text: $text})", '{"text": "It\'s a test"}')
+g.connection.cypher("CREATE (n:Quote {text: $text})", {"text": "It's a test"})
 ```
 
 ## Best Practices

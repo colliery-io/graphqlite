@@ -23,19 +23,22 @@
  */
 const sqlite3_api_routines *sqlite3_api = 0;
 
-/* Global executor cache - simple single-connection cache for now */
-static struct {
+/* Per-connection executor cache structure */
+typedef struct {
     sqlite3 *db;
     cypher_executor *executor;
-} g_executor_cache = { NULL, NULL };
+} connection_cache;
 
-/* Cleanup the global cache */
-static void cleanup_global_cache(void) {
-    if (g_executor_cache.executor) {
-        cypher_executor_free(g_executor_cache.executor);
-        g_executor_cache.executor = NULL;
+/* Destructor called when database connection closes */
+static void connection_cache_destroy(void *data) {
+    connection_cache *cache = (connection_cache *)data;
+    if (cache) {
+        if (cache->executor) {
+            CYPHER_DEBUG("Connection closing - freeing executor %p", (void*)cache->executor);
+            cypher_executor_free(cache->executor);
+        }
+        free(cache);
     }
-    g_executor_cache.db = NULL;
 }
 
 /* Simple test function */
@@ -79,21 +82,16 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
     /* Get database connection from SQLite context */
     sqlite3 *db = sqlite3_context_db_handle(context);
 
-    /* Get or create cached executor using global cache */
+    /* Get per-connection cache from user data */
+    connection_cache *cache = (connection_cache *)sqlite3_user_data(context);
     cypher_executor *executor = NULL;
 
-    if (g_executor_cache.db == db && g_executor_cache.executor != NULL) {
+    if (cache && cache->executor) {
         /* Reuse cached executor for this connection */
-        executor = g_executor_cache.executor;
+        executor = cache->executor;
         CYPHER_DEBUG("Reusing cached executor %p", (void*)executor);
     } else {
-        /* Different connection or first call - create new executor */
-        if (g_executor_cache.executor != NULL) {
-            /* Clean up old executor from different connection */
-            CYPHER_DEBUG("Cleaning up old executor for different connection");
-            cleanup_global_cache();
-        }
-
+        /* First call - create new executor */
         CYPHER_DEBUG("Creating new executor for db=%p", (void*)db);
         executor = cypher_executor_create(db);
         if (!executor) {
@@ -102,8 +100,9 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
         }
 
         /* Cache for reuse */
-        g_executor_cache.db = db;
-        g_executor_cache.executor = executor;
+        if (cache) {
+            cache->executor = executor;
+        }
     }
 
     /* Execute query (with or without parameters) */
@@ -396,14 +395,23 @@ int sqlite3_graphqlite_init(
   int rc = SQLITE_OK;
   SQLITE_EXTENSION_INIT2(pApi);
   (void)pzErrMsg;  /* Unused parameter */
-  
+
+  /* Create per-connection cache that will be freed when connection closes */
+  connection_cache *cache = calloc(1, sizeof(connection_cache));
+  if (!cache) {
+    return SQLITE_NOMEM;
+  }
+  cache->db = db;
+  cache->executor = NULL;
+
   /* Register the graphqlite_test function */
   sqlite3_create_function(db, "graphqlite_test", 0, SQLITE_UTF8, 0,
                          simple_test_func, 0, 0);
-  
-  /* Register the main cypher() function (1 or 2 args: query, optional params_json) */
-  sqlite3_create_function(db, "cypher", -1, SQLITE_UTF8, 0,
-                         graphqlite_cypher_func, 0, 0);
+
+  /* Register the main cypher() function with destructor for cleanup on connection close */
+  rc = sqlite3_create_function_v2(db, "cypher", -1, SQLITE_UTF8, cache,
+                             graphqlite_cypher_func, 0, 0,
+                             connection_cache_destroy);
 
   /* Register the regexp() function for =~ operator support */
   sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
@@ -411,6 +419,6 @@ int sqlite3_graphqlite_init(
 
   /* Create schema during initialization */
   create_schema(db);
-  
-  return rc;
+
+  return SQLITE_OK;
 }

@@ -93,8 +93,8 @@ print([n["id"] for n in neighbors])  # ['bob', 'carol']
 print(g.has_edge("alice", "bob"))  # True
 print(g.has_edge("bob", "alice"))  # False (directed edge)
 
-# Get node degree
-print(g.node_degree("alice"))  # {'in': 0, 'out': 2, 'total': 2}
+# Get node degree (total connections)
+print(g.node_degree("alice"))  # 2
 ```
 
 ## Next Steps

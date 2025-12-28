@@ -175,6 +175,40 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 }
                                 dbuf_free(&cond);
+                            } else if (pair->value && pair->value->type == AST_NODE_PARAMETER) {
+                                /* Handle parameter in property filter */
+                                cypher_parameter *param = (cypher_parameter*)pair->value;
+                                dynamic_buffer cond;
+                                dbuf_init(&cond);
+
+                                /* Use OR conditions to check each property type table
+                                 * This handles string, int, real, and bool params correctly */
+                                dbuf_appendf(&cond,
+                                    "("
+                                    /* String match */
+                                    "EXISTS(SELECT 1 FROM node_props_text npt "
+                                    "JOIN property_keys pk ON npt.key_id = pk.id "
+                                    "WHERE npt.node_id = %s.id AND pk.key = '%s' AND npt.value = :%s) OR "
+                                    /* Integer match */
+                                    "EXISTS(SELECT 1 FROM node_props_int npi "
+                                    "JOIN property_keys pk ON npi.key_id = pk.id "
+                                    "WHERE npi.node_id = %s.id AND pk.key = '%s' AND npi.value = :%s) OR "
+                                    /* Real match */
+                                    "EXISTS(SELECT 1 FROM node_props_real npr "
+                                    "JOIN property_keys pk ON npr.key_id = pk.id "
+                                    "WHERE npr.node_id = %s.id AND pk.key = '%s' AND npr.value = :%s) OR "
+                                    /* Boolean match */
+                                    "EXISTS(SELECT 1 FROM node_props_bool npb "
+                                    "JOIN property_keys pk ON npb.key_id = pk.id "
+                                    "WHERE npb.node_id = %s.id AND pk.key = '%s' AND npb.value = :%s)"
+                                    ")",
+                                    alias, pair->key, param->name,
+                                    alias, pair->key, param->name,
+                                    alias, pair->key, param->name,
+                                    alias, pair->key, param->name);
+
+                                sql_where(ctx->unified_builder, dbuf_get(&cond));
+                                dbuf_free(&cond);
                             }
                         }
                     }

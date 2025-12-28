@@ -1,13 +1,13 @@
 ---
-id: implement-proper-string-escaping
+id: fix-buffer-overflow-in-agtype-c
 level: task
-title: "Implement proper string escaping in cypher_transform.c"
-short_code: "GQLITE-T-0075"
-created_at: 2025-12-27T20:34:10.868281+00:00
-updated_at: 2025-12-27T21:15:11.202019+00:00
+title: "Fix buffer overflow in agtype.c JSON serialization"
+short_code: "GQLITE-T-0073"
+created_at: 2025-12-27T20:34:10.449800+00:00
+updated_at: 2025-12-27T21:15:10.779855+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Implement proper string escaping in cypher_transform.c
+# Fix buffer overflow in agtype.c JSON serialization
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,29 +30,33 @@ initiative_id: NULL
 
 ## Objective
 
-Implement proper string escaping in cypher_transform.c to handle special characters correctly.
+Fix buffer overflow vulnerability in agtype.c JSON serialization by replacing fixed-size strcat() calls with dynamic buffer management.
 
 ## Priority
-- [x] P1 - High (correctness issue)
-
-## Type
-- [x] Bug - Production issue that needs fixing
+- [x] P0 - Critical (potential crash/security issue)
 
 ## Details
 
-### Current TODO
+### Current Problem
+Lines 787-853 in agtype.c use strcat() without bounds checking:
+
 ```c
-// Line 155 in cypher_transform.c
-/* TODO: Proper escaping */
+result = malloc(base_size);  // Calculated but might be short
+...
+strcat(result, key_str);     // ← No bounds check!
+strcat(result, ": ");
+strcat(result, value_str);
 ```
 
-### Context
-The sql_builder.c already has `sql_builder_escape_string()` for escaping single quotes.
+The `base_size` calculation doesn't account for deeply nested values, escaped quotes, or edge cases.
+
+### Files to Modify
+- `src/backend/executor/agtype.c` - Lines 780-856 (AGTV_VERTEX and AGTV_EDGE cases)
 
 ### Impact Assessment
-- **Affected Users**: Users with special characters in string literals
-- **Reproduction**: Query with strings containing quotes or backslashes
-- **Expected vs Actual**: Should escape properly, may currently fail or produce wrong SQL
+- **Affected Users**: All users returning nodes/edges with many properties
+- **Reproduction**: Return node with 100+ properties or deeply nested values
+- **Expected vs Actual**: Should handle any size, currently may overflow buffer
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -63,6 +67,8 @@ The sql_builder.c already has `sql_builder_escape_string()` for escaping single 
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

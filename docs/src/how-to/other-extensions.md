@@ -26,7 +26,7 @@ import graphqlite
 import sqlite_vec  # Example: vector search extension
 
 db = graphqlite.connect("combined.db")
-sqlite_vec.load(db._conn)  # Access underlying sqlite3.Connection
+sqlite_vec.load(db.sqlite_connection)  # Access underlying sqlite3.Connection
 ```
 
 ## Example: GraphQLite + sqlite-vec

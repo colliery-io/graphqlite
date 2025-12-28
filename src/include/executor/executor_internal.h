@@ -79,6 +79,10 @@ void set_result_error(cypher_result *result, const char *error_msg);
 /* Helper to bind parameters from JSON to a prepared statement */
 int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json);
 
+/* Helper to lookup a parameter value from JSON */
+int get_param_value(const char *params_json, const char *param_name,
+                    property_type *out_type, void *out_value, size_t value_size);
+
 /* Clause execution functions (used by main dispatcher and other clauses) */
 int execute_create_clause(cypher_executor *executor, cypher_create *create, cypher_result *result);
 int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, cypher_result *result);

@@ -76,9 +76,7 @@ SELECT 'Test 3.3 - Count all relationships:' as test_name;
 SELECT cypher('MATCH ()-[r]->() RETURN count(r)') as total_relationships;
 
 SELECT 'Test 3.4 - List all relationships:' as test_name;
--- NOTE: type() function not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (a)-[r]->(b) RETURN a.name, type(r), b.name') as all_relationships;
-SELECT 'SKIPPED: type() function not implemented' as all_relationships;
+SELECT cypher('MATCH (a)-[r]->(b) RETURN a.name, type(r), b.name') as all_relationships;
 
 -- =======================================================================
 -- SECTION 4: MATCH...CREATE with Complex Patterns

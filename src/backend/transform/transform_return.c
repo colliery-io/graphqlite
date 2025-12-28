@@ -544,17 +544,33 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
         case AST_NODE_SUBSCRIPT:
             {
-                /* Transform list[index] to json_extract(list, '$[' || index || ']') */
+                /* Transform list[index] to json_extract with negative index support
+                 * Negative indices count from end: list[-1] = last element
+                 * SQL: json_extract(list, '$[' || CASE WHEN idx < 0
+                 *        THEN json_array_length(list) + idx ELSE idx END || ']')
+                 */
                 cypher_subscript *subscript = (cypher_subscript*)expr;
                 append_sql(ctx, "json_extract(");
                 if (transform_expression(ctx, subscript->expr) < 0) {
                     return -1;
                 }
-                append_sql(ctx, ", '$[' || (");
+                append_sql(ctx, ", '$[' || CAST(CASE WHEN (");
                 if (transform_expression(ctx, subscript->index) < 0) {
                     return -1;
                 }
-                append_sql(ctx, ") || ']')");
+                append_sql(ctx, ") < 0 THEN json_array_length(");
+                if (transform_expression(ctx, subscript->expr) < 0) {
+                    return -1;
+                }
+                append_sql(ctx, ") + (");
+                if (transform_expression(ctx, subscript->index) < 0) {
+                    return -1;
+                }
+                append_sql(ctx, ") ELSE (");
+                if (transform_expression(ctx, subscript->index) < 0) {
+                    return -1;
+                }
+                append_sql(ctx, ") END AS INTEGER) || ']')");
             }
             break;
 

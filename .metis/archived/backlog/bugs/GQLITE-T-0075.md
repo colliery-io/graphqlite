@@ -1,17 +1,17 @@
 ---
-id: address-memory-management-todos-in
+id: implement-proper-string-escaping
 level: task
-title: "Address memory management TODOs in agtype.c"
-short_code: "GQLITE-T-0074"
-created_at: 2025-12-27T20:34:10.653686+00:00
-updated_at: 2025-12-27T21:15:10.988247+00:00
+title: "Implement proper string escaping in cypher_transform.c"
+short_code: "GQLITE-T-0075"
+created_at: 2025-12-27T20:34:10.868281+00:00
+updated_at: 2025-12-27T21:15:11.202019+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#tech-debt"
+  - "#bug"
   - "#phase/completed"
 
 
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Address memory management TODOs in agtype.c
+# Implement proper string escaping in cypher_transform.c
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,43 +30,29 @@ initiative_id: NULL
 
 ## Objective
 
-Address incomplete memory management TODOs in agtype.c to prevent memory leaks and use-after-free bugs.
+Implement proper string escaping in cypher_transform.c to handle special characters correctly.
 
 ## Priority
-- [x] P1 - High (memory safety)
+- [x] P1 - High (correctness issue)
 
 ## Type
-- [x] Tech Debt - Code improvement or refactoring
+- [x] Bug - Production issue that needs fixing
 
 ## Details
 
-### Current TODOs
+### Current TODO
 ```c
-// Line 376
-/* TODO: Deep copy properties if needed */
-
-// Line 382  
-/* TODO: Deep copy properties if needed */
-
-// Line 440
-/* TODO: Free properties properly */
-
-// Line 446
-/* TODO: Free properties properly */
+// Line 155 in cypher_transform.c
+/* TODO: Proper escaping */
 ```
 
-### Risk Assessment
-- **Memory leaks**: Properties not freed in long-running processes
-- **Use-after-free**: Shallow-copied properties with freed originals
-- **Double-free**: Properties freed multiple times
+### Context
+The sql_builder.c already has `sql_builder_escape_string()` for escaping single quotes.
 
-### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: {Number/percentage of users affected}
-- **Reproduction Steps**: 
-  1. {Step 1}
-  2. {Step 2}
-  3. {Step 3}
-- **Expected vs Actual**: {What should happen vs what happens}
+### Impact Assessment
+- **Affected Users**: Users with special characters in string literals
+- **Reproduction**: Query with strings containing quotes or backslashes
+- **Expected vs Actual**: Should escape properly, may currently fail or produce wrong SQL
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -77,6 +63,8 @@ Address incomplete memory management TODOs in agtype.c to prevent memory leaks a
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

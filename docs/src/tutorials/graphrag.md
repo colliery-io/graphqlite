@@ -231,7 +231,7 @@ def graphrag_retrieve(query: str, k_chunks: int = 5, expand_hops: int = 1) -> di
     """
 
     # Get underlying connection for vector search
-    conn = g._conn._conn
+    conn = g.connection.sqlite_connection
 
     # Step 1: Vector search
     chunk_ids = vector_search(conn, query, k=k_chunks)
@@ -240,7 +240,7 @@ def graphrag_retrieve(query: str, k_chunks: int = 5, expand_hops: int = 1) -> di
     entities = set()
     for chunk_id in chunk_ids:
         results = g.query(f"""
-            MATCH (c:Chunk {{chunk_id: '{chunk_id}'}})-[:MENTIONS]->(e:Entity)
+            MATCH (c:Chunk {{id: '{chunk_id}'}})-[:MENTIONS]->(e:Entity)
             RETURN e.name
         """)
         for r in results:

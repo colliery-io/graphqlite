@@ -100,6 +100,36 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             /* Skip null properties for now */
                                             continue;
                                     }
+                                } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
+                                    /* Handle parameter substitution */
+                                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                                    static char str_buf[4096];
+                                    static int64_t int_buf;
+                                    static double real_buf;
+                                    static int bool_buf;
+
+                                    int rc = get_param_value(executor->params_json, param->name, &prop_type, str_buf, sizeof(str_buf));
+                                    if (rc == -2) {
+                                        /* null parameter - skip */
+                                        continue;
+                                    } else if (rc == 0) {
+                                        /* Set prop_value based on type returned */
+                                        if (prop_type == PROP_TYPE_TEXT) {
+                                            prop_value = str_buf;
+                                        } else if (prop_type == PROP_TYPE_INTEGER) {
+                                            int_buf = *(int64_t*)str_buf;
+                                            prop_value = &int_buf;
+                                        } else if (prop_type == PROP_TYPE_REAL) {
+                                            real_buf = *(double*)str_buf;
+                                            prop_value = &real_buf;
+                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                            bool_buf = *(int*)str_buf;
+                                            prop_value = &bool_buf;
+                                        }
+                                    } else {
+                                        CYPHER_DEBUG("Parameter '%s' not found in params_json", param->name);
+                                        continue;
+                                    }
                                 } else if (pair->value->type == AST_NODE_IDENTIFIER && g_foreach_ctx) {
                                     /* Check if this is a foreach variable reference */
                                     cypher_identifier *id = (cypher_identifier*)pair->value;
@@ -228,12 +258,40 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             /* Skip null properties for now */
                                             continue;
                                     }
+                                } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
+                                    /* Handle parameter substitution */
+                                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                                    static char str_buf2[4096];
+                                    static int64_t int_buf2;
+                                    static double real_buf2;
+                                    static int bool_buf2;
 
-                                    if (prop_value) {
-                                        if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value) == 0) {
-                                            result->properties_set++;
-                                            CYPHER_DEBUG("Set property '%s' on target node %d", pair->key, target_node_id);
+                                    int rc = get_param_value(executor->params_json, param->name, &prop_type, str_buf2, sizeof(str_buf2));
+                                    if (rc == -2) {
+                                        continue;
+                                    } else if (rc == 0) {
+                                        if (prop_type == PROP_TYPE_TEXT) {
+                                            prop_value = str_buf2;
+                                        } else if (prop_type == PROP_TYPE_INTEGER) {
+                                            int_buf2 = *(int64_t*)str_buf2;
+                                            prop_value = &int_buf2;
+                                        } else if (prop_type == PROP_TYPE_REAL) {
+                                            real_buf2 = *(double*)str_buf2;
+                                            prop_value = &real_buf2;
+                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                            bool_buf2 = *(int*)str_buf2;
+                                            prop_value = &bool_buf2;
                                         }
+                                    } else {
+                                        CYPHER_DEBUG("Parameter '%s' not found in params_json", param->name);
+                                        continue;
+                                    }
+                                }
+
+                                if (prop_value) {
+                                    if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value) == 0) {
+                                        result->properties_set++;
+                                        CYPHER_DEBUG("Set property '%s' on target node %d", pair->key, target_node_id);
                                     }
                                 }
                             }

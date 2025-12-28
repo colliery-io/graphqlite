@@ -69,8 +69,8 @@ See [Operators Reference](./cypher-operators.md) for comparison and logical oper
 
 GraphQLite implements standard Cypher with some differences from full implementations:
 
-1. **No CALL procedures** - Use built-in graph algorithm functions instead
-2. **No list comprehensions** - Use `UNWIND` for list operations
+1. **No CALL procedures** - Use built-in graph algorithm functions instead (e.g., `RETURN pageRank()`)
+2. **List comprehensions** - Basic support for `[x IN list | expr]` and `[x IN list WHERE pred | expr]`
 3. **No CREATE CONSTRAINT** - Use SQLite's constraint mechanisms
-4. **No EXPLAIN/PROFILE** - Query analysis not yet implemented
-5. **Graph algorithms are functions** - `RETURN pageRank()` syntax
+4. **EXPLAIN supported** - Returns the generated SQL for debugging
+5. **UNION supported** - Combine results from multiple queries with `UNION` or `UNION ALL`

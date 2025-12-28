@@ -1,13 +1,13 @@
 ---
-id: fix-buffer-overflow-in-agtype-c
+id: fix-sql-injection-vulnerability-in
 level: task
-title: "Fix buffer overflow in agtype.c JSON serialization"
-short_code: "GQLITE-T-0073"
-created_at: 2025-12-27T20:34:10.449800+00:00
-updated_at: 2025-12-27T21:15:10.779855+00:00
+title: "Fix SQL injection vulnerability in executor_merge.c"
+short_code: "GQLITE-T-0072"
+created_at: 2025-12-27T20:34:10.266740+00:00
+updated_at: 2025-12-27T21:15:10.590269+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Fix buffer overflow in agtype.c JSON serialization
+# Fix SQL injection vulnerability in executor_merge.c
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,33 +30,39 @@ initiative_id: NULL
 
 ## Objective
 
-Fix buffer overflow vulnerability in agtype.c JSON serialization by replacing fixed-size strcat() calls with dynamic buffer management.
+Migrate executor_merge.c from string interpolation to parameterized queries to eliminate SQL injection vulnerability.
 
 ## Priority
-- [x] P0 - Critical (potential crash/security issue)
+- [x] P0 - Critical (security vulnerability)
 
 ## Details
 
 ### Current Problem
-Lines 787-853 in agtype.c use strcat() without bounds checking:
+Property keys from the AST (user input) are interpolated directly into SQL strings without escaping:
 
 ```c
-result = malloc(base_size);  // Calculated but might be short
-...
-strcat(result, key_str);     // ← No bounds check!
-strcat(result, ": ");
-strcat(result, value_str);
+// Lines 77-81 in executor_merge.c
+offset += snprintf(sql + offset, sizeof(sql) - offset,
+    " JOIN %s np%d ON n.id = np%d.node_id"
+    " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = '%s'"
+    " AND np%d.value = %s",
+    prop_table, i, i,
+    i, i, i, i, pair->key,  // ← NOT ESCAPED!
+    i, value_str);
 ```
 
-The `base_size` calculation doesn't account for deeply nested values, escaped quotes, or edge cases.
+### Correct Pattern (from cypher_schema.c)
+```c
+sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);  // Safe
+```
 
 ### Files to Modify
-- `src/backend/executor/agtype.c` - Lines 780-856 (AGTV_VERTEX and AGTV_EDGE cases)
+- `src/backend/executor/executor_merge.c` - Lines 26-87, 118-176
 
 ### Impact Assessment
-- **Affected Users**: All users returning nodes/edges with many properties
-- **Reproduction**: Return node with 100+ properties or deeply nested values
-- **Expected vs Actual**: Should handle any size, currently may overflow buffer
+- **Affected Users**: All users of MERGE with property matching
+- **Reproduction**: `MERGE (n:Label {key'; DROP TABLE nodes;--: 'value'})`
+- **Expected vs Actual**: Should reject/escape malicious input, currently interpolates directly
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -67,6 +73,8 @@ The `base_size` calculation doesn't account for deeply nested values, escaped qu
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

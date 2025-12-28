@@ -256,9 +256,7 @@ SELECT 'Test 9.3 - Multi-level property access:' as test_name;
 SELECT cypher('MATCH (p:Person)-[r]->(target) RETURN p.name, r, target.name LIMIT 3') as result;
 
 SELECT 'Test 9.4 - Property aggregation patterns:' as test_name;
--- NOTE: MIN/MAX aggregate functions not implemented - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n:Person) WHERE n.age IS NOT NULL RETURN MIN(n.age), MAX(n.age)') as result;
-SELECT 'SKIPPED: MIN/MAX aggregate functions not implemented' as result;
+SELECT cypher('MATCH (n:Person) WHERE n.age IS NOT NULL RETURN MIN(n.age), MAX(n.age)') as result;
 
 -- =======================================================================
 -- VERIFICATION: Property System Analysis

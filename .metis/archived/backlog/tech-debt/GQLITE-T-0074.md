@@ -1,17 +1,17 @@
 ---
-id: fix-sql-injection-vulnerability-in
+id: address-memory-management-todos-in
 level: task
-title: "Fix SQL injection vulnerability in executor_merge.c"
-short_code: "GQLITE-T-0072"
-created_at: 2025-12-27T20:34:10.266740+00:00
-updated_at: 2025-12-27T21:15:10.590269+00:00
+title: "Address memory management TODOs in agtype.c"
+short_code: "GQLITE-T-0074"
+created_at: 2025-12-27T20:34:10.653686+00:00
+updated_at: 2025-12-27T21:15:10.988247+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#bug"
+  - "#tech-debt"
   - "#phase/completed"
 
 
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Fix SQL injection vulnerability in executor_merge.c
+# Address memory management TODOs in agtype.c
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,39 +30,43 @@ initiative_id: NULL
 
 ## Objective
 
-Migrate executor_merge.c from string interpolation to parameterized queries to eliminate SQL injection vulnerability.
+Address incomplete memory management TODOs in agtype.c to prevent memory leaks and use-after-free bugs.
 
 ## Priority
-- [x] P0 - Critical (security vulnerability)
+- [x] P1 - High (memory safety)
+
+## Type
+- [x] Tech Debt - Code improvement or refactoring
 
 ## Details
 
-### Current Problem
-Property keys from the AST (user input) are interpolated directly into SQL strings without escaping:
-
+### Current TODOs
 ```c
-// Lines 77-81 in executor_merge.c
-offset += snprintf(sql + offset, sizeof(sql) - offset,
-    " JOIN %s np%d ON n.id = np%d.node_id"
-    " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = '%s'"
-    " AND np%d.value = %s",
-    prop_table, i, i,
-    i, i, i, i, pair->key,  // ← NOT ESCAPED!
-    i, value_str);
+// Line 376
+/* TODO: Deep copy properties if needed */
+
+// Line 382  
+/* TODO: Deep copy properties if needed */
+
+// Line 440
+/* TODO: Free properties properly */
+
+// Line 446
+/* TODO: Free properties properly */
 ```
 
-### Correct Pattern (from cypher_schema.c)
-```c
-sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);  // Safe
-```
+### Risk Assessment
+- **Memory leaks**: Properties not freed in long-running processes
+- **Use-after-free**: Shallow-copied properties with freed originals
+- **Double-free**: Properties freed multiple times
 
-### Files to Modify
-- `src/backend/executor/executor_merge.c` - Lines 26-87, 118-176
-
-### Impact Assessment
-- **Affected Users**: All users of MERGE with property matching
-- **Reproduction**: `MERGE (n:Label {key'; DROP TABLE nodes;--: 'value'})`
-- **Expected vs Actual**: Should reject/escape malicious input, currently interpolates directly
+### Impact Assessment **[CONDITIONAL: Bug]**
+- **Affected Users**: {Number/percentage of users affected}
+- **Reproduction Steps**: 
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -73,6 +77,8 @@ sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);  // Safe
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

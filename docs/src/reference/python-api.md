@@ -56,20 +56,24 @@ path = graphqlite.loadable_path()
 
 ### Connection.cypher()
 
-Execute a Cypher query.
+Execute a Cypher query with optional parameters.
 
 ```python
 conn.cypher("CREATE (n:Person {name: 'Alice'})")
 results = conn.cypher("MATCH (n) RETURN n.name")
 for row in results:
     print(row["n.name"])
+
+# With parameters
+results = conn.cypher(
+    "MATCH (n:Person {name: $name}) RETURN n",
+    {"name": "Alice"}
+)
 ```
 
-**Parameters**:
-- `query` (str) - Cypher query
-- `params` (str, optional) - JSON parameters
+The `query` parameter is the Cypher query string. The optional `params` parameter accepts a dictionary that will be converted to JSON for parameter binding.
 
-**Returns**: List of dicts
+**Returns**: `CypherResult` object (iterable, supports indexing and `len()`)
 
 ### Connection.execute()
 
@@ -165,13 +169,13 @@ g.upsert_edge("alice", "bob", {"since": 2020}, rel_type="KNOWS")
 
 #### get_edge()
 
-Get an edge.
+Get an edge between two nodes.
 
 ```python
-edge = g.get_edge("alice", "bob", rel_type="KNOWS")
+edge = g.get_edge("alice", "bob")
 ```
 
-**Returns**: dict or None
+Returns the first edge found between the source and target nodes, or `None` if no edge exists.
 
 #### has_edge()
 
@@ -185,10 +189,10 @@ exists = g.has_edge("alice", "bob")
 
 #### delete_edge()
 
-Delete an edge.
+Delete an edge between two nodes.
 
 ```python
-g.delete_edge("alice", "bob", rel_type="KNOWS")
+g.delete_edge("alice", "bob")
 ```
 
 #### get_all_edges()
@@ -218,13 +222,13 @@ neighbors = g.get_neighbors("alice")
 
 #### node_degree()
 
-Get a node's degree (total number of connections).
+Get a node's degree, which is the total number of edges connected to the node (both incoming and outgoing).
 
 ```python
 degree = g.node_degree("alice")  # 5
 ```
 
-**Returns**: int (total edge count)
+Returns an integer count of connected edges.
 
 #### stats()
 
@@ -241,18 +245,22 @@ stats = g.stats()
 
 #### query()
 
-Execute a Cypher query.
+Execute a Cypher query and return results as a list of dictionaries.
 
 ```python
 results = g.query("MATCH (n:Person) RETURN n.name")
+for row in results:
+    print(row["n.name"])
 ```
 
-**Parameters**:
-- `cypher` (str) - Cypher query
+This method is for queries that don't require parameters. For parameterized queries, access the underlying connection:
 
-**Returns**: List of dicts
-
-> **Note**: For parameterized queries, use the `Connection.cypher()` method instead.
+```python
+results = g.connection.cypher(
+    "MATCH (n:Person {name: $name}) RETURN n",
+    {"name": "Alice"}
+)
+```
 
 ### Algorithm Methods
 
@@ -271,7 +279,7 @@ results = g.degree_centrality()
 #### community_detection()
 
 ```python
-results = g.community_detection(max_iterations=10)
+results = g.community_detection(iterations=10)
 ```
 
 #### shortest_path()

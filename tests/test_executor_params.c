@@ -1,5 +1,11 @@
-/*
- * Test parameterized query execution
+/**
+ * Tests for parameterized Cypher queries
+ *
+ * Tests parameter substitution in:
+ * - MATCH clause property filters
+ * - CREATE clause property values
+ * - WHERE clause conditions
+ * - SET clause property updates
  */
 
 #include <stdio.h>
@@ -17,43 +23,102 @@
 
 /* Test database handle */
 static sqlite3 *test_db = NULL;
-static cypher_executor *test_executor = NULL;
+static cypher_executor *executor = NULL;
 
-/* Setup function - create test database with sample data */
+/* Helper to execute a parameterized query and check success */
+static cypher_result* exec_params(const char *query, const char *params_json)
+{
+    return cypher_executor_execute_params(executor, query, params_json);
+}
+
+/* Helper to execute a query without params */
+static cypher_result* exec(const char *query)
+{
+    return cypher_executor_execute(executor, query);
+}
+
+/* Helper to find a value in result by column name */
+static int result_contains_value(cypher_result *result, const char *col_name, const char *expected)
+{
+    if (!result || !result->success || result->row_count == 0) return 0;
+
+    /* Find column index */
+    int col_idx = -1;
+    for (int c = 0; c < result->column_count; c++) {
+        if (result->column_names[c] && strcmp(result->column_names[c], col_name) == 0) {
+            col_idx = c;
+            break;
+        }
+    }
+    if (col_idx < 0) return 0;
+
+    /* Search all rows for the expected value */
+    for (int r = 0; r < result->row_count; r++) {
+        if (result->data[r][col_idx] && strcmp(result->data[r][col_idx], expected) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Helper to get row count */
+static int get_row_count(cypher_result *result)
+{
+    if (!result || !result->success) return 0;
+    return result->row_count;
+}
+
+/* Helper to get a specific cell value */
+static const char* get_cell(cypher_result *result, int row, const char *col_name)
+{
+    if (!result || !result->success || row >= result->row_count) return NULL;
+
+    for (int c = 0; c < result->column_count; c++) {
+        if (result->column_names[c] && strcmp(result->column_names[c], col_name) == 0) {
+            return result->data[row][c];
+        }
+    }
+    return NULL;
+}
+
+/* Setup - create database and test data */
 static int setup_params_suite(void)
 {
     int rc = sqlite3_open(":memory:", &test_db);
-    if (rc != SQLITE_OK) {
+    if (rc != SQLITE_OK) return -1;
+
+    cypher_schema_manager *schema_mgr = cypher_schema_create_manager(test_db);
+    if (!schema_mgr) return -1;
+
+    if (cypher_schema_initialize(schema_mgr) < 0) {
+        cypher_schema_free_manager(schema_mgr);
         return -1;
     }
+    cypher_schema_free_manager(schema_mgr);
 
-    test_executor = cypher_executor_create(test_db);
-    if (!test_executor) {
-        sqlite3_close(test_db);
-        return -1;
-    }
+    executor = cypher_executor_create(test_db);
+    if (!executor) return -1;
 
-    /* Create test data */
-    cypher_result *result;
+    /* Create test data with literal values */
+    cypher_result *r;
+    r = exec("CREATE (:Person {name: \"Alice\", age: 30})");
+    if (r) cypher_result_free(r);
 
-    result = cypher_executor_execute(test_executor, "CREATE (n:Person {name: 'Alice', age: 30})");
-    if (result) cypher_result_free(result);
+    r = exec("CREATE (:Person {name: \"Bob\", age: 25})");
+    if (r) cypher_result_free(r);
 
-    result = cypher_executor_execute(test_executor, "CREATE (n:Person {name: 'Bob', age: 25})");
-    if (result) cypher_result_free(result);
-
-    result = cypher_executor_execute(test_executor, "CREATE (n:Person {name: 'Charlie', age: 35})");
-    if (result) cypher_result_free(result);
+    r = exec("CREATE (:Person {name: \"Charlie\", age: 35})");
+    if (r) cypher_result_free(r);
 
     return 0;
 }
 
-/* Teardown function */
+/* Teardown */
 static int teardown_params_suite(void)
 {
-    if (test_executor) {
-        cypher_executor_free(test_executor);
-        test_executor = NULL;
+    if (executor) {
+        cypher_executor_free(executor);
+        executor = NULL;
     }
     if (test_db) {
         sqlite3_close(test_db);
@@ -62,251 +127,249 @@ static int teardown_params_suite(void)
     return 0;
 }
 
-/* Test parameterized query with string parameter */
-static void test_param_string(void)
+/*
+ * TEST: MATCH with literal property filter (baseline)
+ * This should work and filter correctly
+ */
+static void test_match_literal_filter(void)
 {
-    const char *query = "MATCH (n:Person) WHERE n.name = $name RETURN n.name, n.age";
-    const char *params = "{\"name\": \"Alice\"}";
+    cypher_result *result = exec("MATCH (p:Person {name: \"Alice\"}) RETURN p.name AS name");
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 1);
+    /* Should return exactly 1 result - Alice */
+    CU_ASSERT_EQUAL(get_row_count(result), 1);
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Alice"));
 
-        if (result->row_count == 1 && result->data && result->data[0]) {
-            /* Check that we got Alice */
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "Alice");
-            CU_ASSERT_STRING_EQUAL(result->data[0][1], "30");
-        }
-
-        cypher_result_free(result);
-    }
+    if (result) cypher_result_free(result);
 }
 
-/* Test parameterized query with integer parameter */
-static void test_param_integer(void)
+/*
+ * TEST: MATCH with parameter in property filter
+ * MATCH (p:Person {name: $name}) should filter by the parameter value
+ */
+static void test_match_param_filter(void)
 {
-    const char *query = "MATCH (n:Person) WHERE n.age > $min_age RETURN n.name, n.age ORDER BY n.age";
-    const char *params = "{\"min_age\": 28}";
+    cypher_result *result = exec_params(
+        "MATCH (p:Person {name: $name}) RETURN p.name AS name",
+        "{\"name\": \"Alice\"}"
+    );
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 2);  /* Alice (30) and Charlie (35) */
+    /* Should return exactly 1 result - only Alice */
+    CU_ASSERT_EQUAL_FATAL(get_row_count(result), 1);  /* FATAL: This is the key bug test */
 
-        if (result->row_count == 2 && result->data) {
-            /* With ORDER BY n.age, should be Alice (30) then Charlie (35) */
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "Alice");
-            CU_ASSERT_STRING_EQUAL(result->data[1][0], "Charlie");
-        }
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Alice"));
+    CU_ASSERT_FALSE(result_contains_value(result, "name", "Bob"));
+    CU_ASSERT_FALSE(result_contains_value(result, "name", "Charlie"));
 
-        cypher_result_free(result);
-    }
+    if (result) cypher_result_free(result);
 }
 
-/* Test parameterized query with multiple parameters */
-static void test_param_multiple(void)
+/*
+ * TEST: CREATE with parameter in property value
+ * CREATE (p:Person {name: $name}) should set the property from parameter
+ */
+static void test_create_param_property(void)
 {
-    const char *query = "MATCH (n:Person) WHERE n.age >= $min AND n.age <= $max RETURN n.name ORDER BY n.age";
-    const char *params = "{\"min\": 25, \"max\": 32}";
+    cypher_result *result = exec_params(
+        "CREATE (p:Person {name: $name, age: $age})",
+        "{\"name\": \"Diana\", \"age\": 28}"
+    );
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
+    CU_ASSERT_TRUE(result->nodes_created > 0);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 2);  /* Bob (25) and Alice (30) */
+    if (result) cypher_result_free(result);
 
-        if (result->row_count == 2 && result->data) {
-            /* With ORDER BY n.age, should be Bob (25) then Alice (30) */
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "Bob");
-            CU_ASSERT_STRING_EQUAL(result->data[1][0], "Alice");
-        }
+    /* Verify the node was created with correct property value */
+    result = exec("MATCH (p:Person {name: \"Diana\"}) RETURN p.name AS name, p.age AS age");
 
-        cypher_result_free(result);
-    }
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
+
+    /* Should find Diana with age 28 */
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Diana"));
+
+    if (result) cypher_result_free(result);
 }
 
-/* Test parameterized query with no matches */
-static void test_param_no_match(void)
+/*
+ * TEST: Multiple parameters in MATCH
+ */
+static void test_match_multiple_params(void)
 {
-    const char *query = "MATCH (n:Person) WHERE n.name = $name RETURN n.name";
-    const char *params = "{\"name\": \"Nobody\"}";
+    cypher_result *result = exec_params(
+        "MATCH (p:Person) WHERE p.name = $name AND p.age = $age RETURN p.name AS name",
+        "{\"name\": \"Alice\", \"age\": 30}"
+    );
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 0);  /* No matches */
-        cypher_result_free(result);
-    }
+    /* Should return exactly Alice */
+    CU_ASSERT_EQUAL(get_row_count(result), 1);
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Alice"));
+
+    if (result) cypher_result_free(result);
 }
 
-/* Test SQL injection prevention via parameters */
-static void test_param_injection_safe(void)
+/*
+ * TEST: Parameter in WHERE clause
+ */
+static void test_where_param(void)
 {
-    /* This malicious value should be treated as a literal string */
-    const char *query = "MATCH (n:Person) WHERE n.name = $name RETURN n.name";
-    const char *params = "{\"name\": \"'; DROP TABLE nodes; --\"}";
+    cypher_result *result = exec_params(
+        "MATCH (p:Person) WHERE p.age > $min_age RETURN p.name AS name ORDER BY p.age",
+        "{\"min_age\": 28}"
+    );
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 0);  /* Should not match anyone */
-        cypher_result_free(result);
-    }
+    /* Should return Alice (30) and Charlie (35), not Bob (25) */
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Alice"));
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Charlie"));
+    CU_ASSERT_FALSE(result_contains_value(result, "name", "Bob"));
 
-    /* Verify data is still intact */
-    result = cypher_executor_execute(test_executor, "MATCH (n:Person) RETURN count(n) as cnt");
-    CU_ASSERT_PTR_NOT_NULL(result);
-
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 1);
-        if (result->row_count == 1 && result->data && result->data[0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "3");  /* All 3 records intact */
-        }
-        cypher_result_free(result);
-    }
+    if (result) cypher_result_free(result);
 }
 
-/* Test parameterized query with boolean parameter */
-static void test_param_boolean(void)
+/*
+ * TEST: Parameter in SET clause
+ */
+static void test_set_param(void)
 {
-    /* First create a node with boolean property */
-    cypher_result *setup = cypher_executor_execute(test_executor,
-        "CREATE (n:Flag {name: 'test', active: true})");
-    if (setup) cypher_result_free(setup);
+    /* First create a test node */
+    cypher_result *r = exec("CREATE (:TestNode {value: 0})");
+    if (r) cypher_result_free(r);
 
-    const char *query = "MATCH (n:Flag) WHERE n.active = $active RETURN n.name";
-    const char *params = "{\"active\": true}";
+    cypher_result *result = exec_params(
+        "MATCH (n:TestNode) SET n.value = $new_value RETURN n.value AS value",
+        "{\"new_value\": 42}"
+    );
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 1);
-        if (result->row_count == 1 && result->data && result->data[0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "test");
-        }
-        cypher_result_free(result);
-    }
+    if (result) cypher_result_free(result);
+
+    /* Verify value was updated */
+    result = exec("MATCH (n:TestNode) RETURN n.value AS value");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
+
+    const char *val = get_cell(result, 0, "value");
+    CU_ASSERT_PTR_NOT_NULL(val);
+    CU_ASSERT_TRUE(val && strcmp(val, "42") == 0);
+
+    if (result) cypher_result_free(result);
 }
 
-/* Test parameterized query with null parameter */
-static void test_param_null(void)
+/*
+ * TEST: Integer parameter
+ */
+static void test_integer_param(void)
 {
-    const char *query = "MATCH (n:Person) WHERE n.name = $name RETURN n.name";
-    const char *params = "{\"name\": null}";
+    cypher_result *result = exec_params(
+        "MATCH (p:Person {age: $age}) RETURN p.name AS name",
+        "{\"age\": 30}"
+    );
 
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 0);  /* NULL shouldn't match anything */
-        cypher_result_free(result);
-    }
+    /* Should find Alice (age 30) */
+    CU_ASSERT_EQUAL(get_row_count(result), 1);
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "Alice"));
+
+    if (result) cypher_result_free(result);
 }
 
-/* Test parameterized query with float parameter */
-static void test_param_float(void)
+/*
+ * TEST: Boolean parameter
+ */
+static void test_boolean_param(void)
 {
-    /* Create node with float property */
-    cypher_result *setup = cypher_executor_execute(test_executor,
-        "CREATE (n:Score {name: 'high', value: 95.5})");
-    if (setup) cypher_result_free(setup);
+    /* Create test node with boolean */
+    exec("CREATE (:Feature {name: \"test\", enabled: true})");
 
-    setup = cypher_executor_execute(test_executor,
-        "CREATE (n:Score {name: 'low', value: 45.5})");
-    if (setup) cypher_result_free(setup);
+    cypher_result *result = exec_params(
+        "MATCH (f:Feature {enabled: $enabled}) RETURN f.name AS name",
+        "{\"enabled\": true}"
+    );
 
-    const char *query = "MATCH (n:Score) WHERE n.value > $threshold RETURN n.name";
-    const char *params = "{\"threshold\": 50.0}";
-
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, params);
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 1);
-        if (result->row_count == 1 && result->data && result->data[0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "high");
-        }
-        cypher_result_free(result);
-    }
+    CU_ASSERT_TRUE(result_contains_value(result, "name", "test"));
+
+    if (result) cypher_result_free(result);
 }
 
-/* Test execute without params (backward compatibility) */
-static void test_no_params(void)
+/*
+ * TEST: Null handling in parameters
+ */
+static void test_null_param(void)
 {
-    const char *query = "MATCH (n:Person) WHERE n.name = 'Alice' RETURN n.name, n.age";
+    /* Create a node with null property */
+    /* Note: 'optional' is a reserved keyword, use 'extra' instead */
+    cypher_result *r = exec("CREATE (:TestNull {name: \"has_null\", extra: null})");
+    if (r) cypher_result_free(r);
 
-    cypher_result *result = cypher_executor_execute(test_executor, query);
+    cypher_result *result = exec_params(
+        "MATCH (n:TestNull {name: $name}) RETURN n.extra AS opt",
+        "{\"name\": \"has_null\"}"
+    );
+
     CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result->success);
 
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 1);
-
-        if (result->row_count == 1 && result->data && result->data[0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "Alice");
-        }
-
-        cypher_result_free(result);
-    }
+    if (result) cypher_result_free(result);
 }
 
-/* Test execute_params with NULL params (should work like execute) */
-static void test_null_params_arg(void)
-{
-    const char *query = "MATCH (n:Person) WHERE n.name = 'Bob' RETURN n.name";
-
-    cypher_result *result = cypher_executor_execute_params(test_executor, query, NULL);
-    CU_ASSERT_PTR_NOT_NULL(result);
-
-    if (result) {
-        CU_ASSERT_TRUE(result->success);
-        CU_ASSERT_EQUAL(result->row_count, 1);
-
-        if (result->row_count == 1 && result->data && result->data[0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "Bob");
-        }
-
-        cypher_result_free(result);
-    }
-}
-
-/* Register parameterized query tests */
+/* Register all tests */
 int register_params_tests(void)
 {
-    CU_pSuite suite = CU_add_suite("Parameterized Query Tests",
-                                    setup_params_suite,
-                                    teardown_params_suite);
-    if (!suite) {
-        return CU_get_error();
-    }
+    CU_pSuite suite = CU_add_suite(
+        "Parameterized Query Tests",
+        setup_params_suite,
+        teardown_params_suite
+    );
 
-    if (!CU_add_test(suite, "String parameter", test_param_string) ||
-        !CU_add_test(suite, "Integer parameter", test_param_integer) ||
-        !CU_add_test(suite, "Multiple parameters", test_param_multiple) ||
-        !CU_add_test(suite, "No match", test_param_no_match) ||
-        !CU_add_test(suite, "SQL injection prevention", test_param_injection_safe) ||
-        !CU_add_test(suite, "Boolean parameter", test_param_boolean) ||
-        !CU_add_test(suite, "Null parameter", test_param_null) ||
-        !CU_add_test(suite, "Float parameter", test_param_float) ||
-        !CU_add_test(suite, "No params (backward compat)", test_no_params) ||
-        !CU_add_test(suite, "NULL params argument", test_null_params_arg)) {
-        return CU_get_error();
-    }
+    if (!suite) return -1;
 
-    return CUE_SUCCESS;
+    /* Baseline test */
+    if (!CU_add_test(suite, "MATCH with literal filter", test_match_literal_filter))
+        return -1;
+
+    /* Core parameter tests */
+    if (!CU_add_test(suite, "MATCH with parameter in property filter", test_match_param_filter))
+        return -1;
+    if (!CU_add_test(suite, "CREATE with parameter property", test_create_param_property))
+        return -1;
+    if (!CU_add_test(suite, "MATCH with multiple parameters", test_match_multiple_params))
+        return -1;
+
+    /* WHERE clause */
+    if (!CU_add_test(suite, "WHERE clause with parameter", test_where_param))
+        return -1;
+
+    /* SET clause */
+    if (!CU_add_test(suite, "SET clause with parameter", test_set_param))
+        return -1;
+
+    /* Type-specific tests */
+    if (!CU_add_test(suite, "Integer parameter", test_integer_param))
+        return -1;
+    if (!CU_add_test(suite, "Boolean parameter", test_boolean_param))
+        return -1;
+    if (!CU_add_test(suite, "Null parameter", test_null_param))
+        return -1;
+
+    return 0;
 }

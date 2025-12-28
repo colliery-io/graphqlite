@@ -183,33 +183,14 @@ property_key_cache* create_property_key_cache(sqlite3 *db, int slot_count)
 }
 
 /* Prepare cache statements after schema initialization */
+/* Note: Statements are now prepared locally in each function to avoid
+ * keeping prepared statements open, which prevents sqlite3_close() from
+ * succeeding when the connection is closed. */
 int prepare_property_key_cache_statements(property_key_cache *cache, sqlite3 *db)
 {
-    if (!cache || !db) {
-        return -1;
-    }
-    
-    /* Skip if already prepared */
-    if (cache->lookup_stmt || cache->insert_stmt) {
-        return 0;
-    }
-    
-    /* Prepare lookup statement */
-    const char *lookup_sql = "SELECT id FROM property_keys WHERE key = ?";
-    int rc = sqlite3_prepare_v2(db, lookup_sql, -1, &cache->lookup_stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return -1;
-    }
-    
-    /* Prepare insert statement */
-    const char *insert_sql = "INSERT INTO property_keys (key) VALUES (?)";
-    rc = sqlite3_prepare_v2(db, insert_sql, -1, &cache->insert_stmt, NULL);
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(cache->lookup_stmt);
-        cache->lookup_stmt = NULL;
-        return -1;
-    }
-    
+    UNUSED_PARAMETER(cache);
+    UNUSED_PARAMETER(db);
+    /* No-op: statements are now prepared on-demand and finalized immediately */
     return 0;
 }
 
@@ -479,18 +460,22 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
     
     /* Cache miss - query database */
     cache->cache_misses++;
-    
-    if (!cache->lookup_stmt) {
-        CYPHER_DEBUG("Property key lookup statement not prepared");
+
+    /* Prepare statement locally to avoid caching issues with sqlite3_close */
+    sqlite3_stmt *lookup_stmt = NULL;
+    const char *lookup_sql = "SELECT id FROM property_keys WHERE key = ?";
+    int rc = sqlite3_prepare_v2(manager->db, lookup_sql, -1, &lookup_stmt, NULL);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to prepare property key lookup");
         return -1;
     }
-    
-    sqlite3_bind_text(cache->lookup_stmt, 1, key, -1, SQLITE_STATIC);
-    
+
+    sqlite3_bind_text(lookup_stmt, 1, key, -1, SQLITE_STATIC);
+
     int key_id = -1;
-    if (sqlite3_step(cache->lookup_stmt) == SQLITE_ROW) {
-        key_id = sqlite3_column_int(cache->lookup_stmt, 0);
-        
+    if (sqlite3_step(lookup_stmt) == SQLITE_ROW) {
+        key_id = sqlite3_column_int(lookup_stmt, 0);
+
         /* Add to cache */
         if (entry) {
             /* Replace existing entry */
@@ -499,21 +484,21 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
             /* Create new entry */
             entry = malloc(sizeof(property_key_entry));
             if (!entry) {
-                sqlite3_reset(cache->lookup_stmt);
+                sqlite3_finalize(lookup_stmt);
                 return key_id;
             }
             cache->slots[slot] = entry;
         }
-        
+
         entry->key_id = key_id;
         entry->key_string = strdup(key);
         entry->last_used = time(NULL);
         entry->usage_count = 1;
-        
+
         CYPHER_DEBUG("Property key '%s' found in DB -> id %d", key, key_id);
     }
-    
-    sqlite3_reset(cache->lookup_stmt);
+
+    sqlite3_finalize(lookup_stmt);
     return key_id;
 }
 
@@ -531,17 +516,21 @@ int cypher_schema_ensure_property_key(cypher_schema_manager *manager, const char
     
     /* Key doesn't exist - create it */
     property_key_cache *cache = manager->key_cache;
-    
-    if (!cache->insert_stmt) {
-        CYPHER_DEBUG("Property key insert statement not prepared");
+
+    /* Prepare statement locally to avoid caching issues with sqlite3_close */
+    sqlite3_stmt *insert_stmt = NULL;
+    const char *insert_sql = "INSERT INTO property_keys (key) VALUES (?)";
+    int rc = sqlite3_prepare_v2(manager->db, insert_sql, -1, &insert_stmt, NULL);
+    if (rc != SQLITE_OK) {
+        CYPHER_DEBUG("Failed to prepare property key insert");
         return -1;
     }
-    
-    sqlite3_bind_text(cache->insert_stmt, 1, key, -1, SQLITE_STATIC);
-    
-    int rc = sqlite3_step(cache->insert_stmt);
-    sqlite3_reset(cache->insert_stmt);
-    
+
+    sqlite3_bind_text(insert_stmt, 1, key, -1, SQLITE_STATIC);
+
+    rc = sqlite3_step(insert_stmt);
+    sqlite3_finalize(insert_stmt);
+
     if (rc != SQLITE_DONE) {
         CYPHER_DEBUG("Failed to insert property key '%s': %s", key, sqlite3_errmsg(manager->db));
         return -1;

@@ -60,25 +60,18 @@ conn.cypher(&query)?;
 
 ## Row Access
 
-### By Index
+Access row values by column name using the `get()` method:
 
 ```rust
-let rows = conn.cypher("MATCH (n) RETURN n.name, n.age")?;
-for row in rows {
-    let name: String = row.get(0)?;
-    let age: i32 = row.get(1)?;
+let results = conn.cypher("MATCH (n) RETURN n.name AS name, n.age AS age")?;
+for row in &results {
+    let name: String = row.get("name")?;
+    let age: i32 = row.get("age")?;
+    println!("{} is {} years old", name, age);
 }
 ```
 
-### By Column Name
-
-```rust
-let rows = conn.cypher("MATCH (n) RETURN n.name AS name, n.age AS age")?;
-for row in rows {
-    let name: String = row.get_by_name("name")?;
-    let age: i32 = row.get_by_name("age")?;
-}
-```
+The column name must match the alias in your RETURN clause. Use `AS` to create readable column names.
 
 ## Type Conversions
 
@@ -104,8 +97,11 @@ fn example() -> Result<(), Error> {
 
     match conn.cypher("INVALID QUERY") {
         Ok(rows) => { /* process rows */ }
-        Err(Error::CypherError(msg)) => {
-            eprintln!("Query error: {}", msg);
+        Err(Error::Cypher(msg)) => {
+            eprintln!("Cypher query error: {}", msg);
+        }
+        Err(Error::Sqlite(e)) => {
+            eprintln!("SQLite error: {}", e);
         }
         Err(e) => {
             eprintln!("Other error: {}", e);
@@ -116,11 +112,12 @@ fn example() -> Result<(), Error> {
 }
 ```
 
+The `Error` enum includes variants for Cypher errors, SQLite errors, JSON parsing errors, and type conversion errors.
+
 ## Complete Example
 
 ```rust
 use graphqlite::Connection;
-use serde_json::json;
 
 fn main() -> Result<(), graphqlite::Error> {
     // Open connection
@@ -136,27 +133,27 @@ fn main() -> Result<(), graphqlite::Error> {
         CREATE (a)-[:KNOWS {since: 2020}]->(b)
     ")?;
 
-    // Query
-    let rows = conn.cypher("
+    // Query with aliases
+    let results = conn.cypher("
         MATCH (a:Person)-[:KNOWS]->(b:Person)
-        RETURN a.name AS from, b.name AS to
+        RETURN a.name AS from_person, b.name AS to_person
     ")?;
 
-    for row in rows {
-        let from: String = row.get_by_name("from")?;
-        let to: String = row.get_by_name("to")?;
+    for row in &results {
+        let from: String = row.get("from_person")?;
+        let to: String = row.get("to_person")?;
         println!("{} knows {}", from, to);
     }
 
-    // Query with filter
+    // Query with filter (embedding values directly)
     let min_age = 26;
-    let rows = conn.cypher(&format!(
-        "MATCH (n:Person) WHERE n.age >= {} RETURN n.name",
+    let results = conn.cypher(&format!(
+        "MATCH (n:Person) WHERE n.age >= {} RETURN n.name AS name",
         min_age
     ))?;
 
-    for row in &rows {
-        let name: String = row.get(0)?;
+    for row in &results {
+        let name: String = row.get("name")?;
         println!("Adult: {}", name);
     }
 

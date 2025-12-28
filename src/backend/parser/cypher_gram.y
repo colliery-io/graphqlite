@@ -825,6 +825,17 @@ rel_type_list:
             free($1);
             free($3);
         }
+    | IDENTIFIER '|' ':' IDENTIFIER
+        {
+            /* Support [:TYPE1|:TYPE2] syntax with colon before second type */
+            $$ = ast_list_create();
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit4 = make_string_literal($4, @4.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit4);
+            free($1);
+            free($4);
+        }
     | IDENTIFIER '|' BQIDENT
         {
             $$ = ast_list_create();
@@ -834,6 +845,17 @@ rel_type_list:
             ast_list_append($$, (ast_node*)type_lit3);
             free($1);
             free($3);
+        }
+    | IDENTIFIER '|' ':' BQIDENT
+        {
+            /* Support [:TYPE1|:`backtick-type`] syntax */
+            $$ = ast_list_create();
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit4 = make_string_literal($4, @4.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit4);
+            free($1);
+            free($4);
         }
     | BQIDENT '|' IDENTIFIER
         {
@@ -845,6 +867,17 @@ rel_type_list:
             free($1);
             free($3);
         }
+    | BQIDENT '|' ':' IDENTIFIER
+        {
+            /* Support [:`backtick-type`|:TYPE2] syntax */
+            $$ = ast_list_create();
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit4 = make_string_literal($4, @4.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit4);
+            free($1);
+            free($4);
+        }
     | BQIDENT '|' BQIDENT
         {
             $$ = ast_list_create();
@@ -854,6 +887,17 @@ rel_type_list:
             ast_list_append($$, (ast_node*)type_lit3);
             free($1);
             free($3);
+        }
+    | BQIDENT '|' ':' BQIDENT
+        {
+            /* Support [:`backtick-type`|:`backtick-type2`] syntax */
+            $$ = ast_list_create();
+            cypher_literal *type_lit1 = make_string_literal($1, @1.first_line);
+            cypher_literal *type_lit4 = make_string_literal($4, @4.first_line);
+            ast_list_append($$, (ast_node*)type_lit1);
+            ast_list_append($$, (ast_node*)type_lit4);
+            free($1);
+            free($4);
         }
     | rel_type_list '|' IDENTIFIER
         {
@@ -971,6 +1015,11 @@ primary_expr:
         {
             /* Array subscript on parenthesized expression: (expr)[idx] */
             $$ = (ast_node*)make_subscript($2, $5, @4.first_line);
+        }
+    | list_literal '[' expr ']'
+        {
+            /* Array subscript on list literal: [1,2,3][0] */
+            $$ = (ast_node*)make_subscript($1, $3, @2.first_line);
         }
     ;
 
