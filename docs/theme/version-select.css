@@ -1,0 +1,31 @@
+/* Version selector styling */
+.version-select {
+    display: flex;
+    align-items: center;
+    margin-left: 1rem;
+    font-size: 0.9em;
+}
+
+.version-select label {
+    margin-right: 0.3rem;
+    color: var(--icons);
+}
+
+.version-select select {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--icons);
+    border-radius: 4px;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+.version-select select:hover {
+    border-color: var(--links);
+}
+
+.version-select select:focus {
+    outline: none;
+    border-color: var(--links);
+}

@@ -11,8 +11,8 @@ build-dir = "book"
 [output.html]
 git-repository-url = "https://github.com/colliery-io/graphqlite"
 edit-url-template = "https://github.com/colliery-io/graphqlite/edit/main/docs/{path}"
-additional-css = []
-additional-js = []
+additional-css = ["theme/version-select.css"]
+additional-js = ["theme/version-select.js"]
 
 [output.html.fold]
 enable = true
