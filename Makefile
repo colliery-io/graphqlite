@@ -267,9 +267,9 @@ $(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EX
 ifeq ($(UNAME_S),Darwin)
 	$(CC) -g -fPIC -dynamiclib $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -undefined dynamic_lookup
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
-	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3 -lsystre
+	$(CC) -shared -static $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3 -lsystre -ltre -lintl -liconv
 else ifneq (,$(findstring MSYS,$(UNAME_S)))
-	$(CC) -shared $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3 -lsystre
+	$(CC) -shared -static $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@ -lsqlite3 -lsystre -ltre -lintl -liconv
 else
 	$(CC) -shared -fPIC $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) -o $@
 endif
