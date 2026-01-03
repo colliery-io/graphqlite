@@ -4,14 +4,14 @@ level: initiative
 title: "Multi-Graph Support via GraphManager and ATTACH"
 short_code: "GQLITE-I-0022"
 created_at: 2025-12-25T20:16:11.339561+00:00
-updated_at: 2026-01-03T15:38:13.774222+00:00
+updated_at: 2026-01-03T15:39:58.693280+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/decompose"
+  - "#phase/active"
 
 
 exit_criteria_met: false

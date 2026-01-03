@@ -80,6 +80,10 @@ void ast_node_free(ast_node *node)
                     ast_node_free(match->where);
                     match->where = NULL;
                 }
+                if (match->from_graph) {
+                    free(match->from_graph);
+                    match->from_graph = NULL;
+                }
             }
             break;
             
@@ -631,16 +635,17 @@ cypher_union* make_cypher_union(ast_node *left, ast_node *right, bool all, int l
     return u;
 }
 
-cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optional)
+cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optional, char *from_graph)
 {
     cypher_match *match = (cypher_match*)ast_node_create(AST_NODE_MATCH, -1, sizeof(cypher_match));
     if (!match) {
         return NULL;
     }
-    
+
     match->pattern = pattern;
     match->where = where;
     match->optional = optional;
+    match->from_graph = from_graph ? strdup(from_graph) : NULL;
     return match;
 }
 
@@ -1427,6 +1432,10 @@ void ast_node_print(ast_node *node, int indent)
         case AST_NODE_MATCH:
             {
                 cypher_match *match = (cypher_match*)node;
+                if (match->from_graph) {
+                    printf(" FROM %s", match->from_graph);
+                }
+                printf("\n");
                 if (match->pattern) {
                     for (int i = 0; i < match->pattern->count; i++) {
                         ast_node_print(match->pattern->items[i], indent + 1);
@@ -1437,7 +1446,7 @@ void ast_node_print(ast_node *node, int indent)
                 }
             }
             break;
-            
+
         case AST_NODE_RETURN:
             {
                 cypher_return *ret = (cypher_return*)node;

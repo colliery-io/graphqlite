@@ -133,7 +133,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <list> map_pair_list
 
 %type <list> label_opt label_list
-%type <string> variable_opt
+%type <string> variable_opt from_graph_opt
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list rel_type_list
 %type <node> skip_opt limit_opt where_opt
@@ -224,9 +224,17 @@ clause:
 
 /* MATCH clause */
 match_clause:
-    optional_opt MATCH pattern_list where_opt
+    optional_opt MATCH pattern_list from_graph_opt where_opt
         {
-            $$ = make_cypher_match($3, $4, $1);
+            $$ = make_cypher_match($3, $5, $1, $4);
+        }
+    ;
+
+from_graph_opt:
+    /* empty */     { $$ = NULL; }
+    | FROM IDENTIFIER
+        {
+            $$ = $2;
         }
     ;
 
