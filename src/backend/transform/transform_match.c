@@ -49,21 +49,27 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
     CYPHER_DEBUG("Transforming %s MATCH clause", match->optional ? "OPTIONAL" : "regular");
-    
+
     if (!ctx || !match) {
         return -1;
     }
-    
+
     /* Mark this as a read query */
     if (ctx->query_type == QUERY_TYPE_UNKNOWN) {
         ctx->query_type = QUERY_TYPE_READ;
     } else if (ctx->query_type == QUERY_TYPE_WRITE) {
         ctx->query_type = QUERY_TYPE_MIXED;
     }
-    
+
     /* SQL builder mode is now determined at query level */
 
     /* Unified builder handles SELECT in RETURN clause - no need to start SELECT here */
+
+    /* Multi-graph support: set current graph for table prefixing */
+    ctx->current_graph = match->from_graph;
+
+    /* Save variable count before processing patterns (for multi-graph support) */
+    int var_count_before = transform_var_count(ctx->var_ctx);
 
     /* Process each pattern in the MATCH - this only adds table joins */
     for (int i = 0; i < match->pattern->count; i++) {
@@ -77,6 +83,17 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 
         if (transform_match_pattern(ctx, pattern, match->optional) < 0) {
             return -1;
+        }
+    }
+
+    /* Multi-graph support: set graph on all newly registered variables */
+    if (match->from_graph) {
+        int var_count_after = transform_var_count(ctx->var_ctx);
+        for (int i = var_count_before; i < var_count_after; i++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, i);
+            if (var && var->name) {
+                transform_var_set_graph(ctx->var_ctx, var->name, match->from_graph);
+            }
         }
     }
 
@@ -388,6 +405,9 @@ handle_where_clause:
         }
     }
 
+    /* Clear current graph after MATCH processing */
+    ctx->current_graph = NULL;
+
     return 0;
 }
 
@@ -607,7 +627,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                 if (prop_table) {
                     /* FROM property_table */
                     snprintf(prop_alias, sizeof(prop_alias), "_prop_%s", alias);
-                    sql_from(ctx->unified_builder, prop_table, prop_alias);
+                    sql_from(ctx->unified_builder, get_graph_table(ctx, prop_table), prop_alias);
 
                     /* JOIN property_keys with key filter and value filter */
                     snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", alias);
@@ -630,25 +650,25 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                         default:
                             break;
                     }
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "property_keys", pk_alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "property_keys"), pk_alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
                     /* JOIN nodes */
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.id = %s.node_id", alias, prop_alias);
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "nodes", alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "nodes"), alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
                     /* Mark first property as handled */
                     first_pair->key = NULL;
                 } else {
-                    sql_from(ctx->unified_builder, "nodes", alias);
+                    sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
                 }
             } else {
-                sql_from(ctx->unified_builder, "nodes", alias);
+                sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
             }
         } else {
-            sql_from(ctx->unified_builder, "nodes", alias);
+            sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
         }
     } else {
         /* Subsequent tables - use JOIN */
@@ -668,7 +688,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                 if (prop_table) {
                     /* JOIN property_table */
                     snprintf(prop_alias, sizeof(prop_alias), "_prop_%s", alias);
-                    sql_join(ctx->unified_builder, jtype, prop_table, prop_alias, "1=1");
+                    sql_join(ctx->unified_builder, jtype, get_graph_table(ctx, prop_table), prop_alias, "1=1");
 
                     /* JOIN property_keys with key filter and value filter */
                     snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", alias);
@@ -691,27 +711,27 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                         default:
                             break;
                     }
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "property_keys", pk_alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "property_keys"), pk_alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
                     /* JOIN nodes */
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.id = %s.node_id", alias, prop_alias);
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "nodes", alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "nodes"), alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
                     first_pair->key = NULL;
                 } else {
-                    sql_join(ctx->unified_builder, jtype, "nodes", alias, "1=1");
+                    sql_join(ctx->unified_builder, jtype, get_graph_table(ctx, "nodes"), alias, "1=1");
                 }
             } else {
-                sql_join(ctx->unified_builder, jtype, "nodes", alias, "1=1");
+                sql_join(ctx->unified_builder, jtype, get_graph_table(ctx, "nodes"), alias, "1=1");
             }
         } else {
             if (optional) {
-                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "nodes", alias, "1=1");
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), alias, "1=1");
             } else {
-                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", alias, NULL);
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), alias, NULL);
             }
         }
     }
@@ -729,7 +749,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                 dbuf_init(&on_cond);
                 dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
                              nl_alias, node_id, nl_alias, label);
-                sql_join(ctx->unified_builder, SQL_JOIN_INNER, "node_labels", nl_alias, dbuf_get(&on_cond));
+                sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "node_labels"), nl_alias, dbuf_get(&on_cond));
                 dbuf_free(&on_cond);
             }
         }
@@ -862,7 +882,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                 if (prop_table) {
                     /* CROSS JOIN property table */
                     snprintf(prop_alias, sizeof(prop_alias), "_prop_%s", target_alias);
-                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, prop_table, prop_alias, NULL);
+                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, prop_table), prop_alias, NULL);
 
                     /* JOIN property_keys with key and value filter */
                     snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", target_alias);
@@ -885,24 +905,24 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                         default:
                             break;
                     }
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "property_keys", pk_alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "property_keys"), pk_alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
                     /* JOIN nodes */
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.id = %s.node_id", target_alias, prop_alias);
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "nodes", target_alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "nodes"), target_alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
                     first_pair->key = NULL;
                 } else {
-                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", target_alias, NULL);
+                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
                 }
             } else {
-                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", target_alias, NULL);
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
             }
         } else {
-            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", target_alias, NULL);
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
         }
 
         /* Add label constraints for target node if specified */
@@ -917,7 +937,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
                                  nl_alias, target_id, nl_alias, label);
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, "node_labels", nl_alias, dbuf_get(&on_cond));
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "node_labels"), nl_alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
                 }
             }
@@ -985,7 +1005,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                 dbuf_append(&edge_cond, ")");
             }
 
-            sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "edges", edge_alias, dbuf_get(&edge_cond));
+            sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "edges"), edge_alias, dbuf_get(&edge_cond));
             dbuf_free(&edge_cond);
 
             /* Then, LEFT JOIN target node through the edge's target_id */
@@ -1003,11 +1023,11 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             if (!target_already_added) {
                 char target_cond[256];
                 snprintf(target_cond, sizeof(target_cond), "%s.id = %s.target_id", target_alias, edge_alias);
-                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "nodes", target_alias, target_cond);
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), target_alias, target_cond);
             }
         } else {
             /* Non-optional: use CROSS JOIN for edges (will be filtered by WHERE) */
-            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "edges", edge_alias, NULL);
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "edges"), edge_alias, NULL);
         }
     }
     

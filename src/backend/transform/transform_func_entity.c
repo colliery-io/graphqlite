@@ -97,10 +97,19 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
         return -1;
     }
 
+    /* Multi-graph support: get graph prefix for table references */
+    const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
+    const char *gprefix = "";
+    char gprefix_buf[64] = "";
+    if (graph && graph[0] != '\0') {
+        snprintf(gprefix_buf, sizeof(gprefix_buf), "%s.", graph);
+        gprefix = gprefix_buf;
+    }
+
     /* Generate SQL to get labels as JSON array */
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
-    append_sql(ctx, "(SELECT json_group_array(label) FROM node_labels WHERE node_id = %s%s)",
-               alias, is_projected ? "" : ".id");
+    append_sql(ctx, "(SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s)",
+               gprefix, alias, is_projected ? "" : ".id");
 
     return 0;
 }
@@ -139,34 +148,88 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
     const char *id_suffix = is_projected ? "" : ".id";
 
+    /* Multi-graph support: get graph prefix for table references */
+    const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
+    const char *gprefix = "";
+    char gprefix_buf[64] = "";
+    if (graph && graph[0] != '\0') {
+        snprintf(gprefix_buf, sizeof(gprefix_buf), "%s.", graph);
+        gprefix = gprefix_buf;
+    }
+
     if (is_edge) {
         /* For edges, query edge property tables */
         append_sql(ctx, "(SELECT json_group_object(pk.key, COALESCE("
-            "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s%s AND ept.key_id = pk.id), "
-            "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s%s AND epi.key_id = pk.id), "
-            "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s%s AND epr.key_id = pk.id), "
-            "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s%s AND epb.key_id = pk.id))) "
-            "FROM property_keys pk WHERE EXISTS ("
-            "SELECT 1 FROM edge_props_text WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM edge_props_int WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM edge_props_real WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM edge_props_bool WHERE edge_id = %s%s AND key_id = pk.id))",
-            alias, id_suffix, alias, id_suffix, alias, id_suffix, alias, id_suffix,
-            alias, id_suffix, alias, id_suffix, alias, id_suffix, alias, id_suffix);
+            "(SELECT ept.value FROM %sedge_props_text ept WHERE ept.edge_id = %s%s AND ept.key_id = pk.id), "
+            "(SELECT epi.value FROM %sedge_props_int epi WHERE epi.edge_id = %s%s AND epi.key_id = pk.id), "
+            "(SELECT epr.value FROM %sedge_props_real epr WHERE epr.edge_id = %s%s AND epr.key_id = pk.id), "
+            "(SELECT epb.value FROM %sedge_props_bool epb WHERE epb.edge_id = %s%s AND epb.key_id = pk.id))) "
+            "FROM %sproperty_keys pk WHERE EXISTS ("
+            "SELECT 1 FROM %sedge_props_text WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %sedge_props_int WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %sedge_props_real WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %sedge_props_bool WHERE edge_id = %s%s AND key_id = pk.id))",
+            gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix,
+            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     } else {
         /* For nodes, query node property tables */
         append_sql(ctx, "(SELECT json_group_object(pk.key, COALESCE("
-            "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s%s AND npt.key_id = pk.id), "
-            "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s%s AND npi.key_id = pk.id), "
-            "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s%s AND npr.key_id = pk.id), "
-            "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s%s AND npb.key_id = pk.id))) "
-            "FROM property_keys pk WHERE EXISTS ("
-            "SELECT 1 FROM node_props_text WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM node_props_int WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM node_props_real WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM node_props_bool WHERE node_id = %s%s AND key_id = pk.id))",
-            alias, id_suffix, alias, id_suffix, alias, id_suffix, alias, id_suffix,
-            alias, id_suffix, alias, id_suffix, alias, id_suffix, alias, id_suffix);
+            "(SELECT npt.value FROM %snode_props_text npt WHERE npt.node_id = %s%s AND npt.key_id = pk.id), "
+            "(SELECT npi.value FROM %snode_props_int npi WHERE npi.node_id = %s%s AND npi.key_id = pk.id), "
+            "(SELECT npr.value FROM %snode_props_real npr WHERE npr.node_id = %s%s AND npr.key_id = pk.id), "
+            "(SELECT npb.value FROM %snode_props_bool npb WHERE npb.node_id = %s%s AND npb.key_id = pk.id))) "
+            "FROM %sproperty_keys pk WHERE EXISTS ("
+            "SELECT 1 FROM %snode_props_text WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %snode_props_int WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %snode_props_real WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %snode_props_bool WHERE node_id = %s%s AND key_id = pk.id))",
+            gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix,
+            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
+    }
+
+    return 0;
+}
+
+/* Transform graph() function - returns source graph name for a variable */
+int transform_graph_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming graph() function");
+
+    /* graph() requires exactly one argument */
+    if (!func_call->args || func_call->args->count != 1 || func_call->args->items[0] == NULL) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("graph() function requires exactly one argument");
+        return -1;
+    }
+
+    /* The argument must be an identifier (variable) */
+    ast_node *arg = func_call->args->items[0];
+    if (arg->type != AST_NODE_IDENTIFIER) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("graph() function argument must be a node or relationship variable");
+        return -1;
+    }
+
+    cypher_identifier *id = (cypher_identifier*)arg;
+
+    /* Check that the variable exists */
+    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
+    if (!alias) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "Unknown variable in graph() function: %s", id->name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+
+    /* Get the graph name for this variable */
+    const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
+
+    /* Return the graph name as a string literal, or 'main' for the default graph */
+    if (graph && graph[0] != '\0') {
+        append_sql(ctx, "'%s'", graph);
+    } else {
+        append_sql(ctx, "'main'");
     }
 
     return 0;
@@ -206,22 +269,31 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
     const char *id_suffix = is_projected ? "" : ".id";
 
+    /* Multi-graph support: get graph prefix for table references */
+    const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
+    const char *gprefix = "";
+    char gprefix_buf[64] = "";
+    if (graph && graph[0] != '\0') {
+        snprintf(gprefix_buf, sizeof(gprefix_buf), "%s.", graph);
+        gprefix = gprefix_buf;
+    }
+
     if (is_edge) {
         /* For edges, query edge property tables */
-        append_sql(ctx, "(SELECT json_group_array(pk.key) FROM property_keys pk WHERE EXISTS ("
-            "SELECT 1 FROM edge_props_text WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM edge_props_int WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM edge_props_real WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM edge_props_bool WHERE edge_id = %s%s AND key_id = pk.id))",
-            alias, id_suffix, alias, id_suffix, alias, id_suffix, alias, id_suffix);
+        append_sql(ctx, "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE EXISTS ("
+            "SELECT 1 FROM %sedge_props_text WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %sedge_props_int WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %sedge_props_real WHERE edge_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %sedge_props_bool WHERE edge_id = %s%s AND key_id = pk.id))",
+            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     } else {
         /* For nodes, query node property tables */
-        append_sql(ctx, "(SELECT json_group_array(pk.key) FROM property_keys pk WHERE EXISTS ("
-            "SELECT 1 FROM node_props_text WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM node_props_int WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM node_props_real WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
-            "SELECT 1 FROM node_props_bool WHERE node_id = %s%s AND key_id = pk.id))",
-            alias, id_suffix, alias, id_suffix, alias, id_suffix, alias, id_suffix);
+        append_sql(ctx, "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE EXISTS ("
+            "SELECT 1 FROM %snode_props_text WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %snode_props_int WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %snode_props_real WHERE node_id = %s%s AND key_id = pk.id UNION ALL "
+            "SELECT 1 FROM %snode_props_bool WHERE node_id = %s%s AND key_id = pk.id))",
+            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     }
 
     return 0;

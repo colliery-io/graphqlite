@@ -223,6 +223,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_patterns.c \
 	$(TEST_DIR)/test_executor_functions.c \
 	$(TEST_DIR)/test_executor_predicates.c \
+	$(TEST_DIR)/test_executor_multigraph.c \
 	$(TEST_DIR)/test_sql_builder.c \
 	$(TEST_DIR)/test_query_dispatch.c
 

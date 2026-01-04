@@ -336,6 +336,15 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
 
+    /* Multi-graph support: get graph prefix for property table references */
+    const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
+    const char *gprefix = "";
+    char gprefix_buf[64] = "";
+    if (graph && graph[0] != '\0') {
+        snprintf(gprefix_buf, sizeof(gprefix_buf), "%s.", graph);
+        gprefix = gprefix_buf;
+    }
+
     /* Generate property access query using our actual schema */
     /* We need to check multiple property tables based on type */
 
@@ -343,30 +352,30 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         /* Edge property access - use edge_props_* tables */
         if (ctx->in_comparison) {
             append_sql(ctx, "(SELECT COALESCE(");
-            append_sql(ctx, "(SELECT ept.value FROM edge_props_text ept JOIN property_keys pk ON ept.key_id = pk.id WHERE ept.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT ept.value FROM %sedge_props_text ept JOIN %sproperty_keys pk ON ept.key_id = pk.id WHERE ept.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT epi.value FROM edge_props_int epi JOIN property_keys pk ON epi.key_id = pk.id WHERE epi.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT epi.value FROM %sedge_props_int epi JOIN %sproperty_keys pk ON epi.key_id = pk.id WHERE epi.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT epr.value FROM edge_props_real epr JOIN property_keys pk ON epr.key_id = pk.id WHERE epr.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT epr.value FROM %sedge_props_real epr JOIN %sproperty_keys pk ON epr.key_id = pk.id WHERE epr.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(epb.value AS INTEGER) FROM edge_props_bool epb JOIN property_keys pk ON epb.key_id = pk.id WHERE epb.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT CAST(epb.value AS INTEGER) FROM %sedge_props_bool epb JOIN %sproperty_keys pk ON epb.key_id = pk.id WHERE epb.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, ")))");
         } else {
             append_sql(ctx, "(SELECT COALESCE(");
-            append_sql(ctx, "(SELECT ept.value FROM edge_props_text ept JOIN property_keys pk ON ept.key_id = pk.id WHERE ept.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT ept.value FROM %sedge_props_text ept JOIN %sproperty_keys pk ON ept.key_id = pk.id WHERE ept.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(epi.value AS TEXT) FROM edge_props_int epi JOIN property_keys pk ON epi.key_id = pk.id WHERE epi.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT CAST(epi.value AS TEXT) FROM %sedge_props_int epi JOIN %sproperty_keys pk ON epi.key_id = pk.id WHERE epi.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(epr.value AS TEXT) FROM edge_props_real epr JOIN property_keys pk ON epr.key_id = pk.id WHERE epr.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT CAST(epr.value AS TEXT) FROM %sedge_props_real epr JOIN %sproperty_keys pk ON epr.key_id = pk.id WHERE epr.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CASE WHEN epb.value THEN 'true' ELSE 'false' END FROM edge_props_bool epb JOIN property_keys pk ON epb.key_id = pk.id WHERE epb.edge_id = %s.id AND pk.key = ", alias);
+            append_sql(ctx, "(SELECT CASE WHEN epb.value THEN 'true' ELSE 'false' END FROM %sedge_props_bool epb JOIN %sproperty_keys pk ON epb.key_id = pk.id WHERE epb.edge_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, ")))");
         }
@@ -374,42 +383,42 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         /* Node property access for comparisons - preserve proper types */
         append_sql(ctx, "(SELECT COALESCE(");
         /* Text properties (both numeric and non-numeric strings) */
-        append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         /* Integer properties */
-        append_sql(ctx, "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         /* Real properties */
-        append_sql(ctx, "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         /* Boolean properties (cast to integer for comparison) */
-        append_sql(ctx, "(SELECT CAST(npb.value AS INTEGER) FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT CAST(npb.value AS INTEGER) FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, ")))");
     } else {
         /* Node property access for RETURN clauses - convert everything to text */
         append_sql(ctx, "(SELECT COALESCE(");
-        append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                   alias, is_projected ? "" : ".id");
+        append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
+                   gprefix, gprefix, alias, is_projected ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, ")))");
     }
