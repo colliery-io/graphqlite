@@ -24,6 +24,7 @@ static const transform_func_entry dispatch_table[] = {
     {"labels",          transform_labels_function},
     {"properties",      transform_properties_function},
     {"keys",            transform_keys_function},
+    {"graph",           transform_graph_function},
 
     /* Aggregate functions */
     {"count",           transform_count_function},

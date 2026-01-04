@@ -163,6 +163,31 @@ void append_string_literal(cypher_transform_context *ctx, const char *value)
     }
 }
 
+void append_var_table(cypher_transform_context *ctx, const char *var_name, const char *table)
+{
+    /* Look up the variable's associated graph */
+    const char *graph = transform_var_get_graph(ctx->var_ctx, var_name);
+
+    if (graph && graph[0] != '\0') {
+        /* Variable has an associated graph - prefix table with graph name */
+        append_sql(ctx, "%s.%s", graph, table);
+    } else {
+        /* No graph - use table name directly */
+        append_sql(ctx, "%s", table);
+    }
+}
+
+const char *get_graph_table(cypher_transform_context *ctx, const char *table)
+{
+    static char table_buf[256];
+
+    if (ctx->current_graph && ctx->current_graph[0] != '\0') {
+        snprintf(table_buf, sizeof(table_buf), "%s.%s", ctx->current_graph, table);
+        return table_buf;
+    }
+    return table;
+}
+
 /* Parameter tracking */
 
 int register_parameter(cypher_transform_context *ctx, const char *name)

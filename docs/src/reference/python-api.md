@@ -319,6 +319,158 @@ edges = [
 g.upsert_edges_batch(edges)
 ```
 
+## GraphManager Class
+
+Manages multiple graph databases in a directory with cross-graph query support.
+
+### Constructor
+
+```python
+from graphqlite import graphs, GraphManager
+
+# Using factory function (recommended)
+gm = graphs("./data")
+
+# Or direct instantiation
+gm = GraphManager("./data")
+gm = GraphManager("./data", extension_path="/path/to/graphqlite.dylib")
+```
+
+### Context Manager
+
+```python
+with graphs("./data") as gm:
+    # Work with graphs...
+    pass  # All connections closed automatically
+```
+
+### Graph Management
+
+#### list()
+
+List all graphs in the directory.
+
+```python
+names = gm.list()  # ["products", "social", "users"]
+```
+
+**Returns**: List of graph names (sorted)
+
+#### exists()
+
+Check if a graph exists.
+
+```python
+if gm.exists("social"):
+    print("Graph exists")
+```
+
+**Returns**: bool
+
+#### create()
+
+Create a new graph.
+
+```python
+g = gm.create("social")
+```
+
+**Parameters**:
+- `name` (str) - Graph name
+
+**Returns**: `Graph` instance
+
+**Raises**: `FileExistsError` if graph already exists
+
+#### open()
+
+Open an existing graph.
+
+```python
+g = gm.open("social")
+```
+
+**Parameters**:
+- `name` (str) - Graph name
+
+**Returns**: `Graph` instance
+
+**Raises**: `FileNotFoundError` if graph doesn't exist
+
+#### open_or_create()
+
+Open a graph, creating it if it doesn't exist.
+
+```python
+g = gm.open_or_create("cache")
+```
+
+**Returns**: `Graph` instance
+
+#### drop()
+
+Delete a graph and its database file.
+
+```python
+gm.drop("old_graph")
+```
+
+**Raises**: `FileNotFoundError` if graph doesn't exist
+
+### Cross-Graph Queries
+
+#### query()
+
+Execute a Cypher query across multiple graphs.
+
+```python
+result = gm.query(
+    "MATCH (n:Person) FROM social RETURN n.name, graph(n) AS source",
+    graphs=["social"]
+)
+for row in result:
+    print(f"{row['n.name']} from {row['source']}")
+```
+
+**Parameters**:
+- `cypher` (str) - Cypher query with FROM clauses
+- `graphs` (list) - Graph names to attach
+- `params` (dict, optional) - Query parameters
+
+**Returns**: `CypherResult`
+
+#### query_sql()
+
+Execute raw SQL across attached graphs.
+
+```python
+result = gm.query_sql(
+    "SELECT COUNT(*) FROM social.nodes",
+    graphs=["social"]
+)
+```
+
+**Parameters**:
+- `sql` (str) - SQL query with graph-prefixed table names
+- `graphs` (list) - Graph names to attach
+- `parameters` (tuple, optional) - Query parameters
+
+**Returns**: List of tuples
+
+### Collection Interface
+
+```python
+# Length
+len(gm)  # Number of graphs
+
+# Membership
+"social" in gm  # True/False
+
+# Iteration
+for name in gm:
+    print(name)
+```
+
 ## Utility Functions
 
 ### escape_string()

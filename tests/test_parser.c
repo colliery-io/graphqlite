@@ -1343,8 +1343,94 @@ static void test_optional_match_parsing(void)
         CU_ASSERT_TRUE(match->optional); /* OPTIONAL MATCH */
         
         printf("Standalone OPTIONAL MATCH parsing test passed\n");
-        
+
         cypher_parser_free_result(result2);
+    }
+}
+
+/* Test MATCH FROM clause parsing for multi-graph support */
+static void test_match_from_clause_parsing(void)
+{
+    /* Test 1: Simple MATCH FROM */
+    const char *query1 = "MATCH (n:Person) FROM social RETURN n.name";
+
+    ast_node *result1 = parse_cypher_query(query1);
+    CU_ASSERT_PTR_NOT_NULL(result1);
+    CU_ASSERT_EQUAL(result1->type, AST_NODE_QUERY);
+
+    if (result1) {
+        cypher_query *query_ast = (cypher_query*)result1;
+
+        /* Should have 2 clauses: MATCH, RETURN */
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2);
+
+        /* Check MATCH clause has from_graph set */
+        ast_node *match_node = query_ast->clauses->items[0];
+        CU_ASSERT_EQUAL(match_node->type, AST_NODE_MATCH);
+        cypher_match *match = (cypher_match*)match_node;
+        CU_ASSERT_PTR_NOT_NULL(match->from_graph);
+        CU_ASSERT_STRING_EQUAL(match->from_graph, "social");
+        CU_ASSERT_FALSE(match->optional);
+
+        printf("MATCH FROM parsing test passed: from_graph=%s\n", match->from_graph);
+
+        cypher_parser_free_result(result1);
+    }
+
+    /* Test 2: MATCH FROM with WHERE */
+    const char *query2 = "MATCH (n:Person) FROM mygraph WHERE n.age > 21 RETURN n";
+
+    ast_node *result2 = parse_cypher_query(query2);
+    CU_ASSERT_PTR_NOT_NULL(result2);
+
+    if (result2) {
+        cypher_query *query_ast = (cypher_query*)result2;
+        CU_ASSERT_EQUAL(query_ast->clauses->count, 2);
+
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+        CU_ASSERT_PTR_NOT_NULL(match->from_graph);
+        CU_ASSERT_STRING_EQUAL(match->from_graph, "mygraph");
+        CU_ASSERT_PTR_NOT_NULL(match->where); /* WHERE should be set */
+
+        printf("MATCH FROM with WHERE parsing test passed\n");
+
+        cypher_parser_free_result(result2);
+    }
+
+    /* Test 3: OPTIONAL MATCH FROM */
+    const char *query3 = "OPTIONAL MATCH (n:Person) FROM analytics RETURN n";
+
+    ast_node *result3 = parse_cypher_query(query3);
+    CU_ASSERT_PTR_NOT_NULL(result3);
+
+    if (result3) {
+        cypher_query *query_ast = (cypher_query*)result3;
+
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+        CU_ASSERT_TRUE(match->optional);
+        CU_ASSERT_PTR_NOT_NULL(match->from_graph);
+        CU_ASSERT_STRING_EQUAL(match->from_graph, "analytics");
+
+        printf("OPTIONAL MATCH FROM parsing test passed\n");
+
+        cypher_parser_free_result(result3);
+    }
+
+    /* Test 4: MATCH without FROM (backward compatibility) */
+    const char *query4 = "MATCH (n:Person) RETURN n";
+
+    ast_node *result4 = parse_cypher_query(query4);
+    CU_ASSERT_PTR_NOT_NULL(result4);
+
+    if (result4) {
+        cypher_query *query_ast = (cypher_query*)result4;
+
+        cypher_match *match = (cypher_match*)query_ast->clauses->items[0];
+        CU_ASSERT_PTR_NULL(match->from_graph); /* No FROM clause */
+
+        printf("MATCH without FROM backward compat test passed\n");
+
+        cypher_parser_free_result(result4);
     }
 }
 
@@ -2024,6 +2110,7 @@ int init_parser_suite(void)
         !CU_add_test(suite, "DELETE node parsing", test_delete_node_parsing) ||
         !CU_add_test(suite, "DETACH DELETE parsing", test_detach_delete_parsing) ||
         !CU_add_test(suite, "OPTIONAL MATCH parsing", test_optional_match_parsing) ||
+        !CU_add_test(suite, "MATCH FROM clause parsing", test_match_from_clause_parsing) ||
         !CU_add_test(suite, "Multiple relationship types", test_multiple_relationship_types) ||
         !CU_add_test(suite, "Three relationship types", test_three_relationship_types) ||
         !CU_add_test(suite, "Path variable assignment", test_path_variable_assignment) ||

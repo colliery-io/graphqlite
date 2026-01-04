@@ -2,11 +2,7 @@ name: Documentation
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main]
-    paths: ['docs/**']
 
 permissions:
   contents: read
@@ -34,21 +30,14 @@ jobs:
       - name: Get version info
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "is_main=false" >> $GITHUB_OUTPUT
-          else
-            echo "version=latest" >> $GITHUB_OUTPUT
-            echo "is_main=true" >> $GITHUB_OUTPUT
-          fi
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build current docs
         working-directory: docs
         run: mdbook build
 
       - name: Fetch existing docs (for versioning)
-        if: github.event_name == 'push'
         run: |
           mkdir -p _site
           # Try to fetch existing gh-pages content
@@ -58,30 +47,32 @@ jobs:
           fi
 
       - name: Organize versioned docs
-        if: github.event_name == 'push'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          # For main branch, always update /latest/
-          # For tags, create versioned directory
+          # Create versioned directory
           rm -rf _site/$VERSION
           mkdir -p _site/$VERSION
           cp -r docs/book/* _site/$VERSION/
 
-          # Generate versions.json only from main (tags just add their directory)
-          if [[ "${{ steps.version.outputs.is_main }}" == "true" ]]; then
-            cd _site
-            {
-              echo "["
-              echo "  \"latest\""
-              for v in $(ls -d v[0-9]* 2>/dev/null | sort -Vr | head -10); do
-                echo "  ,\"$v\""
-              done
-              echo "]"
-            } > versions.json
+          # Update latest to point to this version
+          rm -rf _site/latest
+          mkdir -p _site/latest
+          cp -r docs/book/* _site/latest/
 
-            # Create index redirect to latest
-            cat > index.html << 'EOF'
+          # Update versions.json
+          cd _site
+          {
+            echo "["
+            echo "  \"latest\""
+            for v in $(ls -d v[0-9]* 2>/dev/null | sort -Vr | head -10); do
+              echo "  ,\"$v\""
+            done
+            echo "]"
+          } > versions.json
+
+          # Create index redirect to latest
+          cat > index.html << 'EOF'
           <!DOCTYPE html>
           <html>
           <head>
@@ -93,16 +84,13 @@ jobs:
           </body>
           </html>
           EOF
-          fi
 
       - name: Upload artifact
-        if: github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
   deploy:
-    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     environment:

@@ -49,6 +49,7 @@ int init_executor_functions_suite(void);
 int init_executor_predicates_suite(void);
 int init_sql_builder_suite(void);
 int init_query_dispatch_suite(void);
+int init_executor_multigraph_suite(void);
 
 int main(void)
 {
@@ -319,6 +320,12 @@ int main(void)
 
     if (init_query_dispatch_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add query dispatch suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_multigraph_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor multi-graph suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

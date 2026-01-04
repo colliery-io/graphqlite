@@ -202,18 +202,27 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                             return -1;
                         }
 
+                        /* Multi-graph support: get graph prefix for table references */
+                        const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
+                        const char *gprefix = "";
+                        char gprefix_buf[64] = "";
+                        if (graph && graph[0] != '\0') {
+                            snprintf(gprefix_buf, sizeof(gprefix_buf), "%s.", graph);
+                            gprefix = gprefix_buf;
+                        }
+
                         /* Generate SQL to check if property exists */
                         append_sql(ctx, "(");
-                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", alias);
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
                         append_string_literal(ctx, prop->property_name);
                         append_sql(ctx, ") OR ");
-                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", alias);
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
                         append_string_literal(ctx, prop->property_name);
                         append_sql(ctx, ") OR ");
-                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", alias);
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
                         append_string_literal(ctx, prop->property_name);
                         append_sql(ctx, ") OR ");
-                        append_sql(ctx, "EXISTS (SELECT 1 FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", alias);
+                        append_sql(ctx, "EXISTS (SELECT 1 FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s.id AND pk.key = ", gprefix, gprefix, alias);
                         append_string_literal(ctx, prop->property_name);
                         append_sql(ctx, ")");
                         append_sql(ctx, ")");

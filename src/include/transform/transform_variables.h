@@ -40,6 +40,9 @@ struct transform_var {
     bool is_visible;         /* Currently in scope? */
     bool is_bound;           /* Has a value assigned? */
 
+    /* Multi-graph support */
+    char *graph;             /* Source graph name (NULL = default graph) */
+
     /* For nodes/edges - optional label info */
     char *label;             /* Primary label if known */
 
@@ -135,6 +138,15 @@ int transform_var_set_cte(transform_var_context *ctx,
 int transform_var_set_bound(transform_var_context *ctx,
                            const char *name,
                            bool is_bound);
+
+/* Set graph for multi-graph support */
+int transform_var_set_graph(transform_var_context *ctx,
+                           const char *name,
+                           const char *graph);
+
+/* Get graph for variable (returns NULL if not set or variable not found) */
+const char *transform_var_get_graph(transform_var_context *ctx,
+                                   const char *name);
 
 /* Iteration helpers */
 int transform_var_count(transform_var_context *ctx);

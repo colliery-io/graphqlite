@@ -56,6 +56,9 @@ struct cypher_transform_context {
         QUERY_TYPE_MIXED            /* Both read and write */
     } query_type;
 
+    /* Multi-graph support: current graph for MATCH clause processing */
+    const char *current_graph;      /* Active graph name (borrowed pointer, not owned) */
+
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;
 };
@@ -121,6 +124,13 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
 void append_sql(cypher_transform_context *ctx, const char *format, ...);
 void append_identifier(cypher_transform_context *ctx, const char *name);
 void append_string_literal(cypher_transform_context *ctx, const char *value);
+
+/* Graph-aware table name helper - uses variable's associated graph */
+void append_var_table(cypher_transform_context *ctx, const char *var_name, const char *table);
+
+/* Get graph-prefixed table name using context's current_graph (for MATCH processing) */
+/* Returns static buffer - use immediately or copy */
+const char *get_graph_table(cypher_transform_context *ctx, const char *table);
 
 /* Parameter tracking */
 int register_parameter(cypher_transform_context *ctx, const char *name);

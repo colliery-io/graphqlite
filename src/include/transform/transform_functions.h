@@ -36,6 +36,7 @@ int transform_id_function(cypher_transform_context *ctx, cypher_function_call *f
 int transform_labels_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_properties_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_keys_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_graph_function(cypher_transform_context *ctx, cypher_function_call *func);
 
 /*
  * Path functions - transform_func_path.c

@@ -203,6 +203,40 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
             /* Use identifier name as column name (n -> "n") */
             cypher_identifier *ident = (cypher_identifier*)item->expr;
             result->column_names[i] = strdup(ident->name);
+        } else if (item->expr && item->expr->type == AST_NODE_FUNCTION_CALL) {
+            /* Generate function name as column name: funcname(arg1, arg2, ...) */
+            cypher_function_call *func = (cypher_function_call*)item->expr;
+            if (func->function_name) {
+                char func_name[256];
+                size_t pos = 0;
+                pos += snprintf(func_name + pos, sizeof(func_name) - pos, "%s(", func->function_name);
+                if (func->args) {
+                    for (int j = 0; j < func->args->count && pos < sizeof(func_name) - 10; j++) {
+                        if (j > 0) {
+                            pos += snprintf(func_name + pos, sizeof(func_name) - pos, ", ");
+                        }
+                        ast_node *arg = func->args->items[j];
+                        if (arg && arg->type == AST_NODE_IDENTIFIER) {
+                            cypher_identifier *arg_id = (cypher_identifier*)arg;
+                            pos += snprintf(func_name + pos, sizeof(func_name) - pos, "%s", arg_id->name);
+                        } else if (arg && arg->type == AST_NODE_PROPERTY) {
+                            cypher_property *arg_prop = (cypher_property*)arg;
+                            if (arg_prop->expr && arg_prop->expr->type == AST_NODE_IDENTIFIER) {
+                                cypher_identifier *prop_id = (cypher_identifier*)arg_prop->expr;
+                                pos += snprintf(func_name + pos, sizeof(func_name) - pos, "%s.%s", prop_id->name, arg_prop->property_name);
+                            }
+                        } else {
+                            pos += snprintf(func_name + pos, sizeof(func_name) - pos, "...");
+                        }
+                    }
+                }
+                snprintf(func_name + pos, sizeof(func_name) - pos, ")");
+                result->column_names[i] = strdup(func_name);
+            } else {
+                char default_name[32];
+                snprintf(default_name, sizeof(default_name), "column_%d", i);
+                result->column_names[i] = strdup(default_name);
+            }
         } else {
             /* Generate default column name for complex expressions */
             char default_name[32];

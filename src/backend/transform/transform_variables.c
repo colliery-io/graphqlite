@@ -40,6 +40,7 @@ static void free_var(transform_var *var)
     free(var->label);
     free(var->cte_name);
     free(var->source_expr);
+    free(var->graph);
     /* path_elements is owned by AST, don't free */
 }
 
@@ -386,6 +387,33 @@ int transform_var_set_bound(transform_var_context *ctx,
     return 0;
 }
 
+int transform_var_set_graph(transform_var_context *ctx,
+                           const char *name,
+                           const char *graph)
+{
+    int idx = find_var_index(ctx, name);
+    if (idx < 0) return -1;
+
+    if (graph) {
+        char *graph_copy = strdup(graph);
+        if (!graph_copy) return -1;
+        free(ctx->vars[idx].graph);
+        ctx->vars[idx].graph = graph_copy;
+    } else {
+        free(ctx->vars[idx].graph);
+        ctx->vars[idx].graph = NULL;
+    }
+    return 0;
+}
+
+const char *transform_var_get_graph(transform_var_context *ctx,
+                                   const char *name)
+{
+    transform_var *var = transform_var_lookup(ctx, name);
+    if (!var) return NULL;
+    return var->graph;
+}
+
 /* Iteration */
 
 int transform_var_count(transform_var_context *ctx)
@@ -429,10 +457,11 @@ void transform_var_dump(transform_var_context *ctx)
 
     for (int i = 0; i < ctx->count; i++) {
         transform_var *v = &ctx->vars[i];
-        fprintf(stderr, "  [%d] %s: kind=%s alias=%s visible=%d bound=%d clause=%d\n",
+        fprintf(stderr, "  [%d] %s: kind=%s alias=%s visible=%d bound=%d clause=%d graph=%s\n",
                 i, v->name ? v->name : "(null)",
                 v->kind < 5 ? kind_names[v->kind] : "?",
                 v->table_alias ? v->table_alias : "(null)",
-                v->is_visible, v->is_bound, v->declared_in_clause);
+                v->is_visible, v->is_bound, v->declared_in_clause,
+                v->graph ? v->graph : "(null)");
     }
 }

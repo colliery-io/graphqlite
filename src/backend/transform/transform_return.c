@@ -170,7 +170,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 return -1;
             }
 
-            /* Determine alias - use explicit alias, or generate one for properties */
+            /* Determine alias - use explicit alias, or generate one for properties/functions */
             const char *alias = item->alias;
             char auto_alias[256] = "";
             if (!alias && item->expr->type == AST_NODE_PROPERTY) {
@@ -178,6 +178,35 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
                     cypher_identifier *id = (cypher_identifier*)prop->expr;
                     snprintf(auto_alias, sizeof(auto_alias), "\"%s.%s\"", id->name, prop->property_name);
+                    alias = auto_alias;
+                }
+            } else if (!alias && item->expr->type == AST_NODE_FUNCTION_CALL) {
+                /* Generate function name as column alias: funcname(arg1, arg2, ...) */
+                cypher_function_call *func = (cypher_function_call*)item->expr;
+                if (func->function_name) {
+                    size_t pos = 0;
+                    pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "\"%s(", func->function_name);
+                    if (func->args) {
+                        for (int j = 0; j < func->args->count && pos < sizeof(auto_alias) - 10; j++) {
+                            if (j > 0) {
+                                pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, ", ");
+                            }
+                            ast_node *arg = func->args->items[j];
+                            if (arg && arg->type == AST_NODE_IDENTIFIER) {
+                                cypher_identifier *arg_id = (cypher_identifier*)arg;
+                                pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "%s", arg_id->name);
+                            } else if (arg && arg->type == AST_NODE_PROPERTY) {
+                                cypher_property *arg_prop = (cypher_property*)arg;
+                                if (arg_prop->expr && arg_prop->expr->type == AST_NODE_IDENTIFIER) {
+                                    cypher_identifier *prop_id = (cypher_identifier*)arg_prop->expr;
+                                    pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "%s.%s", prop_id->name, arg_prop->property_name);
+                                }
+                            } else {
+                                pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "...");
+                            }
+                        }
+                    }
+                    snprintf(auto_alias + pos, sizeof(auto_alias) - pos, ")\"");
                     alias = auto_alias;
                 }
             }
@@ -290,8 +319,49 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     return -1;
                 }
 
+                /* Determine alias - use explicit alias, or generate one for properties/functions */
+                const char *alias = item->alias;
+                char auto_alias[256] = "";
+                if (!alias && item->expr->type == AST_NODE_PROPERTY) {
+                    cypher_property *prop = (cypher_property*)item->expr;
+                    if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+                        cypher_identifier *id = (cypher_identifier*)prop->expr;
+                        snprintf(auto_alias, sizeof(auto_alias), "\"%s.%s\"", id->name, prop->property_name);
+                        alias = auto_alias;
+                    }
+                } else if (!alias && item->expr->type == AST_NODE_FUNCTION_CALL) {
+                    /* Generate function name as column alias: funcname(arg1, arg2, ...) */
+                    cypher_function_call *func = (cypher_function_call*)item->expr;
+                    if (func->function_name) {
+                        size_t pos = 0;
+                        pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "\"%s(", func->function_name);
+                        if (func->args) {
+                            for (int j = 0; j < func->args->count && pos < sizeof(auto_alias) - 10; j++) {
+                                if (j > 0) {
+                                    pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, ", ");
+                                }
+                                ast_node *arg = func->args->items[j];
+                                if (arg && arg->type == AST_NODE_IDENTIFIER) {
+                                    cypher_identifier *arg_id = (cypher_identifier*)arg;
+                                    pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "%s", arg_id->name);
+                                } else if (arg && arg->type == AST_NODE_PROPERTY) {
+                                    cypher_property *arg_prop = (cypher_property*)arg;
+                                    if (arg_prop->expr && arg_prop->expr->type == AST_NODE_IDENTIFIER) {
+                                        cypher_identifier *prop_id = (cypher_identifier*)arg_prop->expr;
+                                        pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "%s.%s", prop_id->name, arg_prop->property_name);
+                                    }
+                                } else {
+                                    pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "...");
+                                }
+                            }
+                        }
+                        snprintf(auto_alias + pos, sizeof(auto_alias) - pos, ")\"");
+                        alias = auto_alias;
+                    }
+                }
+
                 /* Add to unified builder */
-                sql_select(ctx->unified_builder, expr_str, item->alias);
+                sql_select(ctx->unified_builder, expr_str, alias);
                 free(expr_str);
 
                 /* Register alias for ORDER BY reference */

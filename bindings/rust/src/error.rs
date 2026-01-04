@@ -31,4 +31,19 @@ pub enum Error {
     /// Column not found in result row.
     #[error("Column not found: {0}")]
     ColumnNotFound(String),
+
+    /// Graph already exists.
+    #[error("Graph '{0}' already exists")]
+    GraphExists(String),
+
+    /// Graph not found.
+    #[error("Graph '{name}' not found. Available: {available:?}")]
+    GraphNotFound {
+        name: String,
+        available: Vec<String>,
+    },
+
+    /// IO error.
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }

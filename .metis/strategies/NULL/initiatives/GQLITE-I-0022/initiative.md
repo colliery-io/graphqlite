@@ -4,14 +4,14 @@ level: initiative
 title: "Multi-Graph Support via GraphManager and ATTACH"
 short_code: "GQLITE-I-0022"
 created_at: 2025-12-25T20:16:11.339561+00:00
-updated_at: 2025-12-25T20:16:11.339561+00:00
+updated_at: 2026-01-04T14:34:29.624102+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -68,29 +68,23 @@ Key insight: If you frequently query across "separate" graphs, they're arguably 
 
 ## Use Cases
 
-### Use Case 1: Multi-Tenant SaaS
-- **Actor**: SaaS platform developer
-- **Scenario**: Each customer gets isolated graph; platform manages lifecycle
-- **Example**: `gm.create("tenant_acme")`, `gm.drop("tenant_acme")`
-- **Outcome**: Complete data isolation, easy onboarding/offboarding
-
-### Use Case 2: Test/Production Separation
-- **Actor**: Developer
-- **Scenario**: Separate graphs for testing without affecting production
-- **Example**: `gm.open("prod")` vs `gm.open("test")`
-- **Outcome**: Safe testing environment
-
-### Use Case 3: Graph Versioning
+### Use Case 1: Graph Versioning
 - **Actor**: Data engineer
-- **Scenario**: Maintain versioned snapshots during migration
-- **Example**: `gm.create("graph_v2")`, migrate, then `gm.drop("graph_v1")`
-- **Outcome**: Safe rollback capability
+- **Scenario**: Maintain versioned snapshots during schema migration or data transformation
+- **Example**: `gm.create("graph_v2")`, migrate data, validate, then `gm.drop("graph_v1")`
+- **Outcome**: Safe rollback capability, ability to compare before/after states
 
-### Use Case 4: Cross-Graph Analytics
-- **Actor**: Analyst
-- **Scenario**: Correlate entities across domain graphs by shared identifier
-- **Example**: Find users in social graph who purchased in products graph
-- **Outcome**: Ad-hoc cross-domain queries without merging graphs
+### Use Case 2: Cross-Graph Analytics
+- **Actor**: Analyst or application developer
+- **Scenario**: Correlate entities across separate domain graphs by shared identifier
+- **Example**: Join a knowledge graph with an activity graph via shared entity IDs
+- **Outcome**: Ad-hoc cross-domain queries without merging conceptually separate graphs
+
+### Use Case 3: Domain Isolation in Monolith Applications
+- **Actor**: Application developer
+- **Scenario**: Single application manages multiple independent graph datasets (e.g., a note-taking app with separate graphs per workspace/project)
+- **Example**: `gm.open_or_create("project_alpha")`, `gm.open_or_create("project_beta")`
+- **Outcome**: Clean separation of unrelated data within one application
 
 ## Architecture **[CONDITIONAL: Technically Complex Initiative]**
 
@@ -246,22 +240,78 @@ Each graph is a separate `.db` file; use ATTACH for cross-graph.
 
 ## Implementation Plan
 
-### Phase 1: GraphManager in Bindings
-- Add `GraphManager` to Python bindings (`manager.py`)
-- Add `GraphManager` to Rust bindings (`manager.rs`)
-- Raw SQL cross-graph via ATTACH (no Cypher changes yet)
-- Tests for file management and ATTACH queries
+### Phase 1: C Extension - FROM Clause Support
 
-### Phase 2: Cypher FROM Clause
-- Add `FROM` token handling in parser (avoid conflict with LOAD CSV FROM)
-- Extend `cypher_match` AST with `from_graph` field
-- Transform layer prefixes table names when `from_graph` set
-- Executor manages coordinator connection with ATTACH
+**Parser Changes (`cypher_gram.y`, `cypher_scanner.l`):**
+- Add `FROM` token handling in MATCH context (distinguish from LOAD CSV FROM)
+- Grammar rule: `match_clause : MATCH pattern_list FROM identifier ...`
+- Store graph name in `cypher_match` AST node
+
+**AST Changes (`cypher_ast.h`, `cypher_ast.c`):**
+- Add `from_graph` field to `cypher_match` struct
+- Update AST construction/destruction functions
+- Add accessor: `cypher_match_get_from_graph()`
+
+**Transform Layer (`transform_match.c`):**
+- When `from_graph` is set, prefix all table references with graph name
+- Example: `nodes` → `{graph_name}.nodes`, `edges` → `{graph_name}.edges`
+- No connection management - just string prefixing in generated SQL
+
+**Testing:**
+- Unit tests for parser accepting/rejecting FROM syntax
+- Transform tests verifying correct table prefixing
+- Ensure backward compatibility (queries without FROM unchanged)
+
+### Phase 2: Binding Layer - GraphManager
+
+**Python (`graphqlite/manager.py`):**
+```python
+class GraphManager:
+    def __init__(self, base_path: str)
+    def list(self) -> list[str]
+    def create(self, name: str) -> Graph
+    def open(self, name: str) -> Graph
+    def open_or_create(self, name: str) -> Graph
+    def drop(self, name: str) -> None
+    def query_cross(self, cypher: str, graphs: list[str]) -> Result
+```
+- `query_cross` handles ATTACH to coordinator connection
+- Connection pooling for open graphs
+- Context manager support (`with graphs(...) as gm`)
+
+**Rust (`src/manager.rs`):**
+```rust
+pub struct GraphManager { ... }
+impl GraphManager {
+    pub fn new(base_path: impl AsRef<Path>) -> Result<Self>
+    pub fn list(&self) -> Result<Vec<String>>
+    pub fn create(&mut self, name: &str) -> Result<Graph>
+    pub fn open(&mut self, name: &str) -> Result<Graph>
+    pub fn open_or_create(&mut self, name: &str) -> Result<Graph>
+    pub fn drop(&mut self, name: &str) -> Result<()>
+    pub fn query_cross(&self, cypher: &str, graphs: &[&str]) -> Result<QueryResult>
+}
+```
+
+**ATTACH Coordination:**
+- Maintain a "coordinator" in-memory connection for cross-graph queries
+- Dynamically ATTACH requested graphs before executing
+- DETACH after query completes (or pool attached state)
+
+**Testing:**
+- File creation/deletion
+- Connection lifecycle
+- Cross-graph queries via ATTACH
+- Error handling (missing graphs, permission errors)
 
 ### Phase 3: Documentation & Examples
-- Update README with multi-graph examples
-- Add examples/multi_graph/ tutorials
-- Document cross-graph query patterns and when to use them
+
+- Update README with multi-graph section
+- Add `examples/multi_graph/` with:
+  - Graph versioning workflow
+  - Cross-graph analytics example
+- Document when to use multi-graph vs single graph with better modeling
+- API reference for GraphManager in both Python and Rust docs
 
 ### Design Decisions
 

@@ -140,6 +140,7 @@ typedef struct cypher_match {
     ast_list *pattern;    /* List of path patterns */
     ast_node *where;      /* Optional WHERE expression */
     bool optional;        /* OPTIONAL MATCH */
+    char *from_graph;     /* Optional graph name for multi-graph queries (MATCH ... FROM graph_name) */
 } cypher_match;
 
 /* RETURN clause */
@@ -487,7 +488,7 @@ void ast_list_append(ast_list *list, ast_node *node);
 /* Node creation functions */
 cypher_query* make_cypher_query(ast_list *clauses, bool explain);
 cypher_union* make_cypher_union(ast_node *left, ast_node *right, bool all, int location);
-cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optional);
+cypher_match* make_cypher_match(ast_list *pattern, ast_node *where, bool optional, char *from_graph);
 cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *order_by, ast_node *skip, ast_node *limit);
 cypher_with* make_cypher_with(bool distinct, ast_list *items, ast_list *order_by, ast_node *skip, ast_node *limit, ast_node *where);
 cypher_unwind* make_cypher_unwind(ast_node *expr, char *alias, int location);

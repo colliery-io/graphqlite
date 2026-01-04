@@ -39,6 +39,20 @@ impl Graph {
         Ok(Graph { conn })
     }
 
+    /// Open a graph database with a custom extension path.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to database file
+    /// * `extension_path` - Path to the GraphQLite extension
+    pub fn open_with_extension<P: AsRef<Path>, E: AsRef<Path>>(
+        path: P,
+        extension_path: E,
+    ) -> Result<Self> {
+        let conn = Connection::open_with_extension(path, extension_path)?;
+        Ok(Graph { conn })
+    }
+
     /// Open an in-memory graph database.
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
