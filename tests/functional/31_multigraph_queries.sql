@@ -16,13 +16,13 @@ SELECT '=== SETUP: Creating Multi-Graph Environment ===' as test_section;
 
 -- Create a separate database file for the "other" graph
 -- First, connect to temp file and initialize it
-.shell rm -f /tmp/test_other_graph.db
+.shell rm -f test_other_graph.db
 
 -- Create the other graph database with schema
 SELECT 'Creating other_graph database...' as status;
 
 -- We need to attach, then manually create schema in it
-ATTACH DATABASE '/tmp/test_other_graph.db' AS other_graph;
+ATTACH DATABASE 'test_other_graph.db' AS other_graph;
 
 -- Initialize schema in the attached database
 CREATE TABLE IF NOT EXISTS other_graph.nodes (id INTEGER PRIMARY KEY);
@@ -369,7 +369,7 @@ SELECT cypher('MATCH (c:Company) FROM other_graph RETURN graph(c) AS source, c.n
 SELECT '=== CLEANUP ===' as test_section;
 
 DETACH DATABASE other_graph;
-.shell rm -f /tmp/test_other_graph.db
+.shell rm -f test_other_graph.db
 
 SELECT '=== Multi-Graph Tests Complete ===' as test_section;
 SELECT 'All multi-graph query patterns tested successfully' as status;

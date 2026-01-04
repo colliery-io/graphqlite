@@ -116,7 +116,7 @@ impl GraphManager {
         for entry in fs::read_dir(&self.base_path)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "db") {
+            if path.extension().is_some_and(|ext| ext == "db") {
                 if let Some(stem) = path.file_stem() {
                     if let Some(name) = stem.to_str() {
                         graphs.push(name.to_string());
