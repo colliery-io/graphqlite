@@ -128,13 +128,11 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
                 set_variable_node_id(var_map, var->name, (int)node_id);
-                printf("DEBUG - MATCH returned node_id=%lld for variable '%s'\n", (long long)node_id, var->name);
                 CYPHER_DEBUG("Bound variable '%s' to node %lld", var->name, (long long)node_id);
                 col++;
             } else if (var && var->kind == VAR_KIND_EDGE) {
                 int64_t edge_id = sqlite3_column_int64(stmt, col);
                 set_variable_edge_id(var_map, var->name, (int)edge_id);
-                printf("DEBUG - MATCH returned edge_id=%lld for variable '%s'\n", (long long)edge_id, var->name);
                 CYPHER_DEBUG("Bound variable '%s' to edge %lld", var->name, (long long)edge_id);
                 col++;
             }
