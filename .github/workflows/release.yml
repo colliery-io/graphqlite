@@ -14,17 +14,25 @@ jobs:
           - os: ubuntu-latest
             artifact: graphqlite.so
             artifact-name: graphqlite-linux-x86_64.so
+            cli-artifact: gqlite
+            cli-artifact-name: gqlite-linux-x86_64
           - os: macos-14
             arch: arm64
             artifact: graphqlite.dylib
             artifact-name: graphqlite-macos-arm64.dylib
+            cli-artifact: gqlite
+            cli-artifact-name: gqlite-macos-arm64
           - os: macos-14
             arch: x86_64
             artifact: graphqlite.dylib
             artifact-name: graphqlite-macos-x86_64.dylib
+            cli-artifact: gqlite
+            cli-artifact-name: gqlite-macos-x86_64
           - os: windows-latest
             artifact: graphqlite.dll
             artifact-name: graphqlite-windows-x86_64.dll
+            cli-artifact: gqlite.exe
+            cli-artifact-name: gqlite-windows-x86_64.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -80,6 +88,27 @@ jobs:
         if: runner.os == 'Windows'
         run: make extension RELEASE=1
 
+      # Build gqlite CLI
+      - name: Install static SQLite (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libsqlite3-dev
+
+      - name: Build gqlite CLI (Linux)
+        if: runner.os == 'Linux'
+        run: make gqlite-portable RELEASE=1
+
+      - name: Build gqlite CLI (macOS arm64)
+        if: runner.os == 'macOS' && matrix.arch == 'arm64'
+        run: make gqlite-portable RELEASE=1
+
+      - name: Build gqlite CLI (macOS x86_64 cross-compile)
+        if: runner.os == 'macOS' && matrix.arch == 'x86_64'
+        run: make gqlite-portable RELEASE=1 CC="clang -arch x86_64"
+
+      - name: Build gqlite CLI (Windows)
+        if: runner.os == 'Windows'
+        run: make gqlite-portable RELEASE=1
+
       # Python binding tests
       - name: Set up Python (Linux/Windows)
         if: runner.os != 'macOS'
@@ -119,14 +148,24 @@ jobs:
         shell: bash
         run: cargo test -- --test-threads=1
 
-      - name: Rename artifact
+      - name: Rename extension artifact
         run: cp build/${{ matrix.artifact }} build/${{ matrix.artifact-name }}
+
+      - name: Rename CLI artifact
+        run: cp build/${{ matrix.cli-artifact }} build/${{ matrix.cli-artifact-name }}
+        shell: bash
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
           path: build/${{ matrix.artifact-name }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.cli-artifact-name }}
+          path: build/${{ matrix.cli-artifact-name }}
 
   # Build platform-specific Python wheels
   build-wheels:
@@ -197,6 +236,7 @@ jobs:
   publish-python:
     needs: build-wheels
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
       - uses: actions/checkout@v4
@@ -235,6 +275,7 @@ jobs:
   publish-rust:
     needs: build-and-test
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
       - uses: actions/checkout@v4
@@ -247,3 +288,43 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --allow-dirty
+
+  # Create GitHub Release with binaries
+  create-release:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Organize release assets
+        run: |
+          mkdir -p release-assets
+          # Copy extension binaries
+          cp artifacts/graphqlite-linux-x86_64.so/graphqlite-linux-x86_64.so release-assets/
+          cp artifacts/graphqlite-macos-arm64.dylib/graphqlite-macos-arm64.dylib release-assets/
+          cp artifacts/graphqlite-macos-x86_64.dylib/graphqlite-macos-x86_64.dylib release-assets/
+          cp artifacts/graphqlite-windows-x86_64.dll/graphqlite-windows-x86_64.dll release-assets/
+          # Copy CLI binaries
+          cp artifacts/gqlite-linux-x86_64/gqlite-linux-x86_64 release-assets/
+          cp artifacts/gqlite-macos-arm64/gqlite-macos-arm64 release-assets/
+          cp artifacts/gqlite-macos-x86_64/gqlite-macos-x86_64 release-assets/
+          cp artifacts/gqlite-windows-x86_64.exe/gqlite-windows-x86_64.exe release-assets/
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
