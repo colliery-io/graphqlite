@@ -273,6 +273,46 @@ def test_constraints(verbose: bool = False) -> int:
 
 @test()
 @angreal.command(
+    name="cli",
+    about="Run CLI tests for gqlite binary",
+    tool=angreal.ToolDescription(
+        """
+Run CLI tests that exercise the gqlite interactive shell.
+
+## When to use
+- After changes to src/main.c
+- Testing multi-line statement handling
+- Validating CLI behavior
+
+## Examples
+```
+angreal test cli
+```
+
+## Prerequisites
+- gqlite binary must be built first (auto-built if missing)
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(
+    name="verbose",
+    long="verbose",
+    short="v",
+    is_flag=True,
+    takes_value=False,
+    help="Show verbose output"
+)
+def test_cli(verbose: bool = False) -> int:
+    """Run CLI tests."""
+    from utils import run_make
+
+    print("Running CLI tests...")
+    return run_make("test-cli", verbose=verbose)
+
+
+@test()
+@angreal.command(
     name="all",
     about="Run all tests",
     tool=angreal.ToolDescription(
@@ -313,6 +353,7 @@ def test_all(verbose: bool = False) -> int:
     tests = [
         ("Unit tests", lambda: test_unit(verbose=verbose)),
         ("Functional tests", lambda: test_functional(verbose=verbose)),
+        ("CLI tests", lambda: test_cli(verbose=verbose)),
         ("Binding tests", lambda: test_bindings(verbose=verbose)),
     ]
 

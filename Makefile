@@ -260,8 +260,21 @@ graphqlite: $(MAIN_APP)
 extension: $(EXTENSION_LIB)
 
 
+# Standard gqlite build (dynamic linking)
 $(MAIN_APP): $(MAIN_OBJ) $(PARSER_OBJS) $(TRANSFORM_OBJS) $(EXECUTOR_OBJS) | dirs
 	$(CC) $(CFLAGS) $^ -o $@ -lsqlite3
+
+# Portable gqlite build for releases (static linking where possible)
+gqlite-portable: $(MAIN_OBJ) $(PARSER_OBJS) $(TRANSFORM_OBJS) $(EXECUTOR_OBJS) | dirs
+ifeq ($(UNAME_S),Darwin)
+	$(CC) $(CFLAGS) $^ -o $(BUILD_DIR)/gqlite -lsqlite3
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+	$(CC) $(CFLAGS) -static $^ -o $(BUILD_DIR)/gqlite.exe -lsqlite3 -lsystre -ltre -lintl -liconv
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+	$(CC) $(CFLAGS) -static $^ -o $(BUILD_DIR)/gqlite.exe -lsqlite3 -lsystre -ltre -lintl -liconv
+else
+	$(CC) $(CFLAGS) $^ -o $(BUILD_DIR)/gqlite -l:libsqlite3.a -lpthread -ldl -lm
+endif
 
 # SQLite extension shared library (with full parser, transform, and executor)
 $(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) | dirs $(GRAMMAR_HDR)
@@ -499,7 +512,18 @@ test-functional: extension
 		fi; \
 	done
 
-test-all: test-unit test-functional test-bindings
+test-cli:
+	@echo "Building gqlite in release mode for CLI tests..."
+	@$(MAKE) clean-app --no-print-directory 2>/dev/null || true
+	@$(MAKE) graphqlite RELEASE=1 --no-print-directory
+	@echo "Running CLI tests..."
+	@./tests/cli/run_cli_tests.sh $(BUILD_DIR)/gqlite
+
+# Clean only the app-related object files (for switching between debug/release)
+clean-app:
+	@rm -f $(BUILD_DIR)/main.o $(BUILD_DIR)/gqlite
+
+test-all: test-unit test-functional test-cli test-bindings
 
 # Main test target dispatches to appropriate sub-target
 test: test-$(TEST_TARGET)
@@ -511,4 +535,4 @@ clean:
 	find . -name "*.gcno" -delete
 	find . -name "*.gcov" -delete
 
-.PHONY: all help dirs test test-unit test-rust test-python test-bindings test-functional test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional
+.PHONY: all help dirs test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable

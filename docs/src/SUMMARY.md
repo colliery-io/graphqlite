@@ -16,6 +16,7 @@
 
 - [Installation](./how-to/installation.md)
 - [Working with Multiple Graphs](./how-to/multi-graph.md)
+- [Use the gqlite CLI](./how-to/cli.md)
 - [Use Graph Algorithms](./how-to/graph-algorithms.md)
 - [Handle Special Characters](./how-to/special-characters.md)
 - [Use with Other Extensions](./how-to/other-extensions.md)

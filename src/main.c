@@ -6,12 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sqlite3.h>
 
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
 
-#define MAX_QUERY_LENGTH 4096
+#define MAX_QUERY_LENGTH 65536
+#define MAX_LINE_LENGTH 4096
 #define DEFAULT_DB_PATH "graphqlite.db"
 
 /* Print usage information */
@@ -36,12 +38,12 @@ static void print_usage(const char *program_name)
 static void print_interactive_help(void)
 {
     printf("\nGraphQLite Interactive Shell\n");
-    printf("Enter Cypher queries or dot commands:\n\n");
+    printf("Enter Cypher queries terminated with semicolon (;)\n\n");
     printf("Cypher Examples:\n");
-    printf("  CREATE (n:Person {name: 'Alice'})\n");
-    printf("  CREATE (a:Person)-[:KNOWS]->(b:Person)\n");
-    printf("  MATCH (n:Person) RETURN n\n");
-    printf("  MATCH (a)-[:KNOWS]->(b) RETURN a, b\n\n");
+    printf("  CREATE (n:Person {name: 'Alice'});\n");
+    printf("  MATCH (n:Person) RETURN n;\n");
+    printf("  MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})\n");
+    printf("      CREATE (a)-[:KNOWS]->(b);\n\n");
     printf("Dot Commands:\n");
     printf("  .help     - Show this help\n");
     printf("  .schema   - Show database schema\n");
@@ -162,86 +164,197 @@ static int initialize_database(const char *db_path)
     return 0;
 }
 
-/* Main interactive loop */
-static int run_interactive(cypher_executor *executor, sqlite3 *db)
+/* Check if a string ends with semicolon (ignoring trailing whitespace) */
+static bool ends_with_semicolon(const char *str)
 {
+    size_t len = strlen(str);
+    while (len > 0 && (str[len-1] == ' ' || str[len-1] == '\t' || str[len-1] == '\n' || str[len-1] == '\r')) {
+        len--;
+    }
+    return len > 0 && str[len-1] == ';';
+}
+
+/* Trim trailing semicolon and whitespace, return new string (caller must free) */
+static char *trim_semicolon(const char *str)
+{
+    size_t len = strlen(str);
+
+    /* Trim trailing whitespace */
+    while (len > 0 && (str[len-1] == ' ' || str[len-1] == '\t' || str[len-1] == '\n' || str[len-1] == '\r')) {
+        len--;
+    }
+
+    /* Trim semicolon */
+    if (len > 0 && str[len-1] == ';') {
+        len--;
+    }
+
+    /* Trim more whitespace after semicolon removal */
+    while (len > 0 && (str[len-1] == ' ' || str[len-1] == '\t' || str[len-1] == '\n' || str[len-1] == '\r')) {
+        len--;
+    }
+
+    char *result = malloc(len + 1);
+    if (result) {
+        memcpy(result, str, len);
+        result[len] = '\0';
+    }
+    return result;
+}
+
+/* Execute a single Cypher statement */
+static void execute_statement(cypher_executor *executor, const char *query, bool verbose)
+{
+    if (verbose) {
+        printf("Executing: %s\n", query);
+    }
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+
+    if (result) {
+        if (result->success) {
+            /* Print statistics for modification queries */
+            if (result->nodes_created > 0 || result->nodes_deleted > 0 ||
+                result->relationships_created > 0 || result->relationships_deleted > 0 ||
+                result->properties_set > 0) {
+                printf("Query executed successfully\n");
+                if (result->nodes_created > 0)
+                    printf("  Nodes created: %d\n", result->nodes_created);
+                if (result->nodes_deleted > 0)
+                    printf("  Nodes deleted: %d\n", result->nodes_deleted);
+                if (result->relationships_created > 0)
+                    printf("  Relationships created: %d\n", result->relationships_created);
+                if (result->relationships_deleted > 0)
+                    printf("  Relationships deleted: %d\n", result->relationships_deleted);
+                if (result->properties_set > 0)
+                    printf("  Properties set: %d\n", result->properties_set);
+            }
+
+            /* Print result data for read queries */
+            if (result->row_count > 0 && result->column_count > 0) {
+                cypher_result_print(result);
+            }
+
+        } else {
+            printf("Query failed: %s\n", result->error_message ? result->error_message : "Unknown error");
+        }
+
+        cypher_result_free(result);
+    } else {
+        printf("Failed to execute query\n");
+    }
+}
+
+/* Main interactive loop */
+static int run_interactive(cypher_executor *executor, sqlite3 *db, bool verbose)
+{
+    char line[MAX_LINE_LENGTH];
     char query[MAX_QUERY_LENGTH];
-    
-    printf("GraphQLite Interactive Shell\n");
-    printf("Type .help for help, .quit to exit\n\n");
-    
+    bool in_statement = false;
+    bool is_tty = isatty(fileno(stdin));
+
+    if (is_tty) {
+        printf("GraphQLite Interactive Shell\n");
+        printf("Type .help for help, .quit to exit\n");
+        printf("Queries must end with semicolon (;)\n\n");
+    }
+
+    query[0] = '\0';
+
     while (1) {
-        printf("graphqlite> ");
-        fflush(stdout);
-        
-        if (!fgets(query, sizeof(query), stdin)) {
-            break; /* EOF */
+        if (is_tty) {
+            printf("%s", in_statement ? "       ...> " : "graphqlite> ");
+            fflush(stdout);
         }
-        
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            /* EOF - execute any pending statement */
+            if (in_statement && strlen(query) > 0) {
+                char *trimmed = trim_semicolon(query);
+                if (trimmed && strlen(trimmed) > 0) {
+                    execute_statement(executor, trimmed, verbose || is_tty);
+                }
+                free(trimmed);
+            }
+            break;
+        }
+
         /* Remove trailing newline */
-        size_t len = strlen(query);
-        if (len > 0 && query[len-1] == '\n') {
-            query[len-1] = '\0';
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\n') {
+            line[len-1] = '\0';
+            len--;
         }
-        
-        /* Skip empty lines */
-        if (strlen(query) == 0) {
+
+        /* Skip empty lines when not in a statement */
+        if (!in_statement && len == 0) {
             continue;
         }
-        
-        /* Handle dot commands */
-        if (query[0] == '.') {
-            if (strcmp(query, ".quit") == 0 || strcmp(query, ".exit") == 0) {
+
+        /* Handle dot commands (only at start of statement) */
+        if (!in_statement && line[0] == '.') {
+            if (strcmp(line, ".quit") == 0 || strcmp(line, ".exit") == 0) {
                 break;
-            } else if (strcmp(query, ".help") == 0) {
+            } else if (strcmp(line, ".help") == 0) {
                 print_interactive_help();
-            } else if (strcmp(query, ".schema") == 0) {
+            } else if (strcmp(line, ".schema") == 0) {
                 show_schema(db);
-            } else if (strcmp(query, ".tables") == 0) {
+            } else if (strcmp(line, ".tables") == 0) {
                 show_tables(db);
-            } else if (strcmp(query, ".stats") == 0) {
+            } else if (strcmp(line, ".stats") == 0) {
                 show_stats(db);
             } else {
-                printf("Unknown command: %s\n", query);
+                printf("Unknown command: %s\n", line);
                 printf("Type .help for available commands\n");
             }
             continue;
         }
-        
-        /* Execute Cypher query */
-        printf("Executing: %s\n", query);
-        cypher_result *result = cypher_executor_execute(executor, query);
-        
-        if (result) {
-            if (result->success) {
-                printf("Query executed successfully\n");
-                
-                /* Print statistics for modification queries */
-                if (result->nodes_created > 0 || result->relationships_created > 0 || result->properties_set > 0) {
-                    printf("  Nodes created: %d\n", result->nodes_created);
-                    printf("  Relationships created: %d\n", result->relationships_created);
-                    printf("  Properties set: %d\n", result->properties_set);
-                }
-                
-                /* Print result data for read queries */
-                if (result->row_count > 0 && result->column_count > 0) {
-                    printf("\nResults:\n");
-                    cypher_result_print(result);
-                }
-                
-            } else {
-                printf("Query failed: %s\n", result->error_message ? result->error_message : "Unknown error");
+
+        /* Accumulate line into query buffer */
+        size_t query_len = strlen(query);
+        size_t line_len = strlen(line);
+
+        /* Add space between lines if accumulating */
+        if (in_statement && query_len > 0) {
+            if (query_len + 1 < MAX_QUERY_LENGTH) {
+                query[query_len] = ' ';
+                query_len++;
             }
-            
-            cypher_result_free(result);
-        } else {
-            printf("Failed to execute query\n");
         }
-        
-        printf("\n");
+
+        /* Check buffer overflow */
+        if (query_len + line_len >= MAX_QUERY_LENGTH) {
+            printf("Error: Query too long (max %d characters)\n", MAX_QUERY_LENGTH);
+            query[0] = '\0';
+            in_statement = false;
+            continue;
+        }
+
+        /* Append line */
+        memcpy(query + query_len, line, line_len + 1);
+        in_statement = true;
+
+        /* Check if statement is complete (ends with semicolon) */
+        if (ends_with_semicolon(query)) {
+            char *trimmed = trim_semicolon(query);
+            if (trimmed && strlen(trimmed) > 0) {
+                execute_statement(executor, trimmed, verbose || is_tty);
+            }
+            free(trimmed);
+
+            /* Reset for next statement */
+            query[0] = '\0';
+            in_statement = false;
+
+            if (is_tty) {
+                printf("\n");
+            }
+        }
     }
-    
-    printf("Goodbye!\n");
+
+    if (is_tty) {
+        printf("Goodbye!\n");
+    }
     return 0;
 }
 
@@ -301,13 +414,13 @@ int main(int argc, char *argv[])
     }
     
     printf("GraphQLite executor initialized\n");
-    
+
     if (verbose) {
         printf("Debug mode enabled\n");
     }
-    
+
     /* Run interactive shell */
-    int result = run_interactive(executor, db);
+    int result = run_interactive(executor, db, verbose);
     
     /* Cleanup */
     cypher_executor_free(executor);
