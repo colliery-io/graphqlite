@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 /// ```no_run
 /// use graphqlite::GraphManager;
 ///
-/// let gm = GraphManager::open("./data")?;
+/// let mut gm = GraphManager::open("./data")?;
 ///
 /// // Create graphs
 /// let social = gm.create("social")?;
