@@ -196,6 +196,81 @@ static void test_empty_list_parsing(void)
     }
 }
 
+/**
+ * Regression test for GQLITE-T-0087: UNWIND with range() function
+ * Previously returned: "UNWIND requires list literal, property access, or variable"
+ * Now should correctly expand range(1, 5) to rows 1, 2, 3, 4, 5
+ */
+static void test_unwind_range_function_regression(void)
+{
+    const char *query = "UNWIND range(1, 5) AS n RETURN n";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nUNWIND range() failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 5);
+
+        /* Verify actual values returned */
+        if (result->success && result->row_count == 5 && result->data) {
+            bool found_1 = false, found_2 = false, found_3 = false, found_4 = false, found_5 = false;
+            for (int i = 0; i < result->row_count; i++) {
+                if (result->data[i] && result->data[i][0]) {
+                    int val = atoi(result->data[i][0]);
+                    if (val == 1) found_1 = true;
+                    if (val == 2) found_2 = true;
+                    if (val == 3) found_3 = true;
+                    if (val == 4) found_4 = true;
+                    if (val == 5) found_5 = true;
+                }
+            }
+            CU_ASSERT_TRUE(found_1);
+            CU_ASSERT_TRUE(found_2);
+            CU_ASSERT_TRUE(found_3);
+            CU_ASSERT_TRUE(found_4);
+            CU_ASSERT_TRUE(found_5);
+        }
+
+        cypher_result_free(result);
+    }
+}
+
+/**
+ * Regression test for GQLITE-T-0087: UNWIND with range() function with step
+ * Tests range(0, 10, 2) which should produce 0, 2, 4, 6, 8, 10
+ */
+static void test_unwind_range_with_step_regression(void)
+{
+    const char *query = "UNWIND range(0, 10, 2) AS n RETURN n";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nUNWIND range() with step failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 6);  /* 0, 2, 4, 6, 8, 10 */
+
+        /* Verify values are even numbers */
+        if (result->success && result->data) {
+            for (int i = 0; i < result->row_count; i++) {
+                if (result->data[i] && result->data[i][0]) {
+                    int val = atoi(result->data[i][0]);
+                    CU_ASSERT_EQUAL(val % 2, 0);  /* All values should be even */
+                }
+            }
+        }
+
+        cypher_result_free(result);
+    }
+}
+
 /* Initialize the UNWIND executor test suite */
 int init_executor_unwind_suite(void)
 {
@@ -212,7 +287,9 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "UNWIND string list", test_unwind_string_list) ||
         !CU_add_test(suite, "UNWIND empty list", test_unwind_empty_list) ||
         !CU_add_test(suite, "UNWIND single element", test_unwind_single_element) ||
-        !CU_add_test(suite, "UNWIND mixed types", test_unwind_mixed_types)) {
+        !CU_add_test(suite, "UNWIND mixed types", test_unwind_mixed_types) ||
+        !CU_add_test(suite, "UNWIND range() function regression", test_unwind_range_function_regression) ||
+        !CU_add_test(suite, "UNWIND range() with step regression", test_unwind_range_with_step_regression)) {
         return CU_get_error();
     }
 

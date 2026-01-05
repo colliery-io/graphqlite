@@ -33,7 +33,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * a parenthesized expression until it sees more context.
  */
 %expect 4
-%expect-rr 2  /* One for IDENTIFIER, one for BQIDENT in variable_opt */
+%expect-rr 3  /* One for IDENTIFIER, one for BQIDENT, one for END_P in variable_opt */
 
 %union {
     int integer;
@@ -767,6 +767,7 @@ variable_opt:
     /* empty */     { $$ = NULL; }
     | IDENTIFIER    { $$ = $1; }
     | BQIDENT       { $$ = $1; }
+    | END_P         { $$ = strdup("end"); }  /* Allow 'end' as variable name */
     ;
 
 /* Variable-length range for relationships: *, *1..5, *2.., *..3 */
@@ -1003,6 +1004,13 @@ primary_expr:
             cypher_identifier *base = make_identifier($1, @1.first_line);
             $$ = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
             free($1);
+            free($3);
+        }
+    | END_P '.' IDENTIFIER
+        {
+            /* Allow 'end' as identifier in property access: end.name */
+            cypher_identifier *base = make_identifier(strdup("end"), @1.first_line);
+            $$ = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
             free($3);
         }
     | IDENTIFIER ':' IDENTIFIER
@@ -1317,15 +1325,28 @@ map_projection_item:
         }
     ;
 
-/* CASE expression: CASE WHEN cond THEN val [WHEN cond THEN val ...] [ELSE val] END */
+/* CASE expression - two forms:
+ *   Searched: CASE WHEN cond THEN val [...] [ELSE val] END
+ *   Simple:   CASE expr WHEN val THEN result [...] [ELSE val] END
+ */
 case_expression:
+    /* Searched CASE: CASE WHEN ... END */
     CASE when_clause_list END_P
         {
-            $$ = (ast_node*)make_case_expr($2, NULL, @1.first_line);
+            $$ = (ast_node*)make_case_expr(NULL, $2, NULL, @1.first_line);
         }
     | CASE when_clause_list ELSE expr END_P
         {
-            $$ = (ast_node*)make_case_expr($2, $4, @1.first_line);
+            $$ = (ast_node*)make_case_expr(NULL, $2, $4, @1.first_line);
+        }
+    /* Simple CASE: CASE expr WHEN ... END */
+    | CASE expr when_clause_list END_P
+        {
+            $$ = (ast_node*)make_case_expr($2, $3, NULL, @1.first_line);
+        }
+    | CASE expr when_clause_list ELSE expr END_P
+        {
+            $$ = (ast_node*)make_case_expr($2, $3, $5, @1.first_line);
         }
     ;
 
@@ -1387,6 +1408,11 @@ identifier:
         {
             $$ = make_identifier($1, @1.first_line);
             free($1);
+        }
+    | END_P
+        {
+            /* Allow 'end' as an identifier - it's only reserved in CASE...END context */
+            $$ = make_identifier(strdup("end"), @1.first_line);
         }
     ;
 

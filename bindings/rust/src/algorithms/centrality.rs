@@ -5,7 +5,7 @@ use crate::Result;
 use super::{
     PageRankResult, DegreeCentralityResult, BetweennessCentralityResult,
     ClosenessCentralityResult, EigenvectorCentralityResult,
-    parsing::{extract_node_id, extract_user_id, extract_float, extract_int},
+    parsing::{extract_algo_array, extract_node_id, extract_user_id, extract_float, extract_int},
 };
 
 impl Graph {
@@ -18,9 +18,10 @@ impl Graph {
     pub fn pagerank(&self, damping: f64, iterations: i32) -> Result<Vec<PageRankResult>> {
         let query = format!("RETURN pageRank({}, {})", damping, iterations);
         let result = self.connection().cypher(&query)?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut ranks = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 ranks.push(PageRankResult {
                     node_id,
@@ -35,9 +36,10 @@ impl Graph {
     /// Calculate degree centrality for all nodes.
     pub fn degree_centrality(&self) -> Result<Vec<DegreeCentralityResult>> {
         let result = self.connection().cypher("RETURN degreeCentrality()")?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut degrees = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 degrees.push(DegreeCentralityResult {
                     node_id,
@@ -54,9 +56,10 @@ impl Graph {
     /// Calculate betweenness centrality for all nodes.
     pub fn betweenness_centrality(&self) -> Result<Vec<BetweennessCentralityResult>> {
         let result = self.connection().cypher("RETURN betweennessCentrality()")?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut scores = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 scores.push(BetweennessCentralityResult {
                     node_id,
@@ -71,9 +74,10 @@ impl Graph {
     /// Calculate closeness centrality for all nodes.
     pub fn closeness_centrality(&self) -> Result<Vec<ClosenessCentralityResult>> {
         let result = self.connection().cypher("RETURN closenessCentrality()")?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut scores = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 scores.push(ClosenessCentralityResult {
                     node_id,
@@ -93,9 +97,10 @@ impl Graph {
     pub fn eigenvector_centrality(&self, iterations: i32) -> Result<Vec<EigenvectorCentralityResult>> {
         let query = format!("RETURN eigenvectorCentrality({})", iterations);
         let result = self.connection().cypher(&query)?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut scores = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 scores.push(EigenvectorCentralityResult {
                     node_id,

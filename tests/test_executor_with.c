@@ -482,6 +482,145 @@ static void test_with_match_chaining(void)
     printf("WITH + MATCH chaining test passed\n");
 }
 
+/* REGRESSION TEST: GQLITE-T-0088
+ * Bug: WITH n WHERE n.age > 26 RETURN n.name returned node IDs instead of property values
+ * Root cause: Node variables passed through WITH were not preserving their kind,
+ * causing property lookups to fail.
+ */
+static void test_with_node_property_access_regression(void)
+{
+    /* This is the exact query from the bug report - tests GQLITE-T-0088
+     * Bug: WITH n WHERE n.age > 26 RETURN n.name returned node IDs instead of property values
+     *
+     * Filter to only base test data (Alice, Bob, Charlie, Diana) to avoid interference
+     * from other tests that add more Person nodes.
+     */
+    const char *query = "MATCH (n:Person) WITH n WHERE n.age > 28 AND n.age < 40 RETURN n.name AS person_name ORDER BY person_name";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nWITH node property access regression test failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+
+        /* Expected: Alice (age 30) and Charlie (age 35) - both have 28 < age < 40 */
+        if (result->success) {
+            CU_ASSERT_EQUAL(result->row_count, 2);
+
+            /* Verify data contains names, not node IDs */
+            if (result->data && result->row_count >= 2) {
+                /* Ordered by name: Alice, Charlie */
+                const char *row0 = result->data[0][0];
+                const char *row1 = result->data[1][0];
+
+                /* Debug output if test fails */
+                if (row0 && row1) {
+                    bool has_alice = strstr(row0, "Alice") != NULL;
+                    bool has_charlie = strstr(row1, "Charlie") != NULL;
+
+                    /* Also check for regression - data should NOT be just node IDs */
+                    bool is_id_0 = (strcmp(row0, "1") == 0 || strcmp(row0, "3") == 0);
+                    bool is_id_1 = (strcmp(row1, "1") == 0 || strcmp(row1, "3") == 0);
+
+                    if (!has_alice || !has_charlie) {
+                        printf("\nExpected Alice and Charlie, got: '%s', '%s'\n", row0, row1);
+                    }
+                    if (is_id_0 || is_id_1) {
+                        printf("\nRegression! Got node IDs instead of names: '%s', '%s'\n", row0, row1);
+                    }
+
+                    CU_ASSERT_TRUE(has_alice);
+                    CU_ASSERT_TRUE(has_charlie);
+                    CU_ASSERT_FALSE(is_id_0);
+                    CU_ASSERT_FALSE(is_id_1);
+                }
+            }
+        }
+
+        cypher_result_free(result);
+    }
+
+    printf("WITH node property access regression test passed\n");
+}
+
+/* REGRESSION TEST: Multiple WITH clauses with property access */
+static void test_with_multiple_property_access_regression(void)
+{
+    const char *query = "MATCH (n:Person) WITH n WHERE n.age > 25 WITH n WHERE n.age < 35 RETURN n.name AS name ORDER BY name";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nWITH multiple property access regression test failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+
+        /* Expected: Alice (age 30) and Diana (age 28) - both match age > 25 AND age < 35 */
+        if (result->success) {
+            CU_ASSERT_EQUAL(result->row_count, 2);
+
+            /* Verify data contains names, not node IDs */
+            if (result->data && result->row_count >= 2) {
+                /* Ordered by name: Alice, Diana */
+                const char *row0 = result->data[0][0];
+                const char *row1 = result->data[1][0];
+
+                /* Debug output if test fails */
+                if (row0 && row1) {
+                    bool has_alice = strstr(row0, "Alice") != NULL;
+                    bool has_diana = strstr(row1, "Diana") != NULL;
+
+                    if (!has_alice || !has_diana) {
+                        printf("\nExpected Alice and Diana, got: '%s', '%s'\n", row0, row1);
+                    }
+                    CU_ASSERT_TRUE(has_alice);
+                    CU_ASSERT_TRUE(has_diana);
+                }
+            }
+        }
+
+        cypher_result_free(result);
+    }
+
+    printf("WITH multiple property access regression test passed\n");
+}
+
+/* REGRESSION TEST: WITH node RETURN node (full node object) */
+static void test_with_node_return_node_regression(void)
+{
+    const char *query = "MATCH (n:Person) WITH n RETURN n LIMIT 1";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nWITH node RETURN node regression test failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+
+        /* Should return 1 row with a full node object */
+        if (result->success && result->data && result->row_count > 0) {
+            const char *node_json = result->data[0][0];
+            if (node_json) {
+                /* Should contain id, labels, and properties */
+                CU_ASSERT_PTR_NOT_NULL(strstr(node_json, "id"));
+                CU_ASSERT_PTR_NOT_NULL(strstr(node_json, "labels"));
+                CU_ASSERT_PTR_NOT_NULL(strstr(node_json, "properties"));
+            }
+        }
+
+        cypher_result_free(result);
+    }
+
+    printf("WITH node RETURN node regression test passed\n");
+}
+
 /* Initialize the WITH executor test suite */
 int init_executor_with_suite(void)
 {
@@ -509,7 +648,10 @@ int init_executor_with_suite(void)
         !CU_add_test(suite, "WITH expression arithmetic", test_with_expression_arithmetic) ||
         !CU_add_test(suite, "WITH CASE expression", test_with_case_expression) ||
         !CU_add_test(suite, "WITH literal expression", test_with_literal_expression) ||
-        !CU_add_test(suite, "WITH + MATCH chaining", test_with_match_chaining))
+        !CU_add_test(suite, "WITH + MATCH chaining", test_with_match_chaining) ||
+        !CU_add_test(suite, "REGRESSION: WITH node property access (GQLITE-T-0088)", test_with_node_property_access_regression) ||
+        !CU_add_test(suite, "REGRESSION: WITH multiple property access", test_with_multiple_property_access_regression) ||
+        !CU_add_test(suite, "REGRESSION: WITH node RETURN node", test_with_node_return_node_regression))
     {
         return CU_get_error();
     }

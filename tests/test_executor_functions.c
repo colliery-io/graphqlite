@@ -622,6 +622,172 @@ static void test_func_randomuuid(void)
     }
 }
 
+/**
+ * Regression test for GQLITE-T-0086: List function results preserve column aliases
+ * Previously returned raw array [0,1,2,3,4,5] without column wrapper
+ * Now should return [{"result": [0,1,2,3,4,5]}] with proper column name
+ */
+static void test_list_function_alias_regression(void)
+{
+    /* Test range() with alias */
+    const char *query = "RETURN range(0, 3) AS nums";
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 1);
+        CU_ASSERT_EQUAL(result->column_count, 1);
+
+        /* Verify column name is preserved */
+        if (result->column_names && result->column_names[0]) {
+            CU_ASSERT_STRING_EQUAL(result->column_names[0], "nums");
+        }
+
+        /* Verify data is the list */
+        if (result->data && result->data[0] && result->data[0][0]) {
+            /* Should contain [0,1,2,3] as JSON array */
+            CU_ASSERT_TRUE(strstr(result->data[0][0], "0") != NULL);
+            CU_ASSERT_TRUE(strstr(result->data[0][0], "3") != NULL);
+        }
+
+        cypher_result_free(result);
+    }
+}
+
+/**
+ * Regression test for GQLITE-T-0085: Simple CASE syntax
+ * Previously only searched CASE worked: CASE WHEN n.status = 'active' THEN 1 ELSE 0 END
+ * Now simple CASE also works: CASE n.status WHEN 'active' THEN 1 ELSE 0 END
+ */
+static void test_simple_case_syntax_regression(void)
+{
+    /* Create test data */
+    const char *create_query = "CREATE (n:CaseTest {name: 'Alice', status: 'active'})";
+    cypher_result *create_result = cypher_executor_execute(executor, create_query);
+    CU_ASSERT_PTR_NOT_NULL(create_result);
+    if (create_result) {
+        CU_ASSERT_TRUE(create_result->success);
+        cypher_result_free(create_result);
+    }
+
+    /* Test simple CASE with status matching 'active' */
+    const char *query = "MATCH (n:CaseTest) RETURN CASE n.status WHEN 'active' THEN 1 WHEN 'inactive' THEN 0 ELSE -1 END AS is_active";
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 1);
+        CU_ASSERT_EQUAL(result->column_count, 1);
+
+        /* Verify column name is correct */
+        if (result->column_names && result->column_names[0]) {
+            CU_ASSERT_STRING_EQUAL(result->column_names[0], "is_active");
+        }
+
+        /* Verify CASE evaluated correctly - should be 1 for 'active' */
+        if (result->data && result->data[0] && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+        }
+
+        cypher_result_free(result);
+    }
+
+    /* Clean up test data */
+    const char *delete_query = "MATCH (n:CaseTest) DELETE n";
+    cypher_result *delete_result = cypher_executor_execute(executor, delete_query);
+    if (delete_result) {
+        cypher_result_free(delete_result);
+    }
+}
+
+/**
+ * Regression test for GQLITE-T-0089: keys() function returns empty array
+ * Previously keys(n) returned [] due to broken EXISTS with UNION ALL in SQL generation
+ * Now returns proper array of property key names like ["name", "age"]
+ */
+static void test_keys_function_regression(void)
+{
+    /* Create test data with multiple properties */
+    const char *create_query = "CREATE (n:KeysTest {name: 'Bob', age: 25, active: true})";
+    cypher_result *create_result = cypher_executor_execute(executor, create_query);
+    CU_ASSERT_PTR_NOT_NULL(create_result);
+    if (create_result) {
+        CU_ASSERT_TRUE(create_result->success);
+        cypher_result_free(create_result);
+    }
+
+    /* Test keys() returns property names */
+    const char *query = "MATCH (n:KeysTest) RETURN keys(n) AS prop_keys";
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 1);
+        CU_ASSERT_EQUAL(result->column_count, 1);
+
+        /* Verify keys array contains our property names */
+        if (result->data && result->data[0] && result->data[0][0]) {
+            /* Should contain "name", "age", and "active" */
+            CU_ASSERT_TRUE(strstr(result->data[0][0], "name") != NULL);
+            CU_ASSERT_TRUE(strstr(result->data[0][0], "age") != NULL);
+            CU_ASSERT_TRUE(strstr(result->data[0][0], "active") != NULL);
+        }
+
+        cypher_result_free(result);
+    }
+
+    /* Clean up test data */
+    const char *delete_query = "MATCH (n:KeysTest) DELETE n";
+    cypher_result *delete_result = cypher_executor_execute(executor, delete_query);
+    if (delete_result) {
+        cypher_result_free(delete_result);
+    }
+}
+
+/**
+ * Regression test for GQLITE-T-0084: 'end' keyword as identifier
+ * Previously 'end' was reserved (for CASE...END) and couldn't be used as variable name.
+ * Now 'end' can be used as node/relationship variable and in property access.
+ */
+static void test_end_as_identifier_regression(void)
+{
+    /* Create test data with relationships */
+    const char *create_query = "CREATE (a:EndTest {name: 'Alice'})-[:KNOWS]->(b:EndTest {name: 'Bob'})";
+    cypher_result *create_result = cypher_executor_execute(executor, create_query);
+    CU_ASSERT_PTR_NOT_NULL(create_result);
+    if (create_result) {
+        CU_ASSERT_TRUE(create_result->success);
+        cypher_result_free(create_result);
+    }
+
+    /* Test using 'end' as node variable with property access */
+    const char *query = "MATCH (start:EndTest)-[:KNOWS]->(end) RETURN end.name AS end_name";
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 1);
+
+        /* Verify we got Bob's name */
+        if (result->data && result->data[0] && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "Bob");
+        }
+
+        cypher_result_free(result);
+    }
+
+    /* Clean up test data */
+    const char *delete_query = "MATCH (n:EndTest) DETACH DELETE n";
+    cypher_result *delete_result = cypher_executor_execute(executor, delete_query);
+    if (delete_result) {
+        cypher_result_free(delete_result);
+    }
+}
+
 /* Initialize the functions test suite */
 int init_executor_functions_suite(void)
 {
@@ -685,7 +851,13 @@ int init_executor_functions_suite(void)
 
         /* Utility functions */
         !CU_add_test(suite, "timestamp()", test_func_timestamp) ||
-        !CU_add_test(suite, "randomUUID()", test_func_randomuuid))
+        !CU_add_test(suite, "randomUUID()", test_func_randomuuid) ||
+
+        /* Regression tests */
+        !CU_add_test(suite, "List function alias regression", test_list_function_alias_regression) ||
+        !CU_add_test(suite, "Simple CASE syntax regression", test_simple_case_syntax_regression) ||
+        !CU_add_test(suite, "keys() function returns property names", test_keys_function_regression) ||
+        !CU_add_test(suite, "'end' as identifier regression", test_end_as_identifier_regression))
     {
         return CU_get_error();
     }

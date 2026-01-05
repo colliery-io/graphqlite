@@ -530,6 +530,52 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         if (transform_var_is_projected(ctx->var_ctx, id->name)) {
                             /* This is a projected variable from WITH - alias is the full column reference */
                             append_sql(ctx, "%s", alias);
+                        } else if (transform_var_alias_is_id(ctx->var_ctx, id->name)) {
+                            /* Post-WITH node/edge - alias IS the id value */
+                            if (transform_var_is_edge(ctx->var_ctx, id->name)) {
+                                /* Edge that passed through WITH - build relationship object */
+                                /* Note: After WITH, we only have the id, not type/source/target */
+                                append_sql(ctx, "json_object("
+                                    "'id', %s, "
+                                    "'type', (SELECT type FROM edges WHERE id = %s), "
+                                    "'startNodeId', (SELECT source_id FROM edges WHERE id = %s), "
+                                    "'endNodeId', (SELECT target_id FROM edges WHERE id = %s), "
+                                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                        "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s AND ept.key_id = pk.id), "
+                                        "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s AND epi.key_id = pk.id), "
+                                        "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s AND epr.key_id = pk.id), "
+                                        "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s AND epb.key_id = pk.id))) "
+                                    "FROM property_keys pk WHERE "
+                                        "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s AND key_id = pk.id)"
+                                    "), json('{}'))"
+                                ")",
+                                alias, alias, alias, alias,
+                                alias, alias, alias, alias,
+                                alias, alias, alias, alias);
+                            } else {
+                                /* Node that passed through WITH - build node object using id directly */
+                                append_sql(ctx, "json_object("
+                                    "'id', %s, "
+                                    "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s), json('[]')), "
+                                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                        "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s AND npt.key_id = pk.id), "
+                                        "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s AND npi.key_id = pk.id), "
+                                        "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s AND npr.key_id = pk.id), "
+                                        "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s AND npb.key_id = pk.id))) "
+                                    "FROM property_keys pk WHERE "
+                                        "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s AND key_id = pk.id)"
+                                    "), json('{}'))"
+                                ")",
+                                alias, alias,
+                                alias, alias, alias, alias,
+                                alias, alias, alias, alias);
+                            }
                         } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
                             /* This is an edge variable - return full relationship object */
                             append_sql(ctx, "json_object("
@@ -703,7 +749,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
         case AST_NODE_CASE_EXPR:
             {
-                /* Transform CASE WHEN ... THEN ... ELSE ... END */
+                /* Transform CASE expression - two forms:
+                 *   Searched: CASE WHEN cond THEN val END -> CASE WHEN cond THEN val END
+                 *   Simple:   CASE expr WHEN val THEN result END -> CASE WHEN expr = val THEN result END
+                 */
                 cypher_case_expr *case_expr = (cypher_case_expr*)expr;
 
                 if (!case_expr->when_clauses || case_expr->when_clauses->count == 0) {
@@ -718,8 +767,23 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     cypher_when_clause *when = (cypher_when_clause*)case_expr->when_clauses->items[i];
 
                     append_sql(ctx, " WHEN ");
-                    if (transform_expression(ctx, when->condition) < 0) {
-                        return -1;
+
+                    if (case_expr->operand) {
+                        /* Simple CASE: generate "operand = when_value" */
+                        append_sql(ctx, "(");
+                        if (transform_expression(ctx, case_expr->operand) < 0) {
+                            return -1;
+                        }
+                        append_sql(ctx, ") = (");
+                        if (transform_expression(ctx, when->condition) < 0) {
+                            return -1;
+                        }
+                        append_sql(ctx, ")");
+                    } else {
+                        /* Searched CASE: condition is already a boolean expression */
+                        if (transform_expression(ctx, when->condition) < 0) {
+                            return -1;
+                        }
                     }
 
                     append_sql(ctx, " THEN ");

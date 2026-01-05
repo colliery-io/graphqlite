@@ -1262,12 +1262,15 @@ fn test_string_split() {
         return;
     };
 
-    // split() returns raw JSON array which becomes multiple rows with column "value"
+    // split() returns a single row with the array as a column value
     let results = conn.cypher("RETURN split('a,b,c', ',') AS result").unwrap();
-    assert_eq!(results.len(), 3);
-    assert_eq!(results[0].get::<String>("value").unwrap(), "a");
-    assert_eq!(results[1].get::<String>("value").unwrap(), "b");
-    assert_eq!(results[2].get::<String>("value").unwrap(), "c");
+    assert_eq!(results.len(), 1);
+    // The result column contains the array ["a", "b", "c"]
+    if let Some(graphqlite::Value::Array(arr)) = results[0].get_value("result") {
+        assert_eq!(arr.len(), 3);
+    } else {
+        panic!("Expected array result");
+    }
 }
 
 #[test]
@@ -1458,11 +1461,15 @@ fn test_list_tail() {
         return;
     };
 
-    // tail() returns raw JSON array which becomes multiple rows with column "value"
+    // tail() returns a single row with the array as a column value
     let results = conn.cypher("RETURN tail([1, 2, 3]) AS result").unwrap();
-    assert_eq!(results.len(), 2); // [2, 3] as separate rows
-    assert_eq!(results[0].get::<i64>("value").unwrap(), 2);
-    assert_eq!(results[1].get::<i64>("value").unwrap(), 3);
+    assert_eq!(results.len(), 1);
+    // The result column contains the array [2, 3]
+    if let Some(graphqlite::Value::Array(arr)) = results[0].get_value("result") {
+        assert_eq!(arr.len(), 2);
+    } else {
+        panic!("Expected array result");
+    }
 }
 
 #[test]
@@ -1484,11 +1491,15 @@ fn test_list_range() {
         return;
     };
 
-    // range() currently returns raw JSON array which becomes multiple rows with column "value"
+    // range() returns a single row with the array as a column value
     let results = conn.cypher("RETURN range(0, 5) AS result").unwrap();
-    assert_eq!(results.len(), 6); // 0, 1, 2, 3, 4, 5
-    assert_eq!(results[0].get::<i64>("value").unwrap(), 0);
-    assert_eq!(results[5].get::<i64>("value").unwrap(), 5);
+    assert_eq!(results.len(), 1);
+    // The result column contains the array [0, 1, 2, 3, 4, 5]
+    if let Some(graphqlite::Value::Array(arr)) = results[0].get_value("result") {
+        assert_eq!(arr.len(), 6);
+    } else {
+        panic!("Expected array result");
+    }
 }
 
 #[test]
@@ -1498,12 +1509,15 @@ fn test_list_range_with_step() {
         return;
     };
 
-    // range() with step returns raw JSON array which becomes multiple rows with column "value"
+    // range() with step returns a single row with the array as a column value
     let results = conn.cypher("RETURN range(0, 10, 2) AS result").unwrap();
-    assert_eq!(results.len(), 6); // 0, 2, 4, 6, 8, 10
-    assert_eq!(results[0].get::<i64>("value").unwrap(), 0);
-    assert_eq!(results[2].get::<i64>("value").unwrap(), 4);
-    assert_eq!(results[5].get::<i64>("value").unwrap(), 10);
+    assert_eq!(results.len(), 1);
+    // The result column contains the array [0, 2, 4, 6, 8, 10]
+    if let Some(graphqlite::Value::Array(arr)) = results[0].get_value("result") {
+        assert_eq!(arr.len(), 6);
+    } else {
+        panic!("Expected array result");
+    }
 }
 
 // =============================================================================

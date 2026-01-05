@@ -462,9 +462,14 @@ typedef struct cypher_pattern_comprehension {
     ast_node *collect_expr;   /* Expression to collect (NULL returns matched nodes/rels) */
 } cypher_pattern_comprehension;
 
-/* CASE expression: CASE WHEN cond THEN val [...] [ELSE val] END */
+/* CASE expression: CASE [operand] WHEN cond THEN val [...] [ELSE val] END
+ * Two forms:
+ *   Searched: CASE WHEN cond THEN val END (operand is NULL)
+ *   Simple:   CASE expr WHEN val THEN result END (operand is the expr)
+ */
 typedef struct cypher_case_expr {
     ast_node base;
+    ast_node *operand;       /* Simple CASE operand (NULL for searched CASE) */
     ast_list *when_clauses;  /* List of when_clause nodes */
     ast_node *else_expr;     /* Optional ELSE expression */
 } cypher_case_expr;
@@ -537,7 +542,7 @@ cypher_map_projection_item* make_map_projection_item(char *key, char *property, 
 cypher_list* make_list(ast_list *items, int location);
 cypher_list_comprehension* make_list_comprehension(const char *variable, ast_node *list_expr, ast_node *where_expr, ast_node *transform_expr, int location);
 cypher_pattern_comprehension* make_pattern_comprehension(ast_list *pattern, ast_node *where_expr, ast_node *collect_expr, int location);
-cypher_case_expr* make_case_expr(ast_list *when_clauses, ast_node *else_expr, int location);
+cypher_case_expr* make_case_expr(ast_node *operand, ast_list *when_clauses, ast_node *else_expr, int location);
 cypher_when_clause* make_when_clause(ast_node *condition, ast_node *result, int location);
 
 /* Utility functions */

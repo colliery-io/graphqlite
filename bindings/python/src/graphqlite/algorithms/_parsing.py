@@ -1,6 +1,39 @@
 """Shared parsing helpers for algorithm results."""
 
-from typing import Any, Optional
+from typing import Any, List, Optional
+
+
+# Known column names for graph algorithm results
+ALGO_COLUMN_NAMES = [
+    "column_0", "wcc()", "scc()", "pagerank()", "degree_centrality()",
+    "betweenness_centrality()", "closeness_centrality()", "eigenvector_centrality()",
+    "labelPropagation()", "louvain()"
+]
+
+
+def extract_algo_array(result: List[dict]) -> List[dict]:
+    """Extract wrapped array results from graph algorithms.
+
+    Graph algorithms return results in one of two formats:
+    1. Old format: Multiple rows with fields directly accessible
+    2. New format: Single row with a column containing an array of objects
+
+    This function detects the new format and extracts the array elements.
+    """
+    # If multiple rows, assume old format - return as-is
+    if len(result) != 1:
+        return result
+
+    # Single row - check if it has an array column
+    row = result[0]
+
+    # Try common column names for wrapped array results
+    for col_name in ALGO_COLUMN_NAMES:
+        if col_name in row and isinstance(row[col_name], list):
+            return row[col_name]
+
+    # No array column found, return original result
+    return result
 
 
 def parse_score_result(row: dict, score_key: str = "score") -> Optional[dict]:

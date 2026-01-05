@@ -511,6 +511,10 @@ void ast_node_free(ast_node *node)
         case AST_NODE_CASE_EXPR:
             {
                 cypher_case_expr *case_expr = (cypher_case_expr*)node;
+                if (case_expr->operand) {
+                    ast_node_free(case_expr->operand);
+                    case_expr->operand = NULL;
+                }
                 if (case_expr->when_clauses) {
                     ast_list_free(case_expr->when_clauses);
                     case_expr->when_clauses = NULL;
@@ -1266,13 +1270,14 @@ cypher_pattern_comprehension* make_pattern_comprehension(ast_list *pattern, ast_
     return comp;
 }
 
-cypher_case_expr* make_case_expr(ast_list *when_clauses, ast_node *else_expr, int location)
+cypher_case_expr* make_case_expr(ast_node *operand, ast_list *when_clauses, ast_node *else_expr, int location)
 {
     cypher_case_expr *case_expr = (cypher_case_expr*)ast_node_create(AST_NODE_CASE_EXPR, location, sizeof(cypher_case_expr));
     if (!case_expr) {
         return NULL;
     }
 
+    case_expr->operand = operand;
     case_expr->when_clauses = when_clauses;
     case_expr->else_expr = else_expr;
     return case_expr;

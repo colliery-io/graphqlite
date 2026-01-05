@@ -126,9 +126,10 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             if (alias) {
                 /* Determine column name */
                 const char *col_name = item->alias ? item->alias : id->name;
-                /* Check if this is a projected variable (already just an id) vs a node alias */
+                /* Check if alias IS already the id (projected or post-WITH node/edge) */
                 bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
-                const char *id_suffix = is_projected ? "" : ".id";
+                bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
+                const char *id_suffix = (is_projected || alias_is_id) ? "" : ".id";
                 dbuf_appendf(&col_buf, "%s%s AS %s", alias, id_suffix, col_name);
                 /* Add to GROUP BY */
                 if (group_count > 0) {
@@ -146,9 +147,10 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                 const char *col_name = item->alias ? item->alias : prop->property_name;
                 if (alias) {
-                    /* Check if this is a projected variable (already just an id) vs a node alias */
+                    /* Check if alias IS already the id (projected or post-WITH node/edge) */
                     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
-                    const char *id_suffix = is_projected ? "" : ".id";
+                    bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
+                    const char *id_suffix = (is_projected || alias_is_id) ? "" : ".id";
                     /* Use COALESCE with all property tables - order int/real first to preserve type */
                     dbuf_appendf(&col_buf,
                         "(SELECT COALESCE("
@@ -322,6 +324,29 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     ctx->cte_count++;
     free(inner_sql);
 
+    /* Before reset - save source variable kinds for simple identifiers
+     * This preserves node/edge status so property lookups work after WITH */
+    var_kind *source_kinds = NULL;
+    if (with->items->count > 0) {
+        source_kinds = calloc(with->items->count, sizeof(var_kind));
+        if (source_kinds) {
+            for (int i = 0; i < with->items->count; i++) {
+                cypher_return_item *item = (cypher_return_item*)with->items->items[i];
+                if (item->expr->type == AST_NODE_IDENTIFIER) {
+                    cypher_identifier *id = (cypher_identifier*)item->expr;
+                    transform_var *var = transform_var_lookup(ctx->var_ctx, id->name);
+                    if (var) {
+                        source_kinds[i] = var->kind;
+                    } else {
+                        source_kinds[i] = VAR_KIND_PROJECTED;
+                    }
+                } else {
+                    source_kinds[i] = VAR_KIND_PROJECTED;
+                }
+            }
+        }
+    }
+
     /* Clear old variables - WITH creates a new scope */
     transform_var_ctx_reset(ctx->var_ctx);
 
@@ -351,16 +376,35 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         }
 
         if (col_name) {
-            /* Add SELECT column */
+            /* Build the expression for variable registration (NOT added to SELECT -
+             * that's the RETURN clause's job if there is one) */
             char select_expr[256];
             snprintf(select_expr, sizeof(select_expr), "%s.%s", cte_name, col_name);
-            sql_select(ctx->unified_builder, select_expr, NULL);
 
-            /* Register the new projected variable */
-            transform_var_register_projected(ctx->var_ctx, col_name, select_expr);
-            CYPHER_DEBUG("WITH: Registered projected variable '%s' -> %s.%s", col_name, cte_name, col_name);
+            /* Register variable with preserved kind for node/edge, or as projected */
+            var_kind kind = source_kinds ? source_kinds[i] : VAR_KIND_PROJECTED;
+            if (kind == VAR_KIND_NODE) {
+                /* Preserve node status so property access works */
+                transform_var_register_node(ctx->var_ctx, col_name, select_expr, NULL);
+                /* Mark that the alias IS the id value (not a table reference) */
+                transform_var_set_alias_is_id(ctx->var_ctx, col_name, true);
+                CYPHER_DEBUG("WITH: Registered node variable '%s' -> %s (alias_is_id)", col_name, select_expr);
+            } else if (kind == VAR_KIND_EDGE) {
+                /* Preserve edge status so property access works */
+                transform_var_register_edge(ctx->var_ctx, col_name, select_expr, NULL);
+                /* Mark that the alias IS the id value (not a table reference) */
+                transform_var_set_alias_is_id(ctx->var_ctx, col_name, true);
+                CYPHER_DEBUG("WITH: Registered edge variable '%s' -> %s (alias_is_id)", col_name, select_expr);
+            } else {
+                /* Projected value (expression result, aggregate, etc.) */
+                transform_var_register_projected(ctx->var_ctx, col_name, select_expr);
+                CYPHER_DEBUG("WITH: Registered projected variable '%s' -> %s", col_name, select_expr);
+            }
         }
     }
+
+    /* Free saved kinds array */
+    free(source_kinds);
 
     /* Handle WHERE clause (applied after projection) */
     if (with->where) {

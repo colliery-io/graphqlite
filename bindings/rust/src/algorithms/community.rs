@@ -4,7 +4,7 @@ use crate::graph::Graph;
 use crate::Result;
 use super::{
     CommunityResult,
-    parsing::{extract_node_id, extract_user_id, extract_int},
+    parsing::{extract_algo_array, extract_node_id, extract_user_id, extract_int},
 };
 
 impl Graph {
@@ -16,9 +16,10 @@ impl Graph {
     pub fn community_detection(&self, iterations: i32) -> Result<Vec<CommunityResult>> {
         let query = format!("RETURN labelPropagation({})", iterations);
         let result = self.connection().cypher(&query)?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut communities = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 communities.push(CommunityResult {
                     node_id,
@@ -38,9 +39,10 @@ impl Graph {
     pub fn louvain(&self, resolution: f64) -> Result<Vec<CommunityResult>> {
         let query = format!("RETURN louvain({})", resolution);
         let result = self.connection().cypher(&query)?;
+        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
 
         let mut communities = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 communities.push(CommunityResult {
                     node_id,

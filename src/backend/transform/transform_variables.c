@@ -313,6 +313,12 @@ bool transform_var_is_bound(transform_var_context *ctx, const char *name)
     return var && var->is_bound;
 }
 
+bool transform_var_alias_is_id(transform_var_context *ctx, const char *name)
+{
+    transform_var *var = transform_var_lookup(ctx, name);
+    return var && var->alias_is_id;
+}
+
 /* Scope management */
 
 void transform_var_enter_clause(transform_var_context *ctx)
@@ -384,6 +390,17 @@ int transform_var_set_bound(transform_var_context *ctx,
     if (idx < 0) return -1;
 
     ctx->vars[idx].is_bound = is_bound;
+    return 0;
+}
+
+int transform_var_set_alias_is_id(transform_var_context *ctx,
+                                  const char *name,
+                                  bool alias_is_id)
+{
+    int idx = find_var_index(ctx, name);
+    if (idx < 0) return -1;
+
+    ctx->vars[idx].alias_is_id = alias_is_id;
     return 0;
 }
 

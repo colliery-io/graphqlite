@@ -39,6 +39,7 @@ struct transform_var {
     int declared_in_clause;  /* Which clause index declared this */
     bool is_visible;         /* Currently in scope? */
     bool is_bound;           /* Has a value assigned? */
+    bool alias_is_id;        /* True if table_alias IS the id value (post-WITH) */
 
     /* Multi-graph support */
     char *graph;             /* Source graph name (NULL = default graph) */
@@ -116,6 +117,7 @@ bool transform_var_is_edge(transform_var_context *ctx, const char *name);
 bool transform_var_is_path(transform_var_context *ctx, const char *name);
 bool transform_var_is_projected(transform_var_context *ctx, const char *name);
 bool transform_var_is_bound(transform_var_context *ctx, const char *name);
+bool transform_var_alias_is_id(transform_var_context *ctx, const char *name);
 
 /* Scope management */
 void transform_var_enter_clause(transform_var_context *ctx);
@@ -138,6 +140,11 @@ int transform_var_set_cte(transform_var_context *ctx,
 int transform_var_set_bound(transform_var_context *ctx,
                            const char *name,
                            bool is_bound);
+
+/* Set alias_is_id flag (for post-WITH node/edge variables) */
+int transform_var_set_alias_is_id(transform_var_context *ctx,
+                                  const char *name,
+                                  bool alias_is_id);
 
 /* Set graph for multi-graph support */
 int transform_var_set_graph(transform_var_context *ctx,

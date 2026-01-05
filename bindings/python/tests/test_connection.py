@@ -769,9 +769,11 @@ def test_tail_function(db):
     """Test tail() function."""
     results = db.cypher("RETURN tail([1, 2, 3]) AS result")
     assert len(results) == 1
-    # tail returns [2, 3] as JSON
-    import json
-    tail = json.loads(results[0]["result"])
+    # tail returns [2, 3] as a list (may be native list or JSON string)
+    tail = results[0]["result"]
+    if isinstance(tail, str):
+        import json
+        tail = json.loads(tail)
     assert tail == [2, 3]
 
 
@@ -786,8 +788,11 @@ def test_range_function(db):
     """Test range() function."""
     results = db.cypher("RETURN range(1, 5) AS result")
     assert len(results) == 1
-    import json
-    r = json.loads(results[0]["result"])
+    # range returns a list (may be native list or JSON string)
+    r = results[0]["result"]
+    if isinstance(r, str):
+        import json
+        r = json.loads(r)
     assert r == [1, 2, 3, 4, 5]
 
 
@@ -1078,9 +1083,11 @@ def test_path_nodes(db):
     """)
     assert len(results) == 1
     # Column alias may not be applied, check both possibilities
-    import json
     col_name = "path_nodes" if "path_nodes" in results[0] else "result"
-    nodes = json.loads(results[0][col_name])
+    nodes = results[0][col_name]
+    if isinstance(nodes, str):
+        import json
+        nodes = json.loads(nodes)
     assert len(nodes) == 2
 
 
@@ -1093,9 +1100,11 @@ def test_path_relationships(db):
     """)
     assert len(results) == 1
     # Column alias may not be applied, check both possibilities
-    import json
     col_name = "rels" if "rels" in results[0] else "result"
-    rels = json.loads(results[0][col_name])
+    rels = results[0][col_name]
+    if isinstance(rels, str):
+        import json
+        rels = json.loads(rels)
     assert len(rels) == 1
 
 
@@ -1171,10 +1180,12 @@ def test_labels_function(db):
     db.cypher("CREATE (n:Person:Employee:Manager {name: 'Alice'})")
     results = db.cypher("MATCH (n:Person {name: 'Alice'}) RETURN labels(n) AS lbls")
     assert len(results) == 1
-    import json
     # Column alias may not be applied, check both possibilities
     col_name = "lbls" if "lbls" in results[0] else "result"
-    labels = json.loads(results[0][col_name])
+    labels = results[0][col_name]
+    if isinstance(labels, str):
+        import json
+        labels = json.loads(labels)
     assert "Person" in labels
     assert "Employee" in labels
     assert "Manager" in labels

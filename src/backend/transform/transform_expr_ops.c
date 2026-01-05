@@ -332,8 +332,10 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return -1;
     }
 
-    /* Check if this is a projected variable from WITH - if so, alias IS the node id */
+    /* Check if alias IS the id value (projected or post-WITH node/edge) */
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
+    bool skip_id_suffix = is_projected || alias_is_id;
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
 
     /* Multi-graph support: get graph prefix for property table references */
@@ -384,41 +386,41 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         append_sql(ctx, "(SELECT COALESCE(");
         /* Text properties (both numeric and non-numeric strings) */
         append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         /* Integer properties */
         append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         /* Real properties */
         append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         /* Boolean properties (cast to integer for comparison) */
         append_sql(ctx, "(SELECT CAST(npb.value AS INTEGER) FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, ")))");
     } else {
         /* Node property access for RETURN clauses - convert everything to text */
         append_sql(ctx, "(SELECT COALESCE(");
         append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
         append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, is_projected ? "" : ".id");
+                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, ")))");
     }

@@ -168,6 +168,14 @@ impl Row {
         Row { columns, values }
     }
 
+    /// Create a new row from a HashMap of Values.
+    ///
+    /// Used internally to convert array elements from graph algorithm results.
+    pub(crate) fn from_map(map: HashMap<String, Value>) -> Self {
+        let columns: Vec<String> = map.keys().cloned().collect();
+        Row { columns, values: map }
+    }
+
     /// Get a raw [`Value`] by column name.
     ///
     /// Returns `None` if the column doesn't exist. For type-safe extraction,

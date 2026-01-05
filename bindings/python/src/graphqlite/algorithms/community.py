@@ -3,7 +3,7 @@
 from typing import Optional
 
 from ..graph._base import BaseMixin
-from ._parsing import safe_int
+from ._parsing import extract_algo_array, safe_int
 
 
 class CommunityMixin(BaseMixin):
@@ -20,9 +20,10 @@ class CommunityMixin(BaseMixin):
             List of dicts with 'node_id', 'user_id', 'community'
         """
         result = self._conn.cypher(f"RETURN labelPropagation({iterations})")
+        rows = extract_algo_array(result)
 
         communities = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             community = row.get("community")
@@ -50,9 +51,10 @@ class CommunityMixin(BaseMixin):
             List of dicts with 'node_id', 'user_id', 'community'
         """
         result = self._conn.cypher(f"RETURN louvain({resolution})")
+        rows = extract_algo_array(result)
 
         communities = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             community = row.get("community")

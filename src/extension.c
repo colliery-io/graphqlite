@@ -218,87 +218,80 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                 free(json_result);
             }
         } else if (result->row_count > 0 && result->data) {
-            /* Check for single-cell JSON array result (e.g., from graph algorithms) */
-            if (result->row_count == 1 && result->column_count == 1 &&
-                result->data[0][0] && result->data[0][0][0] == '[') {
-                /* Return JSON array directly without double-wrapping */
-                sqlite3_result_text(context, result->data[0][0], -1, SQLITE_TRANSIENT);
-            } else {
-                /* Fallback to legacy JSON format with proper escaping */
-                int buffer_size = 1024;
-                for (int row = 0; row < result->row_count; row++) {
-                    for (int col = 0; col < result->column_count; col++) {
-                        if (result->data[row][col]) {
-                            /* Account for possible JSON escaping (2x size for worst case) */
-                            buffer_size += strlen(result->data[row][col]) * 2 + 20;
-                        }
+            /* Format results as JSON with column names */
+            int buffer_size = 1024;
+            for (int row = 0; row < result->row_count; row++) {
+                for (int col = 0; col < result->column_count; col++) {
+                    if (result->data[row][col]) {
+                        /* Account for possible JSON escaping (2x size for worst case) */
+                        buffer_size += strlen(result->data[row][col]) * 2 + 20;
                     }
                 }
-
-                char *json_result = malloc(buffer_size);
-                if (!json_result) {
-                    sqlite3_result_error(context, "Memory allocation failed for result formatting", -1);
-                    cypher_result_free(result);
-                    return;
-                }
-
-                strcpy(json_result, "[");
-
-                for (int row = 0; row < result->row_count; row++) {
-                    if (row > 0) strcat(json_result, ",");
-                    strcat(json_result, "{");
-
-                    for (int col = 0; col < result->column_count; col++) {
-                        if (col > 0) strcat(json_result, ",");
-
-                        strcat(json_result, "\"");
-                        if (result->column_names && result->column_names[col]) {
-                            strcat(json_result, result->column_names[col]);
-                        } else {
-                            char col_name[32];
-                            snprintf(col_name, sizeof(col_name), "column_%d", col);
-                            strcat(json_result, col_name);
-                        }
-                        strcat(json_result, "\":");
-
-                        if (result->data[row][col]) {
-                            const char *val = result->data[row][col];
-                            /* Get SQLite type if available */
-                            int col_type = SQLITE_TEXT;
-                            if (result->data_types && result->data_types[row]) {
-                                col_type = result->data_types[row][col];
-                            }
-
-                            /* Check if value is already JSON (starts with [ or {) */
-                            if (val[0] == '[' || val[0] == '{') {
-                                strcat(json_result, val);
-                            } else if (col_type == SQLITE_INTEGER || col_type == SQLITE_FLOAT) {
-                                /* Numeric value - output without quotes */
-                                strcat(json_result, val);
-                            } else {
-                                /* String value - quote and escape */
-                                strcat(json_result, "\"");
-                                char *p = json_result + strlen(json_result);
-                                while (*val) {
-                                    if (*val == '"' || *val == '\\') {
-                                        *p++ = '\\';
-                                    }
-                                    *p++ = *val++;
-                                }
-                                *p = '\0';
-                                strcat(json_result, "\"");
-                            }
-                        } else {
-                            strcat(json_result, "null");
-                        }
-                    }
-                    strcat(json_result, "}");
-                }
-                strcat(json_result, "]");
-
-                sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
-                free(json_result);
             }
+
+            char *json_result = malloc(buffer_size);
+            if (!json_result) {
+                sqlite3_result_error(context, "Memory allocation failed for result formatting", -1);
+                cypher_result_free(result);
+                return;
+            }
+
+            strcpy(json_result, "[");
+
+            for (int row = 0; row < result->row_count; row++) {
+                if (row > 0) strcat(json_result, ",");
+                strcat(json_result, "{");
+
+                for (int col = 0; col < result->column_count; col++) {
+                    if (col > 0) strcat(json_result, ",");
+
+                    strcat(json_result, "\"");
+                    if (result->column_names && result->column_names[col]) {
+                        strcat(json_result, result->column_names[col]);
+                    } else {
+                        char col_name[32];
+                        snprintf(col_name, sizeof(col_name), "column_%d", col);
+                        strcat(json_result, col_name);
+                    }
+                    strcat(json_result, "\":");
+
+                    if (result->data[row][col]) {
+                        const char *val = result->data[row][col];
+                        /* Get SQLite type if available */
+                        int col_type = SQLITE_TEXT;
+                        if (result->data_types && result->data_types[row]) {
+                            col_type = result->data_types[row][col];
+                        }
+
+                        /* Check if value is already JSON (starts with [ or {) */
+                        if (val[0] == '[' || val[0] == '{') {
+                            strcat(json_result, val);
+                        } else if (col_type == SQLITE_INTEGER || col_type == SQLITE_FLOAT) {
+                            /* Numeric value - output without quotes */
+                            strcat(json_result, val);
+                        } else {
+                            /* String value - quote and escape */
+                            strcat(json_result, "\"");
+                            char *p = json_result + strlen(json_result);
+                            while (*val) {
+                                if (*val == '"' || *val == '\\') {
+                                    *p++ = '\\';
+                                }
+                                *p++ = *val++;
+                            }
+                            *p = '\0';
+                            strcat(json_result, "\"");
+                        }
+                    } else {
+                        strcat(json_result, "null");
+                    }
+                }
+                strcat(json_result, "}");
+            }
+            strcat(json_result, "]");
+
+            sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
+            free(json_result);
         } else if (result->column_count > 0) {
             /* Query with RETURN clause but zero rows - return empty array */
             sqlite3_result_text(context, "[]", -1, SQLITE_STATIC);

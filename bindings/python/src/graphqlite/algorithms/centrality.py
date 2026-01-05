@@ -3,7 +3,7 @@
 from typing import Any
 
 from ..graph._base import BaseMixin
-from ._parsing import safe_float, safe_int
+from ._parsing import extract_algo_array, safe_float, safe_int
 
 
 class CentralityMixin(BaseMixin):
@@ -28,9 +28,10 @@ class CentralityMixin(BaseMixin):
         result = self._conn.cypher(
             f"RETURN pageRank({damping}, {iterations})"
         )
+        rows = extract_algo_array(result)
 
         ranks = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             score = row.get("score")
@@ -54,9 +55,10 @@ class CentralityMixin(BaseMixin):
             'out_degree', 'degree'
         """
         result = self._conn.cypher("RETURN degreeCentrality()")
+        rows = extract_algo_array(result)
 
         degrees = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             in_degree = row.get("in_degree")
@@ -86,9 +88,10 @@ class CentralityMixin(BaseMixin):
             where score is the betweenness centrality value
         """
         result = self._conn.cypher("RETURN betweennessCentrality()")
+        rows = extract_algo_array(result)
 
         scores = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             score = row.get("score")
@@ -118,9 +121,10 @@ class CentralityMixin(BaseMixin):
             where score is the closeness centrality value (0 to 1)
         """
         result = self._conn.cypher("RETURN closenessCentrality()")
+        rows = extract_algo_array(result)
 
         scores = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             score = row.get("score")
@@ -156,9 +160,10 @@ class CentralityMixin(BaseMixin):
         """
         query = f"RETURN eigenvectorCentrality({iterations})"
         result = self._conn.cypher(query)
+        rows = extract_algo_array(result)
 
         scores = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             score = row.get("score")

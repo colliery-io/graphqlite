@@ -1,7 +1,7 @@
 """Connected components algorithms mixin."""
 
 from ..graph._base import BaseMixin
-from ._parsing import safe_int
+from ._parsing import extract_algo_array, safe_int
 
 
 class ComponentsMixin(BaseMixin):
@@ -19,9 +19,10 @@ class ComponentsMixin(BaseMixin):
             where nodes in the same component share the same component number
         """
         result = self._conn.cypher("RETURN wcc()")
+        rows = extract_algo_array(result)
 
         components = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             component = row.get("component")
@@ -52,9 +53,10 @@ class ComponentsMixin(BaseMixin):
             where nodes in the same SCC share the same component number
         """
         result = self._conn.cypher("RETURN scc()")
+        rows = extract_algo_array(result)
 
         components = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             component = row.get("component")

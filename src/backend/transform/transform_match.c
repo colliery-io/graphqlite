@@ -33,9 +33,13 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
 {
     static char id_ref_buf[256];
 
-    /* Check if this is a projected variable */
-    if (var_name && transform_var_is_projected(ctx->var_ctx, var_name)) {
-        /* For projected variables, the alias IS the id value */
+    /* Check if this is a projected variable or a post-WITH node/edge (alias_is_id) */
+    bool skip_id_suffix = var_name &&
+        (transform_var_is_projected(ctx->var_ctx, var_name) ||
+         transform_var_alias_is_id(ctx->var_ctx, var_name));
+
+    if (skip_id_suffix) {
+        /* For projected variables or post-WITH variables, the alias IS the id value */
         snprintf(id_ref_buf, sizeof(id_ref_buf), "%s", alias);
     } else {
         /* For regular nodes, use alias.id */
@@ -447,9 +451,11 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             if (node->variable) {
                 transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
                 if (var) {
-                    /* Variable exists - check if it's from WITH (projected) */
-                    if (var->kind == VAR_KIND_PROJECTED) {
-                        /* Projected variable from WITH - use the CTE, don't add nodes table */
+                    /* Variable exists - check if it's from WITH (projected or alias_is_id) */
+                    bool is_from_with = (var->kind == VAR_KIND_PROJECTED) ||
+                                       transform_var_alias_is_id(ctx->var_ctx, node->variable);
+                    if (is_from_with) {
+                        /* Variable from WITH - use the CTE, don't add nodes table */
                         alias = transform_var_get_alias(ctx->var_ctx, node->variable);
                         if (!alias) {
                             ctx->has_error = true;

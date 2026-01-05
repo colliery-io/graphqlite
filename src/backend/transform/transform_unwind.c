@@ -174,9 +174,64 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         }
 
         dbuf_appendf(&cte_query, "json_each(%s)", alias ? alias : id->name);
+    } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL) {
+        /* Function call that returns a list (e.g., range(), keys(), etc.) */
+        /* Transform the function expression to SQL, then use json_each on the result */
+
+        /* Save current SQL buffer state */
+        char *saved_buffer = ctx->sql_buffer;
+        size_t saved_size = ctx->sql_size;
+        size_t saved_capacity = ctx->sql_capacity;
+
+        /* Allocate temporary buffer for expression transformation */
+        size_t temp_capacity = 4096;
+        char *temp_buffer = malloc(temp_capacity);
+        if (!temp_buffer) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Memory allocation failed in UNWIND");
+            dbuf_free(&cte_query);
+            free(inner_sql);
+            return -1;
+        }
+        temp_buffer[0] = '\0';
+
+        /* Switch to temporary buffer */
+        ctx->sql_buffer = temp_buffer;
+        ctx->sql_size = 0;
+        ctx->sql_capacity = temp_capacity;
+
+        /* Transform the function call expression */
+        if (transform_expression(ctx, unwind->expr) < 0) {
+            free(temp_buffer);
+            ctx->sql_buffer = saved_buffer;
+            ctx->sql_size = saved_size;
+            ctx->sql_capacity = saved_capacity;
+            dbuf_free(&cte_query);
+            free(inner_sql);
+            return -1;
+        }
+
+        /* Capture the transformed function SQL */
+        char *func_sql = strdup(ctx->sql_buffer);
+
+        /* Restore original buffer */
+        free(temp_buffer);
+        ctx->sql_buffer = saved_buffer;
+        ctx->sql_size = saved_size;
+        ctx->sql_capacity = saved_capacity;
+
+        /* Build json_each query on the function result */
+        dbuf_append(&cte_query, "SELECT json_each.value AS value FROM ");
+
+        if (inner_sql && strlen(inner_sql) > 0) {
+            dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
+        }
+
+        dbuf_appendf(&cte_query, "json_each(%s)", func_sql);
+        free(func_sql);
     } else {
         ctx->has_error = true;
-        ctx->error_message = strdup("UNWIND requires list literal, property access, or variable");
+        ctx->error_message = strdup("UNWIND requires list literal, property access, variable, or function call");
         dbuf_free(&cte_query);
         free(inner_sql);
         return -1;
