@@ -16,6 +16,11 @@ jobs:
             artifact-name: graphqlite-linux-x86_64.so
             cli-artifact: gqlite
             cli-artifact-name: gqlite-linux-x86_64
+          - os: ubuntu-24.04-arm
+            artifact: graphqlite.so
+            artifact-name: graphqlite-linux-aarch64.so
+            cli-artifact: gqlite
+            cli-artifact-name: gqlite-linux-aarch64
           - os: macos-14
             arch: arm64
             artifact: graphqlite.dylib
@@ -177,6 +182,10 @@ jobs:
             artifact: graphqlite-linux-x86_64.so
             extension: graphqlite.so
             wheel_tag: manylinux_2_17_x86_64.manylinux2014_x86_64
+          - os: ubuntu-24.04-arm
+            artifact: graphqlite-linux-aarch64.so
+            extension: graphqlite.so
+            wheel_tag: manylinux_2_28_aarch64
           - os: macos-14
             artifact: graphqlite-macos-arm64.dylib
             extension: graphqlite.dylib
@@ -310,11 +319,13 @@ jobs:
           mkdir -p release-assets
           # Copy extension binaries
           cp artifacts/graphqlite-linux-x86_64.so/graphqlite-linux-x86_64.so release-assets/
+          cp artifacts/graphqlite-linux-aarch64.so/graphqlite-linux-aarch64.so release-assets/
           cp artifacts/graphqlite-macos-arm64.dylib/graphqlite-macos-arm64.dylib release-assets/
           cp artifacts/graphqlite-macos-x86_64.dylib/graphqlite-macos-x86_64.dylib release-assets/
           cp artifacts/graphqlite-windows-x86_64.dll/graphqlite-windows-x86_64.dll release-assets/
           # Copy CLI binaries
           cp artifacts/gqlite-linux-x86_64/gqlite-linux-x86_64 release-assets/
+          cp artifacts/gqlite-linux-aarch64/gqlite-linux-aarch64 release-assets/
           cp artifacts/gqlite-macos-arm64/gqlite-macos-arm64 release-assets/
           cp artifacts/gqlite-macos-x86_64/gqlite-macos-x86_64 release-assets/
           cp artifacts/gqlite-windows-x86_64.exe/gqlite-windows-x86_64.exe release-assets/
