@@ -1,36 +1,35 @@
 ---
-id: unwind-does-not-support-function
+id: add-from-token-and-grammar-rule-to
 level: task
-title: "UNWIND does not support function calls like range()"
-short_code: "GQLITE-T-0087"
-created_at: 2026-01-05T01:19:28.236966+00:00
-updated_at: 2026-01-05T01:19:28.236966+00:00
-parent: 
+title: "Add FROM token and grammar rule to parser"
+short_code: "GQLITE-T-0078"
+created_at: 2026-01-03T15:38:26.838253+00:00
+updated_at: 2026-01-03T15:55:03.253784+00:00
+parent: GQLITE-I-0022
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
-  - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0022
 ---
 
-# UNWIND does not support function calls like range()
+# Add FROM token and grammar rule to parser
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0022]]
 
 ## Objective **[REQUIRED]**
 
-Enable UNWIND to accept function calls that return lists (e.g., `UNWIND range(1, 5) AS n`).
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -49,11 +48,12 @@ Enable UNWIND to accept function calls that return lists (e.g., `UNWIND range(1,
 - [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: Users using UNWIND with dynamic ranges
+- **Affected Users**: {Number/percentage of users affected}
 - **Reproduction Steps**: 
-  1. Run: `UNWIND range(1, 5) AS n RETURN n`
-- **Expected vs Actual**: Should return 5 rows. Actually returns error: `UNWIND requires list literal, property access, or variable`
-- **Workaround**: Use list literal: `UNWIND [1,2,3,4,5] AS n RETURN n`
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -64,6 +64,12 @@ Enable UNWIND to accept function calls that return lists (e.g., `UNWIND range(1,
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -124,10 +130,10 @@ Enable UNWIND to accept function calls that return lists (e.g., `UNWIND range(1,
 {Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-Update `src/backend/transform/transform_unwind.c` to handle AST_NODE_FUNCTION_CALL expressions that return lists.
+{How this will be implemented}
 
 ### Dependencies
-None
+{Other tasks or systems this depends on}
 
 ### Risk Considerations
 {Technical risks and mitigation strategies}

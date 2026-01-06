@@ -1,36 +1,35 @@
 ---
-id: with-clause-property-access
+id: rust-graphmanager-implementation
 level: task
-title: "WITH clause property access returns node ID instead of value"
-short_code: "GQLITE-T-0088"
-created_at: 2026-01-05T01:19:28.339318+00:00
-updated_at: 2026-01-05T01:19:28.339318+00:00
-parent: 
+title: "Rust GraphManager implementation"
+short_code: "GQLITE-T-0082"
+created_at: 2026-01-03T15:38:27.156815+00:00
+updated_at: 2026-01-04T14:26:34.683343+00:00
+parent: GQLITE-I-0022
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
-  - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0022
 ---
 
-# WITH clause property access returns node ID instead of value
+# Rust GraphManager implementation
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0022]]
 
 ## Objective **[REQUIRED]**
 
-Fix WITH clause to properly handle node variable projection so that subsequent property access returns actual values, not node IDs.
+{Clear statement of what this task accomplishes}
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -49,11 +48,12 @@ Fix WITH clause to properly handle node variable projection so that subsequent p
 - [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: Users using WITH to pass node variables with subsequent filtering
+- **Affected Users**: {Number/percentage of users affected}
 - **Reproduction Steps**: 
-  1. Run: `MATCH (n:Person) WITH n WHERE n.age > 26 RETURN n.name`
-- **Expected vs Actual**: Should return names like "Alice", "Charlie". Actually returns node IDs like 1, 3
-- **Workaround**: Move WHERE before WITH and project properties directly: `MATCH (n:Person) WHERE n.age > 26 WITH n.name AS name RETURN name`
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -64,6 +64,12 @@ Fix WITH clause to properly handle node variable projection so that subsequent p
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -124,10 +130,10 @@ Fix WITH clause to properly handle node variable projection so that subsequent p
 {Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-Fix in `src/backend/transform/transform_with.c` - need to track that projected node variables require property lookup in subsequent clauses, not direct column reference.
+{How this will be implemented}
 
 ### Dependencies
-None
+{Other tasks or systems this depends on}
 
 ### Risk Considerations
 {Technical risks and mitigation strategies}

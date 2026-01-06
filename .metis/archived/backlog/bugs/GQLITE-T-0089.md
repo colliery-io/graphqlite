@@ -1,18 +1,18 @@
 ---
-id: list-function-results-lose-column
+id: keys-function-sql-generation-uses
 level: task
-title: "List function results lose column aliases in RETURN"
-short_code: "GQLITE-T-0086"
-created_at: 2026-01-05T01:19:28.139813+00:00
-updated_at: 2026-01-05T01:19:28.139813+00:00
+title: "keys() function SQL generation uses broken EXISTS with UNION ALL"
+short_code: "GQLITE-T-0089"
+created_at: 2026-01-05T14:30:55.659606+00:00
+updated_at: 2026-01-05T15:15:21.710597+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# List function results lose column aliases in RETURN
+# keys() function SQL generation uses broken EXISTS with UNION ALL
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -28,48 +28,59 @@ initiative_id: NULL
 
 [[Parent Initiative]]
 
-## Objective **[REQUIRED]**
+## Objective
 
-Fix list-returning functions (range, tail, split) to preserve column aliases in RETURN clause output.
+Fix the `keys()` function to return the correct list of property keys for a node.
 
-## Backlog Item Details **[CONDITIONAL: Backlog Item]**
-
-{Delete this section when task is assigned to an initiative}
+## Backlog Item Details
 
 ### Type
-- [ ] Bug - Production issue that needs fixing
-- [ ] Feature - New functionality or enhancement  
-- [ ] Tech Debt - Code improvement or refactoring
-- [ ] Chore - Maintenance or setup work
+- [x] Bug - Production issue that needs fixing
 
 ### Priority
-- [ ] P0 - Critical (blocks users/revenue)
-- [ ] P1 - High (important for user experience)
 - [ ] P2 - Medium (nice to have)
-- [ ] P3 - Low (when time permits)
 
-### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: Users returning list functions with aliases
+### Impact Assessment
+- **Affected Users**: Any user calling keys(n) on a node
 - **Reproduction Steps**: 
-  1. Run: `RETURN range(0, 5) AS result`
-- **Expected vs Actual**: Should return `[{"result": [0,1,2,3,4,5]}]`. Actually returns raw array `[0,1,2,3,4,5]` which Rust binding parses as 6 rows with column "value"
-- **Affected Functions**: range(), tail(), split(), reverse() on lists
+  1. `CREATE (n:Person {name: "Alice", age: 30})`
+  2. `MATCH (n:Person) RETURN keys(n)`
+  3. Returns `[]` instead of `["name", "age"]`
+- **Expected vs Actual**: 
+  - Expected: `["name", "age"]`
+  - Actual: `[]` (empty array)
 
-### Business Justification **[CONDITIONAL: Feature]**
-- **User Value**: {Why users need this}
-- **Business Value**: {Impact on metrics/revenue}
-- **Effort Estimate**: {Rough size - S/M/L/XL}
+### Root Cause
 
-### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
-- **Current Problems**: {What's difficult/slow/buggy now}
-- **Benefits of Fixing**: {What improves after refactoring}
-- **Risk Assessment**: {Risks of not addressing this}
+The generated SQL uses `EXISTS (SELECT 1 ... UNION ALL SELECT 1 ...)` pattern which doesn't work correctly in SQLite:
 
-## Acceptance Criteria **[REQUIRED]**
+```sql
+-- BROKEN (current implementation):
+EXISTS (SELECT 1 FROM node_props_text WHERE node_id = n.id AND key_id = pk.id 
+        UNION ALL 
+        SELECT 1 FROM node_props_int WHERE node_id = n.id AND key_id = pk.id)
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+-- WORKING (should be):
+EXISTS (SELECT 1 FROM node_props_text WHERE node_id = n.id AND key_id = pk.id)
+OR EXISTS (SELECT 1 FROM node_props_int WHERE node_id = n.id AND key_id = pk.id)
+```
+
+### File Location
+- `src/backend/transform/transform_func_entity.c` - `transform_keys_function()`
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [ ] `MATCH (n:Person) RETURN keys(n)` returns correct property keys
+- [ ] `MATCH (n) UNWIND keys(n) AS key RETURN key` works correctly
+- [ ] Regression test added for keys() function
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -124,14 +135,20 @@ Fix list-returning functions (range, tail, split) to preserve column aliases in 
 {Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-Fix in `src/backend/transform/transform_return.c` - auto-alias code exists but isn't being reached for function calls. May also need changes in `src/backend/executor/query_dispatch.c`.
+{How this will be implemented}
 
 ### Dependencies
-None
+{Other tasks or systems this depends on}
 
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
 ## Status Updates **[REQUIRED]**
 
-*To be added during implementation*
+### 2026-01-05: Completed
+- Fixed SQL generation in `transform_func_entity.c` for both `keys()` and `properties()` functions
+- Changed `EXISTS (... UNION ALL ...)` pattern to use separate `EXISTS ... OR EXISTS ...` checks
+- SQLite doesn't handle EXISTS with UNION ALL correctly
+- Added regression test `test_keys_function_regression`
+- All 761 C unit tests pass
+- Committed as 977d5e1

@@ -1,60 +1,81 @@
 ---
-id: variable-length-paths-in-match
+id: python-graphmanager-implementation
 level: task
-title: "Variable-length paths in MATCH+RETURN queries cause syntax error"
-short_code: "GQLITE-T-0084"
-created_at: 2026-01-04T15:19:14.677175+00:00
-updated_at: 2026-01-04T15:19:14.677175+00:00
-parent: 
+title: "Python GraphManager implementation"
+short_code: "GQLITE-T-0081"
+created_at: 2026-01-03T15:38:27.073761+00:00
+updated_at: 2026-01-04T14:26:34.601767+00:00
+parent: GQLITE-I-0022
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
-  - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: NULL
+initiative_id: GQLITE-I-0022
 ---
 
-# Variable-length paths in MATCH+RETURN queries cause syntax error
+# Python GraphManager implementation
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[Parent Initiative]]
+[[GQLITE-I-0022]]
 
-## Objective
+## Objective **[REQUIRED]**
 
-Fix the parser/query dispatch to properly handle variable-length path patterns (e.g., `[:KNOWS*]`) in MATCH+RETURN queries.
+{Clear statement of what this task accomplishes}
 
-## Backlog Item Details
+## Backlog Item Details **[CONDITIONAL: Backlog Item]**
+
+{Delete this section when task is assigned to an initiative}
 
 ### Type
-- [x] Bug - Production issue that needs fixing
+- [ ] Bug - Production issue that needs fixing
+- [ ] Feature - New functionality or enhancement  
+- [ ] Tech Debt - Code improvement or refactoring
+- [ ] Chore - Maintenance or setup work
 
 ### Priority
+- [ ] P0 - Critical (blocks users/revenue)
+- [ ] P1 - High (important for user experience)
 - [ ] P2 - Medium (nice to have)
+- [ ] P3 - Low (when time permits)
 
-### Impact Assessment
-- **Affected Users**: Users attempting to traverse graphs with variable-length paths
+### Impact Assessment **[CONDITIONAL: Bug]**
+- **Affected Users**: {Number/percentage of users affected}
 - **Reproduction Steps**: 
-  1. Create nodes and relationships: `CREATE (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)`
-  2. Run: `MATCH path = (a:Person)-[:KNOWS*]->(end) RETURN end.name`
-  3. Observe syntax error
-- **Expected vs Actual**: 
-  - Expected: Query returns all nodes reachable via KNOWS relationships
-  - Actual: `Query failed: Line 1: syntax error, unexpected END_P, expecting ')'`
+  1. {Step 1}
+  2. {Step 2}
+  3. {Step 3}
+- **Expected vs Actual**: {What should happen vs what happens}
+
+### Business Justification **[CONDITIONAL: Feature]**
+- **User Value**: {Why users need this}
+- **Business Value**: {Impact on metrics/revenue}
+- **Effort Estimate**: {Rough size - S/M/L/XL}
+
+### Technical Debt Impact **[CONDITIONAL: Tech Debt]**
+- **Current Problems**: {What's difficult/slow/buggy now}
+- **Benefits of Fixing**: {What improves after refactoring}
+- **Risk Assessment**: {Risks of not addressing this}
 
 ## Acceptance Criteria
 
-- [ ] `MATCH path = (a)-[:REL*]->(b) RETURN b` executes without syntax error
-- [ ] Variable-length path with bounds works: `[:REL*1..3]`
-- [ ] CLI test added to verify this functionality
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria **[REQUIRED]**
+
+- [ ] {Specific, testable requirement 1}
+- [ ] {Specific, testable requirement 2}
+- [ ] {Specific, testable requirement 3}
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -104,18 +125,18 @@ Fix the parser/query dispatch to properly handle variable-length path patterns (
 - **Example Request**: {Code example}
 - **Example Response**: {Expected response format}
 
-## Implementation Notes
+## Implementation Notes **[CONDITIONAL: Technical Task]**
+
+{Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-The parser likely handles `[:RELTYPE*]` syntax, but the query dispatch system (`query_dispatch.c`) may not properly handle path variables in MATCH+RETURN patterns. Investigation needed in:
-- `src/backend/executor/query_dispatch.c` - Pattern matching for MATCH+RETURN
-- `src/backend/parser/cypher_gram.y` - Variable-length path grammar rules
+{How this will be implemented}
 
 ### Dependencies
-None
+{Other tasks or systems this depends on}
 
 ### Risk Considerations
-Low risk - this is additive functionality
+{Technical risks and mitigation strategies}
 
 ## Status Updates **[REQUIRED]**
 

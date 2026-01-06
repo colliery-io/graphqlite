@@ -1,35 +1,36 @@
 ---
-id: python-graphmanager-implementation
+id: unwind-does-not-support-function
 level: task
-title: "Python GraphManager implementation"
-short_code: "GQLITE-T-0081"
-created_at: 2026-01-03T15:38:27.073761+00:00
-updated_at: 2026-01-04T14:26:34.601767+00:00
-parent: GQLITE-I-0022
+title: "UNWIND does not support function calls like range()"
+short_code: "GQLITE-T-0087"
+created_at: 2026-01-05T01:19:28.236966+00:00
+updated_at: 2026-01-05T14:54:06.739729+00:00
+parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
+  - "#bug"
   - "#phase/completed"
 
 
 exit_criteria_met: false
 strategy_id: NULL
-initiative_id: GQLITE-I-0022
+initiative_id: NULL
 ---
 
-# Python GraphManager implementation
+# UNWIND does not support function calls like range()
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
-[[GQLITE-I-0022]]
+[[Parent Initiative]]
 
 ## Objective **[REQUIRED]**
 
-{Clear statement of what this task accomplishes}
+Enable UNWIND to accept function calls that return lists (e.g., `UNWIND range(1, 5) AS n`).
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -48,12 +49,11 @@ initiative_id: GQLITE-I-0022
 - [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: {Number/percentage of users affected}
+- **Affected Users**: Users using UNWIND with dynamic ranges
 - **Reproduction Steps**: 
-  1. {Step 1}
-  2. {Step 2}
-  3. {Step 3}
-- **Expected vs Actual**: {What should happen vs what happens}
+  1. Run: `UNWIND range(1, 5) AS n RETURN n`
+- **Expected vs Actual**: Should return 5 rows. Actually returns error: `UNWIND requires list literal, property access, or variable`
+- **Workaround**: Use list literal: `UNWIND [1,2,3,4,5] AS n RETURN n`
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -64,6 +64,10 @@ initiative_id: GQLITE-I-0022
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
@@ -128,10 +132,10 @@ initiative_id: GQLITE-I-0022
 {Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-{How this will be implemented}
+Update `src/backend/transform/transform_unwind.c` to handle AST_NODE_FUNCTION_CALL expressions that return lists.
 
 ### Dependencies
-{Other tasks or systems this depends on}
+None
 
 ### Risk Considerations
 {Technical risks and mitigation strategies}

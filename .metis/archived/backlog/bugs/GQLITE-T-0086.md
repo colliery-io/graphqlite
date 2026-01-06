@@ -1,18 +1,18 @@
 ---
-id: simple-case-syntax-not-supported
+id: list-function-results-lose-column
 level: task
-title: "Simple CASE syntax not supported (CASE expr WHEN)"
-short_code: "GQLITE-T-0085"
-created_at: 2026-01-05T01:19:28.046936+00:00
-updated_at: 2026-01-05T01:19:28.046936+00:00
+title: "List function results lose column aliases in RETURN"
+short_code: "GQLITE-T-0086"
+created_at: 2026-01-05T01:19:28.139813+00:00
+updated_at: 2026-01-05T14:53:19.002168+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -20,7 +20,7 @@ strategy_id: NULL
 initiative_id: NULL
 ---
 
-# Simple CASE syntax not supported (CASE expr WHEN)
+# List function results lose column aliases in RETURN
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -30,7 +30,7 @@ initiative_id: NULL
 
 ## Objective **[REQUIRED]**
 
-Support simple CASE syntax (`CASE expr WHEN value THEN result END`) in addition to searched CASE syntax.
+Fix list-returning functions (range, tail, split) to preserve column aliases in RETURN clause output.
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -49,11 +49,11 @@ Support simple CASE syntax (`CASE expr WHEN value THEN result END`) in addition 
 - [ ] P3 - Low (when time permits)
 
 ### Impact Assessment **[CONDITIONAL: Bug]**
-- **Affected Users**: Users trying to use standard Cypher CASE syntax
+- **Affected Users**: Users returning list functions with aliases
 - **Reproduction Steps**: 
-  1. Run: `MATCH (n:Person) RETURN CASE n.status WHEN 'active' THEN 1 ELSE 0 END`
-- **Expected vs Actual**: Should return 1 or 0 based on status. Actually returns: `syntax error, unexpected IDENTIFIER, expecting WHEN`
-- **Workaround**: Use searched CASE: `CASE WHEN n.status = 'active' THEN 1 ELSE 0 END`
+  1. Run: `RETURN range(0, 5) AS result`
+- **Expected vs Actual**: Should return `[{"result": [0,1,2,3,4,5]}]`. Actually returns raw array `[0,1,2,3,4,5]` which Rust binding parses as 6 rows with column "value"
+- **Affected Functions**: range(), tail(), split(), reverse() on lists
 
 ### Business Justification **[CONDITIONAL: Feature]**
 - **User Value**: {Why users need this}
@@ -64,6 +64,14 @@ Support simple CASE syntax (`CASE expr WHEN value THEN result END`) in addition 
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -124,14 +132,28 @@ Support simple CASE syntax (`CASE expr WHEN value THEN result END`) in addition 
 {Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-Add grammar rules in `src/backend/parser/cypher_gram.y` for simple CASE expression.
+Fix in `src/backend/transform/transform_return.c` - auto-alias code exists but isn't being reached for function calls. May also need changes in `src/backend/executor/query_dispatch.c`.
 
 ### Dependencies
-None - parser change only
+None
 
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
 ## Status Updates **[REQUIRED]**
 
-*To be added during implementation*
+### 2026-01-05: Fixed
+
+**Root Cause**: `src/extension.c` had a special case (lines 221-225) that returned single-cell JSON arrays directly without the column name wrapper:
+```c
+if (result->row_count == 1 && result->column_count == 1 &&
+    result->data[0][0] && result->data[0][0][0] == '[') {
+    sqlite3_result_text(context, result->data[0][0], -1, SQLITE_TRANSIENT);
+}
+```
+
+**Fix**: Removed this special case so all results go through the standard formatting path that includes column names.
+
+**Commit**: `422284f` - "Fix list function results losing column aliases in RETURN"
+
+**Regression Test**: Added `test_list_function_alias_regression` in `tests/test_executor_functions.c`

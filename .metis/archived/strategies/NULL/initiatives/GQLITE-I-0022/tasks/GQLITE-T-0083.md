@@ -1,13 +1,13 @@
 ---
-id: add-from-token-and-grammar-rule-to
+id: multi-graph-documentation-and
 level: task
-title: "Add FROM token and grammar rule to parser"
-short_code: "GQLITE-T-0078"
-created_at: 2026-01-03T15:38:26.838253+00:00
-updated_at: 2026-01-03T15:55:03.253784+00:00
+title: "Multi-graph documentation and examples"
+short_code: "GQLITE-T-0083"
+created_at: 2026-01-03T15:38:27.243358+00:00
+updated_at: 2026-01-04T14:34:15.423314+00:00
 parent: GQLITE-I-0022
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,7 +19,7 @@ strategy_id: NULL
 initiative_id: GQLITE-I-0022
 ---
 
-# Add FROM token and grammar rule to parser
+# Multi-graph documentation and examples
 
 *This template includes sections for various types of tasks. Delete sections that don't apply to your specific use case.*
 
@@ -64,6 +64,8 @@ initiative_id: GQLITE-I-0022
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

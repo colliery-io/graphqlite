@@ -7,7 +7,7 @@ created_at: 2025-12-25T20:16:11.339561+00:00
 updated_at: 2026-01-04T14:34:29.624102+00:00
 parent: GQLITE-V-0001
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#initiative"
