@@ -69,6 +69,7 @@ Detects communities by propagating labels through the network.
 ```cypher
 RETURN labelPropagation()
 RETURN labelPropagation(10)  -- max iterations
+RETURN communities()         -- alias
 ```
 
 **Returns**: `[{"node_id": int, "user_id": string, "community": int}, ...]`

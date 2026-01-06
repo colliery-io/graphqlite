@@ -52,6 +52,73 @@ path = graphqlite.loadable_path()
 
 **Returns**: str
 
+### graphqlite.wrap()
+
+Wrap an existing sqlite3 connection with GraphQLite support.
+
+```python
+import sqlite3
+import graphqlite
+
+conn = sqlite3.connect(":memory:")
+wrapped = graphqlite.wrap(conn)
+results = wrapped.cypher("RETURN 1 AS x")
+```
+
+**Parameters**:
+- `conn` - sqlite3.Connection object
+- `extension_path` (str, optional) - Path to extension file
+
+**Returns**: `Connection`
+
+### graphqlite.graph()
+
+Factory function to create a Graph instance.
+
+```python
+from graphqlite import graph
+
+g = graph(":memory:")
+g = graph("graph.db", namespace="myapp")
+```
+
+**Parameters**:
+- `db_path` (str) - Database path or `:memory:`
+- `namespace` (str, optional) - Graph namespace (default: "default")
+- `extension_path` (str, optional) - Path to extension file
+
+**Returns**: `Graph`
+
+## CypherResult Class
+
+Result container returned by `cypher()` queries.
+
+```python
+results = conn.cypher("MATCH (n:Person) RETURN n.name, n.age")
+
+# Length
+print(len(results))  # Number of rows
+
+# Indexing
+first_row = results[0]  # Get first row as dict
+
+# Iteration
+for row in results:
+    print(row["n.name"])
+
+# Column names
+print(results.columns)  # ["n.name", "n.age"]
+
+# Convert to list
+all_rows = results.to_list()  # List of dicts
+```
+
+**Properties**:
+- `columns` - List of column names
+
+**Methods**:
+- `to_list()` - Return all rows as a list of dictionaries
+
 ## Connection Class
 
 ### Connection.cypher()
@@ -264,38 +331,270 @@ results = g.connection.cypher(
 
 ### Algorithm Methods
 
-#### pagerank()
+#### Centrality Algorithms
+
+##### pagerank()
+
+Compute PageRank scores for all nodes.
 
 ```python
 results = g.pagerank(damping=0.85, iterations=20)
+# [{"node_id": "alice", "score": 0.25}, ...]
 ```
 
-#### degree_centrality()
+**Parameters**:
+- `damping` (float, default: 0.85) - Damping factor
+- `iterations` (int, default: 20) - Number of iterations
+
+##### degree_centrality()
+
+Compute in-degree, out-degree, and total degree for all nodes.
 
 ```python
 results = g.degree_centrality()
+# [{"node_id": "alice", "in_degree": 2, "out_degree": 3, "degree": 5}, ...]
 ```
 
-#### community_detection()
+##### betweenness_centrality()
+
+Compute betweenness centrality (how often a node lies on shortest paths).
+
+```python
+results = g.betweenness_centrality()
+# Alias: g.betweenness()
+```
+
+**Returns**: List of `{"node_id": str, "score": float}`
+
+##### closeness_centrality()
+
+Compute closeness centrality (average distance to all other nodes).
+
+```python
+results = g.closeness_centrality()
+# Alias: g.closeness()
+```
+
+**Returns**: List of `{"node_id": str, "score": float}`
+
+##### eigenvector_centrality()
+
+Compute eigenvector centrality (influence based on connections to high-scoring nodes).
+
+```python
+results = g.eigenvector_centrality(iterations=100)
+```
+
+**Parameters**:
+- `iterations` (int, default: 100) - Maximum iterations
+
+#### Community Detection
+
+##### community_detection()
+
+Detect communities using label propagation.
 
 ```python
 results = g.community_detection(iterations=10)
+# [{"node_id": "alice", "community": 1}, ...]
 ```
 
-#### shortest_path()
+**Parameters**:
+- `iterations` (int, default: 10) - Maximum iterations
+
+##### louvain()
+
+Detect communities using the Louvain algorithm (modularity optimization).
 
 ```python
-path = g.shortest_path("alice", "bob")
+results = g.louvain(resolution=1.0)
+```
+
+**Parameters**:
+- `resolution` (float, default: 1.0) - Higher values produce more communities
+
+##### leiden_communities()
+
+Detect communities using the Leiden algorithm.
+
+```python
+results = g.leiden_communities(resolution=1.0, random_seed=42)
+```
+
+**Parameters**:
+- `resolution` (float, default: 1.0) - Resolution parameter
+- `random_seed` (int, optional) - Random seed for reproducibility
+
+**Requires**: `graspologic>=3.0` (`pip install graspologic`)
+
+#### Connected Components
+
+##### weakly_connected_components()
+
+Find weakly connected components (ignoring edge direction).
+
+```python
+results = g.weakly_connected_components()
+# Aliases: g.connected_components(), g.wcc()
+```
+
+**Returns**: List of `{"node_id": str, "component": int}`
+
+##### strongly_connected_components()
+
+Find strongly connected components (respecting edge direction).
+
+```python
+results = g.strongly_connected_components()
+# Alias: g.scc()
+```
+
+**Returns**: List of `{"node_id": str, "component": int}`
+
+#### Path Finding
+
+##### shortest_path()
+
+Find the shortest path between two nodes using Dijkstra's algorithm.
+
+```python
+path = g.shortest_path("alice", "bob", weight_property="distance")
 # {"distance": 2, "path": ["alice", "carol", "bob"], "found": True}
+# Alias: g.dijkstra()
 ```
 
-Returns `{"path": [], "distance": None, "found": False}` if no path exists.
+**Parameters**:
+- `source_id` (str) - Starting node ID
+- `target_id` (str) - Ending node ID
+- `weight_property` (str, optional) - Edge property to use as weight
 
-#### connected_components()
+**Returns**: `{"path": list, "distance": float|None, "found": bool}`
+
+##### astar()
+
+Find the shortest path using A* algorithm with optional geographic heuristic.
 
 ```python
-components = g.connected_components()
+path = g.astar("alice", "bob", lat_prop="latitude", lon_prop="longitude")
+# Alias: g.a_star()
 ```
+
+**Parameters**:
+- `source_id` (str) - Starting node ID
+- `target_id` (str) - Ending node ID
+- `lat_prop` (str, optional) - Latitude property name for heuristic
+- `lon_prop` (str, optional) - Longitude property name for heuristic
+
+**Returns**: `{"path": list, "distance": float|None, "found": bool, "nodes_explored": int}`
+
+##### all_pairs_shortest_path()
+
+Compute shortest distances between all node pairs (Floyd-Warshall).
+
+```python
+results = g.all_pairs_shortest_path()
+# Alias: g.apsp()
+```
+
+**Returns**: List of `{"source": str, "target": str, "distance": float}`
+
+**Note**: O(n²) complexity. Use with caution on large graphs.
+
+#### Traversal
+
+##### bfs()
+
+Breadth-first search from a starting node.
+
+```python
+results = g.bfs("alice", max_depth=3)
+# Alias: g.breadth_first_search()
+```
+
+**Parameters**:
+- `start_id` (str) - Starting node ID
+- `max_depth` (int, default: -1) - Maximum depth (-1 for unlimited)
+
+**Returns**: List of `{"user_id": str, "depth": int, "order": int}`
+
+##### dfs()
+
+Depth-first search from a starting node.
+
+```python
+results = g.dfs("alice", max_depth=5)
+# Alias: g.depth_first_search()
+```
+
+**Parameters**:
+- `start_id` (str) - Starting node ID
+- `max_depth` (int, default: -1) - Maximum depth (-1 for unlimited)
+
+**Returns**: List of `{"user_id": str, "depth": int, "order": int}`
+
+#### Similarity
+
+##### node_similarity()
+
+Compute Jaccard similarity between node neighborhoods.
+
+```python
+# All pairs above threshold
+results = g.node_similarity(threshold=0.5)
+
+# Specific pair
+results = g.node_similarity(node1_id="alice", node2_id="bob")
+
+# Top-k most similar pairs
+results = g.node_similarity(top_k=10)
+```
+
+**Parameters**:
+- `node1_id` (str, optional) - First node ID
+- `node2_id` (str, optional) - Second node ID
+- `threshold` (float, default: 0.0) - Minimum similarity threshold
+- `top_k` (int, default: 0) - Return only top-k pairs (0 for all)
+
+**Returns**: List of `{"node1": str, "node2": str, "similarity": float}`
+
+##### knn()
+
+Find k-nearest neighbors for a node based on Jaccard similarity.
+
+```python
+results = g.knn("alice", k=10)
+```
+
+**Parameters**:
+- `node_id` (str) - Node to find neighbors for
+- `k` (int, default: 10) - Number of neighbors to return
+
+**Returns**: List of `{"neighbor": str, "similarity": float, "rank": int}`
+
+##### triangle_count()
+
+Count triangles and compute clustering coefficients.
+
+```python
+results = g.triangle_count()
+# Alias: g.triangles()
+```
+
+**Returns**: List of `{"node_id": str, "triangles": int, "clustering_coefficient": float}`
+
+#### Export
+
+##### to_rustworkx()
+
+Export the graph to a rustworkx PyDiGraph for use with rustworkx algorithms.
+
+```python
+graph, node_map = g.to_rustworkx()
+```
+
+**Returns**: Tuple of (rustworkx.PyDiGraph, dict mapping node IDs to indices)
+
+**Requires**: `rustworkx>=0.13` (`pip install rustworkx`)
 
 ### Batch Operations
 
@@ -492,3 +791,16 @@ from graphqlite import sanitize_rel_type
 
 safe = sanitize_rel_type("has-friend")  # "HAS_FRIEND"
 ```
+
+### CYPHER_RESERVED
+
+A set of reserved Cypher keywords that need special handling in queries.
+
+```python
+from graphqlite import CYPHER_RESERVED
+
+if my_label.upper() in CYPHER_RESERVED:
+    my_label = f"`{my_label}`"  # Quote reserved words
+```
+
+Contains keywords like: `MATCH`, `CREATE`, `RETURN`, `WHERE`, `AND`, `OR`, `NOT`, `IN`, `AS`, `WITH`, `ORDER`, `BY`, `LIMIT`, `SKIP`, `DELETE`, `SET`, `REMOVE`, `MERGE`, `ON`, `CASE`, `WHEN`, `THEN`, `ELSE`, `END`, `TRUE`, `FALSE`, `NULL`, etc.

@@ -7,7 +7,7 @@ pip install graphqlite
 ```
 
 This installs pre-built binaries for:
-- Linux (x86_64)
+- Linux (x86_64, aarch64)
 - macOS (arm64, x86_64)
 - Windows (x86_64)
 
@@ -17,7 +17,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphqlite = "0.1"
+graphqlite = "0.2"
 ```
 
 ## From Source

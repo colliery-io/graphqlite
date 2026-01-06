@@ -15,7 +15,7 @@ This creates `build/gqlite`.
 ## Usage
 
 ```bash
-# Interactive mode with default database
+# Interactive mode with default database (graphqlite.db)
 ./build/gqlite
 
 # Specify a database file

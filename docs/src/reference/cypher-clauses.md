@@ -12,6 +12,29 @@ MATCH (a)-[:KNOWS]->(b) RETURN a, b
 MATCH (n:Person {name: 'Alice'}) RETURN n
 ```
 
+### Shortest Path Patterns
+
+Find shortest paths between nodes:
+
+```cypher
+// Find a single shortest path
+MATCH p = shortestPath((a:Person {name: 'Alice'})-[*]-(b:Person {name: 'Bob'}))
+RETURN p, length(p)
+
+// Find all shortest paths (all paths with minimum length)
+MATCH p = allShortestPaths((a:Person)-[*]-(b:Person))
+WHERE a.name = 'Alice' AND b.name = 'Bob'
+RETURN p
+
+// With relationship type filter
+MATCH p = shortestPath((a)-[:KNOWS*]->(b))
+RETURN nodes(p), relationships(p)
+
+// With length constraints
+MATCH p = shortestPath((a)-[*..10]->(b))
+RETURN p
+```
+
 ### OPTIONAL MATCH
 
 Like MATCH, but returns NULL for non-matches (left join semantics):
@@ -135,6 +158,67 @@ Iterate and perform updates:
 ```cypher
 MATCH p = (start)-[*]->(end)
 FOREACH (n IN nodes(p) | SET n.visited = true)
+```
+
+### LOAD CSV
+
+Import data from CSV files:
+
+```cypher
+// With headers (access columns by name)
+LOAD CSV WITH HEADERS FROM 'file:///people.csv' AS row
+CREATE (n:Person {name: row.name, age: toInteger(row.age)})
+
+// Without headers (access columns by index)
+LOAD CSV FROM 'file:///data.csv' AS row
+CREATE (n:Item {id: row[0], value: row[1]})
+
+// Custom field terminator
+LOAD CSV WITH HEADERS FROM 'file:///data.tsv' AS row FIELDTERMINATOR '\t'
+CREATE (n:Record {field1: row.col1})
+```
+
+**Note**: File paths are relative to the current working directory. Use `file:///` prefix for local files.
+
+## Multi-Graph Queries
+
+### FROM Clause
+
+Query specific graphs when using GraphManager (multi-graph support):
+
+```cypher
+// Query a specific graph
+MATCH (n:Person) FROM social
+RETURN n.name
+
+// Combined with other clauses
+MATCH (p:Person) FROM social
+WHERE p.age > 21
+RETURN p.name, graph(p) AS source_graph
+```
+
+The `graph()` function returns which graph a node came from.
+
+## Combining Results
+
+### UNION
+
+Combine results from multiple queries, removing duplicates:
+
+```cypher
+MATCH (n:Person) WHERE n.city = 'NYC' RETURN n.name
+UNION
+MATCH (n:Person) WHERE n.age > 50 RETURN n.name
+```
+
+### UNION ALL
+
+Combine results keeping all rows (including duplicates):
+
+```cypher
+MATCH (a:Person)-[:KNOWS]->(b) RETURN b.name AS connection
+UNION ALL
+MATCH (a:Person)-[:WORKS_WITH]->(b) RETURN b.name AS connection
 ```
 
 ## Return Clause

@@ -15,6 +15,8 @@
 | `right(s, n)` | Last n characters | `right('hello', 2)` → `'lo'` |
 | `split(s, delim)` | Split into list | `split('a,b,c', ',')` → `['a','b','c']` |
 | `reverse(s)` | Reverse string | `reverse('hello')` → `'olleh'` |
+| `length(s)` | String length | `length('hello')` → `5` |
+| `size(s)` | String length (alias) | `size('hello')` → `5` |
 | `toString(x)` | Convert to string | `toString(123)` → `'123'` |
 
 ## String Predicates
@@ -39,6 +41,7 @@
 | `log10(n)` | Base-10 logarithm | `log10(100)` → `2` |
 | `exp(n)` | e^n | `exp(1)` → `2.718...` |
 | `rand()` | Random 0-1 | `rand()` → `0.42...` |
+| `random()` | Random 0-1 (alias) | `random()` → `0.42...` |
 | `pi()` | π constant | `pi()` → `3.14159...` |
 | `e()` | e constant | `e()` → `2.71828...` |
 
@@ -93,6 +96,7 @@
 |----------|-------------|---------|
 | `nodes(path)` | Get all nodes in path | `nodes(p)` |
 | `relationships(path)` | Get all relationships | `relationships(p)` |
+| `rels(path)` | Get all relationships (alias) | `rels(p)` |
 | `length(path)` | Path length (edges) | `length(p)` |
 
 ## Type Conversion
@@ -113,6 +117,7 @@
 | `time()` | Current time | `time()` |
 | `timestamp()` | Unix timestamp (ms) | `timestamp()` |
 | `localdatetime()` | Local datetime | `localdatetime()` |
+| `randomUUID()` | Generate random UUID | `randomUUID()` → `'550e8400-e29b-...'` |
 
 ## Predicate Functions
 
@@ -130,3 +135,78 @@
 | Function | Description | Example |
 |----------|-------------|---------|
 | `reduce(acc = init, x IN list \| expr)` | Fold/reduce | `reduce(s = 0, x IN [1,2,3] \| s + x)` → `6` |
+
+## CASE Expressions
+
+### Searched CASE
+
+Evaluates conditions in order and returns the first matching result:
+
+```cypher
+RETURN CASE
+    WHEN n.age < 18 THEN 'minor'
+    WHEN n.age < 65 THEN 'adult'
+    ELSE 'senior'
+END AS category
+```
+
+### Simple CASE
+
+Compares an expression against values:
+
+```cypher
+RETURN CASE n.status
+    WHEN 'A' THEN 'Active'
+    WHEN 'I' THEN 'Inactive'
+    WHEN 'P' THEN 'Pending'
+    ELSE 'Unknown'
+END AS status_name
+```
+
+## Comprehensions
+
+### List Comprehension
+
+Create lists by transforming or filtering:
+
+```cypher
+// Transform each element
+RETURN [x IN range(1, 5) | x * 2]
+// → [2, 4, 6, 8, 10]
+
+// Filter elements
+RETURN [x IN range(1, 10) WHERE x % 2 = 0]
+// → [2, 4, 6, 8, 10]
+
+// Filter and transform
+RETURN [x IN range(1, 10) WHERE x % 2 = 0 | x * x]
+// → [4, 16, 36, 64, 100]
+```
+
+### Pattern Comprehension
+
+Extract data from pattern matches within an expression:
+
+```cypher
+// Collect names of friends
+MATCH (p:Person)
+RETURN p.name, [(p)-[:KNOWS]->(friend) | friend.name] AS friends
+
+// With filtering
+RETURN [(p)-[:KNOWS]->(f:Person) WHERE f.age > 21 | f.name] AS adult_friends
+```
+
+### Map Projection
+
+Create maps by selecting properties from nodes:
+
+```cypher
+// Select specific properties
+MATCH (n:Person)
+RETURN n {.name, .age}
+// → {name: "Alice", age: 30}
+
+// Include computed values
+MATCH (n:Person)
+RETURN n {.name, status: 'active', upperName: toUpper(n.name)}
+```

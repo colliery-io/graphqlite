@@ -13,15 +13,24 @@ Cypher is a declarative graph query language originally developed by Neo4j. Grap
 | Node patterns | ✅ Full |
 | Relationship patterns | ✅ Full |
 | Variable-length paths | ✅ Full |
+| shortestPath/allShortestPaths | ✅ Full |
 | Parameterized queries | ✅ Full |
 | MATCH/OPTIONAL MATCH | ✅ Full |
 | CREATE/MERGE | ✅ Full |
 | SET/REMOVE/DELETE | ✅ Full |
 | WITH/UNWIND/FOREACH | ✅ Full |
+| LOAD CSV | ✅ Full |
+| UNION/UNION ALL | ✅ Full |
 | RETURN with modifiers | ✅ Full |
 | Aggregation functions | ✅ Full |
-| List comprehensions | ⚠️ Partial |
+| CASE expressions | ✅ Full |
+| List comprehensions | ✅ Full |
+| Pattern comprehensions | ✅ Full |
+| Map projections | ✅ Full |
+| Multi-graph (FROM clause) | ✅ Full |
+| Graph algorithms | ✅ 15+ built-in |
 | CALL procedures | ❌ Not supported |
+| CREATE INDEX/CONSTRAINT | ❌ Use SQLite |
 
 ## Pattern Syntax
 
@@ -70,7 +79,7 @@ See [Operators Reference](./cypher-operators.md) for comparison and logical oper
 GraphQLite implements standard Cypher with some differences from full implementations:
 
 1. **No CALL procedures** - Use built-in graph algorithm functions instead (e.g., `RETURN pageRank()`)
-2. **List comprehensions** - Basic support for `[x IN list | expr]` and `[x IN list WHERE pred | expr]`
-3. **No CREATE CONSTRAINT** - Use SQLite's constraint mechanisms
-4. **EXPLAIN supported** - Returns the generated SQL for debugging
-5. **UNION supported** - Combine results from multiple queries with `UNION` or `UNION ALL`
+2. **No CREATE INDEX/CONSTRAINT** - Use SQLite's indexing and constraint mechanisms directly
+3. **EXPLAIN supported** - Returns the generated SQL for debugging instead of a query plan
+4. **Multi-graph support** - Use the `FROM` clause to query specific graphs with GraphManager
+5. **Substring indexing** - Uses 0-based indexing (Cypher standard), automatically converted for SQLite
