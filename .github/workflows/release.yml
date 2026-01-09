@@ -14,28 +14,33 @@ jobs:
           - os: ubuntu-latest
             artifact: graphqlite.so
             artifact-name: graphqlite-linux-x86_64.so
+            rust-lib-name: graphqlite-linux-x86_64.so
             cli-artifact: gqlite
             cli-artifact-name: gqlite-linux-x86_64
           - os: ubuntu-24.04-arm
             artifact: graphqlite.so
             artifact-name: graphqlite-linux-aarch64.so
+            rust-lib-name: graphqlite-linux-aarch64.so
             cli-artifact: gqlite
             cli-artifact-name: gqlite-linux-aarch64
           - os: macos-14
             arch: arm64
             artifact: graphqlite.dylib
             artifact-name: graphqlite-macos-arm64.dylib
+            rust-lib-name: graphqlite-macos-aarch64.dylib
             cli-artifact: gqlite
             cli-artifact-name: gqlite-macos-arm64
           - os: macos-14
             arch: x86_64
             artifact: graphqlite.dylib
             artifact-name: graphqlite-macos-x86_64.dylib
+            rust-lib-name: graphqlite-macos-x86_64.dylib
             cli-artifact: gqlite
             cli-artifact-name: gqlite-macos-x86_64
           - os: windows-latest
             artifact: graphqlite.dll
             artifact-name: graphqlite-windows-x86_64.dll
+            rust-lib-name: graphqlite-windows-x86_64.dll
             cli-artifact: gqlite.exe
             cli-artifact-name: gqlite-windows-x86_64.exe
 
@@ -146,6 +151,13 @@ jobs:
       - name: Install Rust toolchain
         if: matrix.arch != 'x86_64'
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Copy extension to Rust libs
+        if: matrix.arch != 'x86_64'
+        shell: bash
+        run: |
+          mkdir -p bindings/rust/libs
+          cp build/${{ matrix.artifact }} bindings/rust/libs/${{ matrix.rust-lib-name }}
 
       - name: Test Rust bindings
         if: matrix.arch != 'x86_64'
@@ -292,36 +304,46 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # Vendor C sources into the crate for crates.io publishing
-      # The crate needs to be self-contained since crates.io doesn't have the full repo
-      - name: Vendor C sources for crate
+      # Download pre-built extension binaries for all platforms
+      - name: Download Linux x86_64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: graphqlite-linux-x86_64.so
+          path: bindings/rust/libs/
+
+      - name: Download Linux ARM64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: graphqlite-linux-aarch64.so
+          path: bindings/rust/libs/
+
+      - name: Download macOS ARM64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: graphqlite-macos-arm64.dylib
+          path: bindings/rust/libs/
+
+      - name: Download macOS x86_64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: graphqlite-macos-x86_64.dylib
+          path: bindings/rust/libs/
+
+      - name: Download Windows extension
+        uses: actions/download-artifact@v4
+        with:
+          name: graphqlite-windows-x86_64.dll
+          path: bindings/rust/libs/
+
+      - name: Rename extensions to expected names
+        working-directory: bindings/rust/libs
         run: |
-          cd bindings/rust
-          mkdir -p csrc/backend/parser csrc/backend/transform csrc/backend/executor
-          mkdir -p csrc/include csrc/generated csrc/vendor/sqlite
-
-          # Copy include headers
-          cp ../../src/include/*.h csrc/include/
-
-          # Copy parser sources
-          cp ../../src/backend/parser/*.c csrc/backend/parser/
-          cp ../../src/backend/parser/*.h csrc/backend/parser/
-
-          # Copy transform sources
-          cp ../../src/backend/transform/*.c csrc/backend/transform/
-
-          # Copy executor sources
-          cp ../../src/backend/executor/*.c csrc/backend/executor/
-
-          # Copy generated sources (pre-generated Flex/Bison output)
-          cp ../../src/generated/*.c csrc/generated/
-          cp ../../src/generated/*.h csrc/generated/
-
-          # Copy bundled init
-          cp ../../src/bundled_init.c csrc/
-
-          # Copy vendored SQLite headers
-          cp ../python/vendor/sqlite/*.h csrc/vendor/sqlite/
+          mv graphqlite-linux-x86_64.so graphqlite-linux-x86_64.so || true
+          mv graphqlite-linux-aarch64.so graphqlite-linux-aarch64.so || true
+          mv graphqlite-macos-arm64.dylib graphqlite-macos-aarch64.dylib
+          mv graphqlite-macos-x86_64.dylib graphqlite-macos-x86_64.dylib || true
+          mv graphqlite-windows-x86_64.dll graphqlite-windows-x86_64.dll || true
+          ls -la
 
       - name: Publish to crates.io
         working-directory: bindings/rust

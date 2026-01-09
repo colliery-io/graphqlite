@@ -1,6 +1,6 @@
 [package]
 name = "graphqlite"
-version = "0.2.1"
+version = "0.2.1-rc.1"
 edition = "2021"
 description = "SQLite extension for graph queries using Cypher"
 license = "MIT"
@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ["sqlite", "graph", "cypher", "database"]
 categories = ["database"]
 exclude = ["tests/", "target/"]
+include = ["src/**/*", "libs/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
