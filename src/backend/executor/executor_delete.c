@@ -20,28 +20,15 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
 
     CYPHER_DEBUG("Executing MATCH+DELETE query");
 
-    /* Step 1: Execute MATCH to find entities to delete */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
-    if (!ctx) {
-        set_result_error(result, "Failed to create transform context");
-        return -1;
-    }
-
-    /* Transform MATCH clause to build SELECT query */
-    if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
-        cypher_transform_free_context(ctx);
-        return -1;
-    }
-
     /* Following AGE's approach: execute MATCH first to get a result set,
-     * then iterate through each row and delete the specified entities */
+     * then iterate through each row and delete the specified entities.
+     * Note: We don't transform MATCH here - execute_match_return_query does that.
+     * Transforming twice would mutate the AST (GQLITE-T-0092). */
 
     /* Create a synthetic RETURN clause for the variables to delete */
     cypher_return *synthetic_return = calloc(1, sizeof(cypher_return));
     if (!synthetic_return) {
         set_result_error(result, "Failed to allocate memory for DELETE processing");
-        cypher_transform_free_context(ctx);
         return -1;
     }
 
@@ -75,7 +62,6 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
     cypher_result *match_result = create_empty_result();
     if (execute_match_return_query(executor, match, synthetic_return, match_result) < 0) {
         set_result_error(result, "Failed to execute MATCH for DELETE");
-        cypher_transform_free_context(ctx);
         cypher_result_free(match_result);
         /* Clean up synthetic return - ast_list_free handles freeing items */
         if (synthetic_return->items) {
@@ -122,7 +108,6 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
                                 /* Failed to delete node - likely due to constraint violation */
                                 set_result_error(result, "Cannot delete node - it still has relationships");
                                 cypher_result_free(match_result);
-                                cypher_transform_free_context(ctx);
 
                                 /* Clean up synthetic return - ast_list_free handles freeing items */
                                 if (synthetic_return->items) {
@@ -149,7 +134,6 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
     }
 
     cypher_result_free(match_result);
-    cypher_transform_free_context(ctx);
 
     /* Clean up synthetic return - ast_list_free handles freeing items */
     if (synthetic_return->items) {

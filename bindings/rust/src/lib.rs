@@ -54,6 +54,8 @@ mod connection;
 mod error;
 mod graph;
 mod manager;
+#[cfg(feature = "bundled-extension")]
+mod platform;
 mod result;
 mod utils;
 

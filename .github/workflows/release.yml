@@ -292,6 +292,37 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Vendor C sources into the crate for crates.io publishing
+      # The crate needs to be self-contained since crates.io doesn't have the full repo
+      - name: Vendor C sources for crate
+        run: |
+          cd bindings/rust
+          mkdir -p csrc/backend/parser csrc/backend/transform csrc/backend/executor
+          mkdir -p csrc/include csrc/generated csrc/vendor/sqlite
+
+          # Copy include headers
+          cp ../../src/include/*.h csrc/include/
+
+          # Copy parser sources
+          cp ../../src/backend/parser/*.c csrc/backend/parser/
+          cp ../../src/backend/parser/*.h csrc/backend/parser/
+
+          # Copy transform sources
+          cp ../../src/backend/transform/*.c csrc/backend/transform/
+
+          # Copy executor sources
+          cp ../../src/backend/executor/*.c csrc/backend/executor/
+
+          # Copy generated sources (pre-generated Flex/Bison output)
+          cp ../../src/generated/*.c csrc/generated/
+          cp ../../src/generated/*.h csrc/generated/
+
+          # Copy bundled init
+          cp ../../src/bundled_init.c csrc/
+
+          # Copy vendored SQLite headers
+          cp ../python/vendor/sqlite/*.h csrc/vendor/sqlite/
+
       - name: Publish to crates.io
         working-directory: bindings/rust
         env:

@@ -1,67 +1,29 @@
 //! Integration tests for GraphQLite Rust bindings.
 
 use graphqlite::{escape_string, graphs, sanitize_rel_type, Connection, Error, Graph, GraphManager};
-use std::path::PathBuf;
 
-/// Get the path to the test extension, or skip if not found.
-fn get_extension_path() -> Option<PathBuf> {
-    let paths = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("build/graphqlite.dylib"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("build/graphqlite.so"),
-    ];
-
-    for path in paths {
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    // Check environment variable
-    std::env::var("GRAPHQLITE_EXTENSION_PATH")
-        .ok()
-        .map(PathBuf::from)
-        .filter(|p| p.exists())
+/// Create a test connection.
+fn test_connection() -> Connection {
+    Connection::open_in_memory().expect("Failed to open in-memory connection")
 }
 
-/// Create a test connection, or skip if extension not available.
-fn test_connection() -> Option<Connection> {
-    let ext_path = get_extension_path()?;
-    Connection::open_with_extension(":memory:", ext_path).ok()
+/// Create a test graph.
+fn test_graph() -> Graph {
+    Graph::open_in_memory().expect("Failed to open in-memory graph")
 }
 
 #[test]
 fn test_open_memory() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
     assert!(conn.cypher("RETURN 1").is_ok());
 }
 
 #[test]
 fn test_open_file() {
-    let ext_path = match get_extension_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("Skipping: extension not found");
-            return;
-        }
-    };
-
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("test.db");
 
-    let conn = Connection::open_with_extension(&db_path, &ext_path).unwrap();
+    let conn = Connection::open(&db_path).unwrap();
     conn.cypher("CREATE (n:Test)").unwrap();
 
     assert!(db_path.exists());
@@ -69,10 +31,7 @@ fn test_open_file() {
 
 #[test]
 fn test_create_node() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:Person {name: \"Alice\", age: 30})")
         .unwrap();
@@ -89,10 +48,7 @@ fn test_create_node() {
 
 #[test]
 fn test_create_relationship() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (a:Person {name: 'Alice'})").unwrap();
     conn.cypher("CREATE (b:Person {name: 'Bob'})").unwrap();
@@ -113,10 +69,7 @@ fn test_create_relationship() {
 
 #[test]
 fn test_return_scalar() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn
         .cypher("RETURN 42 as num, 'hello' as str, true as flag")
@@ -130,10 +83,7 @@ fn test_return_scalar() {
 
 #[test]
 fn test_multiple_rows() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:Num {val: 1})").unwrap();
     conn.cypher("CREATE (n:Num {val: 2})").unwrap();
@@ -149,10 +99,7 @@ fn test_multiple_rows() {
 
 #[test]
 fn test_aggregation() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:Num {val: 10})").unwrap();
     conn.cypher("CREATE (n:Num {val: 20})").unwrap();
@@ -168,10 +115,7 @@ fn test_aggregation() {
 
 #[test]
 fn test_empty_result() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("MATCH (n:NonExistent) RETURN n").unwrap();
     // Empty MATCH results return a success message, not an empty array
@@ -181,10 +125,7 @@ fn test_empty_result() {
 
 #[test]
 fn test_iteration() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:N {v: 'a'})").unwrap();
     conn.cypher("CREATE (n:N {v: 'b'})").unwrap();
@@ -201,10 +142,7 @@ fn test_iteration() {
 
 #[test]
 fn test_column_not_found() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 1 as x").unwrap();
     let err = results[0].get::<i64>("nonexistent").unwrap_err();
@@ -217,10 +155,7 @@ fn test_column_not_found() {
 
 #[test]
 fn test_type_error() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello' as val").unwrap();
     let err = results[0].get::<i64>("val").unwrap_err();
@@ -233,10 +168,7 @@ fn test_type_error() {
 
 #[test]
 fn test_optional_values() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:Node {name: 'test'})").unwrap();
 
@@ -256,10 +188,7 @@ fn test_optional_values() {
 
 #[test]
 fn test_columns() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 1 as a, 2 as b, 3 as c").unwrap();
 
@@ -271,10 +200,7 @@ fn test_columns() {
 
 #[test]
 fn test_graph_algorithms() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create a small graph
     conn.cypher("CREATE (a:Page {name: 'A'})").unwrap();
@@ -299,19 +225,9 @@ fn test_graph_algorithms() {
 // Graph API Tests
 // =============================================================================
 
-/// Create a test Graph, or skip if extension not available.
-fn test_graph() -> Option<Graph> {
-    let ext_path = get_extension_path()?;
-    let conn = Connection::open_with_extension(":memory:", ext_path).ok()?;
-    Some(Graph::from_connection(conn))
-}
-
 #[test]
 fn test_graph_upsert_node() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person")
         .unwrap();
@@ -325,10 +241,7 @@ fn test_graph_upsert_node() {
 
 #[test]
 fn test_graph_upsert_edge() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
@@ -341,10 +254,7 @@ fn test_graph_upsert_edge() {
 
 #[test]
 fn test_graph_stats() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("n1", [("v", "1")], "N").unwrap();
     g.upsert_node("n2", [("v", "2")], "N").unwrap();
@@ -360,10 +270,7 @@ fn test_graph_stats() {
 
 #[test]
 fn test_graph_degree() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("hub", [("name", "Hub")], "Node").unwrap();
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
@@ -380,10 +287,7 @@ fn test_graph_degree() {
 
 #[test]
 fn test_graph_neighbors() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("center", [("name", "Center")], "Node")
         .unwrap();
@@ -400,10 +304,7 @@ fn test_graph_neighbors() {
 
 #[test]
 fn test_graph_delete_node() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("temp", [("name", "Temp")], "Node").unwrap();
     assert!(g.has_node("temp").unwrap());
@@ -414,10 +315,7 @@ fn test_graph_delete_node() {
 
 #[test]
 fn test_graph_delete_edge() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("x", [("name", "X")], "Node").unwrap();
     g.upsert_node("y", [("name", "Y")], "Node").unwrap();
@@ -431,10 +329,7 @@ fn test_graph_delete_edge() {
 
 #[test]
 fn test_graph_query() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("test", [("name", "Test"), ("value", "42")], "Data")
         .unwrap();
@@ -448,10 +343,7 @@ fn test_graph_query() {
 
 #[test]
 fn test_graph_batch_nodes() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_nodes_batch([
         ("n1", [("name", "Node1")], "Batch"),
@@ -466,10 +358,7 @@ fn test_graph_batch_nodes() {
 
 #[test]
 fn test_graph_api_algorithms() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     // Create a small graph for algorithms
     g.upsert_node("a", [("name", "A")], "Page").unwrap();
@@ -489,10 +378,7 @@ fn test_graph_api_algorithms() {
 
 #[test]
 fn test_graph_shortest_path() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     // Create a path: sp1 -> sp2 -> sp3
     g.upsert_node("sp1", [("name", "SP1")], "Node").unwrap();
@@ -521,10 +407,7 @@ fn test_graph_shortest_path() {
 
 #[test]
 fn test_graph_degree_centrality() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     // Create graph: dc1 -> dc2 -> dc3, dc1 -> dc3
     g.upsert_node("dc1", [("name", "DC1")], "Node").unwrap();
@@ -561,10 +444,7 @@ fn test_graph_degree_centrality() {
 
 #[test]
 fn test_graph_wcc() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     // Create two disconnected components
     // Component 1: wcc1 -> wcc2 -> wcc3
@@ -603,10 +483,7 @@ fn test_graph_wcc() {
 
 #[test]
 fn test_graph_wcc_empty() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     let components = g.wcc().unwrap();
     assert!(components.is_empty());
@@ -614,10 +491,7 @@ fn test_graph_wcc_empty() {
 
 #[test]
 fn test_graph_wcc_alias() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     g.upsert_node("a1", [("name", "A1")], "Node").unwrap();
     g.upsert_node("a2", [("name", "A2")], "Node").unwrap();
@@ -633,10 +507,7 @@ fn test_graph_wcc_alias() {
 
 #[test]
 fn test_graph_scc_cycle() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     // Create a cycle: scc1 -> scc2 -> scc3 -> scc1
     g.upsert_node("scc1", [("name", "SCC1")], "Node").unwrap();
@@ -658,10 +529,7 @@ fn test_graph_scc_cycle() {
 
 #[test]
 fn test_graph_scc_no_cycle() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     // Create a directed chain (no cycles): sc_a -> sc_b -> sc_c
     g.upsert_node("sc_a", [("name", "SC_A")], "Node").unwrap();
@@ -682,10 +550,7 @@ fn test_graph_scc_no_cycle() {
 
 #[test]
 fn test_graph_scc_empty() {
-    let Some(g) = test_graph() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let g = test_graph();
 
     let components = g.scc().unwrap();
     assert!(components.is_empty());
@@ -697,10 +562,7 @@ fn test_graph_scc_empty() {
 
 #[test]
 fn test_remove_node_property() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create node with properties
     conn.cypher("CREATE (n:RemoveTest {name: 'Alice', age: 30, city: 'NYC'})")
@@ -730,10 +592,7 @@ fn test_remove_node_property() {
 
 #[test]
 fn test_remove_multiple_properties() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create node with multiple properties
     conn.cypher("CREATE (n:RemoveMultiTest {a: 1, b: 2, c: 3, d: 4})")
@@ -756,10 +615,7 @@ fn test_remove_multiple_properties() {
 
 #[test]
 fn test_remove_label() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create node with multiple labels - use unique label to avoid conflicts
     conn.cypher("CREATE (n:RemoveLabelTest:RemoveLabelEmp:RemoveLabelMgr {name: 'Bob'})")
@@ -799,10 +655,7 @@ fn test_remove_label() {
 
 #[test]
 fn test_remove_edge_property() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create relationship with properties
     conn.cypher(
@@ -834,10 +687,7 @@ fn test_remove_edge_property() {
 
 #[test]
 fn test_remove_with_where() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create multiple nodes
     conn.cypher("CREATE (a:RemoveWhereTest {name: 'Alice', age: 30, status: 'active'})")
@@ -875,10 +725,7 @@ fn test_remove_with_where() {
 
 #[test]
 fn test_remove_nonexistent_property() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Create node with only one property
     conn.cypher("CREATE (n:RemoveNonexistTest {name: 'Test'})")
@@ -898,10 +745,7 @@ fn test_remove_nonexistent_property() {
 
 #[test]
 fn test_remove_no_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // Remove property on non-existent nodes - should succeed (0 rows affected)
     let result = conn.cypher("MATCH (n:NonExistentLabel) REMOVE n.property");
@@ -914,10 +758,7 @@ fn test_remove_no_match() {
 
 #[test]
 fn test_in_literal_list_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 5 IN [1, 2, 5, 10]").unwrap();
     assert_eq!(results.len(), 1);
@@ -928,10 +769,7 @@ fn test_in_literal_list_match() {
 
 #[test]
 fn test_in_literal_list_no_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'x' IN ['a', 'b', 'c']").unwrap();
     assert_eq!(results.len(), 1);
@@ -942,10 +780,7 @@ fn test_in_literal_list_no_match() {
 
 #[test]
 fn test_in_with_where_clause() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:InTest {name: 'Alice', status: 'active'})").unwrap();
     conn.cypher("CREATE (n:InTest {name: 'Bob', status: 'pending'})").unwrap();
@@ -961,10 +796,7 @@ fn test_in_with_where_clause() {
 
 #[test]
 fn test_in_with_integers() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:InIntTest {name: 'A', priority: 1})").unwrap();
     conn.cypher("CREATE (n:InIntTest {name: 'B', priority: 2})").unwrap();
@@ -980,10 +812,7 @@ fn test_in_with_integers() {
 
 #[test]
 fn test_in_empty_result() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:InEmptyTest {name: 'Test', status: 'archived'})").unwrap();
 
@@ -1012,10 +841,7 @@ fn test_utility_functions() {
 
 #[test]
 fn test_starts_with_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello world' STARTS WITH 'hello'").unwrap();
     assert_eq!(results.len(), 1);
@@ -1026,10 +852,7 @@ fn test_starts_with_match() {
 
 #[test]
 fn test_starts_with_no_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello world' STARTS WITH 'world'").unwrap();
     assert_eq!(results.len(), 1);
@@ -1039,10 +862,7 @@ fn test_starts_with_no_match() {
 
 #[test]
 fn test_ends_with_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello world' ENDS WITH 'world'").unwrap();
     assert_eq!(results.len(), 1);
@@ -1052,10 +872,7 @@ fn test_ends_with_match() {
 
 #[test]
 fn test_ends_with_no_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello world' ENDS WITH 'hello'").unwrap();
     assert_eq!(results.len(), 1);
@@ -1065,10 +882,7 @@ fn test_ends_with_no_match() {
 
 #[test]
 fn test_contains_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello world' CONTAINS 'lo wo'").unwrap();
     assert_eq!(results.len(), 1);
@@ -1078,10 +892,7 @@ fn test_contains_match() {
 
 #[test]
 fn test_contains_no_match() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN 'hello world' CONTAINS 'xyz'").unwrap();
     assert_eq!(results.len(), 1);
@@ -1091,10 +902,7 @@ fn test_contains_no_match() {
 
 #[test]
 fn test_string_operators_in_where() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:StringTest {name: 'John Smith', email: 'john@example.com'})").unwrap();
     conn.cypher("CREATE (n:StringTest {name: 'Jane Doe', email: 'jane@test.org'})").unwrap();
@@ -1131,10 +939,7 @@ fn test_string_operators_in_where() {
 
 #[test]
 fn test_string_to_upper() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN toUpper('hello world') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1143,10 +948,7 @@ fn test_string_to_upper() {
 
 #[test]
 fn test_string_to_lower() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN toLower('HELLO WORLD') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1155,10 +957,7 @@ fn test_string_to_lower() {
 
 #[test]
 fn test_string_trim() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN trim('  hello  ') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1167,10 +966,7 @@ fn test_string_trim() {
 
 #[test]
 fn test_string_ltrim() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN ltrim('  hello  ') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1179,10 +975,7 @@ fn test_string_ltrim() {
 
 #[test]
 fn test_string_rtrim() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN rtrim('  hello  ') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1191,10 +984,7 @@ fn test_string_rtrim() {
 
 #[test]
 fn test_string_substring() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // With start only
     let results = conn.cypher("RETURN substring('hello world', 6) AS result").unwrap();
@@ -1209,10 +999,7 @@ fn test_string_substring() {
 
 #[test]
 fn test_string_replace() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN replace('hello world', 'world', 'rust') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1221,10 +1008,7 @@ fn test_string_replace() {
 
 #[test]
 fn test_string_reverse() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN reverse('hello') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1233,10 +1017,7 @@ fn test_string_reverse() {
 
 #[test]
 fn test_string_left() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN left('hello world', 5) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1245,10 +1026,7 @@ fn test_string_left() {
 
 #[test]
 fn test_string_right() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN right('hello world', 5) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1257,10 +1035,7 @@ fn test_string_right() {
 
 #[test]
 fn test_string_split() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // split() returns a single row with the array as a column value
     let results = conn.cypher("RETURN split('a,b,c', ',') AS result").unwrap();
@@ -1275,10 +1050,7 @@ fn test_string_split() {
 
 #[test]
 fn test_string_functions_with_properties() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:StringFuncTest {name: '  John Doe  ', email: 'JOHN@EMAIL.COM'})").unwrap();
 
@@ -1296,10 +1068,7 @@ fn test_string_functions_with_properties() {
 
 #[test]
 fn test_math_abs() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN abs(-42) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1315,10 +1084,7 @@ fn test_math_abs() {
 
 #[test]
 fn test_math_ceil() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN ceil(3.14) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1328,10 +1094,7 @@ fn test_math_ceil() {
 
 #[test]
 fn test_math_floor() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN floor(3.99) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1341,10 +1104,7 @@ fn test_math_floor() {
 
 #[test]
 fn test_math_round() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN round(3.5) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1358,10 +1118,7 @@ fn test_math_round() {
 
 #[test]
 fn test_math_sqrt() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // sqrt() requires SQLite to be compiled with -DSQLITE_ENABLE_MATH_FUNCTIONS
     // which isn't always available
@@ -1380,10 +1137,7 @@ fn test_math_sqrt() {
 
 #[test]
 fn test_math_sign() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN sign(-10) AS neg, sign(0) AS zero, sign(10) AS pos").unwrap();
     assert_eq!(results.len(), 1);
@@ -1394,10 +1148,7 @@ fn test_math_sign() {
 
 #[test]
 fn test_math_rand() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN rand() AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1407,10 +1158,7 @@ fn test_math_rand() {
 
 #[test]
 fn test_math_functions_with_properties() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:MathTest {value: -25.7})").unwrap();
 
@@ -1432,10 +1180,7 @@ fn test_math_functions_with_properties() {
 
 #[test]
 fn test_list_size() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN size([1, 2, 3, 4, 5]) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1444,10 +1189,7 @@ fn test_list_size() {
 
 #[test]
 fn test_list_head() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN head([1, 2, 3]) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1456,10 +1198,7 @@ fn test_list_head() {
 
 #[test]
 fn test_list_tail() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // tail() returns a single row with the array as a column value
     let results = conn.cypher("RETURN tail([1, 2, 3]) AS result").unwrap();
@@ -1474,10 +1213,7 @@ fn test_list_tail() {
 
 #[test]
 fn test_list_last() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN last([1, 2, 3]) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1486,10 +1222,7 @@ fn test_list_last() {
 
 #[test]
 fn test_list_range() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // range() returns a single row with the array as a column value
     let results = conn.cypher("RETURN range(0, 5) AS result").unwrap();
@@ -1504,10 +1237,7 @@ fn test_list_range() {
 
 #[test]
 fn test_list_range_with_step() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // range() with step returns a single row with the array as a column value
     let results = conn.cypher("RETURN range(0, 10, 2) AS result").unwrap();
@@ -1526,10 +1256,7 @@ fn test_list_range_with_step() {
 
 #[test]
 fn test_union_basic() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:UnionA {name: 'Alice'})").unwrap();
     conn.cypher("CREATE (n:UnionB {name: 'Bob'})").unwrap();
@@ -1542,10 +1269,7 @@ fn test_union_basic() {
 
 #[test]
 fn test_union_all() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:UnionAllA {name: 'Same'})").unwrap();
     conn.cypher("CREATE (n:UnionAllB {name: 'Same'})").unwrap();
@@ -1559,10 +1283,7 @@ fn test_union_all() {
 
 #[test]
 fn test_union_removes_duplicates() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // UNION without ALL removes duplicates
     let results = conn
@@ -1577,10 +1298,7 @@ fn test_union_removes_duplicates() {
 
 #[test]
 fn test_with_basic() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:WithTest {name: 'Alice', age: 30})").unwrap();
     conn.cypher("CREATE (n:WithTest {name: 'Bob', age: 25})").unwrap();
@@ -1597,10 +1315,7 @@ fn test_with_basic() {
 
 #[test]
 fn test_with_aggregation() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:WithAggTest {city: 'NYC', age: 30})").unwrap();
     conn.cypher("CREATE (n:WithAggTest {city: 'NYC', age: 25})").unwrap();
@@ -1618,10 +1333,7 @@ fn test_with_aggregation() {
 
 #[test]
 fn test_with_order_by_limit() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:WithOrderTest {val: 1})").unwrap();
     conn.cypher("CREATE (n:WithOrderTest {val: 2})").unwrap();
@@ -1642,10 +1354,7 @@ fn test_with_order_by_limit() {
 
 #[test]
 fn test_case_simple() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:CaseTest {status: 'active'})").unwrap();
     conn.cypher("CREATE (n:CaseTest {status: 'pending'})").unwrap();
@@ -1663,10 +1372,7 @@ fn test_case_simple() {
 
 #[test]
 fn test_case_generic() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:CaseGenTest {score: 85})").unwrap();
     conn.cypher("CREATE (n:CaseGenTest {score: 70})").unwrap();
@@ -1687,10 +1393,7 @@ fn test_case_generic() {
 
 #[test]
 fn test_coalesce() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:CoalesceTest {name: 'Alice'})").unwrap();
     conn.cypher("CREATE (n:CoalesceTest {nickname: 'Bobby'})").unwrap();
@@ -1705,10 +1408,7 @@ fn test_coalesce() {
 
 #[test]
 fn test_is_null() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:NullTest {name: 'Alice', email: 'alice@test.com'})").unwrap();
     conn.cypher("CREATE (n:NullTest {name: 'Bob'})").unwrap();
@@ -1722,10 +1422,7 @@ fn test_is_null() {
 
 #[test]
 fn test_is_not_null() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:NotNullTest {name: 'Alice', email: 'alice@test.com'})").unwrap();
     conn.cypher("CREATE (n:NotNullTest {name: 'Bob'})").unwrap();
@@ -1743,10 +1440,7 @@ fn test_is_not_null() {
 
 #[test]
 fn test_to_string() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN toString(42) AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1760,10 +1454,7 @@ fn test_to_string() {
 
 #[test]
 fn test_to_integer() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN toInteger('42') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1776,10 +1467,7 @@ fn test_to_integer() {
 
 #[test]
 fn test_to_float() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN toFloat('3.14') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1796,10 +1484,7 @@ fn test_to_float() {
 
 #[test]
 fn test_to_boolean() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn.cypher("RETURN toBoolean('true') AS result").unwrap();
     assert_eq!(results.len(), 1);
@@ -1818,10 +1503,7 @@ fn test_to_boolean() {
 
 #[test]
 fn test_exists_property() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:ExistsTest {name: 'Alice', email: 'alice@test.com'})").unwrap();
     conn.cypher("CREATE (n:ExistsTest {name: 'Bob'})").unwrap();
@@ -1839,10 +1521,7 @@ fn test_exists_property() {
 
 #[test]
 fn test_create_multiple_labels() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:MultiLabel1:MultiLabel2:MultiLabel3 {name: 'Test'})").unwrap();
 
@@ -1860,10 +1539,7 @@ fn test_create_multiple_labels() {
 
 #[test]
 fn test_match_multiple_labels() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (n:MatchMultiA:MatchMultiB {name: 'Both'})").unwrap();
     conn.cypher("CREATE (n:MatchMultiA {name: 'OnlyA'})").unwrap();
@@ -1883,10 +1559,7 @@ fn test_match_multiple_labels() {
 
 #[test]
 fn test_optional_match_with_results() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (a:OptMatchA {name: 'Alice'})-[:KNOWS]->(b:OptMatchB {name: 'Bob'})").unwrap();
 
@@ -1900,10 +1573,7 @@ fn test_optional_match_with_results() {
 
 #[test]
 fn test_optional_match_no_results() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("CREATE (a:OptMatchNoRes {name: 'Lonely'})").unwrap();
 
@@ -1922,10 +1592,7 @@ fn test_optional_match_no_results() {
 
 #[test]
 fn test_unwind_basic() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     let results = conn
         .cypher("UNWIND [1, 2, 3] AS x RETURN x")
@@ -1938,10 +1605,7 @@ fn test_unwind_basic() {
 
 #[test]
 fn test_unwind_with_create() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     conn.cypher("UNWIND ['A', 'B', 'C'] AS name CREATE (n:UnwindCreate {name: name})").unwrap();
 
@@ -1956,10 +1620,7 @@ fn test_unwind_with_create() {
 
 #[test]
 fn test_unwind_with_list_literal() {
-    let Some(conn) = test_connection() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let conn = test_connection();
 
     // UNWIND requires a list literal, property access, or variable
     // (function calls like range() are not directly supported)
@@ -1975,20 +1636,16 @@ fn test_unwind_with_list_literal() {
 // GraphManager Tests
 // =============================================================================
 
-/// Create a test GraphManager, or skip if extension not available.
-fn test_graph_manager() -> Option<(GraphManager, tempfile::TempDir)> {
-    let ext_path = get_extension_path()?;
-    let tmpdir = tempfile::tempdir().ok()?;
-    let gm = GraphManager::open_with_extension(tmpdir.path(), ext_path).ok()?;
-    Some((gm, tmpdir))
+/// Create a test GraphManager.
+fn test_graph_manager() -> (GraphManager, tempfile::TempDir) {
+    let tmpdir = tempfile::tempdir().expect("Failed to create temp dir");
+    let gm = GraphManager::open(tmpdir.path()).expect("Failed to create GraphManager");
+    (gm, tmpdir)
 }
 
 #[test]
 fn test_manager_create() {
-    let Some((gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (gm, _tmpdir) = test_graph_manager();
 
     assert!(gm.is_empty().unwrap());
     assert_eq!(gm.list().unwrap(), Vec::<String>::new());
@@ -1996,10 +1653,7 @@ fn test_manager_create() {
 
 #[test]
 fn test_manager_create_graph() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     // Create graph and use it in a scope
     {
@@ -2016,10 +1670,7 @@ fn test_manager_create_graph() {
 
 #[test]
 fn test_manager_create_duplicate_fails() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     gm.create("social").unwrap();
     assert!(gm.create("social").is_err());
@@ -2027,10 +1678,7 @@ fn test_manager_create_duplicate_fails() {
 
 #[test]
 fn test_manager_open_graph() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     gm.create("test_db").unwrap();
     let graph = gm.open_graph("test_db").unwrap();
@@ -2039,10 +1687,7 @@ fn test_manager_open_graph() {
 
 #[test]
 fn test_manager_open_missing_fails() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     let result = gm.open_graph("nonexistent");
     assert!(result.is_err());
@@ -2055,10 +1700,7 @@ fn test_manager_open_missing_fails() {
 
 #[test]
 fn test_manager_open_or_create() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     // Should create new, use it in a scope
     {
@@ -2076,10 +1718,7 @@ fn test_manager_open_or_create() {
 
 #[test]
 fn test_manager_drop_graph() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     gm.create("temp").unwrap();
     assert!(gm.exists("temp"));
@@ -2090,20 +1729,14 @@ fn test_manager_drop_graph() {
 
 #[test]
 fn test_manager_drop_missing_fails() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     assert!(gm.drop("nonexistent").is_err());
 }
 
 #[test]
 fn test_manager_list_multiple() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     gm.create("alpha").unwrap();
     gm.create("beta").unwrap();
@@ -2115,10 +1748,7 @@ fn test_manager_list_multiple() {
 
 #[test]
 fn test_manager_contains() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     gm.create("social").unwrap();
     assert!(gm.contains("social"));
@@ -2127,10 +1757,7 @@ fn test_manager_contains() {
 
 #[test]
 fn test_manager_len() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     assert_eq!(gm.len().unwrap(), 0);
     gm.create("one").unwrap();
@@ -2141,10 +1768,7 @@ fn test_manager_len() {
 
 #[test]
 fn test_manager_graph_isolation() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     // Create first graph
     {
@@ -2182,10 +1806,7 @@ fn test_manager_graph_isolation() {
 
 #[test]
 fn test_manager_cross_graph_query() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     // Create and populate a graph in a scope
     {
@@ -2207,10 +1828,7 @@ fn test_manager_cross_graph_query() {
 
 #[test]
 fn test_manager_query_missing_graph_fails() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     let result = gm.query(
         "MATCH (n) FROM missing RETURN n",
@@ -2221,10 +1839,7 @@ fn test_manager_query_missing_graph_fails() {
 
 #[test]
 fn test_manager_query_sql() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     // Create and populate graph in a scope
     {
@@ -2243,21 +1858,10 @@ fn test_manager_query_sql() {
 
 #[test]
 fn test_graphs_convenience_function() {
-    let ext_path = match get_extension_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("Skipping: extension not found");
-            return;
-        }
-    };
-
     let tmpdir = tempfile::tempdir().unwrap();
 
     // Use the convenience function
-    let mut gm = graphs(tmpdir.path()).unwrap_or_else(|_| {
-        // If the default extension search fails, use the explicit path
-        GraphManager::open_with_extension(tmpdir.path(), &ext_path).unwrap()
-    });
+    let mut gm = graphs(tmpdir.path()).unwrap();
 
     gm.create("test").unwrap();
     assert!(gm.exists("test"));
@@ -2265,14 +1869,44 @@ fn test_graphs_convenience_function() {
 
 #[test]
 fn test_manager_iter() {
-    let Some((mut gm, _tmpdir)) = test_graph_manager() else {
-        eprintln!("Skipping: extension not found");
-        return;
-    };
+    let (mut gm, _tmpdir) = test_graph_manager();
 
     gm.create("alpha").unwrap();
     gm.create("beta").unwrap();
 
     let names: Vec<String> = gm.iter().unwrap().collect();
     assert_eq!(names, vec!["alpha", "beta"]);
+}
+
+/// Regression test for GQLITE-T-0092: DETACH DELETE deletes all nodes
+/// Bug was: MATCH (n {id: 'x'}) DETACH DELETE n deleted ALL nodes instead of just matched
+/// Root cause was: AST mutation in transform_match.c when MATCH transformed twice
+/// Fix: Removed unnecessary transform_match_clause call in execute_match_delete_query
+#[test]
+fn test_regression_gqlite_t_0092_detach_delete_property_filter() {
+    let g = test_graph();
+
+    // Insert 3 nodes
+    g.upsert_node("node_a", [("name", "A")], "Test").expect("insert a");
+    g.upsert_node("node_b", [("name", "B")], "Test").expect("insert b");
+    g.upsert_node("node_c", [("name", "C")], "Test").expect("insert c");
+
+    let stats = g.stats().expect("stats");
+    assert_eq!(stats.nodes, 3, "Should have 3 nodes after insert");
+
+    // Verify all nodes exist
+    assert!(g.has_node("node_a").expect("has a"), "node_a should exist");
+    assert!(g.has_node("node_b").expect("has b"), "node_b should exist");
+    assert!(g.has_node("node_c").expect("has c"), "node_c should exist");
+
+    // Delete only node_a
+    g.delete_node("node_a").expect("delete a");
+
+    let stats = g.stats().expect("stats");
+    // EXPECTED: 2 nodes remain
+    // ACTUAL (bug): 0 nodes remain - all deleted due to AST mutation
+    assert_eq!(stats.nodes, 2, "Should have 2 nodes after deleting node_a");
+    assert!(!g.has_node("node_a").expect("has a"), "node_a should NOT exist");
+    assert!(g.has_node("node_b").expect("has b"), "node_b should still exist");
+    assert!(g.has_node("node_c").expect("has c"), "node_c should still exist");
 }

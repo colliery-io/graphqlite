@@ -3,8 +3,7 @@
 //! The `GraphManager` struct provides management of multiple graph databases
 //! in a directory, with cross-graph query support via ATTACH.
 
-use crate::{CypherResult, Error, Graph, Result};
-use rusqlite::Connection as SqliteConnection;
+use crate::{Connection, CypherResult, Error, Graph, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,9 +39,8 @@ use std::path::{Path, PathBuf};
 /// ```
 pub struct GraphManager {
     base_path: PathBuf,
-    extension_path: PathBuf,
     open_graphs: HashMap<String, Graph>,
-    coordinator: Option<SqliteConnection>,
+    coordinator: Option<Connection>,
 }
 
 impl GraphManager {
@@ -53,38 +51,12 @@ impl GraphManager {
     /// * `base_path` - Directory where graph .db files are stored
     pub fn open<P: AsRef<Path>>(base_path: P) -> Result<Self> {
         let base_path = base_path.as_ref().to_path_buf();
-        let extension_path = find_extension()?;
 
         // Ensure base directory exists
         fs::create_dir_all(&base_path)?;
 
         Ok(GraphManager {
             base_path,
-            extension_path,
-            open_graphs: HashMap::new(),
-            coordinator: None,
-        })
-    }
-
-    /// Open a GraphManager with a custom extension path.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_path` - Directory where graph .db files are stored
-    /// * `extension_path` - Path to the GraphQLite extension
-    pub fn open_with_extension<P: AsRef<Path>, E: AsRef<Path>>(
-        base_path: P,
-        extension_path: E,
-    ) -> Result<Self> {
-        let base_path = base_path.as_ref().to_path_buf();
-        let extension_path = extension_path.as_ref().to_path_buf();
-
-        // Ensure base directory exists
-        fs::create_dir_all(&base_path)?;
-
-        Ok(GraphManager {
-            base_path,
-            extension_path,
             open_graphs: HashMap::new(),
             coordinator: None,
         })
@@ -96,10 +68,9 @@ impl GraphManager {
     }
 
     /// Get or create the coordinator connection for cross-graph queries.
-    fn ensure_coordinator(&mut self) -> Result<&SqliteConnection> {
+    fn ensure_coordinator(&mut self) -> Result<&Connection> {
         if self.coordinator.is_none() {
-            let conn = SqliteConnection::open_in_memory()?;
-            load_extension(&conn, &self.extension_path)?;
+            let conn = Connection::open_in_memory()?;
             self.coordinator = Some(conn);
         }
         Ok(self.coordinator.as_ref().unwrap())
@@ -157,7 +128,7 @@ impl GraphManager {
             return Err(Error::GraphExists(name.to_string()));
         }
 
-        let graph = Graph::open_with_extension(&path, &self.extension_path)?;
+        let graph = Graph::open(&path)?;
         self.open_graphs.insert(name.to_string(), graph);
         Ok(self.open_graphs.get(name).unwrap())
     }
@@ -190,7 +161,7 @@ impl GraphManager {
             });
         }
 
-        let graph = Graph::open_with_extension(&path, &self.extension_path)?;
+        let graph = Graph::open(&path)?;
         self.open_graphs.insert(name.to_string(), graph);
         Ok(self.open_graphs.get(name).unwrap())
     }
@@ -246,7 +217,7 @@ impl GraphManager {
         // Detach from coordinator if attached
         if let Some(ref conn) = self.coordinator {
             // Ignore errors if not attached
-            let _ = conn.execute(&format!("DETACH DATABASE {}", name), []);
+            let _ = conn.sqlite_connection().execute(&format!("DETACH DATABASE {}", name), []);
         }
 
         // Delete file
@@ -284,7 +255,7 @@ impl GraphManager {
 
         // Now borrow coordinator and attach graphs
         self.ensure_coordinator()?;
-        let coord = self.coordinator.as_ref().unwrap();
+        let coord = self.coordinator.as_ref().unwrap().sqlite_connection();
 
         for (name, path) in &graph_paths {
             let attach_sql = format!(
@@ -343,7 +314,7 @@ impl GraphManager {
 
         // Now borrow coordinator and attach graphs
         self.ensure_coordinator()?;
-        let coord = self.coordinator.as_ref().unwrap();
+        let coord = self.coordinator.as_ref().unwrap().sqlite_connection();
 
         for (name, path) in &graph_paths {
             let attach_sql = format!(
@@ -407,64 +378,6 @@ impl Drop for GraphManager {
     }
 }
 
-/// Find the GraphQLite extension library.
-fn find_extension() -> Result<PathBuf> {
-    let ext_name = if cfg!(target_os = "macos") {
-        "graphqlite.dylib"
-    } else if cfg!(target_os = "windows") {
-        "graphqlite.dll"
-    } else {
-        "graphqlite.so"
-    };
-
-    // Search paths in order of preference
-    let search_paths: Vec<PathBuf> = vec![
-        // Environment variable
-        std::env::var("GRAPHQLITE_EXTENSION_PATH")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_default(),
-        // Current directory build
-        PathBuf::from("build").join(ext_name),
-        // Relative to crate root (for development)
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap_or(Path::new("."))
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("build")
-            .join(ext_name),
-        // System paths
-        PathBuf::from("/usr/local/lib").join(ext_name),
-        PathBuf::from("/usr/lib").join(ext_name),
-    ];
-
-    for path in search_paths {
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    Err(Error::ExtensionNotFound(format!(
-        "Could not find {}. Build with 'make extension' or set GRAPHQLITE_EXTENSION_PATH",
-        ext_name
-    )))
-}
-
-/// Load the GraphQLite extension into a connection.
-fn load_extension(conn: &SqliteConnection, path: &Path) -> Result<()> {
-    // Remove the file extension for SQLite's load_extension
-    let load_path = path.with_extension("");
-
-    unsafe {
-        conn.load_extension_enable()?;
-        conn.load_extension(&load_path, None)?;
-        conn.load_extension_disable()?;
-    }
-
-    Ok(())
-}
-
 /// Create a new GraphManager instance (convenience function).
 pub fn graphs<P: AsRef<Path>>(base_path: P) -> Result<GraphManager> {
     GraphManager::open(base_path)
@@ -475,15 +388,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn skip_if_no_extension() -> bool {
-        find_extension().is_err()
-    }
-
     #[test]
     fn test_create_manager() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let gm = GraphManager::open(tmpdir.path()).unwrap();
         assert!(gm.is_empty().unwrap());
@@ -491,9 +397,6 @@ mod tests {
 
     #[test]
     fn test_list_empty() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let gm = GraphManager::open(tmpdir.path()).unwrap();
         assert_eq!(gm.list().unwrap(), Vec::<String>::new());
@@ -501,9 +404,6 @@ mod tests {
 
     #[test]
     fn test_create_graph() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let mut gm = GraphManager::open(tmpdir.path()).unwrap();
         gm.create("social").unwrap();
@@ -513,9 +413,6 @@ mod tests {
 
     #[test]
     fn test_create_duplicate_fails() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let mut gm = GraphManager::open(tmpdir.path()).unwrap();
         gm.create("social").unwrap();
@@ -524,9 +421,6 @@ mod tests {
 
     #[test]
     fn test_open_missing_fails() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let mut gm = GraphManager::open(tmpdir.path()).unwrap();
         assert!(gm.open_graph("nonexistent").is_err());
@@ -534,9 +428,6 @@ mod tests {
 
     #[test]
     fn test_drop_graph() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let mut gm = GraphManager::open(tmpdir.path()).unwrap();
         gm.create("social").unwrap();
@@ -547,9 +438,6 @@ mod tests {
 
     #[test]
     fn test_list_multiple() {
-        if skip_if_no_extension() {
-            return;
-        }
         let tmpdir = TempDir::new().unwrap();
         let mut gm = GraphManager::open(tmpdir.path()).unwrap();
         gm.create("alpha").unwrap();
