@@ -45,6 +45,9 @@ impl Graph {
     ///
     /// * `path` - Path to database file
     /// * `extension_path` - Path to the GraphQLite extension
+    ///
+    /// Note: This method is only available when the `bundled-extension` feature is disabled.
+    #[cfg(not(feature = "bundled-extension"))]
     pub fn open_with_extension<P: AsRef<Path>, E: AsRef<Path>>(
         path: P,
         extension_path: E,

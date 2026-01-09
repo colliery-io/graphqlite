@@ -1,7 +1,10 @@
 //! GraphQLite connection wrapper.
 
 use crate::{CypherResult, Error, Result};
-use std::path::{Path, PathBuf};
+
+#[cfg(not(feature = "bundled-extension"))]
+use std::path::PathBuf;
+use std::path::Path;
 
 /// A GraphQLite database connection.
 ///
@@ -58,6 +61,15 @@ impl Connection {
     /// let conn = Connection::from_rusqlite(sqlite_conn)?;
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
+    #[cfg(feature = "bundled-extension")]
+    pub fn from_rusqlite(conn: rusqlite::Connection) -> Result<Self> {
+        // Load the bundled extension (extracts from embedded binary)
+        crate::platform::load_bundled_extension(&conn)?;
+        Ok(Connection { conn })
+    }
+
+    /// Create a GraphQLite connection from an existing rusqlite Connection.
+    #[cfg(not(feature = "bundled-extension"))]
     pub fn from_rusqlite(conn: rusqlite::Connection) -> Result<Self> {
         let extension_path = find_extension()?;
         load_extension(&conn, &extension_path)?;
@@ -70,7 +82,10 @@ impl Connection {
     ///
     /// * `path` - Path to database file
     /// * `extension_path` - Path to the GraphQLite extension (.dylib, .so, or .dll)
-    pub fn open_with_extension<P: AsRef<Path>, E: AsRef<Path>>(
+    ///
+    /// Note: This method is only available when the `bundled-extension` feature is disabled.
+    #[cfg(not(feature = "bundled-extension"))]
+    pub fn open_with_extension<P: AsRef<Path>, E: AsRef<std::path::Path>>(
         path: P,
         extension_path: E,
     ) -> Result<Self> {
@@ -131,6 +146,7 @@ impl Connection {
 }
 
 /// Find the GraphQLite extension library.
+#[cfg(not(feature = "bundled-extension"))]
 fn find_extension() -> Result<PathBuf> {
     let ext_name = if cfg!(target_os = "macos") {
         "graphqlite.dylib"
@@ -175,7 +191,8 @@ fn find_extension() -> Result<PathBuf> {
 }
 
 /// Load the GraphQLite extension into a connection.
-fn load_extension(conn: &rusqlite::Connection, path: &Path) -> Result<()> {
+#[cfg(not(feature = "bundled-extension"))]
+fn load_extension(conn: &rusqlite::Connection, path: &std::path::Path) -> Result<()> {
     // Remove the file extension for SQLite's load_extension
     let load_path = path.with_extension("");
 
@@ -200,15 +217,16 @@ fn load_extension(conn: &rusqlite::Connection, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn get_test_extension_path() -> Option<PathBuf> {
+    #[cfg(not(feature = "bundled-extension"))]
+    fn get_test_extension_path() -> Option<std::path::PathBuf> {
         let paths = [
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
                 .parent()
                 .unwrap()
                 .join("build/graphqlite.dylib"),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
                 .parent()
@@ -220,11 +238,20 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "bundled-extension"))]
     fn test_find_extension() {
         // This test may skip if extension isn't built
         if get_test_extension_path().is_none() {
             return;
         }
         assert!(find_extension().is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "bundled-extension")]
+    fn test_bundled_connection() {
+        // Test that bundled extension works
+        let conn = Connection::open_in_memory();
+        assert!(conn.is_ok(), "Failed to open connection: {:?}", conn.err());
     }
 }

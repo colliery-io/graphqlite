@@ -13,6 +13,13 @@
 #include <stdbool.h>
 #include <stdarg.h>
 
+/* MSVC compatibility - __attribute__ is GCC-specific */
+#ifdef _MSC_VER
+#ifndef __attribute__
+#define __attribute__(x)
+#endif
+#endif
+
 /*
  * dynamic_buffer - A growing string buffer
  *
