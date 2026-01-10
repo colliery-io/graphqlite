@@ -1,0 +1,24 @@
+
+GraphQLite Hop Depth Performance
+=================================
+
+  Mode: full (10K, 100K, 500K nodes)
+
+Testing graph: 10K nodes, 50K edges...
+Testing graph: 100K nodes, 500K edges...
+Testing graph: 500K nodes, 2.5M edges...
+
+┌─────────┬──────────┬────────────────┬────────────────┬────────────────┬────────────────┬────────────────┬────────────────┐
+│         │          │     1-hop      │     2-hop      │     3-hop      │     4-hop      │     5-hop      │     6-hop      │
+│ Nodes   │ Edges    ├────────┬───────┼────────┬───────┼────────┬───────┼────────┬───────┼────────┬───────┼────────┬───────┤
+│         │          │  Time  │ Count │  Time  │ Count │  Time  │ Count │  Time  │ Count │  Time  │ Count │  Time  │ Count │
+├─────────┼──────────┼────────┼───────┼────────┼───────┼────────┼───────┼────────┼───────┼────────┼───────┼────────┼───────┤
+│     10K │      50K │   1ms │    5 │  <1ms │   25 │   1ms │  125 │   2ms │  625 │  11ms │   3K │  55ms │  15K │
+│    100K │     500K │   1ms │    5 │  <1ms │   25 │   1ms │  125 │   2ms │  625 │  12ms │   3K │  58ms │  15K │
+│    500K │     2.5M │   1ms │    5 │  <1ms │   25 │   1ms │  125 │   2ms │  625 │  12ms │   3K │  60ms │  15K │
+└─────────┴──────────┴────────┴───────┴────────┴───────┴────────┴───────┴────────┴───────┴────────┴───────┴────────┴───────┘
+
+  Time = query execution time
+  Count = number of paths found (grows as degree^hops)
+  Graph has average out-degree of 5, so paths grow ~5^n
+

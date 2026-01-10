@@ -242,7 +242,7 @@ static double* load_edge_weights(sqlite3 *db, csr_graph *graph, const char *weig
     return weights;
 }
 
-graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char *target_id,
+graph_algo_result* execute_astar(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id,
                                   const char *weight_prop, const char *lat_prop, const char *lon_prop) {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
@@ -251,8 +251,17 @@ graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char 
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("{\"path\":[],\"distance\":null,\"found\":false,\"nodes_explored\":0}");
@@ -273,7 +282,7 @@ graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char 
     }
 
     if (source == -1 || target == -1) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = true;
         result->json_result = strdup("{\"path\":[],\"distance\":null,\"found\":false,\"nodes_explored\":0}");
         return result;
@@ -312,7 +321,7 @@ graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char 
         free(edge_weights);
         free(lat);
         free(lon);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Memory allocation failed");
         return result;
     }
@@ -332,7 +341,7 @@ graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char 
         free(edge_weights);
         free(lat);
         free(lon);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Priority queue creation failed");
         return result;
     }
@@ -404,7 +413,7 @@ graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char 
         free(edge_weights);
         free(lat);
         free(lon);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("JSON buffer allocation failed");
         return result;
     }
@@ -450,7 +459,7 @@ graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char 
     free(edge_weights);
     free(lat);
     free(lon);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

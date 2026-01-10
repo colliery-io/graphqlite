@@ -116,7 +116,7 @@ static int dfs_stack_empty(dfs_stack *s) {
 }
 
 /* BFS Implementation */
-graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth) {
+graph_algo_result* execute_bfs(sqlite3 *db, csr_graph *cached, const char *start_id, int max_depth) {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
 
@@ -124,8 +124,17 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -144,7 +153,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
     }
 
     if (start == -1) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = true;
         result->json_result = strdup("[]");
         return result;
@@ -160,7 +169,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
         free(visited);
         free(order);
         free(depths);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Memory allocation failed");
         return result;
     }
@@ -170,7 +179,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
         free(visited);
         free(order);
         free(depths);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Queue creation failed");
         return result;
     }
@@ -209,7 +218,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
         free(visited);
         free(order);
         free(depths);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("JSON buffer allocation failed");
         return result;
     }
@@ -236,7 +245,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
                 free(visited);
                 free(order);
                 free(depths);
-                csr_graph_free(graph);
+                if (should_free_graph) csr_graph_free(graph);
                 result->error_message = strdup("JSON buffer reallocation failed");
                 return result;
             }
@@ -256,7 +265,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
     free(visited);
     free(order);
     free(depths);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;
@@ -264,7 +273,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth)
 }
 
 /* DFS Implementation */
-graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth) {
+graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start_id, int max_depth) {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
 
@@ -272,8 +281,17 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -292,7 +310,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
     }
 
     if (start == -1) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = true;
         result->json_result = strdup("[]");
         return result;
@@ -308,7 +326,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
         free(visited);
         free(order);
         free(depths);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Memory allocation failed");
         return result;
     }
@@ -318,7 +336,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
         free(visited);
         free(order);
         free(depths);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Stack creation failed");
         return result;
     }
@@ -358,7 +376,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
         free(visited);
         free(order);
         free(depths);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("JSON buffer allocation failed");
         return result;
     }
@@ -385,7 +403,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
                 free(visited);
                 free(order);
                 free(depths);
-                csr_graph_free(graph);
+                if (should_free_graph) csr_graph_free(graph);
                 result->error_message = strdup("JSON buffer reallocation failed");
                 return result;
             }
@@ -405,7 +423,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth)
     free(visited);
     free(order);
     free(depths);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

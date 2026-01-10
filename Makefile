@@ -225,7 +225,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_predicates.c \
 	$(TEST_DIR)/test_executor_multigraph.c \
 	$(TEST_DIR)/test_sql_builder.c \
-	$(TEST_DIR)/test_query_dispatch.c
+	$(TEST_DIR)/test_query_dispatch.c \
+	$(TEST_DIR)/test_cache.c
 
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_TEST_DIR)/%.o)
 
@@ -238,6 +239,7 @@ MAIN_OBJ = $(BUILD_DIR)/main.o
 
 # SQLite extension - use .dylib on macOS, .dll on Windows, .so on Linux
 UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Darwin)
     EXTENSION_LIB = $(BUILD_DIR)/graphqlite.dylib
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
@@ -249,7 +251,6 @@ else
 endif
 EXTENSION_OBJ = $(BUILD_DIR)/extension.o
 
-
 # Default target
 all: dirs $(PARSER_OBJS)
 
@@ -258,6 +259,26 @@ graphqlite: $(MAIN_APP)
 
 # Build SQLite extension
 extension: $(EXTENSION_LIB)
+
+# Copy extension to Rust bindings libs/ directory for bundled builds
+# Note: macOS uses "arm64", Linux uses "aarch64" for ARM64
+install-bundled: $(EXTENSION_LIB)
+	@mkdir -p $(RUST_BINDINGS_DIR)/libs
+ifeq ($(UNAME_S),Darwin)
+ifneq (,$(filter arm64 aarch64,$(UNAME_M)))
+	cp $(EXTENSION_LIB) $(RUST_BINDINGS_DIR)/libs/graphqlite-macos-aarch64.dylib
+else
+	cp $(EXTENSION_LIB) $(RUST_BINDINGS_DIR)/libs/graphqlite-macos-x86_64.dylib
+endif
+else ifeq ($(UNAME_S),Linux)
+ifneq (,$(filter arm64 aarch64,$(UNAME_M)))
+	cp $(EXTENSION_LIB) $(RUST_BINDINGS_DIR)/libs/graphqlite-linux-aarch64.so
+else
+	cp $(EXTENSION_LIB) $(RUST_BINDINGS_DIR)/libs/graphqlite-linux-x86_64.so
+endif
+else
+	cp $(EXTENSION_LIB) $(RUST_BINDINGS_DIR)/libs/graphqlite-windows-x86_64.dll
+endif
 
 
 # Standard gqlite build (dynamic linking)
@@ -295,7 +316,6 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 # Extension object (uses vendored SQLite headers for ABI consistency - no EXTRA_INCLUDES)
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
 	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
-
 
 # Help target
 help:
@@ -490,7 +510,7 @@ test-unit: $(TEST_RUNNER)
 	@echo "Running unit tests..."
 	./$(TEST_RUNNER)
 
-test-rust: extension
+test-rust: extension install-bundled
 	@echo "Running Rust binding tests..."
 	cd $(RUST_BINDINGS_DIR) && cargo test -- --test-threads=1
 

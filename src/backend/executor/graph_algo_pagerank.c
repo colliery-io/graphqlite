@@ -37,17 +37,29 @@ static int compare_pr_desc(const void *a, const void *b)
  * - Pre-computes 1/out_degree to avoid division in inner loop
  * - Early convergence detection (stops if max change < 1e-6)
  * - Push-based approach for better cache locality on outgoing edges
+ *
+ * If cached is non-NULL, uses it directly (fast path).
+ * If cached is NULL, loads graph from SQLite (original behavior).
  */
-graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations, int top_k)
+graph_algo_result* execute_pagerank(sqlite3 *db, csr_graph *cached, double damping, int iterations, int top_k)
 {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
-    CYPHER_DEBUG("Executing C-based PageRank: damping=%.2f, iterations=%d, top_k=%d",
-                 damping, iterations, top_k);
+    CYPHER_DEBUG("Executing PageRank: damping=%.2f, iterations=%d, top_k=%d, cached=%s",
+                 damping, iterations, top_k, cached ? "yes" : "no");
 
-    /* Load graph into CSR format */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -66,7 +78,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations,
         free(pr);
         free(pr_new);
         free(inv_out_degree);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -135,7 +147,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations,
         free(pr);
         free(pr_new);
         free(inv_out_degree);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -159,7 +171,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations,
         free(pr);
         free(pr_new);
         free(inv_out_degree);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -202,7 +214,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations,
     free(pr);
     free(pr_new);
     free(inv_out_degree);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

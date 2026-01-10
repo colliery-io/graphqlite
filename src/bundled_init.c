@@ -17,18 +17,23 @@
 #include "executor/cypher_schema.h"
 #include "executor/cypher_executor.h"
 #include "executor/agtype.h"
+#include "executor/graph_algorithms.h"
 #include "parser/cypher_parser.h"
 
 /* Per-connection executor cache structure */
 typedef struct {
     sqlite3 *db;
     cypher_executor *executor;
+    csr_graph *cached_graph;  /* Cached CSR graph for algorithm acceleration */
 } bundled_connection_cache;
 
 /* Destructor called when database connection closes */
 static void bundled_connection_cache_destroy(void *data) {
     bundled_connection_cache *cache = (bundled_connection_cache *)data;
     if (cache) {
+        if (cache->cached_graph) {
+            csr_graph_free(cache->cached_graph);
+        }
         if (cache->executor) {
             cypher_executor_free(cache->executor);
         }
@@ -41,6 +46,143 @@ static void bundled_test_func(sqlite3_context *context, int argc, sqlite3_value 
     (void)argc;
     (void)argv;
     sqlite3_result_text(context, "GraphQLite extension loaded successfully!", -1, SQLITE_STATIC);
+}
+
+/* gql_load_graph() - Build CSR from SQLite and cache in connection memory */
+static void bundled_load_graph_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
+
+    bundled_connection_cache *cache = (bundled_connection_cache *)sqlite3_user_data(context);
+    if (!cache) {
+        sqlite3_result_error(context, "No connection cache available", -1);
+        return;
+    }
+
+    sqlite3 *db = sqlite3_context_db_handle(context);
+
+    /* If already loaded, return current stats */
+    if (cache->cached_graph) {
+        char response[256];
+        snprintf(response, sizeof(response),
+                 "{\"status\":\"already_loaded\",\"nodes\":%d,\"edges\":%d}",
+                 cache->cached_graph->node_count,
+                 cache->cached_graph->edge_count);
+        sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
+        return;
+    }
+
+    /* Load graph from SQLite */
+    csr_graph *graph = csr_graph_load(db);
+    if (!graph) {
+        sqlite3_result_text(context, "{\"status\":\"loaded\",\"nodes\":0,\"edges\":0}", -1, SQLITE_STATIC);
+        return;
+    }
+
+    /* Cache the graph */
+    cache->cached_graph = graph;
+
+    /* Also update executor if it exists */
+    if (cache->executor) {
+        cache->executor->cached_graph = graph;
+    }
+
+    char response[256];
+    snprintf(response, sizeof(response),
+             "{\"status\":\"loaded\",\"nodes\":%d,\"edges\":%d}",
+             graph->node_count, graph->edge_count);
+    sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
+}
+
+/* gql_unload_graph() - Free cached graph memory */
+static void bundled_unload_graph_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
+
+    bundled_connection_cache *cache = (bundled_connection_cache *)sqlite3_user_data(context);
+    if (!cache) {
+        sqlite3_result_error(context, "No connection cache available", -1);
+        return;
+    }
+
+    if (cache->cached_graph) {
+        csr_graph_free(cache->cached_graph);
+        cache->cached_graph = NULL;
+
+        /* Also clear executor reference */
+        if (cache->executor) {
+            cache->executor->cached_graph = NULL;
+        }
+
+        sqlite3_result_text(context, "{\"status\":\"unloaded\"}", -1, SQLITE_STATIC);
+    } else {
+        sqlite3_result_text(context, "{\"status\":\"not_loaded\"}", -1, SQLITE_STATIC);
+    }
+}
+
+/* gql_reload_graph() - Invalidate cache and rebuild from current database state */
+static void bundled_reload_graph_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
+
+    bundled_connection_cache *cache = (bundled_connection_cache *)sqlite3_user_data(context);
+    if (!cache) {
+        sqlite3_result_error(context, "No connection cache available", -1);
+        return;
+    }
+
+    sqlite3 *db = sqlite3_context_db_handle(context);
+
+    int prev_nodes = 0, prev_edges = 0;
+
+    /* Free existing cache if present */
+    if (cache->cached_graph) {
+        prev_nodes = cache->cached_graph->node_count;
+        prev_edges = cache->cached_graph->edge_count;
+        csr_graph_free(cache->cached_graph);
+        cache->cached_graph = NULL;
+    }
+
+    /* Load fresh graph from SQLite */
+    csr_graph *graph = csr_graph_load(db);
+    cache->cached_graph = graph;
+
+    /* Also update executor if it exists */
+    if (cache->executor) {
+        cache->executor->cached_graph = graph;
+    }
+
+    int new_nodes = graph ? graph->node_count : 0;
+    int new_edges = graph ? graph->edge_count : 0;
+
+    char response[512];
+    snprintf(response, sizeof(response),
+             "{\"status\":\"reloaded\",\"previous_nodes\":%d,\"previous_edges\":%d,\"nodes\":%d,\"edges\":%d}",
+             prev_nodes, prev_edges, new_nodes, new_edges);
+    sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
+}
+
+/* gql_graph_loaded() - Return cache status */
+static void bundled_graph_loaded_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
+
+    bundled_connection_cache *cache = (bundled_connection_cache *)sqlite3_user_data(context);
+    if (!cache) {
+        sqlite3_result_error(context, "No connection cache available", -1);
+        return;
+    }
+
+    if (cache->cached_graph) {
+        char response[256];
+        snprintf(response, sizeof(response),
+                 "{\"loaded\":true,\"nodes\":%d,\"edges\":%d}",
+                 cache->cached_graph->node_count,
+                 cache->cached_graph->edge_count);
+        sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_result_text(context, "{\"loaded\":false,\"nodes\":0,\"edges\":0}", -1, SQLITE_STATIC);
+    }
 }
 
 /* Cypher function - full implementation with cached executor */
@@ -379,6 +521,16 @@ int graphqlite_init(sqlite3 *db) {
     /* Register the regexp() function */
     sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
                            bundled_regexp_func, 0, 0);
+
+    /* Register graph cache management functions */
+    sqlite3_create_function(db, "gql_load_graph", 0, SQLITE_UTF8, cache,
+                           bundled_load_graph_func, 0, 0);
+    sqlite3_create_function(db, "gql_unload_graph", 0, SQLITE_UTF8, cache,
+                           bundled_unload_graph_func, 0, 0);
+    sqlite3_create_function(db, "gql_reload_graph", 0, SQLITE_UTF8, cache,
+                           bundled_reload_graph_func, 0, 0);
+    sqlite3_create_function(db, "gql_graph_loaded", 0, SQLITE_UTF8, cache,
+                           bundled_graph_loaded_func, 0, 0);
 
     /* Create schema */
     bundled_create_schema(db);

@@ -27,6 +27,19 @@ Benchmarks on Apple M1 Max (10 cores, 64GB RAM).
 | Moderate | 500K | 10.0M | 1ms | 2ms |
 | Moderate | 1M | 20.0M | <1ms | 2ms |
 
+### Deep Hop Traversal
+
+Traversal time is **independent of graph size** - it scales only with the number of paths found.
+
+| Hops | Paths Found | Time |
+|------|-------------|------|
+| 1-3 | 5-125 | <1ms |
+| 4 | 625 | 2ms |
+| 5 | 3,125 | 12ms |
+| 6 | 15,625 | 58ms |
+
+Path count grows as `degree^hops`. With average degree 5, expect 5^n paths at n hops.
+
 ### Graph Algorithms
 
 | Algorithm | Nodes | Edges | Time |
@@ -99,9 +112,99 @@ nodes = [(p["id"], p, "Person") for p in people]
 g.upsert_nodes_batch(nodes)
 ```
 
-### Algorithm Caching
+### Graph Caching
 
-Graph algorithms scan the entire graph. If your graph doesn't change frequently, cache results:
+GraphQLite can cache the graph structure in memory using a Compressed Sparse Row (CSR) format, providing **1.5-2x speedup** for graph algorithms by eliminating repeated SQLite I/O.
+
+#### SQL Interface
+
+```sql
+-- Load graph into memory cache
+SELECT gql_load_graph();
+-- Returns: {"status":"loaded","nodes":1000,"edges":5000}
+
+-- Check if cache is loaded
+SELECT gql_graph_loaded();
+-- Returns: {"loaded":true,"nodes":1000,"edges":5000}
+
+-- Reload cache after graph modifications
+SELECT gql_reload_graph();
+
+-- Free cache memory
+SELECT gql_unload_graph();
+```
+
+#### Python Interface
+
+```python
+from graphqlite import graph
+
+g = graph(":memory:")
+# ... build graph ...
+
+# Load cache for fast algorithm execution
+g.load_graph()  # {"status": "loaded", "nodes": 1000, "edges": 5000}
+
+# Run algorithms (all use cached graph)
+g.pagerank()
+g.community_detection()
+g.degree_centrality()
+
+# After modifying graph, reload cache
+g.upsert_node("new_node", {}, "Person")
+g.reload_graph()
+
+# Free memory when done
+g.unload_graph()
+```
+
+#### Rust Interface
+
+```rust
+use graphqlite::Graph;
+
+let g = Graph::open_in_memory()?;
+// ... build graph ...
+
+// Load cache
+let status = g.load_graph()?;
+println!("Loaded {} nodes", status.nodes.unwrap_or(0));
+
+// Run algorithms with cache
+// ... algorithms use cache automatically ...
+
+// Check status
+if g.graph_loaded()? {
+    g.unload_graph()?;
+}
+```
+
+#### Cache Performance
+
+Benchmarks on Apple M1 Max with graph caching enabled:
+
+| Nodes | Edges | Algorithm | Uncached | Cached | Speedup |
+|-------|-------|-----------|----------|--------|---------|
+| 10K | 50K | PageRank | 13ms | 7ms | **1.8x** |
+| 10K | 50K | Label Prop | 13ms | 7ms | **1.8x** |
+| 100K | 500K | PageRank | 151ms | 91ms | **1.6x** |
+| 100K | 500K | Label Prop | 151ms | 87ms | **1.7x** |
+| 500K | 2.5M | PageRank | 858ms | 420ms | **2.0x** |
+| 500K | 2.5M | Label Prop | 863ms | 412ms | **2.0x** |
+
+**When to use caching:**
+- Running multiple algorithms on the same graph
+- Repeated analysis workflows
+- Interactive exploration where graph doesn't change
+
+**When NOT to use caching:**
+- Single algorithm call (cache load overhead may exceed benefit)
+- Frequently modified graphs (requires reload after each change)
+- Memory-constrained environments
+
+### Result Caching
+
+For application-level caching of algorithm results:
 
 ```python
 import functools
@@ -131,11 +234,24 @@ conn.execute("PRAGMA cache_size = -64000")  # 64MB
 Run benchmarks on your hardware:
 
 ```bash
-make performance
+# Full performance suite
+./tests/performance/run_all_perf.sh full
+
+# Cache comparison benchmark
+./tests/performance/perf_cache_comparison.sh full
+
+# Quick cache test
+sqlite3 :memory: < tests/performance/perf_cache.sql
 ```
 
-This runs:
-- Insertion benchmarks
-- Traversal benchmarks across topologies
-- Algorithm benchmarks
-- Query benchmarks
+Available benchmark modes:
+- `quick` - Fast smoke test (~30s)
+- `standard` - Default benchmarks (~3min)
+- `full` - Comprehensive benchmarks (~10min)
+
+Benchmarks cover:
+- Insertion performance
+- Traversal across topologies (chain, tree, sparse, dense, power-law)
+- Algorithm performance (PageRank, Label Propagation, etc.)
+- Query performance (lookup, hop traversals, filters)
+- Cache performance (uncached vs cached algorithms)

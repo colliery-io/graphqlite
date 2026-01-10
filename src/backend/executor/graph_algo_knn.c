@@ -106,7 +106,7 @@ static int compare_neighbors(const void *a, const void *b) {
     return 0;
 }
 
-graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k) {
+graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_id, int k) {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
@@ -116,7 +116,17 @@ graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k) {
         return result;
     }
 
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -135,7 +145,7 @@ graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k) {
     if (source_idx < 0) {
         result->success = true;
         result->json_result = strdup("[]");
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -149,7 +159,7 @@ graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k) {
         result->success = false;
         result->error_message = strdup("Out of memory");
         if (source_neighbors) free(source_neighbors);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -184,7 +194,7 @@ graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k) {
         result->success = false;
         result->error_message = strdup("Out of memory");
         free(similarities);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -207,6 +217,6 @@ graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k) {
     result->success = true;
 
     free(similarities);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
     return result;
 }

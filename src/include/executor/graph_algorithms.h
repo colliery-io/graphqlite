@@ -84,25 +84,29 @@ typedef struct {
 /* Check if RETURN clause contains a graph algorithm call and extract parameters */
 graph_algo_params detect_graph_algorithm(cypher_return *return_clause);
 
-/* Algorithm implementations */
-graph_algo_result* execute_pagerank(sqlite3 *db, double damping, int iterations, int top_k);
-graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations);
-graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const char *target_id, const char *weight_prop);
-graph_algo_result* execute_degree_centrality(sqlite3 *db);
-graph_algo_result* execute_wcc(sqlite3 *db);
-graph_algo_result* execute_scc(sqlite3 *db);
-graph_algo_result* execute_betweenness_centrality(sqlite3 *db);
-graph_algo_result* execute_closeness_centrality(sqlite3 *db);
-graph_algo_result* execute_louvain(sqlite3 *db, double resolution);
-graph_algo_result* execute_triangle_count(sqlite3 *db);
-graph_algo_result* execute_astar(sqlite3 *db, const char *source_id, const char *target_id,
+/* Algorithm implementations
+ * All algorithms accept an optional cached CSR graph parameter.
+ * If cached is non-NULL, uses it directly (fast path).
+ * If cached is NULL, loads graph from SQLite (original behavior).
+ */
+graph_algo_result* execute_pagerank(sqlite3 *db, csr_graph *cached, double damping, int iterations, int top_k);
+graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int iterations);
+graph_algo_result* execute_dijkstra(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id, const char *weight_prop);
+graph_algo_result* execute_degree_centrality(sqlite3 *db, csr_graph *cached);
+graph_algo_result* execute_wcc(sqlite3 *db, csr_graph *cached);
+graph_algo_result* execute_scc(sqlite3 *db, csr_graph *cached);
+graph_algo_result* execute_betweenness_centrality(sqlite3 *db, csr_graph *cached);
+graph_algo_result* execute_closeness_centrality(sqlite3 *db, csr_graph *cached);
+graph_algo_result* execute_louvain(sqlite3 *db, csr_graph *cached, double resolution);
+graph_algo_result* execute_triangle_count(sqlite3 *db, csr_graph *cached);
+graph_algo_result* execute_astar(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id,
                                   const char *weight_prop, const char *lat_prop, const char *lon_prop);
-graph_algo_result* execute_bfs(sqlite3 *db, const char *start_id, int max_depth);
-graph_algo_result* execute_dfs(sqlite3 *db, const char *start_id, int max_depth);
-graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id, const char *node2_id, double threshold, int top_k);
-graph_algo_result* execute_knn(sqlite3 *db, const char *node_id, int k);
-graph_algo_result* execute_eigenvector_centrality(sqlite3 *db, int iterations);
-graph_algo_result* execute_apsp(sqlite3 *db);
+graph_algo_result* execute_bfs(sqlite3 *db, csr_graph *cached, const char *start_id, int max_depth);
+graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start_id, int max_depth);
+graph_algo_result* execute_node_similarity(sqlite3 *db, csr_graph *cached, const char *node1_id, const char *node2_id, double threshold, int top_k);
+graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_id, int k);
+graph_algo_result* execute_eigenvector_centrality(sqlite3 *db, csr_graph *cached, int iterations);
+graph_algo_result* execute_apsp(sqlite3 *db, csr_graph *cached);
 
 /* Result management */
 void graph_algo_result_free(graph_algo_result *result);

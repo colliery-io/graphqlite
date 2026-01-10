@@ -119,13 +119,23 @@ static int compare_similarity(const void *a, const void *b) {
     return 0;
 }
 
-graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
+graph_algo_result* execute_node_similarity(sqlite3 *db, csr_graph *cached, const char *node1_id,
                                             const char *node2_id, double threshold,
                                             int top_k) {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         /* Empty graph - return empty array */
         result->success = true;
@@ -150,7 +160,7 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
         if (idx1 < 0 || idx2 < 0) {
             result->success = true;
             result->json_result = strdup("[]");
-            csr_graph_free(graph);
+            if (should_free_graph) csr_graph_free(graph);
             return result;
         }
 
@@ -169,7 +179,7 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
             result->error_message = strdup("Out of memory");
         }
 
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -179,7 +189,7 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
     if (max_pairs == 0) {
         result->success = true;
         result->json_result = strdup("[]");
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -187,7 +197,7 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
     if (!pairs) {
         result->success = false;
         result->error_message = strdup("Out of memory");
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -224,7 +234,7 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
         result->success = false;
         result->error_message = strdup("Out of memory");
         free(pairs);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -249,6 +259,6 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, const char *node1_id,
     result->success = true;
 
     free(pairs);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
     return result;
 }
