@@ -189,9 +189,10 @@ impl Graph {
     /// use graphqlite::Graph;
     ///
     /// let g = Graph::open_in_memory()?;
+    /// let empty: Vec<(&str, &str)> = vec![];
     /// let id_map = g.insert_nodes_bulk([
-    ///     ("a", vec![], "Node"),
-    ///     ("b", vec![], "Node"),
+    ///     ("a", empty.clone(), "Node"),
+    ///     ("b", empty.clone(), "Node"),
     /// ])?;
     ///
     /// g.insert_edges_bulk(
