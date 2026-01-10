@@ -12,6 +12,7 @@ Store and query graph data directly in SQLite—combining the simplicity of a si
 ## Installation
 
 ```bash
+brew install graphqlite       # macOS/Linux (Homebrew)
 pip install graphqlite        # Python
 cargo add graphqlite          # Rust
 ```
