@@ -2038,3 +2038,292 @@ fn test_cache_empty_graph() {
     assert_eq!(status.nodes, Some(0));
     assert_eq!(status.edges, Some(0));
 }
+
+// =============================================================================
+// Bulk Insert Tests
+// =============================================================================
+
+// Type alias to help with empty property vecs
+type BulkProps = Vec<(&'static str, &'static str)>;
+
+fn empty_bulk_props() -> BulkProps {
+    vec![]
+}
+
+#[test]
+fn test_bulk_insert_nodes() {
+    let g = test_graph();
+
+    let id_map = g
+        .insert_nodes_bulk([
+            ("alice", vec![("name", "Alice"), ("age", "30")], "Person"),
+            ("bob", vec![("name", "Bob"), ("age", "25")], "Person"),
+            ("charlie", vec![("name", "Charlie"), ("age", "35")], "Person"),
+        ])
+        .unwrap();
+
+    assert_eq!(id_map.len(), 3);
+    assert!(id_map.contains_key("alice"));
+    assert!(id_map.contains_key("bob"));
+    assert!(id_map.contains_key("charlie"));
+
+    // Verify nodes exist via Graph API
+    let stats = g.stats().unwrap();
+    assert_eq!(stats.nodes, 3);
+
+    // Verify nodes via Cypher query
+    let result = g.query("MATCH (n:Person) RETURN n.id ORDER BY n.id").unwrap();
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0].get::<String>("n.id").unwrap(), "alice");
+    assert_eq!(result[1].get::<String>("n.id").unwrap(), "bob");
+    assert_eq!(result[2].get::<String>("n.id").unwrap(), "charlie");
+}
+
+#[test]
+fn test_bulk_insert_nodes_empty() {
+    let g = test_graph();
+
+    let id_map = g
+        .insert_nodes_bulk::<std::vec::IntoIter<(&str, BulkProps, &str)>, _, _, _, _, _>(vec![].into_iter())
+        .unwrap();
+
+    assert!(id_map.is_empty());
+    assert_eq!(g.stats().unwrap().nodes, 0);
+}
+
+#[test]
+fn test_bulk_insert_edges() {
+    let g = test_graph();
+
+    let id_map = g
+        .insert_nodes_bulk([
+            ("a", empty_bulk_props(), "Node"),
+            ("b", empty_bulk_props(), "Node"),
+            ("c", empty_bulk_props(), "Node"),
+        ])
+        .unwrap();
+
+    let edges_inserted = g
+        .insert_edges_bulk(
+            [
+                ("a", "b", vec![("weight", "1.5")], "CONNECTS"),
+                ("b", "c", vec![("weight", "2.5")], "CONNECTS"),
+                ("a", "c", vec![("weight", "3.5")], "CONNECTS"),
+            ],
+            &id_map,
+        )
+        .unwrap();
+
+    assert_eq!(edges_inserted, 3);
+
+    // Verify edges exist
+    let stats = g.stats().unwrap();
+    assert_eq!(stats.edges, 3);
+
+    // Verify edges via query
+    let result = g.query("MATCH ()-[r:CONNECTS]->() RETURN r.weight ORDER BY r.weight").unwrap();
+    assert_eq!(result.len(), 3);
+    let weights: Vec<f64> = result.iter().map(|r| r.get::<f64>("r.weight").unwrap()).collect();
+    assert!((weights[0] - 1.5).abs() < 0.01);
+    assert!((weights[1] - 2.5).abs() < 0.01);
+    assert!((weights[2] - 3.5).abs() < 0.01);
+}
+
+#[test]
+fn test_bulk_insert_edges_empty() {
+    let g = test_graph();
+
+    let id_map = g
+        .insert_nodes_bulk([("node1", empty_bulk_props(), "Node")])
+        .unwrap();
+
+    let edges_inserted = g
+        .insert_edges_bulk::<std::vec::IntoIter<(&str, &str, BulkProps, &str)>, _, _, _, _, _, _>(
+            vec![].into_iter(),
+            &id_map,
+        )
+        .unwrap();
+
+    assert_eq!(edges_inserted, 0);
+    assert_eq!(g.stats().unwrap().edges, 0);
+}
+
+#[test]
+fn test_bulk_insert_edges_fallback_lookup() {
+    let g = test_graph();
+
+    // Create nodes via regular upsert
+    g.upsert_node("existing1", [("name", "Existing1")], "Node").unwrap();
+    g.upsert_node("existing2", [("name", "Existing2")], "Node").unwrap();
+
+    // Insert edges using empty id_map - should fall back to database lookup
+    let empty_map = std::collections::HashMap::new();
+    let edges_inserted = g
+        .insert_edges_bulk(
+            [("existing1", "existing2", empty_bulk_props(), "CONNECTS")],
+            &empty_map,
+        )
+        .unwrap();
+
+    assert_eq!(edges_inserted, 1);
+    assert!(g.has_edge("existing1", "existing2").unwrap());
+}
+
+#[test]
+fn test_bulk_insert_graph() {
+    let g = test_graph();
+
+    let result = g
+        .insert_graph_bulk(
+            [
+                ("x", vec![("name", "X")], "Node"),
+                ("y", vec![("name", "Y")], "Node"),
+                ("z", vec![("name", "Z")], "Node"),
+            ],
+            [
+                ("x", "y", empty_bulk_props(), "LINKS"),
+                ("y", "z", empty_bulk_props(), "LINKS"),
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(result.nodes_inserted, 3);
+    assert_eq!(result.edges_inserted, 2);
+    assert_eq!(result.id_map.len(), 3);
+
+    // Verify via stats
+    let stats = g.stats().unwrap();
+    assert_eq!(stats.nodes, 3);
+    assert_eq!(stats.edges, 2);
+}
+
+#[test]
+fn test_resolve_node_ids() {
+    let g = test_graph();
+
+    // Insert some nodes via upsert
+    g.upsert_node("alice", [("name", "Alice")], "Person").unwrap();
+    g.upsert_node("bob", [("name", "Bob")], "Person").unwrap();
+    g.upsert_node("charlie", [("name", "Charlie")], "Person").unwrap();
+
+    let resolved = g.resolve_node_ids(["alice", "bob", "unknown"]).unwrap();
+
+    assert_eq!(resolved.len(), 2);
+    assert!(resolved.contains_key("alice"));
+    assert!(resolved.contains_key("bob"));
+    assert!(!resolved.contains_key("unknown"));
+    assert!(!resolved.contains_key("charlie")); // Not in the query
+}
+
+#[test]
+fn test_resolve_node_ids_empty() {
+    let g = test_graph();
+
+    let resolved = g.resolve_node_ids::<std::vec::IntoIter<&str>, _>(vec![].into_iter()).unwrap();
+    assert!(resolved.is_empty());
+}
+
+#[test]
+fn test_bulk_insert_mixed_sources() {
+    let g = test_graph();
+
+    // Insert some nodes via Cypher/upsert
+    g.upsert_node("existing", [("name", "Existing")], "Person").unwrap();
+
+    // Insert new nodes via bulk
+    let id_map = g
+        .insert_nodes_bulk([
+            ("new1", empty_bulk_props(), "Person"),
+            ("new2", empty_bulk_props(), "Person"),
+        ])
+        .unwrap();
+
+    // Insert edges connecting new and existing nodes
+    // "existing" is not in id_map, so it will use fallback lookup
+    let edges_inserted = g
+        .insert_edges_bulk(
+            [
+                ("new1", "new2", empty_bulk_props(), "KNOWS"),
+                ("new1", "existing", empty_bulk_props(), "KNOWS"),
+                ("existing", "new2", empty_bulk_props(), "KNOWS"),
+            ],
+            &id_map,
+        )
+        .unwrap();
+
+    assert_eq!(edges_inserted, 3);
+
+    // Verify all edges exist
+    assert!(g.has_edge("new1", "new2").unwrap());
+    assert!(g.has_edge("new1", "existing").unwrap());
+    assert!(g.has_edge("existing", "new2").unwrap());
+}
+
+#[test]
+fn test_bulk_insert_with_typed_properties() {
+    let g = test_graph();
+
+    // Insert nodes with different property types
+    let id_map = g
+        .insert_nodes_bulk([
+            ("node1", vec![("name", "Node1"), ("count", "42"), ("active", "true")], "TypedNode"),
+            ("node2", vec![("name", "Node2"), ("score", "3.14"), ("active", "false")], "TypedNode"),
+        ])
+        .unwrap();
+
+    assert_eq!(id_map.len(), 2);
+
+    // Verify integer property
+    let result = g.query("MATCH (n {id: 'node1'}) RETURN n.count").unwrap();
+    assert_eq!(result[0].get::<i64>("n.count").unwrap(), 42);
+
+    // Verify float property
+    let result = g.query("MATCH (n {id: 'node2'}) RETURN n.score").unwrap();
+    let score = result[0].get::<f64>("n.score").unwrap();
+    assert!((score - 3.14).abs() < 0.01);
+
+    // Verify boolean properties
+    let result = g.query("MATCH (n {id: 'node1'}) RETURN n.active").unwrap();
+    assert!(result[0].get::<bool>("n.active").unwrap());
+
+    let result = g.query("MATCH (n {id: 'node2'}) RETURN n.active").unwrap();
+    assert!(!result[0].get::<bool>("n.active").unwrap());
+}
+
+#[test]
+fn test_bulk_insert_verifies_with_graph_api() {
+    let g = test_graph();
+
+    let result = g
+        .insert_graph_bulk(
+            [
+                ("hub", vec![("name", "Hub")], "Node"),
+                ("spoke1", vec![("name", "Spoke1")], "Node"),
+                ("spoke2", vec![("name", "Spoke2")], "Node"),
+            ],
+            [
+                ("hub", "spoke1", empty_bulk_props(), "CONNECTS"),
+                ("hub", "spoke2", empty_bulk_props(), "CONNECTS"),
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(result.nodes_inserted, 3);
+    assert_eq!(result.edges_inserted, 2);
+
+    // Verify using Graph API methods
+    assert!(g.has_node("hub").unwrap());
+    assert!(g.has_node("spoke1").unwrap());
+    assert!(g.has_node("spoke2").unwrap());
+
+    assert!(g.has_edge("hub", "spoke1").unwrap());
+    assert!(g.has_edge("hub", "spoke2").unwrap());
+
+    // Hub should have degree 2
+    assert_eq!(g.node_degree("hub").unwrap(), 2);
+
+    // Neighbors of hub should include both spokes
+    let neighbors = g.get_neighbors("hub").unwrap();
+    assert_eq!(neighbors.len(), 2);
+}
+
