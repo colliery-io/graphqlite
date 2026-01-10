@@ -5,7 +5,9 @@ query execution time, memory usage, and scalability.
 """
 
 import angreal
-from utils import run_make, ensure_extension_built
+import subprocess
+import os
+from utils import run_make, ensure_extension_built, get_project_root
 
 perf = angreal.command_group(name="perf", about="Run performance benchmarks")
 
@@ -164,3 +166,85 @@ def perf_full(iterations: int = None, verbose: bool = False) -> int:
     if iterations:
         return run_make("performance-full", verbose=verbose, ITERATIONS=str(iterations))
     return run_make("performance-full", verbose=verbose)
+
+
+@perf()
+@angreal.command(
+    name="gpu",
+    about="GPU vs CPU performance comparison",
+    tool=angreal.ToolDescription(
+        """
+Compare GPU-accelerated vs CPU-only PageRank performance.
+
+## What this tests
+- Builds both CPU-only and GPU-enabled extensions
+- Runs PageRank on increasingly large graphs
+- Measures execution time for both paths
+- Calculates speedup ratios
+
+## When to use
+- Evaluating GPU acceleration benefits
+- Finding optimal graph sizes for GPU dispatch
+- Validating GPU implementation performance
+
+## Examples
+```
+angreal perf gpu              # Standard benchmark (50K-250K nodes)
+angreal perf gpu --mode quick # Quick test (10K-50K nodes)
+angreal perf gpu --mode full  # Full suite (up to 1M nodes)
+```
+
+## Prerequisites
+- Rust toolchain installed
+- GPU-capable machine (Metal on macOS, Vulkan on Linux)
+
+## Duration
+- quick: ~1 minute
+- standard: ~3 minutes
+- full: ~10 minutes
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(
+    name="mode",
+    long="mode",
+    short="m",
+    default_value="standard",
+    help="Benchmark mode: quick, standard, or full"
+)
+@angreal.argument(
+    name="iterations",
+    long="iterations",
+    short="n",
+    python_type="int",
+    default_value="3",
+    help="Number of test iterations per measurement"
+)
+@angreal.argument(
+    name="pagerank_iters",
+    long="pagerank-iters",
+    short="p",
+    python_type="int",
+    default_value="20",
+    help="Number of PageRank iterations per test"
+)
+def perf_gpu(mode: str = "standard", iterations: int = 3, pagerank_iters: int = 20) -> int:
+    """Run GPU vs CPU performance comparison."""
+    root = get_project_root()
+    script = os.path.join(root, "tests", "performance", "perf_gpu_comparison.sh")
+
+    if not os.path.exists(script):
+        print(f"Error: Benchmark script not found at {script}")
+        return 1
+
+    print(f"Running GPU vs CPU benchmark (mode={mode})...")
+    print(f"PageRank iterations: {pagerank_iters}, Test iterations: {iterations}")
+    print("")
+
+    env = os.environ.copy()
+    env["PERF_ITERATIONS"] = str(iterations)
+    env["PAGERANK_ITERS"] = str(pagerank_iters)
+
+    result = subprocess.run([script, mode], cwd=root, env=env)
+    return result.returncode
