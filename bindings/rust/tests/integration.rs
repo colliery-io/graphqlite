@@ -2326,3 +2326,4 @@ fn test_bulk_insert_verifies_with_graph_api() {
     let neighbors = g.get_neighbors("hub").unwrap();
     assert_eq!(neighbors.len(), 2);
 }
+

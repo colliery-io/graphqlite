@@ -4,15 +4,15 @@ level: task
 title: "Update batch bindings to use transactions instead of for loops"
 short_code: "GQLITE-T-0094"
 created_at: 2026-01-10T04:16:05.171987+00:00
-updated_at: 2026-01-10T04:16:05.171987+00:00
+updated_at: 2026-01-10T13:55:47.109934+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#tech-debt"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -79,6 +79,12 @@ pub fn upsert_nodes_batch(...) -> Result<()> {
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] `upsert_nodes_batch` wraps all operations in a single transaction
 - [ ] `upsert_edges_batch` wraps all operations in a single transaction
 - [ ] Transaction rolls back on any individual operation failure
@@ -105,4 +111,22 @@ pub fn upsert_nodes_batch(...) -> Result<()> {
 
 ## Status Updates
 
-*To be added during implementation*
+### Resolution (2026-01-10)
+
+**Outcome**: Resolved differently than originally planned.
+
+Transaction wrapping for batch methods conflicts with the Cypher extension's internal transaction management, causing syntax errors and rollback failures.
+
+**Solution implemented**:
+1. **Bulk insert methods** (GQLITE-T-0093) provide the high-performance atomic batch operations users need
+2. **Batch methods** remain as convenience wrappers with documented limitations
+
+**Key differences**:
+| Aspect | `upsert_*_batch` | `insert_*_bulk` |
+|--------|------------------|-----------------|
+| Semantics | Upsert (MERGE) | Insert only |
+| Atomicity | No | Yes |
+| Performance | ~1x (no improvement) | 100-500x faster |
+| Use case | Mixed workloads | Building new graphs |
+
+**Documentation updated** to clearly state that batch methods do not provide atomicity, and users should use bulk methods for atomic operations.
