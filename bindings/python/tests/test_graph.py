@@ -694,3 +694,109 @@ def test_leiden_communities_with_resolution(g):
     node_ids = {c["node_id"] for c in communities}
     assert "r1" in node_ids
     assert "r2" in node_ids
+
+
+# =============================================================================
+# Graph Cache Tests
+# =============================================================================
+
+def test_graph_loaded_initially_false(g):
+    """Cache should not be loaded initially."""
+    assert g.graph_loaded() is False
+
+
+def test_load_graph(g):
+    """Test loading graph into cache."""
+    g.upsert_node("a", {}, "Node")
+    g.upsert_node("b", {}, "Node")
+    g.upsert_edge("a", "b", {}, "KNOWS")
+
+    result = g.load_graph()
+
+    assert result["status"] == "loaded"
+    assert result["nodes"] == 2
+    assert result["edges"] == 1
+    assert g.graph_loaded() is True
+
+
+def test_load_graph_already_loaded(g):
+    """Loading when already loaded should return already_loaded status."""
+    g.upsert_node("a", {}, "Node")
+    g.load_graph()
+
+    result = g.load_graph()
+
+    assert result["status"] == "already_loaded"
+
+
+def test_unload_graph(g):
+    """Test unloading graph cache."""
+    g.upsert_node("a", {}, "Node")
+    g.load_graph()
+    assert g.graph_loaded() is True
+
+    result = g.unload_graph()
+
+    assert result["status"] == "unloaded"
+    assert g.graph_loaded() is False
+
+
+def test_unload_graph_not_loaded(g):
+    """Unloading when not loaded should return not_loaded status."""
+    result = g.unload_graph()
+
+    assert result["status"] == "not_loaded"
+
+
+def test_reload_graph(g):
+    """Test reloading graph cache after modifications."""
+    g.upsert_node("a", {}, "Node")
+    g.upsert_node("b", {}, "Node")
+    g.load_graph()
+
+    # Add new node
+    g.upsert_node("c", {}, "Node")
+
+    result = g.reload_graph()
+
+    assert result["status"] == "reloaded"
+    assert result["nodes"] == 3
+
+
+def test_reload_graph_not_loaded(g):
+    """Reloading when not loaded should load and return reloaded status."""
+    g.upsert_node("a", {}, "Node")
+
+    result = g.reload_graph()
+
+    # reload_graph always returns "reloaded" even on first load
+    assert result["status"] == "reloaded"
+    assert g.graph_loaded() is True
+
+
+def test_cache_with_pagerank(g):
+    """Test that cached graph works with algorithms."""
+    g.upsert_node("a", {}, "Node")
+    g.upsert_node("b", {}, "Node")
+    g.upsert_node("c", {}, "Node")
+    g.upsert_edge("a", "b", {}, "LINKS")
+    g.upsert_edge("b", "c", {}, "LINKS")
+    g.upsert_edge("c", "a", {}, "LINKS")
+
+    g.load_graph()
+
+    # PageRank should work with cached graph
+    result = g.pagerank()
+
+    assert isinstance(result, list)
+    assert len(result) == 3
+
+
+def test_cache_empty_graph(g):
+    """Test caching an empty graph."""
+    result = g.load_graph()
+
+    # Empty graph should still load successfully
+    assert result["status"] == "loaded"
+    assert result["nodes"] == 0
+    assert result["edges"] == 0

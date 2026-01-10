@@ -17,14 +17,25 @@
  * Each node adopts the most common label among its neighbors.
  * Optimized with sparse label counting for O(E) per iteration.
  */
-graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
+graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int iterations)
 {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
-    CYPHER_DEBUG("Executing C-based Label Propagation: iterations=%d", iterations);
+    CYPHER_DEBUG("Executing C-based Label Propagation: iterations=%d, cached=%s",
+                 iterations, cached ? "yes" : "no");
 
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -39,7 +50,7 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
     if (!labels || !new_labels) {
         free(labels);
         free(new_labels);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -59,7 +70,7 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
         free(new_labels);
         free(label_counts);
         free(touched_labels);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -141,7 +152,7 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
     if (!label_to_community) {
         free(labels);
         free(new_labels);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -168,7 +179,7 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
         free(labels);
         free(new_labels);
         free(label_to_community);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -210,7 +221,7 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, int iterations)
     free(labels);
     free(new_labels);
     free(label_to_community);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

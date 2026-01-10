@@ -76,6 +76,128 @@ impl Graph {
     pub fn query(&self, cypher: &str) -> Result<CypherResult> {
         self.conn.cypher(cypher)
     }
+
+    // Cache management methods for algorithm acceleration
+
+    /// Load the graph into an in-memory CSR cache for fast algorithm execution.
+    ///
+    /// When the cache is loaded, graph algorithms run ~28x faster by avoiding
+    /// repeated SQLite I/O. The cache persists until explicitly unloaded or
+    /// the connection is closed.
+    ///
+    /// # Returns
+    ///
+    /// A `CacheStatus` with the cache status and graph statistics.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// g.query("CREATE (:Person {id: 'alice'})-[:KNOWS]->(:Person {id: 'bob'})")?;
+    /// let status = g.load_graph()?;
+    /// assert_eq!(status.status, "loaded");
+    /// // Now pagerank() will run ~28x faster
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn load_graph(&self) -> Result<CacheStatus> {
+        let json: String = self.conn.sqlite_connection()
+            .query_row("SELECT gql_load_graph()", [], |row| row.get(0))?;
+        let status: CacheStatus = serde_json::from_str(&json)?;
+        Ok(status)
+    }
+
+    /// Free the cached graph from memory.
+    ///
+    /// Call this after algorithm execution to reclaim memory, or when the
+    /// graph has been modified and you want to invalidate the cache.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// g.load_graph()?;
+    /// // ... run algorithms ...
+    /// let status = g.unload_graph()?;
+    /// assert_eq!(status.status, "unloaded");
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn unload_graph(&self) -> Result<CacheStatus> {
+        let json: String = self.conn.sqlite_connection()
+            .query_row("SELECT gql_unload_graph()", [], |row| row.get(0))?;
+        let status: CacheStatus = serde_json::from_str(&json)?;
+        Ok(status)
+    }
+
+    /// Reload the graph cache with the latest data.
+    ///
+    /// Use this after modifying the graph (adding/removing nodes/edges)
+    /// to refresh the cache with the current state.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// g.load_graph()?;
+    /// g.query("CREATE (:Person {id: 'charlie'})")?;  // Graph modified
+    /// let status = g.reload_graph()?;  // Refresh cache
+    /// assert_eq!(status.status, "reloaded");
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn reload_graph(&self) -> Result<CacheStatus> {
+        let json: String = self.conn.sqlite_connection()
+            .query_row("SELECT gql_reload_graph()", [], |row| row.get(0))?;
+        let status: CacheStatus = serde_json::from_str(&json)?;
+        Ok(status)
+    }
+
+    /// Check if the graph cache is currently loaded.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the cache is loaded, `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// assert!(!g.graph_loaded()?);
+    /// g.load_graph()?;
+    /// assert!(g.graph_loaded()?);
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn graph_loaded(&self) -> Result<bool> {
+        let json: String = self.conn.sqlite_connection()
+            .query_row("SELECT gql_graph_loaded()", [], |row| row.get(0))?;
+        let status: CacheLoadedStatus = serde_json::from_str(&json)?;
+        Ok(status.loaded)
+    }
+}
+
+/// Cache operation status returned by load/unload/reload operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStatus {
+    /// Operation status: "loaded", "unloaded", "reloaded", or "already_loaded"
+    pub status: String,
+    /// Number of nodes in the cached graph (if loaded)
+    #[serde(default)]
+    pub nodes: Option<i64>,
+    /// Number of edges in the cached graph (if loaded)
+    #[serde(default)]
+    pub edges: Option<i64>,
+}
+
+/// Response from graph_loaded() query.
+#[derive(Debug, Clone, Deserialize)]
+struct CacheLoadedStatus {
+    loaded: bool,
 }
 
 /// Create a new Graph instance (convenience function).

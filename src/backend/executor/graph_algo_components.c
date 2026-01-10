@@ -91,7 +91,7 @@ static void uf_union(union_find *uf, int x, int y)
  * Treats directed graph as undirected and finds connected components.
  * Uses Union-Find for O(V + E * α(V)) complexity where α is inverse Ackermann.
  */
-graph_algo_result* execute_wcc(sqlite3 *db)
+graph_algo_result* execute_wcc(sqlite3 *db, csr_graph *cached)
 {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
@@ -100,8 +100,17 @@ graph_algo_result* execute_wcc(sqlite3 *db)
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph - NULL means no nodes (empty graph) */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         /* Empty graph - no nodes exist */
         result->success = true;
@@ -113,7 +122,7 @@ graph_algo_result* execute_wcc(sqlite3 *db)
     union_find *uf = uf_create(graph->node_count);
     if (!uf) {
         result->error_message = strdup("Failed to allocate Union-Find structure");
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -134,7 +143,7 @@ graph_algo_result* execute_wcc(sqlite3 *db)
         free(component_map);
         free(component);
         uf_free(uf);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate component arrays");
         return result;
     }
@@ -160,7 +169,7 @@ graph_algo_result* execute_wcc(sqlite3 *db)
         free(component_map);
         free(component);
         uf_free(uf);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate result buffer");
         return result;
     }
@@ -189,7 +198,7 @@ graph_algo_result* execute_wcc(sqlite3 *db)
     free(component_map);
     free(component);
     uf_free(uf);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     return result;
 }
@@ -354,7 +363,7 @@ static void tarjan_iterative(csr_graph *graph, tarjan_state *t, int start)
     free(call_stack);
 }
 
-graph_algo_result* execute_scc(sqlite3 *db)
+graph_algo_result* execute_scc(sqlite3 *db, csr_graph *cached)
 {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
@@ -363,8 +372,17 @@ graph_algo_result* execute_scc(sqlite3 *db)
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph - NULL means no nodes (empty graph) */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         /* Empty graph - no nodes exist */
         result->success = true;
@@ -376,7 +394,7 @@ graph_algo_result* execute_scc(sqlite3 *db)
     tarjan_state *t = tarjan_create(graph->node_count);
     if (!t) {
         result->error_message = strdup("Failed to allocate Tarjan state");
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -392,7 +410,7 @@ graph_algo_result* execute_scc(sqlite3 *db)
     char *json = malloc(buf_size);
     if (!json) {
         tarjan_free(t);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate result buffer");
         return result;
     }
@@ -419,7 +437,7 @@ graph_algo_result* execute_scc(sqlite3 *db)
     result->json_result = json;
 
     tarjan_free(t);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     return result;
 }

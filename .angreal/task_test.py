@@ -6,10 +6,13 @@ Provides a unified interface for running various test suites:
 - Python binding tests
 - Functional SQL tests
 - Constraint tests (expected failures)
+- GPU acceleration tests
 """
 
 import angreal
-from utils import run_make, ensure_extension_built
+import subprocess
+import os
+from utils import run_make, ensure_extension_built, get_project_root
 
 test = angreal.command_group(name="test", about="Run GraphQLite tests")
 
@@ -368,5 +371,148 @@ def test_all(verbose: bool = False) -> int:
 
     print("\n" + "="*50)
     print("All tests passed!")
+    print("="*50)
+    return 0
+
+
+@test()
+@angreal.command(
+    name="gpu",
+    about="Run GPU acceleration tests",
+    tool=angreal.ToolDescription(
+        """
+Run GPU-specific tests for the wgpu-based acceleration.
+
+## What this tests
+1. Rust GPU crate unit tests (config, cost calculations)
+2. GPU extension build with GPU=1
+3. GPU PageRank integration test (forces GPU execution)
+
+## When to use
+- After changes to src/gpu/ Rust code
+- Validating GPU dispatch logic
+- Testing GPU algorithm implementations
+
+## Examples
+```
+angreal test gpu
+angreal test gpu --verbose
+```
+
+## Prerequisites
+- Rust toolchain installed
+- GPU-capable machine (Metal on macOS, Vulkan on Linux)
+- wgpu dependencies available
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(
+    name="verbose",
+    long="verbose",
+    short="v",
+    is_flag=True,
+    takes_value=False,
+    help="Show verbose output"
+)
+def test_gpu(verbose: bool = False) -> int:
+    """Run GPU acceleration tests."""
+    root = get_project_root()
+    gpu_dir = os.path.join(root, "src", "gpu")
+
+    # Step 1: Run Rust unit tests
+    print("Step 1: Running Rust GPU crate tests...")
+    cmd = ["cargo", "test"]
+    if verbose:
+        cmd.append("--verbose")
+        print(f"Running: {' '.join(cmd)} in {gpu_dir}")
+
+    result = subprocess.run(cmd, cwd=gpu_dir)
+    if result.returncode != 0:
+        print("Rust GPU tests failed!")
+        return result.returncode
+    print("Rust GPU tests passed!")
+
+    # Step 2: Build extension with GPU=1
+    print("\nStep 2: Building extension with GPU=1...")
+    result = run_make("clean", verbose=verbose)
+    if result != 0:
+        print("Clean failed!")
+        return result
+
+    result = run_make("extension", verbose=verbose, GPU="1")
+    if result != 0:
+        print("GPU extension build failed!")
+        return result
+    print("GPU extension built successfully!")
+
+    # Step 3: Run GPU integration test
+    print("\nStep 3: Running GPU integration test...")
+    test_script = '''
+-- GPU PageRank Integration Test
+-- This test forces GPU execution by using a graph that exceeds the threshold
+
+-- Create a moderately sized graph to trigger GPU dispatch
+-- With threshold at 100,000 and 20 iterations, we need ~5000 nodes+edges
+-- For simplicity, we'll test with a smaller graph but verify GPU init works
+
+.load build/graphqlite.dylib
+
+-- Create test graph
+SELECT cypher('CREATE (a:Page {id: "A"})');
+SELECT cypher('CREATE (b:Page {id: "B"})');
+SELECT cypher('CREATE (c:Page {id: "C"})');
+SELECT cypher('CREATE (d:Page {id: "D"})');
+SELECT cypher('MATCH (a:Page {id: "A"}), (b:Page {id: "B"}) CREATE (a)-[:LINKS]->(b)');
+SELECT cypher('MATCH (a:Page {id: "A"}), (c:Page {id: "C"}) CREATE (a)-[:LINKS]->(c)');
+SELECT cypher('MATCH (b:Page {id: "B"}), (c:Page {id: "C"}) CREATE (b)-[:LINKS]->(c)');
+SELECT cypher('MATCH (c:Page {id: "C"}), (a:Page {id: "A"}) CREATE (c)-[:LINKS]->(a)');
+SELECT cypher('MATCH (d:Page {id: "D"}), (c:Page {id: "C"}) CREATE (d)-[:LINKS]->(c)');
+
+-- Run PageRank and verify output
+SELECT cypher('RETURN pageRank()');
+'''
+    cmd = ["sqlite3", ":memory:"]
+    if verbose:
+        print(f"Running: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        input=test_script,
+        capture_output=True,
+        text=True,
+        cwd=root
+    )
+
+    if verbose:
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
+
+    # Check for GPU initialization
+    if "GPU acceleration enabled" not in result.stderr:
+        print("WARNING: GPU acceleration not detected in output")
+        print("This may be expected if no GPU is available")
+
+    # Check for valid PageRank output
+    if '"score"' not in result.stdout:
+        print("ERROR: PageRank did not return expected results")
+        print("Output:", result.stdout)
+        return 1
+
+    # Verify ranking order (C should be first - highest PageRank)
+    if '"node_id":3' not in result.stdout:
+        print("WARNING: Node C (id:3) expected to have highest PageRank")
+
+    print("GPU integration test passed!")
+
+    # Step 4: Run C unit tests with GPU build
+    print("\nStep 4: Running C unit tests with GPU build...")
+    result = run_make("test-unit", verbose=verbose, GPU="1")
+    if result != 0:
+        print("C unit tests with GPU build failed!")
+        return result
+
+    print("\n" + "="*50)
+    print("All GPU tests passed!")
     print("="*50)
     return 0

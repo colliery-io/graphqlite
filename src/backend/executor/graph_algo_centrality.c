@@ -18,14 +18,24 @@
  * Returns degree centrality for all nodes:
  * [{"node_id": 1, "user_id": "alice", "in_degree": 3, "out_degree": 2, "degree": 5}, ...]
  */
-graph_algo_result* execute_degree_centrality(sqlite3 *db)
+graph_algo_result* execute_degree_centrality(sqlite3 *db, csr_graph *cached)
 {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
-    CYPHER_DEBUG("Executing Degree Centrality");
+    CYPHER_DEBUG("Executing Degree Centrality: cached=%s", cached ? "yes" : "no");
 
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -37,7 +47,7 @@ graph_algo_result* execute_degree_centrality(sqlite3 *db)
     json_builder jb;
     jbuf_init(&jb, 64 + n * 96);
     if (!jbuf_ok(&jb)) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -64,7 +74,7 @@ graph_algo_result* execute_degree_centrality(sqlite3 *db)
     }
 
     jbuf_end_array(&jb);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = jbuf_take(&jb);

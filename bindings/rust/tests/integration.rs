@@ -1910,3 +1910,131 @@ fn test_regression_gqlite_t_0092_detach_delete_property_filter() {
     assert!(g.has_node("node_b").expect("has b"), "node_b should still exist");
     assert!(g.has_node("node_c").expect("has c"), "node_c should still exist");
 }
+
+// =============================================================================
+// Graph Cache Tests
+// =============================================================================
+
+#[test]
+fn test_graph_loaded_initially_false() {
+    let g = test_graph();
+    assert!(!g.graph_loaded().unwrap());
+}
+
+#[test]
+fn test_load_graph() {
+    let g = test_graph();
+
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_node("a", empty, "Node").unwrap();
+    g.upsert_node("b", empty, "Node").unwrap();
+    g.upsert_edge("a", "b", empty, "KNOWS").unwrap();
+
+    let status = g.load_graph().unwrap();
+
+    assert_eq!(status.status, "loaded");
+    assert_eq!(status.nodes, Some(2));
+    assert_eq!(status.edges, Some(1));
+    assert!(g.graph_loaded().unwrap());
+}
+
+#[test]
+fn test_load_graph_already_loaded() {
+    let g = test_graph();
+
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_node("a", empty, "Node").unwrap();
+    g.load_graph().unwrap();
+
+    let status = g.load_graph().unwrap();
+
+    assert_eq!(status.status, "already_loaded");
+}
+
+#[test]
+fn test_unload_graph() {
+    let g = test_graph();
+
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_node("a", empty, "Node").unwrap();
+    g.load_graph().unwrap();
+    assert!(g.graph_loaded().unwrap());
+
+    let status = g.unload_graph().unwrap();
+
+    assert_eq!(status.status, "unloaded");
+    assert!(!g.graph_loaded().unwrap());
+}
+
+#[test]
+fn test_unload_graph_not_loaded() {
+    let g = test_graph();
+
+    let status = g.unload_graph().unwrap();
+
+    assert_eq!(status.status, "not_loaded");
+}
+
+#[test]
+fn test_reload_graph() {
+    let g = test_graph();
+
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_node("a", empty, "Node").unwrap();
+    g.upsert_node("b", empty, "Node").unwrap();
+    g.load_graph().unwrap();
+
+    // Add new node
+    g.upsert_node("c", empty, "Node").unwrap();
+
+    let status = g.reload_graph().unwrap();
+
+    assert_eq!(status.status, "reloaded");
+    assert_eq!(status.nodes, Some(3));
+}
+
+#[test]
+fn test_reload_graph_not_loaded() {
+    let g = test_graph();
+
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_node("a", empty, "Node").unwrap();
+
+    let status = g.reload_graph().unwrap();
+
+    // reload_graph always returns "reloaded" even on first load
+    assert_eq!(status.status, "reloaded");
+    assert!(g.graph_loaded().unwrap());
+}
+
+#[test]
+fn test_cache_with_pagerank() {
+    let g = test_graph();
+
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_node("a", empty, "Node").unwrap();
+    g.upsert_node("b", empty, "Node").unwrap();
+    g.upsert_node("c", empty, "Node").unwrap();
+    g.upsert_edge("a", "b", empty, "LINKS").unwrap();
+    g.upsert_edge("b", "c", empty, "LINKS").unwrap();
+    g.upsert_edge("c", "a", empty, "LINKS").unwrap();
+
+    g.load_graph().unwrap();
+
+    // PageRank should work with cached graph
+    let result = g.pagerank(0.85, 10).unwrap();
+
+    assert_eq!(result.len(), 3);
+}
+
+#[test]
+fn test_cache_empty_graph() {
+    let g = test_graph();
+
+    let status = g.load_graph().unwrap();
+
+    // Empty graph should still load successfully
+    assert_eq!(status.status, "loaded");
+    assert_eq!(status.nodes, Some(0));
+    assert_eq!(status.edges, Some(0));
+}

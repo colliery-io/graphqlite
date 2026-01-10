@@ -1,0 +1,25 @@
+
+GraphQLite Cache Performance Comparison
+========================================
+
+  Mode: full (1K, 10K, 100K, 500K nodes)
+
+Testing graph: 1K nodes, 5K edges...
+Testing graph: 10K nodes, 50K edges...
+Testing graph: 100K nodes, 500K edges...
+Testing graph: 500K nodes, 2.5M edges...
+
+┌─────────┬──────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐
+│         │          │        PageRank           │     Label Propagation     │    Degree Centrality      │
+│ Nodes   │ Edges    ├─────────┬─────────┬───────┼─────────┬─────────┬───────┼─────────┬─────────┬───────┤
+│         │          │ Uncached│ Cached  │Speedup│ Uncached│ Cached  │Speedup│ Uncached│ Cached  │Speedup│
+├─────────┼──────────┼─────────┼─────────┼───────┼─────────┼─────────┼───────┼─────────┼─────────┼───────┤
+│      1K │       5K │     1ms │    <1ms │   N/A │     1ms │    <1ms │   N/A │     1ms │    <1ms │   N/A │
+│     10K │      50K │    13ms │     6ms │  2.1x │    13ms │     6ms │  2.1x │    14ms │     8ms │  1.7x │
+│    100K │     500K │   154ms │    73ms │  2.1x │   151ms │    75ms │  2.0x │   171ms │    96ms │  1.7x │
+│    500K │     2.5M │   890ms │   396ms │  2.2x │   896ms │   414ms │  2.1x │   1.02s │   509ms │  2.0x │
+└─────────┴──────────┴─────────┴─────────┴───────┴─────────┴─────────┴───────┴─────────┴─────────┴───────┘
+
+  Iterations per measurement: 3
+  Speedup = Uncached Time / Cached Time
+

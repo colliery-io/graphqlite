@@ -47,7 +47,7 @@ static double modularity_gain(
     return k_i_in / m - resolution * sigma_tot * k_i / (2.0 * m * m);
 }
 
-graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
+graph_algo_result* execute_louvain(sqlite3 *db, csr_graph *cached, double resolution)
 {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
@@ -56,8 +56,17 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -71,7 +80,7 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
     double *k = calloc(n, sizeof(double));  /* Degree of each node */
 
     if (!k) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate degree array");
         return result;
     }
@@ -112,7 +121,7 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
             result->json_result = json;
         }
         free(k);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -126,7 +135,7 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
         free(community);
         free(comm_info);
         free(k_i_in);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate working arrays");
         return result;
     }
@@ -243,7 +252,7 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
         free(community);
         free(comm_info);
         free(k_i_in);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate community map");
         return result;
     }
@@ -269,7 +278,7 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
         free(comm_info);
         free(k_i_in);
         free(comm_map);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate result buffer");
         return result;
     }
@@ -301,7 +310,7 @@ graph_algo_result* execute_louvain(sqlite3 *db, double resolution)
     free(comm_info);
     free(k_i_in);
     free(comm_map);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     return result;
 }

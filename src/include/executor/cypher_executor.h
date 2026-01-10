@@ -36,12 +36,16 @@ typedef struct cypher_result {
     int properties_set;
 } cypher_result;
 
+/* Forward declaration for CSR graph (defined in graph_algorithms.h) */
+struct csr_graph;
+
 /* Execution engine - coordinates parser, transformer, and schema manager */
 struct cypher_executor {
     sqlite3 *db;
     cypher_schema_manager *schema_mgr;
     bool schema_initialized;
     const char *params_json;  /* Current query parameters (NULL if no params) */
+    struct csr_graph *cached_graph;  /* Cached graph for algorithm acceleration (managed by connection) */
 };
 
 /* Executor lifecycle */

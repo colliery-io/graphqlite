@@ -19,15 +19,16 @@
  *
  * If weight_prop is NULL, uses unweighted edges (distance = hop count)
  */
-graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const char *target_id, const char *weight_prop)
+graph_algo_result* execute_dijkstra(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id, const char *weight_prop)
 {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
-    CYPHER_DEBUG("Executing Dijkstra: source=%s, target=%s, weight=%s",
+    CYPHER_DEBUG("Executing Dijkstra: source=%s, target=%s, weight=%s, cached=%s",
                  source_id ? source_id : "NULL",
                  target_id ? target_id : "NULL",
-                 weight_prop ? weight_prop : "NULL");
+                 weight_prop ? weight_prop : "NULL",
+                 cached ? "yes" : "no");
 
     if (!source_id || !target_id) {
         result->success = false;
@@ -35,7 +36,17 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
         return result;
     }
 
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("{\"path\":[],\"distance\":null,\"found\":false}");
@@ -49,7 +60,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
     int target_idx = find_node_by_user_id(graph, target_id);
 
     if (source_idx < 0 || target_idx < 0) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = true;
         result->json_result = strdup("{\"path\":[],\"distance\":null,\"found\":false}");
         return result;
@@ -114,7 +125,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
         free(prev);
         free(visited);
         free(weights);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -132,7 +143,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
         free(prev);
         free(visited);
         free(weights);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -170,7 +181,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
         free(dist);
         free(prev);
         free(weights);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = true;
         result->json_result = strdup("{\"path\":[],\"distance\":null,\"found\":false}");
         return result;
@@ -183,7 +194,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
         free(dist);
         free(prev);
         free(weights);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -210,7 +221,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
         free(prev);
         free(path);
         free(weights);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed");
         return result;
@@ -249,7 +260,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, const char *source_id, const ch
     free(prev);
     free(path);
     free(weights);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

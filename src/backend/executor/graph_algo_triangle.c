@@ -73,7 +73,7 @@ static int* get_neighbors(csr_graph *graph, int node, int *neighbor_count) {
     return neighbors;
 }
 
-graph_algo_result* execute_triangle_count(sqlite3 *db) {
+graph_algo_result* execute_triangle_count(sqlite3 *db, csr_graph *cached) {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
 
@@ -81,8 +81,17 @@ graph_algo_result* execute_triangle_count(sqlite3 *db) {
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         /* Empty graph - return empty result */
         result->success = true;
@@ -94,7 +103,7 @@ graph_algo_result* execute_triangle_count(sqlite3 *db) {
 
     /* Handle empty graph */
     if (n == 0) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = true;
         result->json_result = strdup("[]");
         return result;
@@ -107,7 +116,7 @@ graph_algo_result* execute_triangle_count(sqlite3 *db) {
     if (!triangles || !degrees) {
         free(triangles);
         free(degrees);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate memory");
         return result;
     }
@@ -152,7 +161,7 @@ graph_algo_result* execute_triangle_count(sqlite3 *db) {
     if (!json) {
         free(triangles);
         free(degrees);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate JSON buffer");
         return result;
     }
@@ -189,7 +198,7 @@ graph_algo_result* execute_triangle_count(sqlite3 *db) {
                 free(json);
                 free(triangles);
                 free(degrees);
-                csr_graph_free(graph);
+                if (should_free_graph) csr_graph_free(graph);
                 result->error_message = strdup("Failed to reallocate JSON buffer");
                 return result;
             }
@@ -207,7 +216,7 @@ graph_algo_result* execute_triangle_count(sqlite3 *db) {
     /* Cleanup */
     free(triangles);
     free(degrees);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

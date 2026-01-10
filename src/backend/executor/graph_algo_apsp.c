@@ -22,15 +22,25 @@
  * Returns distances between all reachable pairs of nodes.
  * Only includes pairs where a path exists (distance < infinity).
  */
-graph_algo_result* execute_apsp(sqlite3 *db)
+graph_algo_result* execute_apsp(sqlite3 *db, csr_graph *cached)
 {
     graph_algo_result *result = calloc(1, sizeof(graph_algo_result));
     if (!result) return NULL;
 
-    CYPHER_DEBUG("Executing C-based All Pairs Shortest Path (Floyd-Warshall)");
+    CYPHER_DEBUG("Executing C-based All Pairs Shortest Path (Floyd-Warshall): cached=%s",
+                 cached ? "yes" : "no");
 
-    /* Load graph into CSR format */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         result->success = true;
         result->json_result = strdup("[]");
@@ -48,7 +58,7 @@ graph_algo_result* execute_apsp(sqlite3 *db)
     /* Allocate distance matrix - O(V²) space */
     double *dist = malloc(n * n * sizeof(double));
     if (!dist) {
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed for distance matrix");
         return result;
@@ -113,7 +123,7 @@ graph_algo_result* execute_apsp(sqlite3 *db)
     char *json = malloc(json_capacity);
     if (!json) {
         free(dist);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->success = false;
         result->error_message = strdup("Memory allocation failed for JSON result");
         return result;
@@ -158,7 +168,7 @@ graph_algo_result* execute_apsp(sqlite3 *db)
                 if (!new_json) {
                     free(json);
                     free(dist);
-                    csr_graph_free(graph);
+                    if (should_free_graph) csr_graph_free(graph);
                     result->success = false;
                     result->error_message = strdup("Memory reallocation failed");
                     return result;
@@ -175,7 +185,7 @@ graph_algo_result* execute_apsp(sqlite3 *db)
     json[json_len + 1] = '\0';
 
     free(dist);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     result->success = true;
     result->json_result = json;

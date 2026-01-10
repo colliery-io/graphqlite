@@ -59,7 +59,7 @@ static void pred_list_free(pred_list *p) {
     p->capacity = 0;
 }
 
-graph_algo_result* execute_betweenness_centrality(sqlite3 *db)
+graph_algo_result* execute_betweenness_centrality(sqlite3 *db, csr_graph *cached)
 {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
     if (!result) return NULL;
@@ -68,8 +68,17 @@ graph_algo_result* execute_betweenness_centrality(sqlite3 *db)
     result->error_message = NULL;
     result->json_result = NULL;
 
-    /* Load graph - NULL means no nodes (empty graph) */
-    csr_graph *graph = csr_graph_load(db);
+    /* Use cached graph or load from SQLite */
+    csr_graph *graph;
+    bool should_free_graph = false;
+
+    if (cached) {
+        graph = cached;
+    } else {
+        graph = csr_graph_load(db);
+        should_free_graph = true;
+    }
+
     if (!graph) {
         /* Empty graph - no nodes exist */
         result->success = true;
@@ -83,7 +92,7 @@ graph_algo_result* execute_betweenness_centrality(sqlite3 *db)
     double *betweenness = calloc(n, sizeof(double));
     if (!betweenness) {
         result->error_message = strdup("Failed to allocate betweenness array");
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         return result;
     }
 
@@ -103,7 +112,7 @@ graph_algo_result* execute_betweenness_centrality(sqlite3 *db)
         free(P);
         free(queue);
         free(stack);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate working arrays");
         return result;
     }
@@ -193,7 +202,7 @@ graph_algo_result* execute_betweenness_centrality(sqlite3 *db)
         free(P);
         free(queue);
         free(stack);
-        csr_graph_free(graph);
+        if (should_free_graph) csr_graph_free(graph);
         result->error_message = strdup("Failed to allocate result buffer");
         return result;
     }
@@ -227,7 +236,7 @@ graph_algo_result* execute_betweenness_centrality(sqlite3 *db)
     free(P);
     free(queue);
     free(stack);
-    csr_graph_free(graph);
+    if (should_free_graph) csr_graph_free(graph);
 
     return result;
 }
