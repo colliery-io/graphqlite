@@ -15,7 +15,7 @@
  */
 
 /* CSR Graph representation for efficient algorithm execution */
-typedef struct {
+typedef struct csr_graph {
     int node_count;       /* Number of nodes */
     int edge_count;       /* Number of edges */
 

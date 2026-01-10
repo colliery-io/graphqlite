@@ -9,7 +9,6 @@ mod queries;
 
 use crate::{Connection, CypherResult, Result};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::path::Path;
 
 /// Graph statistics containing node and edge counts.
