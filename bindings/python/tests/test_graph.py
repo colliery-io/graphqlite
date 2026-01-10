@@ -319,6 +319,198 @@ def test_upsert_edges_batch(g):
 
 
 # =============================================================================
+# Bulk Insert Operations (High Performance)
+# =============================================================================
+
+def test_insert_nodes_bulk(g):
+    """Test bulk node insertion returns ID mapping."""
+    id_map = g.insert_nodes_bulk([
+        ("bulk_alice", {"name": "Alice", "age": 30}, "Person"),
+        ("bulk_bob", {"name": "Bob", "age": 25}, "Person"),
+        ("bulk_charlie", {"name": "Charlie"}, "Person"),
+    ])
+
+    # Check ID map is returned
+    assert isinstance(id_map, dict)
+    assert len(id_map) == 3
+    assert "bulk_alice" in id_map
+    assert "bulk_bob" in id_map
+    assert "bulk_charlie" in id_map
+
+    # Check nodes exist
+    assert g.has_node("bulk_alice")
+    assert g.has_node("bulk_bob")
+    assert g.has_node("bulk_charlie")
+    assert g.stats()["nodes"] == 3
+
+
+def test_insert_nodes_bulk_empty(g):
+    """Test bulk insert with empty list."""
+    id_map = g.insert_nodes_bulk([])
+    assert id_map == {}
+    assert g.stats()["nodes"] == 0
+
+
+def test_insert_edges_bulk(g):
+    """Test bulk edge insertion using ID map."""
+    # First insert nodes
+    id_map = g.insert_nodes_bulk([
+        ("edge_a", {}, "Node"),
+        ("edge_b", {}, "Node"),
+        ("edge_c", {}, "Node"),
+    ])
+
+    # Then insert edges using the map
+    edges_inserted = g.insert_edges_bulk([
+        ("edge_a", "edge_b", {"weight": 1.0}, "CONNECTS"),
+        ("edge_b", "edge_c", {"weight": 2.0}, "CONNECTS"),
+        ("edge_a", "edge_c", {"weight": 3.0}, "CONNECTS"),
+    ], id_map)
+
+    assert edges_inserted == 3
+    assert g.has_edge("edge_a", "edge_b")
+    assert g.has_edge("edge_b", "edge_c")
+    assert g.has_edge("edge_a", "edge_c")
+    assert g.stats()["edges"] == 3
+
+
+def test_insert_edges_bulk_empty(g):
+    """Test bulk edge insert with empty list."""
+    edges_inserted = g.insert_edges_bulk([], {})
+    assert edges_inserted == 0
+
+
+def test_insert_edges_bulk_without_id_map(g):
+    """Test bulk edge insertion without ID map (falls back to lookup)."""
+    # Insert nodes via Cypher
+    g.connection.cypher("CREATE (:Node {id: 'lookup_a'})")
+    g.connection.cypher("CREATE (:Node {id: 'lookup_b'})")
+
+    # Insert edges without providing id_map
+    edges_inserted = g.insert_edges_bulk([
+        ("lookup_a", "lookup_b", {}, "LINKS"),
+    ])
+
+    assert edges_inserted == 1
+    assert g.has_edge("lookup_a", "lookup_b")
+
+
+def test_insert_graph_bulk(g):
+    """Test combined node and edge bulk insertion."""
+    from graphqlite import BulkInsertResult
+
+    result = g.insert_graph_bulk(
+        nodes=[
+            ("graph_x", {"name": "X"}, "Node"),
+            ("graph_y", {"name": "Y"}, "Node"),
+            ("graph_z", {"name": "Z"}, "Node"),
+        ],
+        edges=[
+            ("graph_x", "graph_y", {}, "LINKS"),
+            ("graph_y", "graph_z", {}, "LINKS"),
+        ],
+    )
+
+    assert isinstance(result, BulkInsertResult)
+    assert result.nodes_inserted == 3
+    assert result.edges_inserted == 2
+    assert "graph_x" in result.id_map
+    assert "graph_y" in result.id_map
+    assert "graph_z" in result.id_map
+
+    assert g.stats()["nodes"] == 3
+    assert g.stats()["edges"] == 2
+
+
+def test_resolve_node_ids(g):
+    """Test resolving external IDs to internal rowids."""
+    # Insert nodes via Cypher
+    g.connection.cypher("CREATE (:Person {id: 'resolve_alice'})")
+    g.connection.cypher("CREATE (:Person {id: 'resolve_bob'})")
+
+    resolved = g.resolve_node_ids(["resolve_alice", "resolve_bob", "nonexistent"])
+
+    assert isinstance(resolved, dict)
+    assert "resolve_alice" in resolved
+    assert "resolve_bob" in resolved
+    assert "nonexistent" not in resolved
+
+
+def test_resolve_node_ids_empty(g):
+    """Test resolving empty list."""
+    resolved = g.resolve_node_ids([])
+    assert resolved == {}
+
+
+def test_bulk_insert_mixed_sources(g):
+    """Test bulk edge insert connecting new nodes to existing nodes."""
+    # Insert some nodes via Cypher
+    g.connection.cypher("CREATE (:Person {id: 'existing_node'})")
+
+    # Insert new nodes via bulk
+    id_map = g.insert_nodes_bulk([
+        ("new_node1", {}, "Person"),
+        ("new_node2", {}, "Person"),
+    ])
+
+    # Insert edges connecting new and existing nodes
+    edges_inserted = g.insert_edges_bulk([
+        ("new_node1", "new_node2", {}, "KNOWS"),
+        ("new_node1", "existing_node", {}, "KNOWS"),
+    ], id_map)
+
+    assert edges_inserted == 2
+    assert g.has_edge("new_node1", "new_node2")
+    assert g.has_edge("new_node1", "existing_node")
+
+
+def test_bulk_insert_with_typed_properties(g):
+    """Test bulk insert correctly handles different property types."""
+    id_map = g.insert_nodes_bulk([
+        ("typed_node", {
+            "str_prop": "hello",
+            "int_prop": 42,
+            "float_prop": 3.14,
+            "bool_true": True,
+            "bool_false": False,
+        }, "TypedNode"),
+    ])
+
+    assert "typed_node" in id_map
+    assert g.has_node("typed_node")
+
+
+def test_bulk_insert_performance(g):
+    """Test that bulk insert is reasonably fast."""
+    import time
+
+    node_count = 500
+    edge_count = 2000
+
+    nodes = [(f"perf_node_{i}", {"name": f"Node {i}"}, "PerfTest") for i in range(node_count)]
+    edges = [
+        (f"perf_node_{i % node_count}", f"perf_node_{(i + 1) % node_count}", {"weight": i}, "PERF")
+        for i in range(edge_count)
+    ]
+
+    start = time.time()
+    id_map = g.insert_nodes_bulk(nodes)
+    node_time = time.time() - start
+
+    edge_start = time.time()
+    edges_inserted = g.insert_edges_bulk(edges, id_map)
+    edge_time = time.time() - edge_start
+
+    total_time = time.time() - start
+
+    assert len(id_map) == node_count
+    assert edges_inserted == edge_count
+
+    # Bulk insert should complete in under 5 seconds for this size
+    assert total_time < 5.0, f"Bulk insert took too long: {total_time:.2f}s"
+
+
+# =============================================================================
 # Graph Algorithms
 # =============================================================================
 

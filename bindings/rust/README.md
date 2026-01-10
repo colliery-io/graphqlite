@@ -161,17 +161,54 @@ let g = graph(":memory:")?;
 #### Batch Operations
 
 ```rust
-// Batch insert nodes
+// Batch insert nodes (upsert semantics)
 g.upsert_nodes_batch([
     ("n1", [("name", "Node1")], "Type"),
     ("n2", [("name", "Node2")], "Type"),
 ])?;
 
-// Batch insert edges
+// Batch insert edges (upsert semantics)
 g.upsert_edges_batch([
     ("n1", "n2", [("weight", "1.0")], "CONNECTS"),
 ])?;
 ```
+
+#### Bulk Insert (High Performance)
+
+For maximum throughput when building graphs from external data, use the bulk insert methods.
+These bypass Cypher parsing entirely and use direct SQL, achieving **100-500x faster** insert rates.
+
+```rust
+// Bulk insert nodes - returns HashMap<external_id, internal_rowid>
+let id_map = g.insert_nodes_bulk([
+    ("alice", vec![("name", "Alice"), ("age", "30")], "Person"),
+    ("bob", vec![("name", "Bob"), ("age", "25")], "Person"),
+    ("charlie", vec![("name", "Charlie")], "Person"),
+])?;
+
+// Bulk insert edges using the ID map - no MATCH queries needed!
+let edges_inserted = g.insert_edges_bulk(
+    [
+        ("alice", "bob", vec![("since", "2020")], "KNOWS"),
+        ("bob", "charlie", vec![("since", "2021")], "KNOWS"),
+    ],
+    &id_map,
+)?;
+
+// Or use the convenience method for both
+let result = g.insert_graph_bulk(nodes, edges)?;
+println!("Inserted {} nodes, {} edges", result.nodes_inserted, result.edges_inserted);
+
+// Resolve existing node IDs (for edges to pre-existing nodes)
+let resolved = g.resolve_node_ids(["alice", "bob"])?;
+```
+
+| Method | Description |
+|--------|-------------|
+| `insert_nodes_bulk(nodes)` | Insert nodes, returns ID mapping |
+| `insert_edges_bulk(edges, id_map)` | Insert edges using ID map |
+| `insert_graph_bulk(nodes, edges)` | Insert both, returns `BulkInsertResult` |
+| `resolve_node_ids(ids)` | Resolve external IDs to internal rowids |
 
 ### Connection
 

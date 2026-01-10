@@ -3,9 +3,12 @@
 //! The `Graph` struct provides an ergonomic interface for common graph operations.
 
 mod batch;
+mod bulk;
 mod edges;
 mod nodes;
 mod queries;
+
+pub use bulk::BulkInsertResult;
 
 use crate::{Connection, CypherResult, Result};
 use serde::{Deserialize, Serialize};

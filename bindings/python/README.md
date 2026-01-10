@@ -157,17 +157,51 @@ g = graph(":memory:")
 #### Batch Operations
 
 ```python
-# Batch insert nodes
+# Batch insert nodes (upsert semantics)
 g.upsert_nodes_batch([
     ("n1", {"name": "Alice"}, "Person"),
     ("n2", {"name": "Bob"}, "Person"),
 ])
 
-# Batch insert edges
+# Batch insert edges (upsert semantics)
 g.upsert_edges_batch([
     ("n1", "n2", {"weight": 1.0}, "KNOWS"),
 ])
 ```
+
+#### Bulk Insert (High Performance)
+
+For maximum throughput when building graphs from external data, use the bulk insert methods.
+These bypass Cypher parsing entirely and use direct SQL, achieving **100-500x faster** insert rates.
+
+```python
+# Bulk insert nodes - returns dict mapping external_id -> internal_rowid
+id_map = g.insert_nodes_bulk([
+    ("alice", {"name": "Alice", "age": 30}, "Person"),
+    ("bob", {"name": "Bob", "age": 25}, "Person"),
+    ("charlie", {"name": "Charlie"}, "Person"),
+])
+
+# Bulk insert edges using the ID map - no MATCH queries needed!
+edges_inserted = g.insert_edges_bulk([
+    ("alice", "bob", {"since": 2020}, "KNOWS"),
+    ("bob", "charlie", {"since": 2021}, "KNOWS"),
+], id_map)
+
+# Or use the convenience method for both
+result = g.insert_graph_bulk(nodes=nodes, edges=edges)
+print(f"Inserted {result.nodes_inserted} nodes, {result.edges_inserted} edges")
+
+# Resolve existing node IDs (for edges to pre-existing nodes)
+resolved = g.resolve_node_ids(["alice", "bob"])
+```
+
+| Method | Description |
+|--------|-------------|
+| `insert_nodes_bulk(nodes)` | Insert nodes, returns ID mapping dict |
+| `insert_edges_bulk(edges, id_map=None)` | Insert edges using ID map |
+| `insert_graph_bulk(nodes, edges)` | Insert both, returns `BulkInsertResult` |
+| `resolve_node_ids(ids)` | Resolve external IDs to internal rowids |
 
 ### Connection Class
 

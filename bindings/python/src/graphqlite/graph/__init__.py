@@ -25,6 +25,7 @@ from ..algorithms import (
 )
 from ._base import BaseMixin
 from .batch import BatchMixin
+from .bulk import BulkInsertResult, BulkMixin
 from .edges import EdgesMixin
 from .nodes import NodesMixin
 from .queries import QueriesMixin
@@ -35,6 +36,7 @@ class Graph(
     EdgesMixin,
     QueriesMixin,
     BatchMixin,
+    BulkMixin,
     CentralityMixin,
     CommunityMixin,
     ComponentsMixin,
@@ -210,4 +212,4 @@ def graph(
     return Graph(db_path, namespace, extension_path)
 
 
-__all__ = ["Graph", "graph"]
+__all__ = ["BulkInsertResult", "Graph", "graph"]
