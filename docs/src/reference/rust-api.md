@@ -6,7 +6,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphqlite = "0.2"
+graphqlite = "0.3"
 ```
 
 ## Connection

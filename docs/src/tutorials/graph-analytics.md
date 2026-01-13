@@ -84,7 +84,7 @@ results = g.query("RETURN betweennessCentrality()")
 Find clusters of densely connected nodes:
 
 ```python
-results = g.community_detection(max_iterations=10)
+results = g.community_detection(iterations=10)
 communities = {}
 for r in results:
     label = r["community"]
