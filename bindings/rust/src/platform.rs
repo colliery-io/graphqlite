@@ -113,7 +113,7 @@ pub fn load_bundled_extension(conn: &rusqlite::Connection) -> Result<()> {
 
     unsafe {
         conn.load_extension_enable()?;
-        conn.load_extension(&load_path, None)?;
+        conn.load_extension(&load_path, None::<&str>)?;
         conn.load_extension_disable()?;
     }
 
