@@ -1,6 +1,7 @@
 //! Integration tests for GraphQLite Rust bindings.
 
 use graphqlite::{escape_string, graphs, sanitize_rel_type, Connection, Error, Graph, GraphManager};
+use serde_json::json;
 
 /// Create a test connection.
 fn test_connection() -> Connection {
@@ -2325,5 +2326,126 @@ fn test_bulk_insert_verifies_with_graph_api() {
     // Neighbors of hub should include both spokes
     let neighbors = g.get_neighbors("hub").unwrap();
     assert_eq!(neighbors.len(), 2);
+}
+
+// =========================================================================
+// Builder-pattern parameterized Cypher API tests
+// =========================================================================
+
+#[test]
+fn test_builder_string_match() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
+    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+        .param("name", "Alice")
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+}
+
+#[test]
+fn test_builder_integer_filter() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
+    conn.cypher("CREATE (n:Person {name: 'Bob', age: 20})").unwrap();
+    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.age > $min RETURN n.name")
+        .param("min", 25)
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+}
+
+#[test]
+fn test_builder_in_create() {
+    let conn = test_connection();
+    conn.cypher_builder("CREATE (n:Person {name: $name, age: $age})")
+        .param("name", "Charlie")
+        .param("age", 40)
+        .run()
+        .unwrap();
+    let results = conn.cypher("MATCH (n:Person {name: 'Charlie'}) RETURN n.name, n.age").unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Charlie");
+    assert_eq!(results[0].get::<i64>("n.age").unwrap(), 40);
+}
+
+#[test]
+fn test_builder_bulk_params() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
+    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+        .params(&json!({"name": "Alice"}))
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+}
+
+#[test]
+fn test_builder_mixed_param_and_params() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
+    conn.cypher("CREATE (n:Person {name: 'Bob', age: 20})").unwrap();
+    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name AND n.age > $min RETURN n.name")
+        .param("name", "Alice")
+        .params(&json!({"min": 25}))
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+}
+
+#[test]
+fn test_builder_run_no_params() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice'})").unwrap();
+    let results = conn.cypher_builder("MATCH (n:Person) RETURN n.name")
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+}
+
+#[test]
+fn test_builder_injection_safe() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice'})").unwrap();
+    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+        .param("name", "Alice'; DROP TABLE nodes; --")
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 0);
+    let verify = conn.cypher("MATCH (n:Person) RETURN n.name").unwrap();
+    assert_eq!(verify.len(), 1);
+}
+
+#[test]
+fn test_builder_backward_compat() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:Person {name: 'Alice'})").unwrap();
+    let results = conn.cypher("MATCH (n:Person) RETURN n.name").unwrap();
+    assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn test_graph_query_builder() {
+    let g = test_graph();
+    g.query("CREATE (n:Person {name: 'Alice'})").unwrap();
+    let results = g.query_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+        .param("name", "Alice")
+        .run()
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
+}
+
+#[test]
+fn test_graph_query_without_params_unchanged() {
+    let g = test_graph();
+    g.query("CREATE (n:Person {name: 'Alice'})").unwrap();
+    let results = g.query("MATCH (n:Person) RETURN n.name").unwrap();
+    assert_eq!(results.len(), 1);
 }
 

@@ -11,6 +11,7 @@ mod queries;
 pub use bulk::BulkInsertResult;
 
 use crate::{Connection, CypherResult, Result};
+use crate::query_builder::CypherQuery;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -78,6 +79,35 @@ impl Graph {
     /// Execute a raw Cypher query.
     pub fn query(&self, cypher: &str) -> Result<CypherResult> {
         self.conn.cypher(cypher)
+    }
+
+    /// Execute a raw Cypher query with named parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `cypher` - Cypher query string with `$param` placeholders
+    /// * `params` - Parameter values as a `serde_json::Value` (must be an object)
+    #[deprecated(since = "0.4.0", note = "Use query_builder() instead")]
+    pub fn query_with_params(&self, cypher: &str, params: &serde_json::Value) -> Result<CypherResult> {
+        self.conn.execute_cypher_with_params(cypher, params)
+    }
+
+    /// Create a builder for a parameterized Cypher query.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// g.query("CREATE (n:Person {name: 'Alice'})")?;
+    /// let results = g.query_builder("MATCH (n:Person) WHERE n.name = $name RETURN n")
+    ///     .param("name", "Alice")
+    ///     .run()?;
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn query_builder<'a>(&'a self, cypher: &'a str) -> CypherQuery<'a> {
+        self.conn.cypher_builder(cypher)
     }
 
     // Cache management methods for algorithm acceleration
