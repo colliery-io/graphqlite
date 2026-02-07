@@ -162,9 +162,22 @@ stmt:
             $$ = $1;
             context->result = $1;
         }
+    | union_query ';'
+        {
+            $$ = $1;
+            context->result = $1;
+        }
     | EXPLAIN union_query
         {
             /* For EXPLAIN with UNION, wrap if needed */
+            if ($2->type == AST_NODE_QUERY) {
+                ((cypher_query*)$2)->explain = true;
+            }
+            $$ = $2;
+            context->result = $2;
+        }
+    | EXPLAIN union_query ';'
+        {
             if ($2->type == AST_NODE_QUERY) {
                 ((cypher_query*)$2)->explain = true;
             }
