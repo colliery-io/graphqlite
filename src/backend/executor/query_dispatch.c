@@ -559,6 +559,16 @@ static int handle_generic_transform(cypher_executor *executor, cypher_query *que
 
     /* Build results from statement */
     if (transform_result->stmt) {
+        /* Bind parameters if provided */
+        if (executor->params_json) {
+            if (bind_params_from_json(transform_result->stmt, executor->params_json) < 0) {
+                set_result_error(result, "Failed to bind query parameters");
+                cypher_free_result(transform_result);
+                cypher_transform_free_context(ctx);
+                return -1;
+            }
+        }
+
         cypher_return *ret = find_return_clause(query);
 
         if (ret) {

@@ -100,6 +100,34 @@ int get_param_value(const char *params_json, const char *param_name,
                     *(int64_t*)out_value = strtoll(num_start, NULL, 10);
                 }
                 return 0;
+            } else if (*p == '[' || *p == '{') {
+                /* Array or object value - store as JSON text */
+                const char *json_start = p;
+                int depth = 1;
+                p++;
+                while (*p && depth > 0) {
+                    if (*p == '[' || *p == '{') depth++;
+                    else if (*p == ']' || *p == '}') depth--;
+                    else if (*p == '"') {
+                        p++;
+                        while (*p && *p != '"') {
+                            if (*p == '\\' && *(p+1)) p++;
+                            p++;
+                        }
+                    }
+                    if (*p) p++;
+                }
+                size_t json_len = p - json_start;
+                char *json_val = (char*)out_value;
+                if (json_len < value_size) {
+                    memcpy(json_val, json_start, json_len);
+                    json_val[json_len] = '\0';
+                } else {
+                    memcpy(json_val, json_start, value_size - 1);
+                    json_val[value_size - 1] = '\0';
+                }
+                *out_type = PROP_TYPE_TEXT;
+                return 0;
             }
             return -1;
         } else {
@@ -108,6 +136,21 @@ int get_param_value(const char *params_json, const char *param_name,
                 p++;
                 while (*p && *p != '"') { if (*p == '\\' && *(p+1)) p++; p++; }
                 if (*p) p++;
+            } else if (*p == '[' || *p == '{') {
+                int depth = 1;
+                p++;
+                while (*p && depth > 0) {
+                    if (*p == '[' || *p == '{') depth++;
+                    else if (*p == ']' || *p == '}') depth--;
+                    else if (*p == '"') {
+                        p++;
+                        while (*p && *p != '"') {
+                            if (*p == '\\' && *(p+1)) p++;
+                            p++;
+                        }
+                    }
+                    if (*p) p++;
+                }
             } else if (*p == 't' || *p == 'f') {
                 while (*p && *p != ',' && *p != '}') p++;
             } else if (*p == 'n') {
@@ -176,6 +219,21 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
                 p++;
                 while (*p && *p != '"') { if (*p == '\\' && *(p+1)) p++; p++; }
                 if (*p) p++;
+            } else if (*p == '[' || *p == '{') {
+                int depth = 1;
+                p++;
+                while (*p && depth > 0) {
+                    if (*p == '[' || *p == '{') depth++;
+                    else if (*p == ']' || *p == '}') depth--;
+                    else if (*p == '"') {
+                        p++;
+                        while (*p && *p != '"') {
+                            if (*p == '\\' && *(p+1)) p++;
+                            p++;
+                        }
+                    }
+                    if (*p) p++;
+                }
             } else if (*p == 't' || *p == 'f') {
                 while (*p && *p != ',' && *p != '}') p++;
             } else if (*p == 'n') {
@@ -241,6 +299,30 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
                 long long val = strtoll(num_start, NULL, 10);
                 sqlite3_bind_int64(stmt, idx, val);
             }
+        } else if (*p == '[' || *p == '{') {
+            /* Array or object value - bind as JSON text */
+            const char *json_start = p;
+            int depth = 1;
+            p++;
+            while (*p && depth > 0) {
+                if (*p == '[' || *p == '{') depth++;
+                else if (*p == ']' || *p == '}') depth--;
+                else if (*p == '"') {
+                    p++;
+                    while (*p && *p != '"') {
+                        if (*p == '\\' && *(p+1)) p++;
+                        p++;
+                    }
+                }
+                if (*p) p++;
+            }
+            size_t json_len = p - json_start;
+            char *json_val = malloc(json_len + 1);
+            if (!json_val) return -1;
+            memcpy(json_val, json_start, json_len);
+            json_val[json_len] = '\0';
+            sqlite3_bind_text(stmt, idx, json_val, -1, SQLITE_TRANSIENT);
+            free(json_val);
         } else {
             return -1;  /* Unknown value type */
         }

@@ -272,6 +272,16 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
 
                 /* Execute the prepared statement */
                 if (transform_result->stmt) {
+                    /* Bind parameters if provided */
+                    if (executor->params_json) {
+                        if (bind_params_from_json(transform_result->stmt, executor->params_json) < 0) {
+                            set_result_error(result, "Failed to bind query parameters");
+                            free(transform_result);
+                            cypher_transform_free_context(ctx);
+                            return result;
+                        }
+                    }
+
                     result->data = NULL;
                     result->row_count = 0;
                     result->column_count = sqlite3_column_count(transform_result->stmt);

@@ -176,4 +176,45 @@ SELECT cypher('MATCH (p:Person {name: $name}) RETURN p.name', '{"name": "Alice",
 SELECT 'Test 10.3 - Null parameter:' as test_name;
 SELECT cypher('MATCH (p:Person) WHERE p.name = $name RETURN p.name', '{"name": null}') as result;
 
+-- =======================================================================
+-- SECTION 11: Generic transform path (OPTIONAL MATCH, WITH, UNWIND)
+-- =======================================================================
+SELECT '=== Section 11: Generic transform path params ===' as section;
+
+SELECT 'Test 11.1 - Params in OPTIONAL MATCH:' as test_name;
+SELECT cypher('OPTIONAL MATCH (p:Person) WHERE p.name = $name RETURN p.name', '{"name": "Alice"}') as result;
+
+SELECT 'Test 11.2 - Params in UNWIND+RETURN:' as test_name;
+SELECT cypher('UNWIND [1,2,3] AS x RETURN x, $label', '{"label": "test"}') as result;
+
+-- =======================================================================
+-- SECTION 12: List and map parameter values
+-- =======================================================================
+SELECT '=== Section 12: List and map params ===' as section;
+
+SELECT 'Test 12.1 - Extra map param ignored:' as test_name;
+SELECT cypher('MATCH (p:Person {name: $name}) RETURN p.name', '{"name": "Alice", "meta": {"key": "val"}}') as result;
+
+SELECT 'Test 12.2 - Extra list param ignored:' as test_name;
+SELECT cypher('MATCH (p:Person {name: $name}) RETURN p.name', '{"name": "Alice", "ids": [1, 2, 3]}') as result;
+
+-- =======================================================================
+-- SECTION 13: Boolean parameter
+-- =======================================================================
+SELECT '=== Section 13: Boolean params ===' as section;
+
+SELECT 'Test 13.1 - Create with boolean param:' as test_name;
+SELECT cypher('CREATE (f:Flag {active: $a}) RETURN f.active', '{"a": true}') as result;
+
+SELECT 'Test 13.2 - Create with false param:' as test_name;
+SELECT cypher('CREATE (f:Flag {active: $a}) RETURN f.active', '{"a": false}') as result;
+
+-- =======================================================================
+-- SECTION 14: Float parameter
+-- =======================================================================
+SELECT '=== Section 14: Float params ===' as section;
+
+SELECT 'Test 14.1 - Create with float param:' as test_name;
+SELECT cypher('CREATE (m:Metric {val: $v}) RETURN m.val', '{"v": 3.14}') as result;
+
 SELECT '=== Test 26 Complete ===' as test_section;
