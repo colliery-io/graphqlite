@@ -56,10 +56,12 @@ mod graph;
 mod manager;
 #[cfg(feature = "bundled-extension")]
 mod platform;
+mod query_builder;
 mod result;
 mod utils;
 
 pub use connection::Connection;
+pub use query_builder::CypherQuery;
 pub use error::Error;
 pub use graph::{graph, BulkInsertResult, CacheStatus, Graph, GraphStats};
 pub use manager::{graphs, GraphManager};

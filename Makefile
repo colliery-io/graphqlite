@@ -4,9 +4,8 @@ CC = gcc
 BISON ?= bison
 FLEX ?= flex
 SQLITE ?= sqlite3
-# Use python3.11 as default since it has pip available on this system
 # Override with: make PYTHON=python3.12 test-python
-PYTHON ?= python3.11
+PYTHON ?= python3
 
 # Platform-specific paths for test builds (CUnit headers/libs)
 # Auto-detect MacPorts (/opt/local) or Homebrew paths

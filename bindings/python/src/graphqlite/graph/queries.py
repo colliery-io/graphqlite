@@ -1,5 +1,7 @@
 """Query operations mixin for Graph class."""
 
+from typing import Optional
+
 from ._base import BaseMixin
 
 
@@ -79,15 +81,16 @@ class QueriesMixin(BaseMixin):
             "edges": int(edge_cnt) if edge_cnt else 0,
         }
 
-    def query(self, cypher: str) -> list[dict]:
+    def query(self, cypher: str, params: Optional[dict] = None) -> list[dict]:
         """
-        Execute a raw Cypher query.
+        Execute a raw Cypher query with optional parameters.
 
         Args:
-            cypher: Cypher query string
+            cypher: Cypher query string (may contain $param placeholders)
+            params: Optional dictionary of parameter values
 
         Returns:
             List of result dictionaries
         """
-        result = self._conn.cypher(cypher)
+        result = self._conn.cypher(cypher, params)
         return result.to_list()

@@ -149,7 +149,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left '*' '/' '%'
 %left '^'
 %left IN IS
-%left '.'
+%left '.' '['
 %right UNARY_MINUS UNARY_PLUS
 
 %%
@@ -162,9 +162,22 @@ stmt:
             $$ = $1;
             context->result = $1;
         }
+    | union_query ';'
+        {
+            $$ = $1;
+            context->result = $1;
+        }
     | EXPLAIN union_query
         {
             /* For EXPLAIN with UNION, wrap if needed */
+            if ($2->type == AST_NODE_QUERY) {
+                ((cypher_query*)$2)->explain = true;
+            }
+            $$ = $2;
+            context->result = $2;
+        }
+    | EXPLAIN union_query ';'
+        {
             if ($2->type == AST_NODE_QUERY) {
                 ((cypher_query*)$2)->explain = true;
             }
@@ -584,6 +597,33 @@ remove_item:
             free($1);
             free($3);
         }
+    | IDENTIFIER '.' BQIDENT
+        {
+            /* REMOVE n.`special-key` - backtick-quoted property */
+            cypher_identifier *base = make_identifier($1, @1.first_line);
+            ast_node *prop = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
+            $$ = make_remove_item(prop);
+            free($1);
+            free($3);
+        }
+    | BQIDENT '.' IDENTIFIER
+        {
+            /* REMOVE `special-var`.property */
+            cypher_identifier *base = make_identifier($1, @1.first_line);
+            ast_node *prop = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
+            $$ = make_remove_item(prop);
+            free($1);
+            free($3);
+        }
+    | BQIDENT '.' BQIDENT
+        {
+            /* REMOVE `special-var`.`special-key` */
+            cypher_identifier *base = make_identifier($1, @1.first_line);
+            ast_node *prop = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
+            $$ = make_remove_item(prop);
+            free($1);
+            free($3);
+        }
     | IDENTIFIER ':' IDENTIFIER
         {
             /* REMOVE n:Label syntax */
@@ -984,6 +1024,20 @@ expr:
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
     | '(' expr ')'      { $$ = $2; }
+    | expr '.' IDENTIFIER
+        {
+            $$ = (ast_node*)make_property($1, $3, @3.first_line);
+            free($3);
+        }
+    | expr '.' BQIDENT
+        {
+            $$ = (ast_node*)make_property($1, $3, @3.first_line);
+            free($3);
+        }
+    | expr '[' expr ']'
+        {
+            $$ = (ast_node*)make_subscript($1, $3, @2.first_line);
+        }
     ;
 
 primary_expr:
@@ -999,43 +1053,12 @@ primary_expr:
     | map_literal       { $$ = $1; }
     | map_projection    { $$ = $1; }
     | case_expression   { $$ = $1; }
-    | IDENTIFIER '.' IDENTIFIER
-        {
-            cypher_identifier *base = make_identifier($1, @1.first_line);
-            $$ = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
-            free($1);
-            free($3);
-        }
-    | END_P '.' IDENTIFIER
-        {
-            /* Allow 'end' as identifier in property access: end.name */
-            cypher_identifier *base = make_identifier(strdup("end"), @1.first_line);
-            $$ = (ast_node*)make_property((ast_node*)base, $3, @3.first_line);
-            free($3);
-        }
     | IDENTIFIER ':' IDENTIFIER
         {
             cypher_identifier *base = make_identifier($1, @1.first_line);
             $$ = (ast_node*)make_label_expr((ast_node*)base, $3, @3.first_line);
             free($1);
             free($3);
-        }
-    | IDENTIFIER '[' expr ']'
-        {
-            /* Array subscript on identifier: items[idx] */
-            cypher_identifier *base = make_identifier($1, @1.first_line);
-            $$ = (ast_node*)make_subscript((ast_node*)base, $3, @2.first_line);
-            free($1);
-        }
-    | '(' expr ')' '[' expr ']'
-        {
-            /* Array subscript on parenthesized expression: (expr)[idx] */
-            $$ = (ast_node*)make_subscript($2, $5, @4.first_line);
-        }
-    | list_literal '[' expr ']'
-        {
-            /* Array subscript on list literal: [1,2,3][0] */
-            $$ = (ast_node*)make_subscript($1, $3, @2.first_line);
         }
     ;
 

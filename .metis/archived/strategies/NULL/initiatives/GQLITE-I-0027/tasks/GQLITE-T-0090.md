@@ -7,7 +7,7 @@ created_at: 2026-01-08T14:40:36.764584+00:00
 updated_at: 2026-01-08T14:40:36.764584+00:00
 parent: GQLITE-I-0027
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -28,6 +28,8 @@ initiative_id: GQLITE-I-0027
 ## Objective
 
 Ensure the build system supports two distinct profiles: a slim CPU-only build (default) and an opt-in GPU-enabled build. This preserves backwards compatibility and keeps binary size small for edge/embedded deployments while allowing desktop/server users to opt into GPU acceleration.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

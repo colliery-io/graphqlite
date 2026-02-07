@@ -4,15 +4,15 @@ level: task
 title: "Bulk Insert Operations for Nodes and Edges"
 short_code: "GQLITE-T-0093"
 created_at: 2026-01-10T04:16:05.119817+00:00
-updated_at: 2026-01-10T04:16:05.119817+00:00
+updated_at: 2026-02-07T13:22:24.868891+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -182,6 +182,12 @@ MATCH (s0 {id: 'x'}), (t0 {id: 'y'}) CREATE (s0)-[:CALLS]->(t0)
 - **User Value**: Enables practical use of graphqlite for code indexing and other large-scale graph construction use cases
 - **Business Value**: Unlocks the primary use case for muninn (code graph indexing for AI-assisted development)
 - **Effort Estimate**: L
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

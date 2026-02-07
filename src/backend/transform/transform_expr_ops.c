@@ -315,6 +315,26 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
 {
     CYPHER_DEBUG("Transforming property access");
 
+    /* Handle nested property access: n.metadata.name → json_extract(n.metadata_sql, '$.name') */
+    if (prop->expr->type == AST_NODE_PROPERTY) {
+        append_sql(ctx, "json_extract(");
+        if (transform_property_access(ctx, (cypher_property*)prop->expr) < 0) return -1;
+        append_sql(ctx, ", '$.");
+        append_sql(ctx, prop->property_name);
+        append_sql(ctx, "')");
+        return 0;
+    }
+
+    /* Handle subscript base: list[0].name → json_extract(list_subscript_sql, '$.name') */
+    if (prop->expr->type == AST_NODE_SUBSCRIPT) {
+        append_sql(ctx, "json_extract(");
+        if (transform_expression(ctx, prop->expr) < 0) return -1;
+        append_sql(ctx, ", '$.");
+        append_sql(ctx, prop->property_name);
+        append_sql(ctx, "')");
+        return 0;
+    }
+
     /* Get the base expression (should be an identifier) */
     if (prop->expr->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;

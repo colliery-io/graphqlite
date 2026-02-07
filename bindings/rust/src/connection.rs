@@ -1,6 +1,7 @@
 //! GraphQLite connection wrapper.
 
 use crate::{CypherResult, Error, Result};
+use crate::query_builder::CypherQuery;
 
 #[cfg(not(feature = "bundled-extension"))]
 use std::path::PathBuf;
@@ -129,6 +130,72 @@ impl Connection {
             }
             None => Ok(CypherResult::empty()),
         }
+    }
+
+    /// Execute a Cypher query with named parameters.
+    ///
+    /// Parameters are passed as a JSON object and bound inside the extension,
+    /// preventing injection and eliminating the need for manual escaping.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Cypher query string with `$param` placeholders
+    /// * `params` - Parameter values as a `serde_json::Value` (must be an object)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Connection;
+    /// use serde_json::json;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")?;
+    /// let results = conn.cypher_with_params(
+    ///     "MATCH (n:Person) WHERE n.name = $name RETURN n.name, n.age",
+    ///     &json!({"name": "Alice"})
+    /// )?;
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    #[deprecated(since = "0.4.0", note = "Use cypher_builder() instead")]
+    pub fn cypher_with_params(&self, query: &str, params: &serde_json::Value) -> Result<CypherResult> {
+        self.execute_cypher_with_params(query, params)
+    }
+
+    /// Internal: execute a parameterized Cypher query.
+    pub(crate) fn execute_cypher_with_params(&self, query: &str, params: &serde_json::Value) -> Result<CypherResult> {
+        let params_json = serde_json::to_string(params)
+            .map_err(|e| Error::Cypher(format!("Failed to serialize params: {}", e)))?;
+        let result: Option<String> = self
+            .conn
+            .query_row("SELECT cypher(?1, ?2)", rusqlite::params![query, params_json], |row| row.get(0))?;
+
+        match result {
+            Some(json_str) => {
+                if json_str.starts_with("Error") {
+                    return Err(Error::Cypher(json_str));
+                }
+                CypherResult::from_json(&json_str)
+            }
+            None => Ok(CypherResult::empty()),
+        }
+    }
+
+    /// Create a builder for a parameterized Cypher query.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Connection;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")?;
+    /// let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n")
+    ///     .param("name", "Alice")
+    ///     .run()?;
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn cypher_builder<'a>(&'a self, query: &'a str) -> CypherQuery<'a> {
+        CypherQuery::new(self, query)
     }
 
     /// Execute raw SQL.

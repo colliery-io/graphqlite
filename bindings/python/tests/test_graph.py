@@ -992,3 +992,59 @@ def test_cache_empty_graph(g):
     assert result["status"] == "loaded"
     assert result["nodes"] == 0
     assert result["edges"] == 0
+
+
+# =============================================================================
+# Parameterized Query Tests
+# =============================================================================
+
+
+def test_graph_query_with_params(g):
+    """Test Graph.query() with parameters."""
+    g.upsert_node("alice", {"name": "Alice", "age": 30}, "Person")
+    result = g.query(
+        "MATCH (n:Person) WHERE n.name = $name RETURN n.name",
+        {"name": "Alice"}
+    )
+    assert len(result) == 1
+    assert result[0]["n.name"] == "Alice"
+
+
+def test_graph_query_with_integer_param(g):
+    """Test Graph.query() with integer parameter."""
+    g.upsert_node("alice", {"name": "Alice", "age": 30}, "Person")
+    g.upsert_node("bob", {"name": "Bob", "age": 20}, "Person")
+    result = g.query(
+        "MATCH (n:Person) WHERE n.age > $min RETURN n.name",
+        {"min": 25}
+    )
+    assert len(result) == 1
+    assert result[0]["n.name"] == "Alice"
+
+
+def test_graph_query_with_params_empty_dict(g):
+    """Test Graph.query() with empty params dict."""
+    g.upsert_node("alice", {"name": "Alice"}, "Person")
+    result = g.query("MATCH (n:Person) RETURN n.name", {})
+    assert len(result) == 1
+
+
+def test_graph_query_without_params_unchanged(g):
+    """Test Graph.query() backward compatibility without params."""
+    g.upsert_node("alice", {"name": "Alice"}, "Person")
+    result = g.query("MATCH (n:Person) RETURN n.name")
+    assert len(result) == 1
+
+
+def test_graph_query_params_injection_safe(g):
+    """Test that parameter binding prevents SQL injection."""
+    g.upsert_node("alice", {"name": "Alice"}, "Person")
+    result = g.query(
+        "MATCH (n:Person) WHERE n.name = $name RETURN n.name",
+        {"name": "Alice'; DROP TABLE nodes; --"}
+    )
+    # Should not match and should not inject
+    assert len(result) == 0
+    # Verify graph is intact
+    verify = g.query("MATCH (n:Person) RETURN n.name")
+    assert len(verify) == 1

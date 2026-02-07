@@ -664,8 +664,30 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                  * Negative indices count from end: list[-1] = last element
                  * SQL: json_extract(list, '$[' || CASE WHEN idx < 0
                  *        THEN json_array_length(list) + idx ELSE idx END || ']')
+                 *
+                 * String-key subscripts on identifiers/properties are normalized to
+                 * property access: n['status'] → n.status, n['a']['b'] → n.a.b
                  */
                 cypher_subscript *subscript = (cypher_subscript*)expr;
+
+                /* Normalize string-key subscript to property access */
+                if (subscript->index->type == AST_NODE_LITERAL) {
+                    cypher_literal *idx_lit = (cypher_literal*)subscript->index;
+                    if (idx_lit->literal_type == LITERAL_STRING) {
+                        if (subscript->expr->type == AST_NODE_IDENTIFIER ||
+                            subscript->expr->type == AST_NODE_PROPERTY ||
+                            subscript->expr->type == AST_NODE_SUBSCRIPT) {
+                            /* Rewrite n['key'] / n['a']['b'] as property access */
+                            cypher_property temp_prop;
+                            memset(&temp_prop, 0, sizeof(temp_prop));
+                            temp_prop.base.type = AST_NODE_PROPERTY;
+                            temp_prop.expr = subscript->expr;
+                            temp_prop.property_name = idx_lit->value.string;
+                            return transform_property_access(ctx, &temp_prop);
+                        }
+                    }
+                }
+
                 append_sql(ctx, "json_extract(");
                 if (transform_expression(ctx, subscript->expr) < 0) {
                     return -1;
