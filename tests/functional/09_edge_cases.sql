@@ -197,9 +197,9 @@ SELECT 'Test 9.1 - Large result sets:' as test_name;
 SELECT cypher('MATCH (a), (b) RETURN a, b LIMIT 10') as result; -- Cartesian product
 
 SELECT 'Test 9.2 - Deep property access:' as test_name;
--- NOTE: Nested property access not supported - documented in BUG_FIXES.md
--- SELECT cypher('MATCH (n) RETURN n.level1.level2.level3') as result; -- Should handle gracefully
-SELECT 'SKIPPED: Nested property access not supported' as result;
+-- Nested property access now supported (reads JSON sub-fields)
+SELECT cypher('CREATE (deep:DeepTest {data: ''{"level1": {"level2": {"level3": "found"}}}''})') as setup;
+SELECT cypher('MATCH (n:DeepTest) RETURN n.data.level1.level2.level3') as result;
 
 SELECT 'Test 9.3 - Many property accesses:' as test_name;
 SELECT cypher('MATCH (n:BigNode) RETURN n.p1, n.p2, n.p3, n.p4, n.p5, n.p6, n.p7, n.p8, n.p9, n.p10') as result;
