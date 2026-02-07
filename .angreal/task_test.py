@@ -132,16 +132,33 @@ angreal test python --python python3.12
 @angreal.argument(
     name="python",
     long="python",
-    default_value="python3.11",
-    help="Python interpreter to use (default: python3.11)"
+    default_value="",
+    help="Python interpreter to use (auto-detects uv, falls back to python3)"
 )
-def test_python(verbose: bool = False, python: str = "python3.11") -> int:
+def test_python(verbose: bool = False, python: str = "") -> int:
     """Run Python binding tests."""
     if not ensure_extension_built():
         return 1
 
-    print(f"Running Python binding tests (using {python})...")
-    return run_make("test-python", verbose=verbose, PYTHON=python)
+    root = get_project_root()
+    bindings_dir = os.path.join(root, "bindings", "python")
+
+    # Auto-detect: if uv.lock exists in the bindings dir, use uv run
+    use_uv = not python and os.path.exists(os.path.join(bindings_dir, "uv.lock"))
+
+    if use_uv:
+        print("Running Python binding tests (using uv)...")
+        cmd = ["uv", "run", "python", "-m", "pytest", "tests/", "-v"]
+    else:
+        interpreter = python or "python3"
+        print(f"Running Python binding tests (using {interpreter})...")
+        cmd = [interpreter, "-m", "pytest", "tests/", "-v"]
+
+    if verbose:
+        print(f"Running: {' '.join(cmd)} in {bindings_dir}")
+
+    result = subprocess.run(cmd, cwd=bindings_dir)
+    return result.returncode
 
 
 @test()
