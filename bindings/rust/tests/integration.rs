@@ -329,6 +329,77 @@ fn test_graph_delete_edge() {
 }
 
 #[test]
+fn test_upsert_edge_multiple_types() {
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    // Create two different relation types between same nodes
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH").unwrap();
+
+    // Both should exist — verify via get_all_edges count
+    let edges = g.get_all_edges().unwrap();
+    assert_eq!(edges.len(), 2);
+}
+
+#[test]
+fn test_upsert_edge_updates_properties() {
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    // Create edge with initial properties
+    g.upsert_edge("a", "b", [("weight", "1")], "KNOWS").unwrap();
+
+    // Upsert again with updated properties — should SET, not create a second edge
+    g.upsert_edge("a", "b", [("weight", "2")], "KNOWS").unwrap();
+
+    // Still only one edge
+    let edges = g.get_all_edges().unwrap();
+    assert_eq!(edges.len(), 1);
+
+    // Verify updated property
+    let edge = g.get_edge("a", "b").unwrap().unwrap();
+    if let graphqlite::Value::Object(e) = &edge {
+        if let Some(graphqlite::Value::Object(props)) = e.get("properties") {
+            assert_eq!(props.get("weight").and_then(|v| v.as_i64()), Some(2));
+        } else {
+            panic!("Expected properties Object in edge");
+        }
+    } else {
+        panic!("Expected Object value for edge");
+    }
+}
+
+#[test]
+fn test_upsert_edge_update_empty_props() {
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    // Create edge with properties
+    g.upsert_edge("a", "b", [("weight", "1")], "KNOWS").unwrap();
+
+    // Upsert with empty props should preserve existing properties
+    let empty: [(&str, &str); 0] = [];
+    g.upsert_edge("a", "b", empty, "KNOWS").unwrap();
+    let edge = g.get_edge("a", "b").unwrap().unwrap();
+    if let graphqlite::Value::Object(e) = &edge {
+        if let Some(graphqlite::Value::Object(props)) = e.get("properties") {
+            assert_eq!(props.get("weight").and_then(|v| v.as_i64()), Some(1));
+        } else {
+            panic!("Expected properties Object in edge");
+        }
+    } else {
+        panic!("Expected Object value for edge");
+    }
+}
+
+#[test]
 fn test_graph_query() {
     let g = test_graph();
 

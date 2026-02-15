@@ -59,7 +59,9 @@ class EdgesMixin(BaseMixin):
         """
         Create or update an edge between two nodes.
 
-        If an edge already exists, this is a no-op.
+        If an edge of the same type already exists, its properties are updated
+        (merge semantics -- existing properties not in edge_data are preserved).
+        If no edge of that type exists, a new one is created.
         Both source and target nodes must exist.
 
         Args:
@@ -69,25 +71,30 @@ class EdgesMixin(BaseMixin):
             rel_type: Relationship type label
         """
         safe_rel_type = sanitize_rel_type(rel_type)
-
-        if self.has_edge(source_id, target_id):
-            return
-
         esc_source = self._escape(source_id)
         esc_target = self._escape(target_id)
 
+        self._conn.cypher(
+            f"MATCH (a {{id: '{esc_source}'}}), (b {{id: '{esc_target}'}}) "
+            f"MERGE (a)-[r:{safe_rel_type}]->(b)"
+        )
+
         if edge_data:
-            prop_str = self._format_props(edge_data)
-            query = (
-                f"MATCH (a {{id: '{esc_source}'}}), (b {{id: '{esc_target}'}}) "
-                f"CREATE (a)-[r:{safe_rel_type} {{{prop_str}}}]->(b)"
+            set_parts = []
+            for k, v in edge_data.items():
+                if isinstance(v, str):
+                    set_parts.append(f"r.{k} = '{self._escape(v)}'")
+                elif isinstance(v, bool):
+                    set_parts.append(f"r.{k} = {str(v).lower()}")
+                elif v is None:
+                    set_parts.append(f"r.{k} = null")
+                else:
+                    set_parts.append(f"r.{k} = {v}")
+            set_str = ", ".join(set_parts)
+            self._conn.cypher(
+                f"MATCH (a {{id: '{esc_source}'}})-[r:{safe_rel_type}]->"
+                f"(b {{id: '{esc_target}'}}) SET {set_str}"
             )
-        else:
-            query = (
-                f"MATCH (a {{id: '{esc_source}'}}), (b {{id: '{esc_target}'}}) "
-                f"CREATE (a)-[r:{safe_rel_type}]->(b)"
-            )
-        self._conn.cypher(query)
 
     def delete_edge(self, source_id: str, target_id: str) -> None:
         """

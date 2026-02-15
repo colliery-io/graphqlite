@@ -209,6 +209,49 @@ def test_get_all_edges(g):
     assert len(g.get_all_edges()) == 2
 
 
+def test_upsert_edge_multiple_types(g):
+    g.upsert_node("a", {"name": "A"})
+    g.upsert_node("b", {"name": "B"})
+
+    # Create two different relation types between same nodes
+    g.upsert_edge("a", "b", {"since": 2020}, rel_type="KNOWS")
+    g.upsert_edge("a", "b", {"project": "X"}, rel_type="WORKS_WITH")
+
+    # Both should exist — verify via get_all_edges count
+    assert len(g.get_all_edges()) == 2
+
+
+def test_upsert_edge_updates_properties(g):
+    g.upsert_node("a", {"name": "A"})
+    g.upsert_node("b", {"name": "B"})
+
+    # Create edge with initial properties
+    g.upsert_edge("a", "b", {"weight": 1}, rel_type="KNOWS")
+
+    # Upsert again with updated properties — should SET, not create a second edge
+    g.upsert_edge("a", "b", {"weight": 2}, rel_type="KNOWS")
+
+    # Still only one edge
+    assert len(g.get_all_edges()) == 1
+
+    # Verify updated property
+    edge = g.get_edge("a", "b")
+    assert edge["properties"]["weight"] == 2
+
+
+def test_upsert_edge_update_empty_props(g):
+    g.upsert_node("a", {"name": "A"})
+    g.upsert_node("b", {"name": "B"})
+
+    # Create edge with properties
+    g.upsert_edge("a", "b", {"weight": 1}, rel_type="KNOWS")
+
+    # Upsert with empty props should preserve existing properties
+    g.upsert_edge("a", "b", {}, rel_type="KNOWS")
+    edge = g.get_edge("a", "b")
+    assert edge["properties"]["weight"] == 1
+
+
 # =============================================================================
 # Graph Queries
 # =============================================================================

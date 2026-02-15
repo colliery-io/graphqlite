@@ -229,6 +229,12 @@ g.delete_node("alice")?;
 // Create or update an edge
 g.upsert_edge("alice", "bob", [("since", "2020")], "KNOWS")?;
 
+// Update properties on an existing edge (true upsert)
+g.upsert_edge("alice", "bob", [("since", "2021")], "KNOWS")?;
+
+// Multiple relationship types between the same nodes
+g.upsert_edge("alice", "bob", [("project", "X")], "WORKS_WITH")?;
+
 // Check if edge exists
 if g.has_edge("alice", "bob")? {
     println!("Edge exists");

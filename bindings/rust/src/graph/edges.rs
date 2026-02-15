@@ -1,8 +1,8 @@
 //! Edge operations for Graph.
 
+use super::Graph;
 use crate::utils::{escape_string, format_value, sanitize_rel_type};
 use crate::{CypherResult, Result, Value};
-use super::Graph;
 
 impl Graph {
     /// Check if a directed edge exists from source to target.
@@ -34,9 +34,11 @@ impl Graph {
         Ok(result[0].get_value("r").cloned())
     }
 
-    /// Create an edge between two nodes.
+    /// Create or update an edge between two nodes.
     ///
-    /// If an edge already exists, this is a no-op.
+    /// If an edge of the same type already exists, its properties are updated
+    /// (merge semantics — existing properties not in `props` are preserved).
+    /// If no edge of that type exists, a new one is created.
     pub fn upsert_edge<I, K, V>(
         &self,
         source_id: &str,
@@ -49,10 +51,6 @@ impl Graph {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        if self.has_edge(source_id, target_id)? {
-            return Ok(());
-        }
-
         let safe_rel_type = sanitize_rel_type(rel_type);
         let esc_source = escape_string(source_id);
         let esc_target = escape_string(target_id);
@@ -62,24 +60,25 @@ impl Graph {
             .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
             .collect();
 
-        let query = if props.is_empty() {
-            format!(
-                "MATCH (a {{id: '{}'}}), (b {{id: '{}'}}) CREATE (a)-[r:{}]->(b)",
-                esc_source, esc_target, safe_rel_type
-            )
-        } else {
-            let prop_parts: Vec<String> = props
-                .iter()
-                .map(|(k, v)| format!("{}: {}", k, format_value(v)))
-                .collect();
-            let prop_str = prop_parts.join(", ");
-            format!(
-                "MATCH (a {{id: '{}'}}), (b {{id: '{}'}}) CREATE (a)-[r:{} {{{}}}]->(b)",
-                esc_source, esc_target, safe_rel_type, prop_str
-            )
-        };
+        let merge_query = format!(
+            "MATCH (a {{id: '{}'}}), (b {{id: '{}'}}) MERGE (a)-[r:{}]->(b)",
+            esc_source, esc_target, safe_rel_type
+        );
+        self.connection().cypher(&merge_query)?;
 
-        self.connection().cypher(&query)?;
+        if !props.is_empty() {
+            let set_parts: Vec<String> = props
+                .iter()
+                .map(|(k, v)| format!("r.{} = {}", k, format_value(v)))
+                .collect();
+            let set_str = set_parts.join(", ");
+            let set_query = format!(
+                "MATCH (a {{id: '{}'}})-[r:{}]->(b {{id: '{}'}}) SET {}",
+                esc_source, safe_rel_type, esc_target, set_str
+            );
+            self.connection().cypher(&set_query)?;
+        }
+
         Ok(())
     }
 
@@ -96,6 +95,7 @@ impl Graph {
 
     /// Get all edges in the graph.
     pub fn get_all_edges(&self) -> Result<CypherResult> {
-        self.connection().cypher("MATCH (a)-[r]->(b) RETURN a.id AS source, b.id AS target, r")
+        self.connection()
+            .cypher("MATCH (a)-[r]->(b) RETURN a.id AS source, b.id AS target, r")
     }
 }

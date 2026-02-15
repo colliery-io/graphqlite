@@ -222,17 +222,23 @@ people = g.get_all_nodes(label="Person")
 
 #### upsert_edge()
 
-Create or update an edge.
+Create or update an edge. If an edge of the same type already exists, its properties are updated (merge semantics).
 
 ```python
 g.upsert_edge("alice", "bob", {"since": 2020}, rel_type="KNOWS")
+
+# Update properties on existing edge
+g.upsert_edge("alice", "bob", {"since": 2021}, rel_type="KNOWS")
+
+# Multiple relationship types between the same nodes
+g.upsert_edge("alice", "bob", {"project": "X"}, rel_type="WORKS_WITH")
 ```
 
 **Parameters**:
 - `source_id` (str) - Source node ID
 - `target_id` (str) - Target node ID
 - `properties` (dict) - Edge properties
-- `rel_type` (str, optional) - Relationship type
+- `rel_type` (str, optional) - Relationship type (default: "RELATED")
 
 #### get_edge()
 
