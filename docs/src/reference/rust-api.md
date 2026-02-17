@@ -235,21 +235,34 @@ g.upsert_edge("alice", "bob", [("since", "2021")], "KNOWS")?;
 // Multiple relationship types between the same nodes
 g.upsert_edge("alice", "bob", [("project", "X")], "WORKS_WITH")?;
 
-// Check if edge exists
-if g.has_edge("alice", "bob")? {
+// Check if edge exists (any type)
+if g.has_edge("alice", "bob", None)? {
     println!("Edge exists");
 }
 
-// Get an edge
-if let Some(edge) = g.get_edge("alice", "bob")? {
+// Check for a specific relationship type
+if g.has_edge("alice", "bob", Some("KNOWS"))? {
+    println!("KNOWS edge exists");
+}
+
+// Get an edge (any type)
+if let Some(edge) = g.get_edge("alice", "bob", None)? {
     println!("Edge: {:?}", edge);
+}
+
+// Get a specific relationship type
+if let Some(edge) = g.get_edge("alice", "bob", Some("KNOWS"))? {
+    println!("KNOWS edge: {:?}", edge);
 }
 
 // Get all edges
 let edges = g.get_all_edges()?;
 
-// Delete an edge
-g.delete_edge("alice", "bob")?;
+// Delete all edges between two nodes
+g.delete_edge("alice", "bob", None)?;
+
+// Delete only a specific relationship type
+g.delete_edge("alice", "bob", Some("KNOWS"))?;
 ```
 
 ### Query Operations

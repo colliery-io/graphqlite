@@ -52,6 +52,16 @@ pub fn sanitize_rel_type(rel_type: &str) -> String {
     }
 }
 
+/// Build a Cypher relationship type pattern fragment.
+///
+/// Returns `":TYPE"` when a type is given, or an empty string for wildcard matching.
+pub fn rel_type_pattern(rel_type: Option<&str>) -> String {
+    match rel_type {
+        Some(rt) => format!(":{}", sanitize_rel_type(rt)),
+        None => String::new(),
+    }
+}
+
 /// Format a value for inclusion in a Cypher query.
 pub fn format_value(v: &str) -> String {
     // Numbers, booleans, and null pass through as-is

@@ -1,15 +1,17 @@
 //! Edge operations for Graph.
 
 use super::Graph;
-use crate::utils::{escape_string, format_value, sanitize_rel_type};
+use crate::utils::{escape_string, format_value, rel_type_pattern, sanitize_rel_type};
 use crate::{CypherResult, Result, Value};
 
 impl Graph {
     /// Check if a directed edge exists from source to target.
-    pub fn has_edge(&self, source_id: &str, target_id: &str) -> Result<bool> {
+    pub fn has_edge(&self, source_id: &str, target_id: &str, rel_type: Option<&str>) -> Result<bool> {
+        let rel_pattern = rel_type_pattern(rel_type);
         let query = format!(
-            "MATCH (a {{id: '{}'}})-[r]->(b {{id: '{}'}}) RETURN count(r) AS cnt",
+            "MATCH (a {{id: '{}'}})-[r{}]->(b {{id: '{}'}}) RETURN count(r) AS cnt",
             escape_string(source_id),
+            rel_pattern,
             escape_string(target_id)
         );
         let result = self.connection().cypher(&query)?;
@@ -21,10 +23,12 @@ impl Graph {
     }
 
     /// Get edge properties between two nodes.
-    pub fn get_edge(&self, source_id: &str, target_id: &str) -> Result<Option<Value>> {
+    pub fn get_edge(&self, source_id: &str, target_id: &str, rel_type: Option<&str>) -> Result<Option<Value>> {
+        let rel_pattern = rel_type_pattern(rel_type);
         let query = format!(
-            "MATCH (a {{id: '{}'}})-[r]->(b {{id: '{}'}}) RETURN r",
+            "MATCH (a {{id: '{}'}})-[r{}]->(b {{id: '{}'}}) RETURN r",
             escape_string(source_id),
+            rel_pattern,
             escape_string(target_id)
         );
         let result = self.connection().cypher(&query)?;
@@ -83,10 +87,12 @@ impl Graph {
     }
 
     /// Delete the directed edge between two nodes.
-    pub fn delete_edge(&self, source_id: &str, target_id: &str) -> Result<()> {
+    pub fn delete_edge(&self, source_id: &str, target_id: &str, rel_type: Option<&str>) -> Result<()> {
+        let rel_pattern = rel_type_pattern(rel_type);
         let query = format!(
-            "MATCH (a {{id: '{}'}})-[r]->(b {{id: '{}'}}) DELETE r",
+            "MATCH (a {{id: '{}'}})-[r{}]->(b {{id: '{}'}}) DELETE r",
             escape_string(source_id),
+            rel_pattern,
             escape_string(target_id)
         );
         self.connection().cypher(&query)?;

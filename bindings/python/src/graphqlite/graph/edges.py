@@ -9,19 +9,21 @@ from ..utils import sanitize_rel_type
 class EdgesMixin(BaseMixin):
     """Mixin providing edge CRUD operations."""
 
-    def has_edge(self, source_id: str, target_id: str) -> bool:
+    def has_edge(self, source_id: str, target_id: str, rel_type: Optional[str] = None) -> bool:
         """
         Check if an edge exists between two nodes.
 
         Args:
             source_id: Source node id
             target_id: Target node id
+            rel_type: Optional relationship type to check for
 
         Returns:
             True if edge exists, False otherwise
         """
+        rel_pattern = f":{sanitize_rel_type(rel_type)}" if rel_type else ""
         result = self._conn.cypher(
-            f"MATCH (a {{id: '{self._escape(source_id)}'}})-[r]->"
+            f"MATCH (a {{id: '{self._escape(source_id)}'}})-[r{rel_pattern}]->"
             f"(b {{id: '{self._escape(target_id)}'}}) "
             f"RETURN count(r) AS cnt"
         )
@@ -30,19 +32,21 @@ class EdgesMixin(BaseMixin):
         cnt = result[0].get("cnt", 0)
         return int(cnt) > 0 if cnt else False
 
-    def get_edge(self, source_id: str, target_id: str) -> Optional[dict]:
+    def get_edge(self, source_id: str, target_id: str, rel_type: Optional[str] = None) -> Optional[dict]:
         """
         Get edge properties between two nodes.
 
         Args:
             source_id: Source node id
             target_id: Target node id
+            rel_type: Optional relationship type to retrieve
 
         Returns:
             Edge dict or None if not found
         """
+        rel_pattern = f":{sanitize_rel_type(rel_type)}" if rel_type else ""
         result = self._conn.cypher(
-            f"MATCH (a {{id: '{self._escape(source_id)}'}})-[r]->"
+            f"MATCH (a {{id: '{self._escape(source_id)}'}})-[r{rel_pattern}]->"
             f"(b {{id: '{self._escape(target_id)}'}}) RETURN r"
         )
         if len(result) == 0:
@@ -96,16 +100,18 @@ class EdgesMixin(BaseMixin):
                 f"(b {{id: '{esc_target}'}}) SET {set_str}"
             )
 
-    def delete_edge(self, source_id: str, target_id: str) -> None:
+    def delete_edge(self, source_id: str, target_id: str, rel_type: Optional[str] = None) -> None:
         """
         Delete edge between two nodes.
 
         Args:
             source_id: Source node id
             target_id: Target node id
+            rel_type: Optional relationship type to delete
         """
+        rel_pattern = f":{sanitize_rel_type(rel_type)}" if rel_type else ""
         self._conn.cypher(
-            f"MATCH (a {{id: '{self._escape(source_id)}'}})-[r]->"
+            f"MATCH (a {{id: '{self._escape(source_id)}'}})-[r{rel_pattern}]->"
             f"(b {{id: '{self._escape(target_id)}'}}) DELETE r"
         )
 

@@ -246,9 +246,17 @@ Get an edge between two nodes.
 
 ```python
 edge = g.get_edge("alice", "bob")
+
+# Get a specific relationship type
+edge = g.get_edge("alice", "bob", rel_type="KNOWS")
 ```
 
-Returns the first edge found between the source and target nodes, or `None` if no edge exists.
+**Parameters**:
+- `source_id` (str) - Source node ID
+- `target_id` (str) - Target node ID
+- `rel_type` (str, optional) - Relationship type to retrieve. If omitted, matches any type.
+
+**Returns**: dict or None
 
 #### has_edge()
 
@@ -256,7 +264,15 @@ Check if an edge exists.
 
 ```python
 exists = g.has_edge("alice", "bob")
+
+# Check for a specific relationship type
+exists = g.has_edge("alice", "bob", rel_type="KNOWS")
 ```
+
+**Parameters**:
+- `source_id` (str) - Source node ID
+- `target_id` (str) - Target node ID
+- `rel_type` (str, optional) - Relationship type to check for. If omitted, matches any type.
 
 **Returns**: bool
 
@@ -266,7 +282,15 @@ Delete an edge between two nodes.
 
 ```python
 g.delete_edge("alice", "bob")
+
+# Delete only a specific relationship type
+g.delete_edge("alice", "bob", rel_type="KNOWS")
 ```
+
+**Parameters**:
+- `source_id` (str) - Source node ID
+- `target_id` (str) - Target node ID
+- `rel_type` (str, optional) - Relationship type to delete. If omitted, deletes all edges between the nodes.
 
 #### get_all_edges()
 

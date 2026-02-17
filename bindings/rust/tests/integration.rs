@@ -249,8 +249,8 @@ fn test_graph_upsert_edge() {
     g.upsert_edge("a", "b", [("weight", "10")], "CONNECTS")
         .unwrap();
 
-    assert!(g.has_edge("a", "b").unwrap());
-    assert!(!g.has_edge("b", "a").unwrap()); // Directed edge
+    assert!(g.has_edge("a", "b", None).unwrap());
+    assert!(!g.has_edge("b", "a", None).unwrap()); // Directed edge
 }
 
 #[test]
@@ -322,10 +322,10 @@ fn test_graph_delete_edge() {
     g.upsert_node("y", [("name", "Y")], "Node").unwrap();
     let empty: [(&str, &str); 0] = [];
     g.upsert_edge("x", "y", empty, "REL").unwrap();
-    assert!(g.has_edge("x", "y").unwrap());
+    assert!(g.has_edge("x", "y", None).unwrap());
 
-    g.delete_edge("x", "y").unwrap();
-    assert!(!g.has_edge("x", "y").unwrap());
+    g.delete_edge("x", "y", None).unwrap();
+    assert!(!g.has_edge("x", "y", None).unwrap());
 }
 
 #[test]
@@ -342,6 +342,73 @@ fn test_upsert_edge_multiple_types() {
     // Both should exist — verify via get_all_edges count
     let edges = g.get_all_edges().unwrap();
     assert_eq!(edges.len(), 2);
+}
+
+#[test]
+fn test_get_edge_by_type() {
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH").unwrap();
+
+    // Should be able to fetch the KNOWS edge specifically
+    let edge = g.get_edge("a", "b", Some("KNOWS")).unwrap().unwrap();
+    if let graphqlite::Value::Object(e) = &edge {
+        assert_eq!(e.get("type").and_then(|v| v.as_str()), Some("KNOWS"));
+        if let Some(graphqlite::Value::Object(props)) = e.get("properties") {
+            assert_eq!(props.get("since").and_then(|v| v.as_i64()), Some(2020));
+        } else {
+            panic!("Expected properties Object in edge");
+        }
+    } else {
+        panic!("Expected Object value for edge");
+    }
+
+    // Should be able to fetch the WORKS_WITH edge specifically
+    let edge = g.get_edge("a", "b", Some("WORKS_WITH")).unwrap().unwrap();
+    if let graphqlite::Value::Object(e) = &edge {
+        assert_eq!(e.get("type").and_then(|v| v.as_str()), Some("WORKS_WITH"));
+        if let Some(graphqlite::Value::Object(props)) = e.get("properties") {
+            assert_eq!(props.get("project").and_then(|v| v.as_str()), Some("X"));
+        } else {
+            panic!("Expected properties Object in edge");
+        }
+    } else {
+        panic!("Expected Object value for edge");
+    }
+}
+
+#[test]
+fn test_delete_edge_by_type() {
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH").unwrap();
+    assert_eq!(g.get_all_edges().unwrap().len(), 2);
+
+    // Deleting KNOWS should leave WORKS_WITH intact
+    g.delete_edge("a", "b", Some("KNOWS")).unwrap();
+    let edges = g.get_all_edges().unwrap();
+    assert_eq!(edges.len(), 1);
+}
+
+#[test]
+fn test_has_edge_by_type() {
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
+
+    assert!(g.has_edge("a", "b", Some("KNOWS")).unwrap());
+    assert!(!g.has_edge("a", "b", Some("WORKS_WITH")).unwrap());
 }
 
 #[test]
@@ -362,7 +429,7 @@ fn test_upsert_edge_updates_properties() {
     assert_eq!(edges.len(), 1);
 
     // Verify updated property
-    let edge = g.get_edge("a", "b").unwrap().unwrap();
+    let edge = g.get_edge("a", "b", None).unwrap().unwrap();
     if let graphqlite::Value::Object(e) = &edge {
         if let Some(graphqlite::Value::Object(props)) = e.get("properties") {
             assert_eq!(props.get("weight").and_then(|v| v.as_i64()), Some(2));
@@ -387,7 +454,7 @@ fn test_upsert_edge_update_empty_props() {
     // Upsert with empty props should preserve existing properties
     let empty: [(&str, &str); 0] = [];
     g.upsert_edge("a", "b", empty, "KNOWS").unwrap();
-    let edge = g.get_edge("a", "b").unwrap().unwrap();
+    let edge = g.get_edge("a", "b", None).unwrap().unwrap();
     if let graphqlite::Value::Object(e) = &edge {
         if let Some(graphqlite::Value::Object(props)) = e.get("properties") {
             assert_eq!(props.get("weight").and_then(|v| v.as_i64()), Some(1));
@@ -2256,7 +2323,7 @@ fn test_bulk_insert_edges_fallback_lookup() {
         .unwrap();
 
     assert_eq!(edges_inserted, 1);
-    assert!(g.has_edge("existing1", "existing2").unwrap());
+    assert!(g.has_edge("existing1", "existing2", None).unwrap());
 }
 
 #[test]
@@ -2344,9 +2411,9 @@ fn test_bulk_insert_mixed_sources() {
     assert_eq!(edges_inserted, 3);
 
     // Verify all edges exist
-    assert!(g.has_edge("new1", "new2").unwrap());
-    assert!(g.has_edge("new1", "existing").unwrap());
-    assert!(g.has_edge("existing", "new2").unwrap());
+    assert!(g.has_edge("new1", "new2", None).unwrap());
+    assert!(g.has_edge("new1", "existing", None).unwrap());
+    assert!(g.has_edge("existing", "new2", None).unwrap());
 }
 
 #[test]
@@ -2406,8 +2473,8 @@ fn test_bulk_insert_verifies_with_graph_api() {
     assert!(g.has_node("spoke1").unwrap());
     assert!(g.has_node("spoke2").unwrap());
 
-    assert!(g.has_edge("hub", "spoke1").unwrap());
-    assert!(g.has_edge("hub", "spoke2").unwrap());
+    assert!(g.has_edge("hub", "spoke1", None).unwrap());
+    assert!(g.has_edge("hub", "spoke2", None).unwrap());
 
     // Hub should have degree 2
     assert_eq!(g.node_degree("hub").unwrap(), 2);
