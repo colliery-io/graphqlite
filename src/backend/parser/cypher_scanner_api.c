@@ -1,6 +1,7 @@
 /*
  * Cypher Scanner API Implementation
- * High-level interface for the Flex-generated scanner
+ * High-level interface for the Flex-generated reentrant scanner
+ * Thread-safe: no global state - enables concurrent parsing
  */
 
 #include <stdio.h>
@@ -9,13 +10,8 @@
 
 #include "parser/cypher_scanner.h"
 
-/* External Flex functions (will be generated) */
-extern int yylex(void);
-extern void *yy_scan_string(const char *str);
-extern void yy_delete_buffer(void *buffer);
-
-/* External variables from scanner */
-extern CypherScannerState *current_scanner;
+/* Flex reentrant API - declarations from generated header */
+#include "cypher_flex.h"
 
 /* Scanner lifecycle functions */
 
@@ -25,18 +21,24 @@ CypherScannerState* cypher_scanner_create(void)
     if (!state) {
         return NULL;
     }
-    
-    /* Initialize error state */
+
     state->has_error = false;
     state->last_error.line = 0;
     state->last_error.column = 0;
     state->last_error.message = NULL;
-    state->scanner = NULL;
+    state->flex_scanner = NULL;
+    state->flex_buffer = NULL;
     state->input_string = NULL;
-    
-    /* Set global current_scanner for Flex callbacks */
-    current_scanner = state;
-    
+    state->current_line = 1;
+    state->current_column = 1;
+    state->current_token = (CypherToken){0};
+
+    /* Initialize Flex reentrant scanner with our state as extra data */
+    if (yylex_init_extra(state, (yyscan_t *)&state->flex_scanner) != 0) {
+        free(state);
+        return NULL;
+    }
+
     return state;
 }
 
@@ -45,22 +47,24 @@ void cypher_scanner_destroy(CypherScannerState *state)
     if (!state) {
         return;
     }
-    
-    /* Clean up buffer if any */
-    if (state->scanner) {
-        yy_delete_buffer(state->scanner);
+
+    /* Delete buffer if any */
+    if (state->flex_buffer) {
+        yy_delete_buffer((YY_BUFFER_STATE)state->flex_buffer, (yyscan_t)state->flex_scanner);
+        state->flex_buffer = NULL;
     }
-    
+
+    /* Destroy Flex scanner */
+    if (state->flex_scanner) {
+        yylex_destroy((yyscan_t)state->flex_scanner);
+        state->flex_scanner = NULL;
+    }
+
     /* Free error message if any */
     if (state->last_error.message) {
         free(state->last_error.message);
     }
-    
-    /* Clear global reference */
-    if (current_scanner == state) {
-        current_scanner = NULL;
-    }
-    
+
     free(state);
 }
 
@@ -71,12 +75,20 @@ int cypher_scanner_set_input_string(CypherScannerState *state, const char *input
     if (!state || !input) {
         return -1;
     }
-    
+
+    /* Delete previous buffer if any */
+    if (state->flex_buffer) {
+        yy_delete_buffer((YY_BUFFER_STATE)state->flex_buffer, (yyscan_t)state->flex_scanner);
+        state->flex_buffer = NULL;
+    }
+
     state->input_string = input;
-    
+    state->current_line = 1;
+    state->current_column = 1;
+
     /* Create Flex buffer for string input */
-    state->scanner = yy_scan_string(input);
-    
+    state->flex_buffer = yy_scan_string(input, (yyscan_t)state->flex_scanner);
+
     return 0;
 }
 
@@ -84,22 +96,19 @@ int cypher_scanner_set_input_string(CypherScannerState *state, const char *input
 CypherToken cypher_scanner_next_token(CypherScannerState *state)
 {
     CypherToken token = {0};
-    
+
     if (!state) {
         token.type = CYPHER_TOKEN_EOF;
         token.text = strdup("");
         return token;
     }
-    
-    /* Set current context for Flex callbacks */
-    current_scanner = state;
-    
-    /* Call Flex to get the next token */
-    yylex();
-    
-    /* Get the prepared token from the scanner */
-    token = cypher_scanner_get_current_token();
-    
+
+    /* Call Flex to get the next token - reentrant, no global state */
+    yylex((yyscan_t)state->flex_scanner);
+
+    /* Get the prepared token from our state */
+    token = cypher_scanner_get_current_token(state);
+
     return token;
 }
 
@@ -120,14 +129,14 @@ void cypher_scanner_clear_error(CypherScannerState *state)
     if (!state) {
         return;
     }
-    
+
     state->has_error = false;
-    
+
     if (state->last_error.message) {
         free(state->last_error.message);
         state->last_error.message = NULL;
     }
-    
+
     state->last_error.line = 0;
     state->last_error.column = 0;
 }
@@ -163,13 +172,13 @@ void cypher_token_free(CypherToken *token)
     if (!token) {
         return;
     }
-    
+
     /* Free text field */
     if (token->text) {
         free((void*)token->text);
         token->text = NULL;
     }
-    
+
     /* Free string value if applicable */
     if (token->type == CYPHER_TOKEN_STRING ||
         token->type == CYPHER_TOKEN_IDENTIFIER ||

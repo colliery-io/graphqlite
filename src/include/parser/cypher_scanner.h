@@ -58,12 +58,17 @@ typedef struct CypherScannerError {
     char *message;
 } CypherScannerError;
 
-/* Scanner state */
+/* Scanner state - holds Flex reentrant handle and per-scan mutable state */
 typedef struct CypherScannerState {
-    cypher_scanner_t scanner;      /* Flex scanner handle */
+    void *flex_scanner;            /* Flex reentrant yyscan_t handle */
+    void *flex_buffer;             /* YY_BUFFER_STATE from yy_scan_string */
     const char *input_string;      /* Input string */
     CypherScannerError last_error; /* Last error encountered */
     bool has_error;                /* Error flag */
+    /* Per-scan state (no globals - enables concurrent parsing) */
+    int current_line;
+    int current_column;
+    CypherToken current_token;
 } CypherScannerState;
 
 /* Function prototypes */
@@ -88,6 +93,6 @@ const char* cypher_token_type_name(CypherTokenType type);
 void cypher_token_free(CypherToken *token);
 
 /* Internal function to get current token (used by API) */
-CypherToken cypher_scanner_get_current_token(void);
+CypherToken cypher_scanner_get_current_token(const CypherScannerState *state);
 
 #endif /* CYPHER_SCANNER_H */

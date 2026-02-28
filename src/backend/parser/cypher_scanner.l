@@ -2,6 +2,7 @@
 /*
  * Cypher Lexical Scanner for GraphQLite
  * Based on OpenCypher specification and AGE scanner
+ * Reentrant: no global state - enables concurrent parsing from multiple threads.
  */
 
 #include <stdio.h>
@@ -15,34 +16,26 @@
 #include "parser/cypher_keywords.h"
 #include "parser/cypher_tokens.h"
 
-/* Forward declaration */
-static void prepare_token(CypherTokenType type, const char *text);
-static void prepare_string_token(CypherTokenType type, const char *text, const char *value);
-static void prepare_integer_token(const char *text);
-static void prepare_decimal_token(const char *text);
-static void scanner_error(const char *message);
+/* Forward declarations - take state (yyextra) for reentrant operation */
+static void prepare_token(CypherScannerState *state, CypherTokenType type, const char *text);
+static void prepare_string_token(CypherScannerState *state, CypherTokenType type, const char *text, const char *value);
+static void prepare_integer_token(CypherScannerState *state, const char *text);
+static void prepare_decimal_token(CypherScannerState *state, const char *text);
+static void scanner_error(CypherScannerState *state, const char *message);
 static char* unescape_string(const char *escaped_str, int length);
 
-/* Global variables for current scanner state */
-CypherScannerState *current_scanner = NULL;
-static int current_line = 1;
-static int current_column = 1;
-
-/* Current token being built */
-static CypherToken current_token;
-
-/* Update location tracking */
+/* Update location tracking - yyextra is CypherScannerState* in reentrant mode */
 #define YY_USER_ACTION \
-    current_column += yyleng;
+    yyextra->current_column += yyleng;
 
-/* Token preparation instead of return */
+/* Token preparation macros - yyextra is the scanner state */
 #define RETURN_TOKEN(type) do { \
-    prepare_token(type, yytext); \
+    prepare_token(yyextra, type, yytext); \
     return (int)type; \
 } while(0)
 
 #define RETURN_STRING_TOKEN(type, value) do { \
-    prepare_string_token(type, yytext, value); \
+    prepare_string_token(yyextra, type, yytext, value); \
     return (int)type; \
 } while(0)
 
@@ -54,6 +47,10 @@ static CypherToken current_token;
 %option nounistd
 %option warn
 %option nodefault
+
+/* Reentrant: no global state - enables concurrent parsing */
+%option reentrant
+%option extra-type="CypherScannerState *"
 
 /* Remove unused functions to avoid warnings */
 %option noinput
@@ -106,8 +103,8 @@ operator    [+\-*/%^=!&|~]+
                     /* Count newlines for line tracking */
                     for (int i = 0; i < (int)yyleng; i++) {
                         if (yytext[i] == '\n') {
-                            current_line++;
-                            current_column = 1;
+                            yyextra->current_line++;
+                            yyextra->current_column = 1;
                         }
                     }
                     /* Skip whitespace - return next token */
@@ -131,8 +128,8 @@ operator    [+\-*/%^=!&|~]+
 
 <BLOCK_COMMENT>\n {
                     /* Count newlines in block comments */
-                    current_line++;
-                    current_column = 1;
+                    yyextra->current_line++;
+                    yyextra->current_column = 1;
                 }
 
 <BLOCK_COMMENT>.  {
@@ -147,20 +144,20 @@ operator    [+\-*/%^=!&|~]+
 {plus_eq}       { RETURN_TOKEN(CYPHER_TOKEN_PLUS_EQ); }
 {regex_match}   { RETURN_TOKEN(CYPHER_TOKEN_REGEX_MATCH); }
 
-{hexint}        { prepare_integer_token(yytext); return CYPHER_TOKEN_INTEGER; }
-{integer}       { prepare_integer_token(yytext); return CYPHER_TOKEN_INTEGER; }
-{decimal}       { prepare_decimal_token(yytext); return CYPHER_TOKEN_DECIMAL; }
+{hexint}        { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
+{integer}       { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
+{decimal}       { prepare_decimal_token(yyextra, yytext); return CYPHER_TOKEN_DECIMAL; }
 
 {string}        {
                     /* Remove quotes and handle escapes */
                     int len = yyleng - 2; /* Remove quotes */
                     char *unescaped = unescape_string(yytext + 1, len);
                     if (!unescaped) {
-                        scanner_error("Out of memory processing string literal");
+                        scanner_error(yyextra, "Out of memory processing string literal");
                         return CYPHER_TOKEN_EOF;
                     }
                     
-                    prepare_string_token(CYPHER_TOKEN_STRING, yytext, unescaped);
+                    prepare_string_token(yyextra, CYPHER_TOKEN_STRING, yytext, unescaped);
                     free(unescaped);
                     return CYPHER_TOKEN_STRING;
                 }
@@ -170,24 +167,24 @@ operator    [+\-*/%^=!&|~]+
                     int len = yyleng - 2;
                     char *unescaped = unescape_string(yytext + 1, len);
                     if (!unescaped) {
-                        scanner_error("Out of memory processing string literal");
+                        scanner_error(yyextra, "Out of memory processing string literal");
                         return CYPHER_TOKEN_EOF;
                     }
                     
-                    prepare_string_token(CYPHER_TOKEN_STRING, yytext, unescaped);
+                    prepare_string_token(yyextra, CYPHER_TOKEN_STRING, yytext, unescaped);
                     free(unescaped);
                     return CYPHER_TOKEN_STRING;
                 }
 
 \$[A-Za-z_][A-Za-z0-9_]* {
                     /* Named parameters: $name, $param1 */
-                    prepare_string_token(CYPHER_TOKEN_PARAMETER, yytext, yytext + 1);
+                    prepare_string_token(yyextra, CYPHER_TOKEN_PARAMETER, yytext, yytext + 1);
                     return CYPHER_TOKEN_PARAMETER;
                 }
 
 \$[0-9]+        {
                     /* Numeric parameters: $0, $1, $2, ... */
-                    prepare_string_token(CYPHER_TOKEN_PARAMETER, yytext, yytext + 1);
+                    prepare_string_token(yyextra, CYPHER_TOKEN_PARAMETER, yytext, yytext + 1);
                     return CYPHER_TOKEN_PARAMETER;
                 }
 
@@ -199,7 +196,7 @@ operator    [+\-*/%^=!&|~]+
                     if (value) {
                         strncpy(value, yytext + 2, len);
                         value[len] = '\0';
-                        prepare_string_token(CYPHER_TOKEN_PARAMETER, yytext, value);
+                        prepare_string_token(yyextra, CYPHER_TOKEN_PARAMETER, yytext, value);
                         free(value);
                     }
                     return CYPHER_TOKEN_PARAMETER;
@@ -210,14 +207,14 @@ operator    [+\-*/%^=!&|~]+
                     int len = yyleng - 2;
                     char *value = malloc(len + 1);
                     if (!value) {
-                        scanner_error("Out of memory");
+                        scanner_error(yyextra, "Out of memory");
                         return CYPHER_TOKEN_EOF;
                     }
                     
                     strncpy(value, yytext + 1, len);
                     value[len] = '\0';
                     
-                    prepare_string_token(CYPHER_TOKEN_BQIDENT, yytext, value);
+                    prepare_string_token(yyextra, CYPHER_TOKEN_BQIDENT, yytext, value);
                     free(value);
                     return CYPHER_TOKEN_BQIDENT;
                 }
@@ -227,104 +224,104 @@ operator    [+\-*/%^=!&|~]+
                     const CypherKeywordToken *kw = cypher_keyword_lookup_full(yytext);
                     if (kw && kw->category == RESERVED_KEYWORD) {
                         /* Only reserved keywords are treated as keywords */
-                        prepare_string_token(CYPHER_TOKEN_KEYWORD, yytext, yytext);
-                        current_token.token_id = kw->token;
+                        prepare_string_token(yyextra, CYPHER_TOKEN_KEYWORD, yytext, yytext);
+                        yyextra->current_token.token_id = kw->token;
                         return CYPHER_TOKEN_KEYWORD;
                     } else {
                         /* Unreserved keywords and non-keywords are identifiers */
-                        prepare_string_token(CYPHER_TOKEN_IDENTIFIER, yytext, yytext);
+                        prepare_string_token(yyextra, CYPHER_TOKEN_IDENTIFIER, yytext, yytext);
                         return CYPHER_TOKEN_IDENTIFIER;
                     }
                 }
 
-{operator}      { prepare_string_token(CYPHER_TOKEN_OPERATOR, yytext, yytext); return CYPHER_TOKEN_OPERATOR; }
+{operator}      { prepare_string_token(yyextra, CYPHER_TOKEN_OPERATOR, yytext, yytext); return CYPHER_TOKEN_OPERATOR; }
 
-:               { prepare_token(CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
-[(){}[\],;.<>]  { prepare_token(CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
+:               { prepare_token(yyextra, CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
+[(){}[\],;.<>]  { prepare_token(yyextra, CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
 
-<<EOF>>         { prepare_token(CYPHER_TOKEN_EOF, ""); return CYPHER_TOKEN_EOF; }
+<<EOF>>         { prepare_token(yyextra, CYPHER_TOKEN_EOF, ""); return CYPHER_TOKEN_EOF; }
 
 .               {
                     char msg[100];
                     snprintf(msg, sizeof(msg), "Unexpected character: '%c' (0x%02x)", 
                             yytext[0], (unsigned char)yytext[0]);
-                    scanner_error(msg);
-                    prepare_token(CYPHER_TOKEN_EOF, "");
+                    scanner_error(yyextra, msg);
+                    prepare_token(yyextra, CYPHER_TOKEN_EOF, "");
                     return CYPHER_TOKEN_EOF;
                 }
 
 %%
 
-/* Helper functions */
+/* Helper functions - all take state for reentrant operation */
 
-static void prepare_token(CypherTokenType type, const char *text)
+static void prepare_token(CypherScannerState *state, CypherTokenType type, const char *text)
 {
-    current_token.type = type;
-    current_token.token_id = 0;
-    current_token.line = current_line;
-    current_token.column = current_column - strlen(text);
-    current_token.text = strdup(text ? text : "");
+    state->current_token.type = type;
+    state->current_token.token_id = 0;
+    state->current_token.line = state->current_line;
+    state->current_token.column = state->current_column - (int)strlen(text);
+    state->current_token.text = strdup(text ? text : "");
     
     /* Initialize value based on type */
     switch (type) {
         case CYPHER_TOKEN_CHAR:
-            current_token.value.character = text[0];
+            state->current_token.value.character = text[0];
             break;
         default:
-            current_token.value.string = NULL;
+            state->current_token.value.string = NULL;
             break;
     }
 }
 
-static void prepare_string_token(CypherTokenType type, const char *text, const char *value)
+static void prepare_string_token(CypherScannerState *state, CypherTokenType type, const char *text, const char *value)
 {
-    prepare_token(type, text);
-    current_token.value.string = strdup(value ? value : "");
+    prepare_token(state, type, text);
+    state->current_token.value.string = strdup(value ? value : "");
 }
 
-static void prepare_integer_token(const char *text)
+static void prepare_integer_token(CypherScannerState *state, const char *text)
 {
-    prepare_token(CYPHER_TOKEN_INTEGER, text);
+    prepare_token(state, CYPHER_TOKEN_INTEGER, text);
     
     /* Parse integer with proper base detection */
     if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
         /* Hexadecimal */
-        current_token.value.integer = strtol(text, NULL, 16);
+        state->current_token.value.integer = strtol(text, NULL, 16);
     } else if (text[0] == '0' && strlen(text) > 1) {
         /* Octal */
-        current_token.value.integer = strtol(text, NULL, 8);
+        state->current_token.value.integer = strtol(text, NULL, 8);
     } else {
         /* Decimal */
-        current_token.value.integer = strtol(text, NULL, 10);
+        state->current_token.value.integer = strtol(text, NULL, 10);
     }
 }
 
-static void prepare_decimal_token(const char *text)
+static void prepare_decimal_token(CypherScannerState *state, const char *text)
 {
-    prepare_token(CYPHER_TOKEN_DECIMAL, text);
-    current_token.value.decimal = strtod(text, NULL);
+    prepare_token(state, CYPHER_TOKEN_DECIMAL, text);
+    state->current_token.value.decimal = strtod(text, NULL);
 }
 
-static void scanner_error(const char *message)
+static void scanner_error(CypherScannerState *state, const char *message)
 {
-    if (current_scanner) {
-        current_scanner->has_error = true;
-        current_scanner->last_error.line = current_line;
-        current_scanner->last_error.column = current_column;
+    if (state) {
+        state->has_error = true;
+        state->last_error.line = state->current_line;
+        state->last_error.column = state->current_column;
         
         /* Free previous error message if any */
-        if (current_scanner->last_error.message) {
-            free(current_scanner->last_error.message);
+        if (state->last_error.message) {
+            free(state->last_error.message);
         }
         
-        current_scanner->last_error.message = strdup(message);
+        state->last_error.message = strdup(message);
     }
 }
 
 /* Function to get the current prepared token */
-CypherToken cypher_scanner_get_current_token(void)
+CypherToken cypher_scanner_get_current_token(const CypherScannerState *state)
 {
-    return current_token;
+    return state ? state->current_token : (CypherToken){0};
 }
 
 /* Process escape sequences in string literals */

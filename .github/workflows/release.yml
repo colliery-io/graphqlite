@@ -163,7 +163,7 @@ jobs:
         if: matrix.arch != 'x86_64'
         working-directory: bindings/rust
         shell: bash
-        run: cargo test -- --test-threads=1
+        run: cargo test
 
       - name: Rename extension artifact
         run: cp build/${{ matrix.artifact }} build/${{ matrix.artifact-name }}

@@ -19,6 +19,33 @@ fn test_open_memory() {
     assert!(conn.cypher("RETURN 1").is_ok());
 }
 
+/// Verifies concurrent parsing: multiple threads each run Cypher queries in parallel.
+/// The reentrant Flex scanner enables this without process-level serialization.
+#[test]
+fn test_concurrent_parsing() {
+    use std::thread;
+
+    let mut handles = vec![];
+
+    for i in 0..8 {
+        let handle = thread::spawn(move || {
+            let conn = test_connection();
+            for j in 0..20 {
+                let query = format!("RETURN {} as x, {} as y", i, j);
+                let results = conn.cypher(&query).expect("cypher should succeed");
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].get::<i64>("x").unwrap(), i as i64);
+                assert_eq!(results[0].get::<i64>("y").unwrap(), j as i64);
+            }
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().expect("thread should not panic");
+    }
+}
+
 #[test]
 fn test_open_file() {
     let temp_dir = tempfile::tempdir().unwrap();

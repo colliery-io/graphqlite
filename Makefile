@@ -93,6 +93,7 @@ PARSER_SRCS = \
 
 # Generated sources
 SCANNER_SRC = $(BUILD_PARSER_DIR)/cypher_scanner.c
+SCANNER_HDR = $(BUILD_PARSER_DIR)/cypher_flex.h
 SCANNER_L = $(PARSER_DIR)/cypher_scanner.l
 GRAMMAR_SRC = $(BUILD_PARSER_DIR)/cypher_gram.tab.c
 GRAMMAR_HDR = $(BUILD_PARSER_DIR)/cypher_gram.tab.h
@@ -354,13 +355,18 @@ dirs:
 $(BUILD_PARSER_DIR)/%.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
 	$(CC) $(CFLAGS) -I$(BUILD_PARSER_DIR) -c $< -o $@
 
+# Scanner API needs Flex-generated header (reentrant API declarations)
+$(BUILD_PARSER_DIR)/cypher_scanner_api.o: $(SCANNER_HDR)
+
 # Parser objects (coverage build) - need build dir for generated headers
 $(BUILD_PARSER_DIR)/%.cov.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -I$(BUILD_PARSER_DIR) -c $< -o $@
 
-# Generate scanner from Flex specification
-$(SCANNER_SRC): $(SCANNER_L) | dirs
-	$(FLEX) -o $@ $<
+$(BUILD_PARSER_DIR)/cypher_scanner_api.cov.o: $(SCANNER_HDR)
+
+# Generate scanner from Flex specification (reentrant, with header for API)
+$(SCANNER_SRC) $(SCANNER_HDR): $(SCANNER_L) | dirs
+	$(FLEX) -o $(SCANNER_SRC) --header=$(SCANNER_HDR) $<
 
 # Generate parser from Bison grammar
 $(GRAMMAR_SRC) $(GRAMMAR_HDR): $(GRAMMAR_Y) | dirs
@@ -401,6 +407,8 @@ $(BUILD_EXECUTOR_DIR)/%.cov.o: $(EXECUTOR_DIR)/%.c | dirs
 # PIC object builds for shared library (uses vendored SQLite headers only - no EXTRA_INCLUDES)
 $(BUILD_PARSER_DIR)/%.pic.o: $(PARSER_DIR)/%.c $(GRAMMAR_HDR) | dirs
 	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -I$(BUILD_PARSER_DIR) -c $< -o $@
+
+$(BUILD_PARSER_DIR)/cypher_scanner_api.pic.o: $(SCANNER_HDR)
 
 $(BUILD_PARSER_DIR)/cypher_scanner.pic.o: $(SCANNER_SRC) | dirs
 	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -Wno-sign-compare -c $< -o $@
@@ -511,7 +519,7 @@ test-unit: $(TEST_RUNNER)
 
 test-rust: extension install-bundled
 	@echo "Running Rust binding tests..."
-	cd $(RUST_BINDINGS_DIR) && cargo test -- --test-threads=1
+	cd $(RUST_BINDINGS_DIR) && cargo test
 
 test-python: extension
 	@echo "Running Python binding tests..."
