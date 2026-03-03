@@ -124,6 +124,13 @@ graph_algo_result* execute_bfs(sqlite3 *db, csr_graph *cached, const char *start
     result->error_message = NULL;
     result->json_result = NULL;
 
+    /* Guard against NULL start_id (e.g. unresolved parameter) */
+    if (!start_id) {
+        result->success = true;
+        result->json_result = strdup("[]");
+        return result;
+    }
+
     /* Use cached graph or load from SQLite */
     csr_graph *graph;
     bool should_free_graph = false;
@@ -280,6 +287,13 @@ graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start
     result->success = false;
     result->error_message = NULL;
     result->json_result = NULL;
+
+    /* Guard against NULL start_id (e.g. unresolved parameter) */
+    if (!start_id) {
+        result->success = true;
+        result->json_result = strdup("[]");
+        return result;
+    }
 
     /* Use cached graph or load from SQLite */
     csr_graph *graph;

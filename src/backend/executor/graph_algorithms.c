@@ -15,6 +15,7 @@
 
 #include "executor/graph_algorithms.h"
 #include "executor/graph_algo_internal.h"
+#include "executor/executor_internal.h"
 #include "parser/cypher_ast.h"
 
 /* Free CSR graph */
@@ -240,8 +241,41 @@ csr_graph* csr_graph_load(sqlite3 *db)
     return graph;
 }
 
+/*
+ * Resolve a function argument to a string value.
+ * Handles AST_NODE_LITERAL (string) and AST_NODE_PARAMETER (via params_json).
+ * Returns strdup'd string on success, NULL on failure.
+ */
+static char* resolve_string_arg(ast_node *node, const char *params_json)
+{
+    if (!node) return NULL;
+
+    if (node->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)node;
+        if (lit->literal_type == LITERAL_STRING && lit->value.string) {
+            return strdup(lit->value.string);
+        }
+        return NULL;
+    }
+
+    if (node->type == AST_NODE_PARAMETER) {
+        cypher_parameter *param = (cypher_parameter *)node;
+        if (!params_json || !param->name) return NULL;
+
+        property_type ptype;
+        char str_buf[256];
+        int rc = get_param_value(params_json, param->name, &ptype, str_buf, sizeof(str_buf));
+        if (rc == 0 && ptype == PROP_TYPE_TEXT) {
+            return strdup(str_buf);
+        }
+        return NULL;
+    }
+
+    return NULL;
+}
+
 /* Detect graph algorithm in RETURN clause */
-graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
+graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const char *params_json)
 {
     graph_algo_params params = {0};
     params.type = GRAPH_ALGO_NONE;
@@ -351,23 +385,11 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         params.type = GRAPH_ALGO_DIJKSTRA;
 
         if (func->args && func->args->count >= 2) {
-            cypher_literal *src_lit = (cypher_literal *)func->args->items[0];
-            if (src_lit && src_lit->base.type == AST_NODE_LITERAL &&
-                src_lit->literal_type == LITERAL_STRING) {
-                params.source_id = strdup(src_lit->value.string);
-            }
-            cypher_literal *tgt_lit = (cypher_literal *)func->args->items[1];
-            if (tgt_lit && tgt_lit->base.type == AST_NODE_LITERAL &&
-                tgt_lit->literal_type == LITERAL_STRING) {
-                params.target_id = strdup(tgt_lit->value.string);
-            }
+            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
+            params.target_id = resolve_string_arg((ast_node *)func->args->items[1], params_json);
         }
         if (func->args && func->args->count >= 3) {
-            cypher_literal *weight_lit = (cypher_literal *)func->args->items[2];
-            if (weight_lit && weight_lit->base.type == AST_NODE_LITERAL &&
-                weight_lit->literal_type == LITERAL_STRING) {
-                params.weight_prop = strdup(weight_lit->value.string);
-            }
+            params.weight_prop = resolve_string_arg((ast_node *)func->args->items[2], params_json);
         }
         return params;
     }
@@ -440,29 +462,13 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
 
         /* astar(source, target) or astar(source, target, lat_prop, lon_prop) */
         if (func->args && func->args->count >= 2) {
-            cypher_literal *src_lit = (cypher_literal *)func->args->items[0];
-            if (src_lit && src_lit->base.type == AST_NODE_LITERAL &&
-                src_lit->literal_type == LITERAL_STRING) {
-                params.source_id = strdup(src_lit->value.string);
-            }
-            cypher_literal *tgt_lit = (cypher_literal *)func->args->items[1];
-            if (tgt_lit && tgt_lit->base.type == AST_NODE_LITERAL &&
-                tgt_lit->literal_type == LITERAL_STRING) {
-                params.target_id = strdup(tgt_lit->value.string);
-            }
+            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
+            params.target_id = resolve_string_arg((ast_node *)func->args->items[1], params_json);
         }
         /* Optional: lat and lon property names for heuristic */
         if (func->args && func->args->count >= 4) {
-            cypher_literal *lat_lit = (cypher_literal *)func->args->items[2];
-            if (lat_lit && lat_lit->base.type == AST_NODE_LITERAL &&
-                lat_lit->literal_type == LITERAL_STRING) {
-                params.lat_prop = strdup(lat_lit->value.string);
-            }
-            cypher_literal *lon_lit = (cypher_literal *)func->args->items[3];
-            if (lon_lit && lon_lit->base.type == AST_NODE_LITERAL &&
-                lon_lit->literal_type == LITERAL_STRING) {
-                params.lon_prop = strdup(lon_lit->value.string);
-            }
+            params.lat_prop = resolve_string_arg((ast_node *)func->args->items[2], params_json);
+            params.lon_prop = resolve_string_arg((ast_node *)func->args->items[3], params_json);
         }
         return params;
     }
@@ -474,11 +480,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         params.max_depth = -1;  /* Unlimited by default */
 
         if (func->args && func->args->count >= 1) {
-            cypher_literal *start_lit = (cypher_literal *)func->args->items[0];
-            if (start_lit && start_lit->base.type == AST_NODE_LITERAL &&
-                start_lit->literal_type == LITERAL_STRING) {
-                params.source_id = strdup(start_lit->value.string);
-            }
+            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
             cypher_literal *depth_lit = (cypher_literal *)func->args->items[1];
@@ -497,11 +499,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         params.max_depth = -1;  /* Unlimited by default */
 
         if (func->args && func->args->count >= 1) {
-            cypher_literal *start_lit = (cypher_literal *)func->args->items[0];
-            if (start_lit && start_lit->base.type == AST_NODE_LITERAL &&
-                start_lit->literal_type == LITERAL_STRING) {
-                params.source_id = strdup(start_lit->value.string);
-            }
+            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
             cypher_literal *depth_lit = (cypher_literal *)func->args->items[1];
@@ -521,17 +519,23 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
         params.source_id = NULL;
         params.target_id = NULL;
 
-        /* Check for specific pair: nodeSimilarity('node1', 'node2') */
+        /* Check for specific pair: nodeSimilarity('node1', 'node2') or with params */
         if (func->args && func->args->count >= 2) {
-            cypher_literal *node1_lit = (cypher_literal *)func->args->items[0];
-            cypher_literal *node2_lit = (cypher_literal *)func->args->items[1];
+            ast_node *arg0 = (ast_node *)func->args->items[0];
+            ast_node *arg1 = (ast_node *)func->args->items[1];
 
-            if (node1_lit && node1_lit->base.type == AST_NODE_LITERAL &&
-                node1_lit->literal_type == LITERAL_STRING &&
-                node2_lit && node2_lit->base.type == AST_NODE_LITERAL &&
-                node2_lit->literal_type == LITERAL_STRING) {
-                params.source_id = strdup(node1_lit->value.string);
-                params.target_id = strdup(node2_lit->value.string);
+            /* Try resolving as string args (literals or parameters) */
+            if (arg0 && (arg0->type == AST_NODE_LITERAL || arg0->type == AST_NODE_PARAMETER) &&
+                arg1 && (arg1->type == AST_NODE_LITERAL || arg1->type == AST_NODE_PARAMETER)) {
+                char *s0 = resolve_string_arg(arg0, params_json);
+                char *s1 = resolve_string_arg(arg1, params_json);
+                if (s0 && s1) {
+                    params.source_id = s0;
+                    params.target_id = s1;
+                } else {
+                    free(s0);
+                    free(s1);
+                }
             }
         }
         /* Check for threshold: nodeSimilarity(0.5) */
@@ -567,11 +571,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause)
 
         /* knn(node_id, k) */
         if (func->args && func->args->count >= 1) {
-            cypher_literal *node_lit = (cypher_literal *)func->args->items[0];
-            if (node_lit && node_lit->base.type == AST_NODE_LITERAL &&
-                node_lit->literal_type == LITERAL_STRING) {
-                params.source_id = strdup(node_lit->value.string);
-            }
+            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
             cypher_literal *k_lit = (cypher_literal *)func->args->items[1];

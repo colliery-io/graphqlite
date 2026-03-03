@@ -911,7 +911,7 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
     CYPHER_DEBUG("Executing standalone RETURN via pattern dispatch");
 
     /* Check for graph algorithm functions - execute in C for performance */
-    graph_algo_params algo_params = detect_graph_algorithm(ret);
+    graph_algo_params algo_params = detect_graph_algorithm(ret, executor->params_json);
     if (algo_params.type != GRAPH_ALGO_NONE) {
         graph_algo_result *algo_result = NULL;
 

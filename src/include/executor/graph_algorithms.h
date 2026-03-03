@@ -82,7 +82,7 @@ typedef struct {
 } graph_algo_params;
 
 /* Check if RETURN clause contains a graph algorithm call and extract parameters */
-graph_algo_params detect_graph_algorithm(cypher_return *return_clause);
+graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const char *params_json);
 
 /* Algorithm implementations
  * All algorithms accept an optional cached CSR graph parameter.
