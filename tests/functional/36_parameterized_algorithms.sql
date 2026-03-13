@@ -46,6 +46,9 @@ SELECT cypher('RETURN bfs($start, 1)', '{"start": "A"}') as result;
 SELECT 'Test 1.4 - BFS parameter with different start node:' as test_name;
 SELECT cypher('RETURN bfs($node)', '{"node": "C"}') as result;
 
+SELECT 'Test 1.5 - BFS with both parameters:' as test_name;
+SELECT cypher('RETURN bfs($start, $maxDepth)', '{"start": "A", "maxDepth": 1}') as result;
+
 -- =======================================================================
 -- SECTION 2: DFS with parameters
 -- =======================================================================
@@ -62,6 +65,9 @@ SELECT cypher('RETURN dfs($start, 1)', '{"start": "A"}') as result;
 
 SELECT 'Test 2.4 - DFS parameter with different start node:' as test_name;
 SELECT cypher('RETURN dfs($node)', '{"node": "C"}') as result;
+
+SELECT 'Test 2.5 - DFS with both parameters:' as test_name;
+SELECT cypher('RETURN dfs($start, $maxDepth)', '{"start": "A", "maxDepth": 1}') as result;
 
 -- =======================================================================
 -- SECTION 3: Dijkstra with parameters
@@ -99,14 +105,20 @@ SELECT cypher('RETURN astar($src, $dst)', '{"src": "A", "dst": "D"}') as result;
 -- =======================================================================
 SELECT '=== Section 5: Node Similarity with parameters ===' as section;
 
-SELECT 'Test 5.1 - nodeSimilarity with literals (baseline):' as test_name;
+SELECT 'Test 5.1 - nodeSimilarity with literal source and baseline (baseline):' as test_name;
 SELECT cypher('RETURN nodeSimilarity("A", "B")') as result;
 
 SELECT 'Test 5.2 - nodeSimilarity with source parameter:' as test_name;
 SELECT cypher('RETURN nodeSimilarity($n1, "B")', '{"n1": "A"}') as result;
 
-SELECT 'Test 5.3 - nodeSimilarity with both parameters:' as test_name;
+SELECT 'Test 5.3 - nodeSimilarity with source and target parameters:' as test_name;
 SELECT cypher('RETURN nodeSimilarity($n1, $n2)', '{"n1": "A", "n2": "B"}') as result;
+
+SELECT 'Test 5.4 - nodeSimilarity with literal threshold and top_k (baseline):' as test_name;
+SELECT cypher('RETURN nodeSimilarity(0.5, 3)') as result;
+
+SELECT 'Test 5.5 - nodeSimilarity with threshold and top_k parameters:' as test_name;
+SELECT cypher('RETURN nodeSimilarity($threshold, $topK)', '{"threshold": 0.5, "topK": 3}') as result;
 
 -- =======================================================================
 -- SECTION 6: KNN with parameters
@@ -119,15 +131,73 @@ SELECT cypher('RETURN knn("A", 3)') as result;
 SELECT 'Test 6.2 - KNN with node parameter:' as test_name;
 SELECT cypher('RETURN knn($node, 3)', '{"node": "A"}') as result;
 
--- =======================================================================
--- SECTION 7: Edge cases
--- =======================================================================
-SELECT '=== Section 7: Edge cases ===' as section;
+SELECT 'Test 6.2 - KNN with both parameters:' as test_name;
+SELECT cypher('RETURN knn($node, $k)', '{"node": "A", "k": 3}') as result;
 
-SELECT 'Test 7.1 - BFS param with nonexistent node:' as test_name;
+-- =======================================================================
+-- SECTION 7: pageRank with parameters
+-- =======================================================================
+SELECT '=== Section 7: pageRank with parameters ===' as section;
+
+SELECT 'Test 7.1 - pageRank with literal (baseline):' as test_name;
+SELECT cypher('RETURN pageRank(0.5, 101)') as result;
+
+SELECT 'Test 7.2 - pageRank with node parameters:' as test_name;
+SELECT cypher('RETURN pageRank($damping, $iterations)', '{"damping": 0.5, "iterations": 100}') as result;
+
+-- =======================================================================
+-- SECTION 8: topPageRank with parameters
+-- =======================================================================
+SELECT '=== Section 8: topPageRank with parameters ===' as section;
+
+SELECT 'Test 8.1 - topPageRank with literal (baseline):' as test_name;
+SELECT cypher('RETURN topPageRank(3, 0.5, 101)') as result;
+
+SELECT 'Test 8.2 - topPageRank with node parameters:' as test_name;
+SELECT cypher('RETURN topPageRank($top, $damping, $iterations)', '{"top": 3, "damping": 0.5, "iterations": 100}') as result;
+
+-- =======================================================================
+-- SECTION 9: labelPropagation with parameters
+-- =======================================================================
+SELECT '=== Section 9: labelPropagation with parameters ===' as section;
+
+SELECT 'Test 9.1 - labelPropagation with literal (baseline):' as test_name;
+SELECT cypher('RETURN labelPropagation(10)') as result;
+
+SELECT 'Test 9.2 - labelPropagation with node parameter:' as test_name;
+SELECT cypher('RETURN labelPropagation($iterations)', '{"iterations": 101}') as result;
+
+-- =======================================================================
+-- SECTION 10: louvain with parameters
+-- =======================================================================
+SELECT '=== Section 10: louvain with parameters ===' as section;
+
+SELECT 'Test 10.1 - louvain with literal (baseline):' as test_name;
+SELECT cypher('RETURN louvain(-0.5)') as result;
+
+SELECT 'Test 10.2 - louvain with node parameter:' as test_name;
+SELECT cypher('RETURN louvain($resolution)', '{"resolution": -0.5}') as result;
+
+-- =======================================================================
+-- SECTION 11: eigenvector with parameters
+-- =======================================================================
+SELECT '=== Section 11: eigenvectorCentrality with parameters ===' as section;
+
+SELECT 'Test 11.1 - eigenvectorCentrality with literal (baseline):' as test_name;
+SELECT cypher('RETURN eigenvectorCentrality(100)') as result;
+
+SELECT 'Test 11.2 - eigenvectorCentrality with node parameter:' as test_name;
+SELECT cypher('RETURN eigenvectorCentrality($iterations)', '{"iterations": 100}') as result;
+
+-- =======================================================================
+-- SECTION 12: Edge cases
+-- =======================================================================
+SELECT '=== Section 12: Edge cases ===' as section;
+
+SELECT 'Test 12.1 - BFS param with nonexistent node:' as test_name;
 SELECT cypher('RETURN bfs($start)', '{"start": "NONEXISTENT"}') as result;
 
-SELECT 'Test 7.2 - Dijkstra param with nonexistent source:' as test_name;
+SELECT 'Test 12.2 - Dijkstra param with nonexistent source:' as test_name;
 SELECT cypher('RETURN dijkstra($src, "D")', '{"src": "NONEXISTENT"}') as result;
 
 -- =======================================================================

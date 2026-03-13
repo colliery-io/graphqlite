@@ -9,6 +9,7 @@
  * - graph_algo_centrality.c
  */
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -274,6 +275,90 @@ static char* resolve_string_arg(ast_node *node, const char *params_json)
     return NULL;
 }
 
+/*
+ * Resolve a function argument to a int value.
+ * Handles AST_NODE_LITERAL (integer) and AST_NODE_PARAMETER (via params_json).
+ * Returns int on success, default_value on failure.
+ */
+static int resolve_int_arg(ast_node *node, const char *params_json, int default_value)
+{
+    if (!node) return default_value;
+
+    if (node->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)node;
+        if (lit && lit->base.type == AST_NODE_LITERAL && lit->literal_type == LITERAL_INTEGER) {
+            return (int) lit->value.integer;
+        }
+        return default_value;
+    }
+
+    if (node->type == AST_NODE_PARAMETER) {
+        cypher_parameter *param = (cypher_parameter *)node;
+        if (!params_json || !param->name) return default_value;
+
+        property_type ptype;
+        char str_buf[256];
+        int rc = get_param_value(params_json, param->name, &ptype, str_buf, sizeof(str_buf));
+        if (rc == 0 && ptype == PROP_TYPE_INTEGER) {
+			int64_t int_buf = *(int64_t*)str_buf;
+			if (int_buf-INT_MIN <= (int64_t)INT_MAX-INT_MIN) {
+				return (int)int_buf;
+			}
+        }
+
+		return default_value;
+    }
+
+    return default_value;
+}
+
+/*
+ * Resolve a function argument to a double value.
+ * Handles AST_NODE_LITERAL (double) and AST_NODE_PARAMETER (via params_json).
+ * Returns double on success, default_value on failure.
+ */
+static double resolve_double_arg(ast_node *node, const char *params_json, double default_value)
+{
+	if (!node) return default_value;
+
+    if (node->type == AST_NODE_LITERAL) {
+		cypher_literal *lit = (cypher_literal *)node;
+        if (lit && lit->base.type == AST_NODE_LITERAL) {
+            if (lit->literal_type == LITERAL_DECIMAL) {
+                return lit->value.decimal;
+            } else if (lit->literal_type == LITERAL_INTEGER) {
+                return (double)lit->value.integer;
+            }
+        }
+
+		return default_value;
+	}
+
+    if (node->type == AST_NODE_PARAMETER) {
+        cypher_parameter *param = (cypher_parameter *)node;
+        if (!params_json || !param->name) return default_value;
+
+        property_type ptype;
+        char str_buf[256];
+        int rc = get_param_value(params_json, param->name, &ptype, str_buf, sizeof(str_buf));
+
+		if (rc == 0 && ptype == PROP_TYPE_REAL) {
+			return *(double*)str_buf;
+        }
+
+        if (rc == 0 && ptype == PROP_TYPE_INTEGER) {
+			int64_t int_buf = *(int64_t*)str_buf;
+			if (int_buf-INT_MIN <= (int64_t)INT_MAX-INT_MIN) {
+				return (double)int_buf;
+			}
+        }
+
+		return default_value;
+    }
+
+    return default_value;
+}
+
 /* Detect graph algorithm in RETURN clause */
 graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const char *params_json)
 {
@@ -306,23 +391,12 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         params.type = GRAPH_ALGO_PAGERANK;
 
         if (func->args && func->args->count >= 1) {
-            cypher_literal *damp_lit = (cypher_literal *)func->args->items[0];
-            if (damp_lit && damp_lit->base.type == AST_NODE_LITERAL) {
-                if (damp_lit->literal_type == LITERAL_DECIMAL) {
-                    params.damping = damp_lit->value.decimal;
-                } else if (damp_lit->literal_type == LITERAL_INTEGER) {
-                    params.damping = (double)damp_lit->value.integer;
-                }
-            }
+			params.damping = resolve_double_arg((ast_node *)func->args->items[0], params_json, params.damping);
         }
         if (func->args && func->args->count >= 2) {
-            cypher_literal *iter_lit = (cypher_literal *)func->args->items[1];
-            if (iter_lit && iter_lit->base.type == AST_NODE_LITERAL &&
-                iter_lit->literal_type == LITERAL_INTEGER) {
-                params.iterations = iter_lit->value.integer;
-                if (params.iterations < 1) params.iterations = 1;
-                if (params.iterations > 100) params.iterations = 100;
-            }
+			params.iterations = resolve_int_arg((ast_node *)func->args->items[1], params_json, params.iterations);
+            if (params.iterations < 1) params.iterations = 1;
+            if (params.iterations > 100) params.iterations = 100;
         }
         return params;
     }
@@ -333,32 +407,17 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         params.top_k = 10;
 
         if (func->args && func->args->count >= 1) {
-            cypher_literal *k_lit = (cypher_literal *)func->args->items[0];
-            if (k_lit && k_lit->base.type == AST_NODE_LITERAL &&
-                k_lit->literal_type == LITERAL_INTEGER) {
-                params.top_k = k_lit->value.integer;
-                if (params.top_k < 1) params.top_k = 1;
-                if (params.top_k > 1000) params.top_k = 1000;
-            }
+			params.top_k = resolve_int_arg((ast_node *)func->args->items[0], params_json, params.top_k);
+            if (params.top_k < 1) params.top_k = 1;
+            if (params.top_k > 1000) params.top_k = 1000;
         }
         if (func->args && func->args->count >= 2) {
-            cypher_literal *damp_lit = (cypher_literal *)func->args->items[1];
-            if (damp_lit && damp_lit->base.type == AST_NODE_LITERAL) {
-                if (damp_lit->literal_type == LITERAL_DECIMAL) {
-                    params.damping = damp_lit->value.decimal;
-                } else if (damp_lit->literal_type == LITERAL_INTEGER) {
-                    params.damping = (double)damp_lit->value.integer;
-                }
-            }
+			params.damping = resolve_double_arg((ast_node *)func->args->items[1], params_json, params.damping);
         }
         if (func->args && func->args->count >= 3) {
-            cypher_literal *iter_lit = (cypher_literal *)func->args->items[2];
-            if (iter_lit && iter_lit->base.type == AST_NODE_LITERAL &&
-                iter_lit->literal_type == LITERAL_INTEGER) {
-                params.iterations = iter_lit->value.integer;
-                if (params.iterations < 1) params.iterations = 1;
-                if (params.iterations > 100) params.iterations = 100;
-            }
+			params.iterations = resolve_int_arg((ast_node *)func->args->items[2], params_json, params.iterations);
+            if (params.iterations < 1) params.iterations = 1;
+            if (params.iterations > 100) params.iterations = 100;
         }
         return params;
     }
@@ -369,13 +428,9 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         params.iterations = 10;
 
         if (func->args && func->args->count >= 1) {
-            cypher_literal *iter_lit = (cypher_literal *)func->args->items[0];
-            if (iter_lit && iter_lit->base.type == AST_NODE_LITERAL &&
-                iter_lit->literal_type == LITERAL_INTEGER) {
-                params.iterations = iter_lit->value.integer;
-                if (params.iterations < 1) params.iterations = 1;
-                if (params.iterations > 100) params.iterations = 100;
-            }
+			params.iterations = resolve_int_arg((ast_node *)func->args->items[0], params_json, params.iterations);
+            if (params.iterations < 1) params.iterations = 1;
+            if (params.iterations > 100) params.iterations = 100;
         }
         return params;
     }
@@ -436,14 +491,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
 
         /* Optional resolution parameter */
         if (func->args && func->args->count >= 1) {
-            cypher_literal *res_lit = (cypher_literal *)func->args->items[0];
-            if (res_lit && res_lit->base.type == AST_NODE_LITERAL) {
-                if (res_lit->literal_type == LITERAL_DECIMAL) {
-                    params.resolution = res_lit->value.decimal;
-                } else if (res_lit->literal_type == LITERAL_INTEGER) {
-                    params.resolution = (double)res_lit->value.integer;
-                }
-            }
+            params.resolution = resolve_double_arg((ast_node *)func->args->items[0], params_json, params.resolution);
         }
         return params;
     }
@@ -483,11 +531,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
             params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
-            cypher_literal *depth_lit = (cypher_literal *)func->args->items[1];
-            if (depth_lit && depth_lit->base.type == AST_NODE_LITERAL &&
-                depth_lit->literal_type == LITERAL_INTEGER) {
-                params.max_depth = (int)depth_lit->value.integer;
-            }
+            params.max_depth = resolve_int_arg((ast_node *)func->args->items[1], params_json, -1);
         }
         return params;
     }
@@ -502,11 +546,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
             params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
-            cypher_literal *depth_lit = (cypher_literal *)func->args->items[1];
-            if (depth_lit && depth_lit->base.type == AST_NODE_LITERAL &&
-                depth_lit->literal_type == LITERAL_INTEGER) {
-                params.max_depth = (int)depth_lit->value.integer;
-            }
+            params.max_depth = resolve_int_arg((ast_node *)func->args->items[1], params_json, -1);
         }
         return params;
     }
@@ -540,24 +580,13 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         }
         /* Check for threshold: nodeSimilarity(0.5) */
         else if (func->args && func->args->count >= 1) {
-            cypher_literal *thresh_lit = (cypher_literal *)func->args->items[0];
-            if (thresh_lit && thresh_lit->base.type == AST_NODE_LITERAL) {
-                if (thresh_lit->literal_type == LITERAL_DECIMAL) {
-                    params.threshold = thresh_lit->value.decimal;
-                } else if (thresh_lit->literal_type == LITERAL_INTEGER) {
-                    params.threshold = (double)thresh_lit->value.integer;
-                }
-            }
+            params.threshold = resolve_double_arg((ast_node *)func->args->items[0], params_json, params.threshold);
         }
 
         /* Check for top_k as last argument */
         if (func->args && func->args->count >= 2 && !params.source_id) {
             /* nodeSimilarity(threshold, top_k) */
-            cypher_literal *topk_lit = (cypher_literal *)func->args->items[1];
-            if (topk_lit && topk_lit->base.type == AST_NODE_LITERAL &&
-                topk_lit->literal_type == LITERAL_INTEGER) {
-                params.top_k = (int)topk_lit->value.integer;
-            }
+            params.top_k = resolve_int_arg((ast_node *)func->args->items[1], params_json, params.top_k);
         }
 
         return params;
@@ -574,11 +603,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
             params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
-            cypher_literal *k_lit = (cypher_literal *)func->args->items[1];
-            if (k_lit && k_lit->base.type == AST_NODE_LITERAL &&
-                k_lit->literal_type == LITERAL_INTEGER) {
-                params.k = (int)k_lit->value.integer;
-            }
+            params.k = resolve_int_arg((ast_node *)func->args->items[1], params_json, params.k);
         }
 
         return params;
@@ -591,13 +616,9 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
 
         /* Optional iterations parameter */
         if (func->args && func->args->count >= 1) {
-            cypher_literal *iter_lit = (cypher_literal *)func->args->items[0];
-            if (iter_lit && iter_lit->base.type == AST_NODE_LITERAL &&
-                iter_lit->literal_type == LITERAL_INTEGER) {
-                params.iterations = (int)iter_lit->value.integer;
-                if (params.iterations < 1) params.iterations = 1;
-                if (params.iterations > 1000) params.iterations = 1000;
-            }
+            params.iterations = resolve_int_arg((ast_node *)func->args->items[0], params_json, params.iterations);
+            if (params.iterations < 1) params.iterations = 1;
+            if (params.iterations > 1000) params.iterations = 1000;
         }
         return params;
     }
