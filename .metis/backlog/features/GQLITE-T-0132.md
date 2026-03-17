@@ -4,15 +4,15 @@ level: task
 title: "Spatial types and functions (point, distance)"
 short_code: "GQLITE-T-0132"
 created_at: 2026-03-17T13:40:43.622092+00:00
-updated_at: 2026-03-17T13:40:43.622092+00:00
+updated_at: 2026-03-17T19:20:05.589139+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Implement spatial types: `point({x, y})` (2D Cartesian), `point({latitude, longi
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,25 @@ Implement spatial types: `point({x, y})` (2D Cartesian), `point({latitude, longi
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete
+
+**point() construction:**
+- `point({x: 3, y: 4})` → `{"srid":7203,"x":3,"y":4,"z":null}` (Cartesian)
+- `point({latitude: 40.71, longitude: -74.00})` → `{"srid":4326,...}` (WGS-84)
+- Auto-detects coordinate system by key names (x/y vs latitude/longitude)
+- 3D variants via z/height supported
+
+**point.distance(p1, p2) / distance(p1, p2):**
+- Cartesian: Euclidean `sqrt(dx^2 + dy^2)` — verified `distance({x:0,y:0},{x:3,y:4}) = 5.0`
+- Geographic: Haversine formula in meters — verified NYC-London ≈ 5,570 km
+- Auto-selects formula based on SRID from point
+
+**point.withinBBox(point, lowerLeft, upperRight):**
+- Returns 1/0 for points inside/outside the bounding box
+- Works for both Cartesian and geographic coordinate systems
+
+**Storage:** Points stored as JSON in `node_props_json` table. No new property table types needed.
+
+**Tests**: 880 unit, 226 Python pass

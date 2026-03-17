@@ -4,15 +4,15 @@ level: task
 title: "Duration arithmetic and temporal operator support"
 short_code: "GQLITE-T-0137"
 created_at: 2026-03-17T13:41:59.655313+00:00
-updated_at: 2026-03-17T13:41:59.655313+00:00
+updated_at: 2026-03-17T19:16:53.987715+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Implement temporal operators: `date + duration`, `datetime - duration`, `duratio
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,23 @@ Implement temporal operators: `date + duration`, `datetime - duration`, `duratio
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete
+
+**Function-based temporal arithmetic:**
+- `dateAdd(temporal, duration_map)` — add duration to date/datetime
+  - `dateAdd("2024-01-15", {days: 30})` → `"2024-02-14"`
+  - `dateAdd("2024-01-15", {years: 1, months: 2, days: 10})` → `"2025-03-25"`
+- `dateSub(temporal, duration_map)` — subtract duration from date/datetime
+  - `dateSub("2024-06-15", {months: 3, days: 5})` → `"2024-03-10"`
+- Works with `duration()` function: `dateAdd("2024-01-01", duration({days: 100}))`
+
+**Design decision:** Implemented as functions (`dateAdd`/`dateSub`) rather than operator overloading (`date + duration`) because the `+` operator transform emits SQL before knowing operand types. Detecting temporal types at transform time would require type inference across the entire expression tree.
+
+**Not implemented:** Operator-level `date + duration` via `+`. Would need either:
+- Type annotations on variables from MATCH
+- A runtime function that detects input types
+- Pre-transform type inference pass
+
+**Tests**: 880 unit pass

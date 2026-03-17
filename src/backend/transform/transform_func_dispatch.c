@@ -153,8 +153,49 @@ static const transform_func_entry dispatch_table[] = {
     {"time",            transform_time_function},
     {"datetime",        transform_datetime_function},
     {"localdatetime",   transform_datetime_function},
+    {"localtime",       transform_time_function},
+    {"duration",        transform_duration_function},
+
+    /* Temporal construction from epoch */
+    {"datetimeFromEpoch",       transform_datetime_from_epoch_function},
+    {"datetimefromepoch",       transform_datetime_from_epoch_function},
+    {"datetime.fromEpoch",      transform_datetime_from_epoch_function},
+    {"datetimeFromEpochMillis",  transform_datetime_from_epoch_function},
+    {"datetimefromepochmillis",  transform_datetime_from_epoch_function},
+    {"datetime.fromEpochMillis", transform_datetime_from_epoch_function},
+
+    /* Temporal truncation */
+    {"date.truncate",           transform_date_truncate_function},
+    {"dateTruncate",            transform_date_truncate_function},
+    {"datetime.truncate",       transform_date_truncate_function},
+    {"datetimeTruncate",        transform_date_truncate_function},
+
+    /* Duration utility functions */
+    {"duration.between",        transform_duration_between_function},
+    {"durationBetween",         transform_duration_between_function},
+    {"duration.inSeconds",      transform_duration_in_function},
+    {"durationInSeconds",       transform_duration_in_function},
+    {"duration.inDays",         transform_duration_in_function},
+    {"durationInDays",          transform_duration_in_function},
+    {"duration.inMonths",       transform_duration_in_function},
+    {"durationInMonths",        transform_duration_in_function},
+
+    /* Temporal arithmetic */
+    {"dateAdd",                 transform_date_add_function},
+    {"dateadd",                 transform_date_add_function},
+    {"dateSub",                 transform_date_add_function},
+    {"datesub",                 transform_date_add_function},
+
     {"randomUUID",      transform_randomuuid_function},
     {"randomuuid",      transform_randomuuid_function},
+
+    /* Spatial functions */
+    {"point",                   transform_point_function},
+    {"point.distance",          transform_point_distance_function},
+    {"pointDistance",            transform_point_distance_function},
+    {"distance",                transform_point_distance_function},
+    {"point.withinBBox",        transform_point_within_bbox_function},
+    {"pointWithinBBox",         transform_point_within_bbox_function},
 
     /* JSON functions */
     {"json_get",        transform_json_get_function},

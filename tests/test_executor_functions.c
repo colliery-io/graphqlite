@@ -1255,6 +1255,402 @@ static void test_return_star_with_rel(void)
     if (del) cypher_result_free(del);
 }
 
+/* ===== Tranche 3: Temporal + Spatial tests ===== */
+
+/* Temporal construction */
+static void test_func_date_map(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN date({year: 2024, month: 3, day: 15}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-03-15");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_date_string(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN date('2024-06-01') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-06-01");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_time_map(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN time({hour: 14, minute: 30, second: 0}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "14:30:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_datetime_map(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN datetime({year: 2024, month: 6, day: 15, hour: 10, minute: 30}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-06-15T10:30:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_duration_map(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN duration({days: 5, hours: 3}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        if (result->data[0][0]) {
+            /* Should contain days:5 somewhere in JSON */
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"days\":5"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_datetime_from_epoch(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN datetimeFromEpoch(0) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1970-01-01 00:00:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_duration_in_days(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN durationInDays('2024-01-01', '2024-03-15') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "74");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_duration_in_seconds(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN durationInSeconds('2024-01-01 00:00:00', '2024-01-01 01:30:00') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "5400");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* Duration arithmetic */
+static void test_func_date_add(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN dateAdd('2024-01-15', {days: 30}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-02-14 00:00:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_date_sub(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN dateSub('2024-06-15', {months: 3}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-03-15 00:00:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* Spatial */
+static void test_func_point_cartesian(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN point({x: 3, y: 4}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"srid\":7203"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"x\":3"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_point_geographic(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN point({latitude: 40.7128, longitude: -74.006}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"srid\":4326"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_distance_euclidean(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN distance(point({x: 0, y: 0}), point({x: 3, y: 4})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 5.0, 0.001);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_distance_haversine(void)
+{
+    /* NYC to London ≈ 5,570 km */
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN distance(point({latitude: 40.7128, longitude: -74.006}), "
+        "point({latitude: 51.5074, longitude: -0.1278})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_TRUE(val > 5500000 && val < 5600000); /* ~5570 km in meters */
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_within_bbox_inside(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN pointWithinBBox(point({x: 5, y: 5}), point({x: 0, y: 0}), point({x: 10, y: 10})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_within_bbox_outside(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN pointWithinBBox(point({x: 15, y: 5}), point({x: 0, y: 0}), point({x: 10, y: 10})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "0");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* Additional temporal coverage */
+static void test_func_localtime(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN localtime() AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_datetime_from_epoch_millis(void)
+{
+    /* 86400000 ms = exactly 1 day after epoch */
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN datetimeFromEpochMillis(86400000) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1970-01-02 00:00:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_duration_in_months(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN durationInMonths('2024-01-01', '2024-07-01') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            int val = atoi(result->data[0][0]);
+            CU_ASSERT_TRUE(val >= 5 && val <= 6); /* ~6 months, approximate */
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_duration_between(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN durationBetween('2024-01-01', '2024-01-15') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"days\":14"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_date_truncate(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN dateTruncate('month', '2024-03-15') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-03-01");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_date_add_mixed(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN dateAdd('2024-01-15', {years: 1, months: 2, days: 10}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2025-03-25 00:00:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_date_add_with_duration(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN dateAdd('2024-01-01', duration({days: 100})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-04-10 00:00:00");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* Additional spatial coverage */
+static void test_func_point_3d(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN point({x: 1, y: 2, z: 3}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"z\":3"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_point_geo_with_height(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN point({latitude: 40.71, longitude: -74.00, height: 100}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"height\":100"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_within_bbox_geographic(void)
+{
+    /* Point in NYC, bbox covers NYC area */
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN pointWithinBBox("
+        "point({latitude: 40.71, longitude: -74.00}), "
+        "point({latitude: 40.0, longitude: -75.0}), "
+        "point({latitude: 41.0, longitude: -73.0})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_distance_zero(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN distance(point({x: 5, y: 5}), point({x: 5, y: 5})) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 0.0, 0.001);
+        }
+        cypher_result_free(result);
+    }
+}
+
 /* Initialize the functions test suite */
 int init_executor_functions_suite(void)
 {
@@ -1365,7 +1761,42 @@ int init_executor_functions_suite(void)
         !CU_add_test(suite, "list[..2] slice to", test_list_slice_to) ||
 
         /* Tranche 2: RETURN * with relationship */
-        !CU_add_test(suite, "RETURN * with rel", test_return_star_with_rel))
+        !CU_add_test(suite, "RETURN * with rel", test_return_star_with_rel) ||
+
+        /* Tranche 3: Temporal */
+        !CU_add_test(suite, "date({map})", test_func_date_map) ||
+        !CU_add_test(suite, "date(string)", test_func_date_string) ||
+        !CU_add_test(suite, "time({map})", test_func_time_map) ||
+        !CU_add_test(suite, "datetime({map})", test_func_datetime_map) ||
+        !CU_add_test(suite, "duration({map})", test_func_duration_map) ||
+        !CU_add_test(suite, "datetimeFromEpoch()", test_func_datetime_from_epoch) ||
+        !CU_add_test(suite, "durationInDays()", test_func_duration_in_days) ||
+        !CU_add_test(suite, "durationInSeconds()", test_func_duration_in_seconds) ||
+        !CU_add_test(suite, "dateAdd()", test_func_date_add) ||
+        !CU_add_test(suite, "dateSub()", test_func_date_sub) ||
+
+        /* Tranche 3: Spatial */
+        !CU_add_test(suite, "point() Cartesian", test_func_point_cartesian) ||
+        !CU_add_test(suite, "point() Geographic", test_func_point_geographic) ||
+        !CU_add_test(suite, "distance() Euclidean", test_func_distance_euclidean) ||
+        !CU_add_test(suite, "distance() Haversine", test_func_distance_haversine) ||
+        !CU_add_test(suite, "withinBBox inside", test_func_within_bbox_inside) ||
+        !CU_add_test(suite, "withinBBox outside", test_func_within_bbox_outside) ||
+
+        /* Additional temporal coverage */
+        !CU_add_test(suite, "localtime()", test_func_localtime) ||
+        !CU_add_test(suite, "datetimeFromEpochMillis()", test_func_datetime_from_epoch_millis) ||
+        !CU_add_test(suite, "durationInMonths()", test_func_duration_in_months) ||
+        !CU_add_test(suite, "durationBetween()", test_func_duration_between) ||
+        !CU_add_test(suite, "dateTruncate()", test_func_date_truncate) ||
+        !CU_add_test(suite, "dateAdd() mixed", test_func_date_add_mixed) ||
+        !CU_add_test(suite, "dateAdd() with duration()", test_func_date_add_with_duration) ||
+
+        /* Additional spatial coverage */
+        !CU_add_test(suite, "point() 3D", test_func_point_3d) ||
+        !CU_add_test(suite, "point() geographic with height", test_func_point_geo_with_height) ||
+        !CU_add_test(suite, "withinBBox geographic", test_func_within_bbox_geographic) ||
+        !CU_add_test(suite, "distance() zero", test_func_distance_zero))
     {
         return CU_get_error();
     }

@@ -84,6 +84,15 @@ int transform_valuetype_function(cypher_transform_context *ctx, cypher_function_
 int transform_stdev_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_percentile_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_atan2_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_duration_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_datetime_from_epoch_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_date_truncate_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_duration_between_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_duration_in_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_date_add_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_point_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_point_distance_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_point_within_bbox_function(cypher_transform_context *ctx, cypher_function_call *func);
 
 /*
  * Predicate expressions - transform_expr_predicate.c

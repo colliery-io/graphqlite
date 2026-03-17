@@ -300,16 +300,36 @@ int transform_length_function(cypher_transform_context *ctx, cypher_function_cal
     return transform_string_function(ctx, func_call);
 }
 
-/* Transform date() function */
+/* Transform date() function
+ * date() - current date
+ * date(string) - parse ISO date string
+ * date({year, month, day}) - construct from map components
+ */
 int transform_date_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming date() function");
 
     if (func_call->args && func_call->args->count > 0) {
-        /* date(string) - parse date from string */
-        append_sql(ctx, "date(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ")");
+        ast_node *arg = func_call->args->items[0];
+        if (arg->type == AST_NODE_MAP) {
+            /* date({year: 2024, month: 3, day: 15}) →
+             * printf('%04d-%02d-%02d', json_extract(map,'$.year'), ...) via SQLite */
+            append_sql(ctx, "(SELECT printf('%%04d-%%02d-%%02d', "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.year'), strftime('%%Y','now')), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.month'), 1), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.day'), 1)))");
+        } else {
+            /* date(string) - parse date from string */
+            append_sql(ctx, "date(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, ")");
+        }
     } else {
         /* date() - current date */
         append_sql(ctx, "date('now')");
@@ -317,16 +337,35 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
     return 0;
 }
 
-/* Transform time() function */
+/* Transform time() function
+ * time() - current time
+ * time(string) - parse ISO time string
+ * time({hour, minute, second}) - construct from map
+ */
 int transform_time_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming time() function");
 
     if (func_call->args && func_call->args->count > 0) {
-        /* time(string) - parse time from string */
-        append_sql(ctx, "time(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ")");
+        ast_node *arg = func_call->args->items[0];
+        if (arg->type == AST_NODE_MAP) {
+            /* time({hour: 14, minute: 30, second: 0}) */
+            append_sql(ctx, "(SELECT printf('%%02d:%%02d:%%02d', "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.hour'), 0), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.minute'), 0), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.second'), 0)))");
+        } else {
+            /* time(string) */
+            append_sql(ctx, "time(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, ")");
+        }
     } else {
         /* time() - current time */
         append_sql(ctx, "time('now')");
@@ -334,20 +373,433 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
     return 0;
 }
 
-/* Transform datetime() function */
+/* Transform datetime() / localdatetime() function
+ * datetime() - current datetime
+ * datetime(string) - parse ISO datetime string
+ * datetime({year, month, day, hour, minute, second}) - construct from map
+ */
 int transform_datetime_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming datetime() function");
 
     if (func_call->args && func_call->args->count > 0) {
-        /* datetime(string) - parse datetime from string */
-        append_sql(ctx, "datetime(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ")");
+        ast_node *arg = func_call->args->items[0];
+        if (arg->type == AST_NODE_MAP) {
+            /* datetime({year: 2024, month: 3, day: 15, hour: 14, minute: 30}) */
+            append_sql(ctx, "(SELECT printf('%%04d-%%02d-%%02dT%%02d:%%02d:%%02d', "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.year'), strftime('%%Y','now')), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.month'), 1), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.day'), 1), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.hour'), 0), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.minute'), 0), "
+                       "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.second'), 0)))");
+        } else {
+            /* datetime(string) */
+            append_sql(ctx, "datetime(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, ")");
+        }
     } else {
         /* datetime() - current datetime */
         append_sql(ctx, "datetime('now')");
     }
+    return 0;
+}
+
+/* Transform duration() function
+ * duration(string) - parse ISO 8601 duration string like 'P1Y2M3DT4H5M6S'
+ * duration({years, months, days, hours, minutes, seconds}) - construct from map
+ *
+ * Stored as SQLite modifier string for use with date/time arithmetic:
+ * '+N years', '+N months', '+N days', '+N hours', '+N minutes', '+N seconds'
+ * Represented as a JSON object internally for composition.
+ */
+int transform_duration_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming duration() function");
+
+    if (!func_call->args || func_call->args->count != 1) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("duration() requires exactly one argument (map or string)");
+        return -1;
+    }
+
+    ast_node *arg = func_call->args->items[0];
+    if (arg->type == AST_NODE_MAP) {
+        /* duration({days: 5, hours: 3}) → JSON representation for later arithmetic */
+        append_sql(ctx, "json_object("
+                   "'years', COALESCE(json_extract(json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "), '$.years'), 0), "
+                   "'months', COALESCE(json_extract(json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "), '$.months'), 0), "
+                   "'days', COALESCE(json_extract(json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "), '$.days'), 0), "
+                   "'hours', COALESCE(json_extract(json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "), '$.hours'), 0), "
+                   "'minutes', COALESCE(json_extract(json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "), '$.minutes'), 0), "
+                   "'seconds', COALESCE(json_extract(json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "), '$.seconds'), 0))");
+    } else {
+        /* duration(string) - pass through as-is for now.
+         * ISO 8601 duration parsing would need a custom C function.
+         * Store the string directly. */
+        append_sql(ctx, "(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, ")");
+    }
+
+    return 0;
+}
+
+/* Transform datetime.fromEpoch(seconds, nanoseconds) and datetime.fromEpochMillis(ms)
+ * These are dispatched as function calls: datetimeFromEpoch, datetimeFromEpochMillis
+ */
+int transform_datetime_from_epoch_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming datetime.fromEpoch function");
+
+    bool is_millis = (strcasecmp(func_call->function_name, "datetimeFromEpochMillis") == 0 ||
+                     strcasecmp(func_call->function_name, "datetimefromepochmillis") == 0 ||
+                     strcasecmp(func_call->function_name, "datetime.fromEpochMillis") == 0);
+
+    if (!func_call->args || func_call->args->count < 1) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("datetime.fromEpoch() requires at least one argument");
+        return -1;
+    }
+
+    if (is_millis) {
+        /* datetime.fromEpochMillis(ms) → datetime(ms/1000, 'unixepoch') */
+        append_sql(ctx, "datetime(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL) / 1000.0, 'unixepoch')");
+    } else {
+        /* datetime.fromEpoch(seconds) → datetime(seconds, 'unixepoch') */
+        append_sql(ctx, "datetime(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", 'unixepoch')");
+    }
+
+    return 0;
+}
+
+/* Transform date.truncate(unit, temporal)
+ * Truncates a temporal value to the specified unit.
+ */
+int transform_date_truncate_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming date.truncate function");
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("date.truncate() requires two arguments: unit and temporal value");
+        return -1;
+    }
+
+    /* date.truncate('month', datetime) → date(datetime, 'start of month') */
+    append_sql(ctx, "date(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", 'start of ' || ");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ")");
+
+    return 0;
+}
+
+/* Transform duration.between(temporal1, temporal2)
+ * Returns the number of days between two dates as a duration-like value
+ */
+int transform_duration_between_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming duration.between function");
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("duration.between() requires two arguments");
+        return -1;
+    }
+
+    /* Return difference in days as a JSON duration object */
+    append_sql(ctx, "json_object('days', CAST(julianday(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") - julianday(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ") AS INTEGER), 'hours', 0, 'minutes', 0, 'seconds', "
+               "CAST(((julianday(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") - julianday(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ")) * 86400) %% 86400 AS INTEGER))");
+
+    return 0;
+}
+
+/* Transform duration.inSeconds/inDays/inMonths */
+int transform_duration_in_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming duration.in* function: %s", func_call->function_name);
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "%s() requires two arguments (temporal1, temporal2)",
+                 func_call->function_name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+
+    if (strcasecmp(func_call->function_name, "duration.inSeconds") == 0 ||
+        strcasecmp(func_call->function_name, "durationInSeconds") == 0) {
+        /* Difference in seconds */
+        append_sql(ctx, "CAST((julianday(");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") - julianday(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")) * 86400 AS INTEGER)");
+    } else if (strcasecmp(func_call->function_name, "duration.inDays") == 0 ||
+               strcasecmp(func_call->function_name, "durationInDays") == 0) {
+        /* Difference in days */
+        append_sql(ctx, "CAST(julianday(");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") - julianday(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") AS INTEGER)");
+    } else {
+        /* duration.inMonths - approximate using 30.44 days/month */
+        append_sql(ctx, "CAST((julianday(");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") - julianday(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")) / 30.44 AS INTEGER)");
+    }
+
+    return 0;
+}
+
+/* Transform temporal arithmetic functions
+ * dateAdd(temporal, duration_map) - add duration components to a date/datetime
+ * dateSub(temporal, duration_map) - subtract duration components
+ *
+ * Example: dateAdd('2024-01-15', {days: 30, months: 2})
+ * → datetime('2024-01-15', '+2 months', '+30 days')
+ *
+ * This is the functional form of `date + duration` since operator overloading
+ * for temporal types is not feasible at transform time (can't detect types).
+ */
+int transform_date_add_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming dateAdd/dateSub function: %s", func_call->function_name);
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("dateAdd()/dateSub() requires two arguments: temporal and duration map");
+        return -1;
+    }
+
+    bool is_sub = (strcasecmp(func_call->function_name, "dateSub") == 0 ||
+                   strcasecmp(func_call->function_name, "datesub") == 0);
+    const char *sign = is_sub ? "-" : "+";
+
+    /* Generate: datetime(temporal,
+     *   '+N years', '+N months', '+N days', '+N hours', '+N minutes', '+N seconds')
+     * where N values come from json_extract on the duration map */
+    append_sql(ctx, "datetime(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+
+    /* Add each duration component as a SQLite date modifier */
+    const char *components[] = {"years", "months", "days", "hours", "minutes", "seconds"};
+    const char *modifiers[] = {"years", "months", "days", "hours", "minutes", "seconds"};
+
+    for (int i = 0; i < 6; i++) {
+        append_sql(ctx, ", '%s' || COALESCE(json_extract(json(", sign);
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, "), '$.%s'), 0) || ' %s'", components[i], modifiers[i]);
+    }
+
+    append_sql(ctx, ")");
+    return 0;
+}
+
+/* Transform point() function
+ * point({x, y}) — 2D Cartesian point (SRID 7203)
+ * point({x, y, z}) — 3D Cartesian point
+ * point({latitude, longitude}) — 2D geographic WGS-84 point (SRID 4326)
+ * point({latitude, longitude, height}) — 3D geographic point
+ *
+ * Stored as JSON object with type metadata for distance calculations.
+ */
+int transform_point_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming point() function");
+
+    if (!func_call->args || func_call->args->count != 1) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("point() requires exactly one map argument");
+        return -1;
+    }
+
+    ast_node *arg = func_call->args->items[0];
+
+    /* Build a JSON object that preserves all input keys plus a _srid for distance calculations.
+     * The point function detects Cartesian (x,y) vs Geographic (latitude,longitude) by key names.
+     * We use json_object to normalize the representation. */
+    append_sql(ctx, "(SELECT CASE "
+               "WHEN json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.latitude') IS NOT NULL THEN json_object("
+               "'srid', 4326, "
+               "'latitude', json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.latitude'), "
+               "'longitude', json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.longitude'), "
+               "'height', json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.height')) "
+               "ELSE json_object("
+               "'srid', 7203, "
+               "'x', json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.x'), "
+               "'y', json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.y'), "
+               "'z', json_extract(json(");
+    if (transform_expression(ctx, arg) < 0) return -1;
+    append_sql(ctx, "), '$.z')) END)");
+
+    return 0;
+}
+
+/* Transform point.distance(p1, p2) / distance(p1, p2)
+ * For Cartesian points (srid 7203): sqrt((x2-x1)^2 + (y2-y1)^2)
+ * For Geographic points (srid 4326): haversine formula in meters
+ */
+int transform_point_distance_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming point.distance() function");
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("point.distance() requires exactly two point arguments");
+        return -1;
+    }
+
+    /* Detect SRID from first point and use appropriate formula */
+    append_sql(ctx, "(SELECT CASE WHEN json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.srid') = 4326 THEN "
+               /* Haversine formula: 2 * R * asin(sqrt(hav(dlat) + cos(lat1)*cos(lat2)*hav(dlon))) */
+               "6371000.0 * 2.0 * ASIN(SQRT("
+               "((1.0 - COS((json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') - json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude')) * 3.141592653589793 / 180.0)) / 2.0) + "
+               "COS(json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') * 3.141592653589793 / 180.0) * "
+               "COS(json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') * 3.141592653589793 / 180.0) * "
+               "((1.0 - COS((json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.longitude') - json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.longitude')) * 3.141592653589793 / 180.0)) / 2.0)"
+               ")) "
+               "ELSE "
+               /* Euclidean distance for Cartesian */
+               "SQRT("
+               "POWER(json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.x') - json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.x'), 2) + "
+               "POWER(json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.y') - json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.y'), 2)"
+               ") END)");
+
+    return 0;
+}
+
+/* Transform point.withinBBox(point, lowerLeft, upperRight)
+ * Returns true if point is within the bounding box defined by two corner points.
+ */
+int transform_point_within_bbox_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming point.withinBBox() function");
+
+    if (!func_call->args || func_call->args->count != 3) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("point.withinBBox() requires three arguments: point, lowerLeft, upperRight");
+        return -1;
+    }
+
+    /* Check if geographic or Cartesian */
+    append_sql(ctx, "(SELECT CASE WHEN json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.srid') = 4326 THEN ("
+               "json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') >= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') <= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    append_sql(ctx, ", '$.latitude') AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.longitude') >= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.longitude') AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.longitude') <= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    append_sql(ctx, ", '$.longitude'))"
+               " ELSE ("
+               "json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.x') >= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.x') AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.x') <= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    append_sql(ctx, ", '$.x') AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.y') >= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '$.y') AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$.y') <= json_extract(");
+    if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    append_sql(ctx, ", '$.y'))"
+               " END)");
+
     return 0;
 }
 

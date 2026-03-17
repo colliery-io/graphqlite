@@ -4,15 +4,15 @@ level: task
 title: "Temporal types and functions (date, time, datetime, duration construction and arithmetic)"
 short_code: "GQLITE-T-0131"
 created_at: 2026-03-17T13:40:21.332883+00:00
-updated_at: 2026-03-17T13:40:21.332883+00:00
+updated_at: 2026-03-17T19:12:13.684239+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Implement full temporal support: `date({year, month, day})`, `date(string)`, `ti
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,34 @@ Implement full temporal support: `date({year, month, day})`, `date(string)`, `ti
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete
+
+**Map-based construction (new):**
+- `date({year: 2024, month: 3, day: 15})` → `"2024-03-15"` via printf/json_extract
+- `time({hour: 14, minute: 30, second: 45})` → `"14:30:45"`
+- `datetime({year: 2024, month: 6, day: 15, hour: 10, minute: 30})` → `"2024-06-15T10:30:00"`
+
+**Duration type (new):**
+- `duration({days: 5, hours: 3})` → JSON object `{"years":0,"months":0,"days":5,"hours":3,...}`
+- `duration(string)` → passthrough for ISO 8601 strings
+
+**Epoch conversion (new):**
+- `datetimeFromEpoch(seconds)` → `datetime(seconds, 'unixepoch')`
+- `datetimeFromEpochMillis(ms)` → `datetime(ms/1000, 'unixepoch')`
+
+**Duration utility functions (new):**
+- `durationInDays(t1, t2)` → integer days via julianday difference
+- `durationInSeconds(t1, t2)` → integer seconds
+- `durationInMonths(t1, t2)` → approximate months (30.44 days/month)
+- `durationBetween(t1, t2)` → JSON duration object
+
+**Truncation (new):**
+- `dateTruncate(unit, temporal)` → `date(temporal, 'start of ' || unit)`
+
+**Also added:** `localtime()` as alias for `time()`
+
+**Not implemented:** ISO 8601 duration string parsing (P1Y2M3D), temporal property types in storage (stored as text). These would need custom C functions.
+
+**Tests**: 880 unit, 226 Python pass
