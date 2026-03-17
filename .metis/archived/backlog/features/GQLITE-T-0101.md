@@ -7,7 +7,7 @@ created_at: 2026-02-07T13:10:52.982026+00:00
 updated_at: 2026-02-07T13:22:34.827683+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -40,6 +39,8 @@ Replace `Connection::cypher_with_params()` and `Graph::query_with_params()` with
 - **User Value**: Cleaner, more ergonomic API for parameterized queries; individual `.param()` calls avoid constructing JSON manually
 - **Business Value**: Better API design attracts Rust users; builder pattern is idiomatic Rust
 - **Effort Estimate**: S - New struct + thin wrappers, no C changes
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

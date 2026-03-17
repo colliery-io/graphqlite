@@ -4,19 +4,18 @@ level: task
 title: "Segfault on parameterized bfs/dfs traversals"
 short_code: "GQLITE-T-0112"
 created_at: 2026-03-03T02:12:25.655318+00:00
-updated_at: 2026-03-03T02:27:22.507223+00:00
+updated_at: 2026-03-17T13:57:15.941863+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -38,6 +37,10 @@ Fix segmentation fault when using parameterized `bfs()` / `dfs()` traversals on 
   3. `select cypher('RETURN bfs($a)', '{"a": "A"}');` — segfault
 - **Expected**: Returns traversal result with the created node
 - **Actual**: Segmentation fault (signal 11)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

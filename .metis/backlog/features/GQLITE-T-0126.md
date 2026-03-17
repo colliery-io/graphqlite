@@ -4,15 +4,15 @@ level: task
 title: "OrNull type conversion variants (toIntegerOrNull, toFloatOrNull, etc.)"
 short_code: "GQLITE-T-0126"
 created_at: 2026-03-17T13:39:07.146984+00:00
-updated_at: 2026-03-17T13:39:07.146984+00:00
+updated_at: 2026-03-17T14:34:39.054666+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Add safe type conversion functions that return null instead of error on failure:
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,12 @@ Add safe type conversion functions that return null instead of error on failure:
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete
+- **`toIntegerOrNull()`**: Returns NULL for non-numeric strings, CAST AS INTEGER otherwise
+- **`toFloatOrNull()`**: Returns NULL for non-numeric, CAST AS REAL otherwise
+- **`toBooleanOrNull()`**: Returns NULL if not in ('true','false','1','0'), boolean otherwise
+- **`toStringOrNull()`**: CAST AS TEXT (always succeeds for non-null, NULL for null)
+- **List conversion variants** (`toBooleanList` etc.): Deferred — requires list iteration via json_each, lower priority
+- **Tests**: 849 unit, 226 Python pass

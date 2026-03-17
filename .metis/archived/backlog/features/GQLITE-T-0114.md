@@ -7,7 +7,7 @@ created_at: 2026-03-17T01:30:30.464617+00:00
 updated_at: 2026-03-17T02:20:29.293351+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -44,6 +44,8 @@ Accept typed `Value` variants (not just strings) in `upsert_node` and `upsert_ed
 **Python:** `upsert_node(node_id, node_data: dict, label)` accepts a dict — Python's dynamic typing means values can be int/float/bool/str already. The Python binding may already handle this better than Rust.
 
 **Note:** The auto-typing in `format_value()` means `("confidence", "0.87")` does get stored as a real. The issue is API ergonomics, not data loss. But edge cases exist (e.g., zip codes like "02134" would be stored as integer 2134).
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

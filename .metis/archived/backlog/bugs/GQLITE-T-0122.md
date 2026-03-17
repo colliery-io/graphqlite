@@ -7,7 +7,7 @@ created_at: 2026-03-17T02:45:29.424871+00:00
 updated_at: 2026-03-17T13:02:01.161106+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -40,6 +40,8 @@ Register `gql_load_graph`, `gql_unload_graph`, `gql_reload_graph`, `gql_graph_lo
   2. Load extension and call `SELECT gql_load_graph()`
   3. Error: `no such function: gql_load_graph`
 - **Expected vs Actual**: Cache functions should be available in all builds. Only available in release builds.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

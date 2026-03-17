@@ -7,7 +7,7 @@ created_at: 2026-02-07T20:21:36.980629+00:00
 updated_at: 2026-02-08T01:43:25.270421+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -65,6 +64,8 @@ Raise CUnit test coverage for the C source files that are currently below 50%. R
 - `tests/test_transform_set.c` — exists but minimal
 - `tests/test_executor_set.c` — exists but minimal
 - `tests/test_transform_*.c` — various, need expansion
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -7,7 +7,7 @@ created_at: 2026-02-07T02:09:56.178299+00:00
 updated_at: 2026-02-07T16:08:59.284721+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -40,6 +39,8 @@ Expand the Cypher parser to accept common Memgraph/Neo4j-style syntax, eliminati
 - **User Value**: Users can write natural Cypher queries without client-side rewriting hacks
 - **Business Value**: Reduces friction for adoption by Neo4j/Memgraph users; removes a class of client bugs
 - **Effort Estimate**: M - Parser/grammar changes (phases 1-2 trivial, phases 3-4 medium — shared transform work). IN lists already done.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

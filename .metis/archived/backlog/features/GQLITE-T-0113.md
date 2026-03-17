@@ -7,7 +7,7 @@ created_at: 2026-03-17T01:30:28.977154+00:00
 updated_at: 2026-03-17T02:15:49.837795+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -36,6 +36,8 @@ Add support for undirected match syntax `(a)--(b)` in the Cypher parser. This is
 ### Business Justification
 - **User Value**: Every "get neighbors" query currently requires a UNION of both directions, doubling query complexity
 - **Effort Estimate**: M — requires parser grammar changes in `cypher_gram.y`
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

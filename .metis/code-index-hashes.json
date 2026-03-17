@@ -1,6 +1,6 @@
 {
   "files": {
-    "bindings/python/src/graphqlite/__init__.py": "71eab74468ed410eab0edef9470626046936db10810e7459b83936ef3fc2bbfe",
+    "bindings/python/src/graphqlite/__init__.py": "3d550c60d909ff1ac261ea4a9fee44d8638e2376093fc23eb2bcbc949a3ea0ad",
     "bindings/python/src/graphqlite/_platform.py": "3d0908c46378bb4c539026ddf1d7c58278b6ff9b01ceae5ee8d04456d1166334",
     "bindings/python/src/graphqlite/algorithms/__init__.py": "616875690e2e716bd3dd9bdb3d0518c4dc5b3598700d29b3646cddf096827cfb",
     "bindings/python/src/graphqlite/algorithms/_parsing.py": "8fab1231488fe1ec57eca00593eb6d4de3ebaa4220af3bda009cf297c007d4ff",

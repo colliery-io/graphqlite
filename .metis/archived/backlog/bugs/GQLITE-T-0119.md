@@ -7,7 +7,7 @@ created_at: 2026-03-17T02:45:26.902672+00:00
 updated_at: 2026-03-17T02:51:50.036225+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -44,6 +44,8 @@ Fix `bfs()` and `dfs()` in Python bindings to return actual traversal results in
 ## Root Cause
 
 The C extension returns algorithm results wrapped as `[{"column_0": [...array...]}]`. Other algorithm mixins (centrality, community, components) call `extract_algo_array()` to unwrap this `column_0` wrapper. The `TraversalMixin` in `bindings/python/src/graphqlite/algorithms/traversal.py` iterates over `result` rows directly looking for `user_id`, but the raw rows have a single `column_0` key containing the actual array. The data is silently dropped.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

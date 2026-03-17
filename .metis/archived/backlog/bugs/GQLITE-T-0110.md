@@ -4,19 +4,18 @@ level: task
 title: "MATCH+SET+RETURN ignores RETURN clause"
 short_code: "GQLITE-T-0110"
 created_at: 2026-02-08T02:19:38.244430+00:00
-updated_at: 2026-02-08T03:54:21.174701+00:00
+updated_at: 2026-03-17T13:57:14.708135+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -53,6 +52,10 @@ The `handle_match_set` dispatch handler in `query_dispatch.c:625` (priority 90, 
 4. Returns — **never inspecting or processing the RETURN clause**
 
 The same issue likely applies to MATCH+DELETE+RETURN and MATCH+REMOVE+RETURN, since those handlers follow the same pattern.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

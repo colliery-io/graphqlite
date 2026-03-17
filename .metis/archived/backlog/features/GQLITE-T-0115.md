@@ -7,7 +7,7 @@ created_at: 2026-03-17T01:30:31.649565+00:00
 updated_at: 2026-03-17T02:21:52.085817+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -51,6 +51,8 @@ Add convenience methods to query edges by source node, target node, or relations
 - `get_edges_from(node_id)` — all outgoing edges from a node
 - `get_edges_to(node_id)` — all incoming edges to a node  
 - `get_edges_by_type(node_id, rel_type)` — outgoing edges of a specific type
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

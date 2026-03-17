@@ -4,19 +4,18 @@ level: task
 title: "Lists/maps returned as escaped strings in RETURN n output"
 short_code: "GQLITE-T-0111"
 created_at: 2026-02-09T21:44:31.979701+00:00
-updated_at: 2026-02-09T22:20:19.843845+00:00
+updated_at: 2026-03-17T13:57:15.612384+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -83,6 +82,10 @@ to:
 ```
 
 For the AGType secondary bug, add `node_props_json`/`edge_props_json` UNION ALL arms to both `load_node_properties()` and `load_edge_properties()`, including a `'json'` type handler that parses the value as raw JSON.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

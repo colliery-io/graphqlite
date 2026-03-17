@@ -7,7 +7,7 @@ created_at: 2026-03-17T01:30:35.766058+00:00
 updated_at: 2026-03-17T02:35:11.788292+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -51,6 +51,8 @@ g.query_builder("MATCH (n {id: $id}) RETURN n")
 **Python:** `Graph.query(cypher, params=None)` already accepts an optional params dict — fully parameterized.
 
 **What's actually missing:** A one-liner convenience like `query_params(cypher, params_map)` that doesn't require the builder pattern. Minor ergonomic improvement only.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

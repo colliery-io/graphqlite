@@ -7,7 +7,7 @@ created_at: 2026-02-07T20:28:23.108071+00:00
 updated_at: 2026-02-08T02:00:56.942799+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -47,6 +46,8 @@ Add test coverage to the Python and Rust bindings for features shipped in recent
 | `bindings/python/tests/test_connection.py` | Connection lifecycle |
 | `bindings/python/tests/test_manager.py` | Graph manager |
 | `bindings/rust/tests/integration.rs` | Full integration tests |
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

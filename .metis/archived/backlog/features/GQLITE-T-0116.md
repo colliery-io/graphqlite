@@ -7,7 +7,7 @@ created_at: 2026-03-17T01:30:32.987839+00:00
 updated_at: 2026-03-17T02:22:47.456768+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -48,6 +48,8 @@ Improve the `Value` enum in Rust bindings to support property access on `Object`
 **Python:** Returns `dict` directly from `get_node` — already ergonomic with `node["properties"]["title"]`.
 
 **Note:** The Rust `Row` type already has `get_value(column)` and typed `get::<T>(column)`. The gap is only on `Value` itself when working with nested objects.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

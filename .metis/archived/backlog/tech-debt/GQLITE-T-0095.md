@@ -7,7 +7,7 @@ created_at: 2026-01-13T13:19:24.851547+00:00
 updated_at: 2026-01-13T13:43:14.795115+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -100,6 +99,8 @@ For each document, perform the following checks:
 - [x] `docs/src/explanation/performance.md` - ✓ Verified
 
 ---
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

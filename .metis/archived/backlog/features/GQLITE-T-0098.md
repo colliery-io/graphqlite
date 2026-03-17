@@ -7,7 +7,7 @@ created_at: 2026-02-07T02:09:57.907693+00:00
 updated_at: 2026-02-07T13:05:01.484027+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -40,6 +39,8 @@ Add a `cypher_with_params(query, params)` API that allows clients to pass parame
 - **User Value**: Eliminates error-prone string interpolation; prevents injection-style bugs
 - **Business Value**: Security improvement; reduces support burden from escaping issues; standard practice for query APIs
 - **Effort Estimate**: M - New API surface with parameter binding layer, but no parser changes
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

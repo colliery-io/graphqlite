@@ -7,7 +7,7 @@ created_at: 2026-03-17T02:45:28.751626+00:00
 updated_at: 2026-03-17T12:57:12.594512+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -47,6 +47,8 @@ Fix string values with leading zeros (e.g., `"02134"`) being coerced to integers
 **Rust path** (now mitigated): The new `PropertyValue` type from GQLITE-T-0114 lets users explicitly pass `PropertyValue::Text("02134".into())`. But the `From<&str>` auto-detection still has this issue.
 
 **Fix needed in Python**: `_format_value()` should NOT strip leading zeros — if a string starts with `0` and is longer than 1 char, it should be treated as text, not a number.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

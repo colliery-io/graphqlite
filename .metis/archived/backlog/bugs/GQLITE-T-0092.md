@@ -7,7 +7,7 @@ created_at: 2026-01-08T18:23:06.278364+00:00
 updated_at: 2026-01-08T22:17:14.531690+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -52,6 +51,8 @@ graphqlite 0.2.0
 
 ### Workaround
 None currently - delete operations are unsafe until fixed.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

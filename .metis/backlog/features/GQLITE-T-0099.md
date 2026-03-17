@@ -4,19 +4,18 @@ level: task
 title: "Better diagnostics + query validation"
 short_code: "GQLITE-T-0099"
 created_at: 2026-02-07T02:09:58.717879+00:00
-updated_at: 2026-02-07T02:09:58.717879+00:00
+updated_at: 2026-03-17T14:28:25.291440+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -43,6 +42,12 @@ Make GraphQLite errors actionable with precise parse errors (line/column, expect
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] Parse errors include line number, column number, and expected tokens
 - [ ] `validate(query)` returns structured diagnostics without running the query
 - [ ] Errors include `dialect_version` and supported feature list for client adaptation
@@ -64,4 +69,13 @@ Make GraphQLite errors actionable with precise parse errors (line/column, expect
 
 ## Status Updates
 
-*To be added during implementation*
+### Implementation Complete (Phase 1)
+- **Column numbers in errors**: `cypher_yyerror` now reports `Line N, Col M:` (was line only)
+- **`error_column` field**: Added to `cypher_parser_context` and `cypher_parse_result`
+- **`cypher_validate()` SQL function**: New function that parses without executing, returns JSON: `{"valid": true}` or `{"valid": false, "error": "...", "line": N, "column": N}`
+- **Tests**: 849 unit, 226 Python pass
+
+### Remaining (Phase 2 — future task)
+- Rust/Python `validate()` binding methods
+- Structured error types in Rust (not just strings)
+- `dialect_version` metadata in error responses

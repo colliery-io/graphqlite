@@ -7,7 +7,7 @@ created_at: 2026-01-10T04:16:05.171987+00:00
 updated_at: 2026-01-10T13:55:47.109934+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -76,6 +75,8 @@ pub fn upsert_nodes_batch(...) -> Result<()> {
 - **Current Problems**: Batch operations are slow due to per-operation transaction overhead; no atomicity guarantees
 - **Benefits of Fixing**: 5-10x performance improvement for batch operations; atomic batch inserts (all-or-nothing)
 - **Risk Assessment**: Low risk - straightforward refactoring with clear semantics
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

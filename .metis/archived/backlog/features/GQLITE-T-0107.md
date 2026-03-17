@@ -7,7 +7,7 @@ created_at: 2026-02-07T19:45:19.044324+00:00
 updated_at: 2026-02-07T20:30:41.381879+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -39,6 +38,8 @@ Implement the openCypher bulk property SET syntax: `SET n = {map}` (replace all 
 ### Business Justification
 - **User Value**: Standard Cypher syntax supported by Neo4j and Memgraph; reduces verbosity for multi-property updates
 - **Effort Estimate**: M
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

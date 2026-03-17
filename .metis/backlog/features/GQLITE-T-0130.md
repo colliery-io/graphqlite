@@ -4,15 +4,15 @@ level: task
 title: "Additional scalar functions (elementId, nullIf, valueType, char_length)"
 short_code: "GQLITE-T-0130"
 created_at: 2026-03-17T13:40:01.385263+00:00
-updated_at: 2026-03-17T13:40:01.385263+00:00
+updated_at: 2026-03-17T14:37:05.704135+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Add missing scalar functions: `elementId(node_or_rel)` (replaces deprecated `id(
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,11 @@ Add missing scalar functions: `elementId(node_or_rel)` (replaces deprecated `id(
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete
+- **`elementId()`**: Alias for `id()`, registered in dispatch table
+- **`nullIf(expr1, expr2)`**: Maps to SQLite `NULLIF()`, returns NULL when equal
+- **`valueType(expr)`**: Returns Cypher type name ('INTEGER','FLOAT','STRING','NULL') via `typeof()` mapping
+- **`char_length()`/`character_length()`**: Aliases for `LENGTH()` in string function handler
+- **Tests**: 849 unit, 226 Python pass

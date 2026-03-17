@@ -7,7 +7,7 @@ created_at: 2026-01-08T14:46:05.846330+00:00
 updated_at: 2026-01-08T17:13:38.199570+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -16,7 +16,6 @@ tags:
 
 
 exit_criteria_met: false
-strategy_id: NULL
 initiative_id: NULL
 ---
 
@@ -45,6 +44,8 @@ Enable `cargo add graphqlite` to work out of the box without requiring users to 
 - **Expected vs Actual**: 
   - **Expected**: Build succeeds, library ready to use
   - **Actual**: Linker error - cannot find graphqlite library. User must manually build C extension and set `LIBRARY_PATH` or equivalent.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -7,7 +7,7 @@ created_at: 2026-03-17T01:30:34.347273+00:00
 updated_at: 2026-03-17T02:34:32.019505+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -45,6 +45,8 @@ Rename `GraphStats` fields from `nodes`/`edges` (i64) to `node_count`/`edge_coun
 **Python:** `stats()` returns `dict` with `{'nodes': int, 'edges': int}` — Python doesn't have usize so naming is the only concern.
 
 **Also affects:** `CacheStatus { pub nodes: Option<i64>, pub edges: Option<i64> }` — same naming/type issue.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

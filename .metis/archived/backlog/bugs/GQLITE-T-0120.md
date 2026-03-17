@@ -7,7 +7,7 @@ created_at: 2026-03-17T02:45:27.787638+00:00
 updated_at: 2026-03-17T02:54:10.922249+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -44,6 +44,8 @@ Fix `all_pairs_shortest_path()` / `apsp()` in Python bindings to return actual r
 ## Root Cause
 
 Same as GQLITE-T-0119. The `all_pairs_shortest_path()` in `bindings/python/src/graphqlite/algorithms/paths.py` iterates `result` rows directly without calling `extract_algo_array()` to unwrap the `column_0` wrapper from the C extension.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
