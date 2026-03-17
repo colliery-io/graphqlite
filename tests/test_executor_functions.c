@@ -1015,6 +1015,246 @@ static void test_return_star(void)
     }
 }
 
+/* ===== Tranche 2 function tests ===== */
+
+/* Trig functions */
+static void test_func_atan2(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN atan2(1, 1) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_TRUE(result->row_count > 0);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 0.7854, 0.001);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_degrees(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN degrees(3.141592653589793) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 180.0, 0.01);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_radians(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN radians(180) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 3.14159, 0.001);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_cot(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN cot(1.0) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_haversin(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN haversin(1.0) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 0.2298, 0.001);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_sinh(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN sinh(1.0) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 1.1752, 0.001);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_cosh(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN cosh(1.0) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_tanh(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN tanh(0.5) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_isnan(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN isNaN(42) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "0");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* Statistical aggregates */
+static void test_func_stdev(void)
+{
+    /* Create test data */
+    const char *queries[] = {
+        "CREATE (n:StDev {val: 10})", "CREATE (n:StDev {val: 20})",
+        "CREATE (n:StDev {val: 30})", "CREATE (n:StDev {val: 40})",
+        "CREATE (n:StDev {val: 50})", NULL
+    };
+    for (int i = 0; queries[i]; i++) {
+        cypher_result *r = cypher_executor_execute(executor, queries[i]);
+        if (r) cypher_result_free(r);
+    }
+
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (n:StDev) RETURN stDev(n.val) AS sd");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 15.811, 0.01);
+        }
+        cypher_result_free(result);
+    }
+
+    /* Cleanup */
+    cypher_result *del = cypher_executor_execute(executor, "MATCH (n:StDev) DETACH DELETE n");
+    if (del) cypher_result_free(del);
+}
+
+static void test_func_stdevp(void)
+{
+    const char *queries[] = {
+        "CREATE (n:StDevP {val: 10})", "CREATE (n:StDevP {val: 20})",
+        "CREATE (n:StDevP {val: 30})", "CREATE (n:StDevP {val: 40})",
+        "CREATE (n:StDevP {val: 50})", NULL
+    };
+    for (int i = 0; queries[i]; i++) {
+        cypher_result *r = cypher_executor_execute(executor, queries[i]);
+        if (r) cypher_result_free(r);
+    }
+
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (n:StDevP) RETURN stDevP(n.val) AS sd");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(val, 14.142, 0.01);
+        }
+        cypher_result_free(result);
+    }
+
+    cypher_result *del = cypher_executor_execute(executor, "MATCH (n:StDevP) DETACH DELETE n");
+    if (del) cypher_result_free(del);
+}
+
+/* List slicing */
+static void test_list_slice_range(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN [1,2,3,4,5][1..3] AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "[2,3]");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_list_slice_from(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN [1,2,3,4,5][2..] AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "[3,4,5]");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_list_slice_to(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN [1,2,3,4,5][..2] AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "[1,2]");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* RETURN * with relationship */
+static void test_return_star_with_rel(void)
+{
+    cypher_result *setup = cypher_executor_execute(executor,
+        "CREATE (a:RStar {id: 'rs1'})-[:RTEST]->(b:RStar {id: 'rs2'})");
+    if (setup) cypher_result_free(setup);
+
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (a:RStar)-[r]->(b:RStar) RETURN *");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 1);
+        CU_ASSERT_TRUE(result->column_count >= 3); /* a, r, b */
+        cypher_result_free(result);
+    }
+
+    cypher_result *del = cypher_executor_execute(executor, "MATCH (n:RStar) DETACH DELETE n");
+    if (del) cypher_result_free(del);
+}
+
 /* Initialize the functions test suite */
 int init_executor_functions_suite(void)
 {
@@ -1102,7 +1342,30 @@ int init_executor_functions_suite(void)
         !CU_add_test(suite, "nullIf() different", test_func_nullif_different) ||
         !CU_add_test(suite, "valueType()", test_func_valuetype) ||
         !CU_add_test(suite, "char_length()", test_func_char_length) ||
-        !CU_add_test(suite, "RETURN *", test_return_star))
+        !CU_add_test(suite, "RETURN *", test_return_star) ||
+
+        /* Tranche 2: Trig functions */
+        !CU_add_test(suite, "atan2()", test_func_atan2) ||
+        !CU_add_test(suite, "degrees()", test_func_degrees) ||
+        !CU_add_test(suite, "radians()", test_func_radians) ||
+        !CU_add_test(suite, "cot()", test_func_cot) ||
+        !CU_add_test(suite, "haversin()", test_func_haversin) ||
+        !CU_add_test(suite, "sinh()", test_func_sinh) ||
+        !CU_add_test(suite, "cosh()", test_func_cosh) ||
+        !CU_add_test(suite, "tanh()", test_func_tanh) ||
+        !CU_add_test(suite, "isNaN()", test_func_isnan) ||
+
+        /* Tranche 2: Statistical aggregates */
+        !CU_add_test(suite, "stDev()", test_func_stdev) ||
+        !CU_add_test(suite, "stDevP()", test_func_stdevp) ||
+
+        /* Tranche 2: List slicing */
+        !CU_add_test(suite, "list[1..3] slice", test_list_slice_range) ||
+        !CU_add_test(suite, "list[2..] slice from", test_list_slice_from) ||
+        !CU_add_test(suite, "list[..2] slice to", test_list_slice_to) ||
+
+        /* Tranche 2: RETURN * with relationship */
+        !CU_add_test(suite, "RETURN * with rel", test_return_star_with_rel))
     {
         return CU_get_error();
     }
