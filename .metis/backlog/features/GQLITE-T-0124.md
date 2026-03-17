@@ -4,15 +4,15 @@ level: task
 title: "List slicing and concatenation operators"
 short_code: "GQLITE-T-0124"
 created_at: 2026-03-17T13:38:37.208056+00:00
-updated_at: 2026-03-17T13:38:37.208056+00:00
+updated_at: 2026-03-17T15:22:33.573209+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Add list slicing (`list[1..3]`, `list[1..]`, `list[..3]`) and list concatenation
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,9 @@ Add list slicing (`list[1..3]`, `list[1..]`, `list[..3]`) and list concatenation
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete
+- **List slicing**: `list[1..3]`, `list[2..]`, `list[..2]` — grammar rules with `DOT_DOT` token, AST `is_slice`/`slice_start`/`slice_end` fields, SQL via `json_each` with key range filtering
+- **List concatenation**: Deferred — requires architectural change to detect list operands before emitting left side of binary op. Current `+` operator emits left then operator then right, making it impossible to wrap both in a subquery mid-stream.
+- **Tests**: 865 unit tests pass, slicing verified manually

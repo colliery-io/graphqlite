@@ -4,15 +4,15 @@ level: task
 title: "Label disjunction in node patterns (n:Label1|Label2)"
 short_code: "GQLITE-T-0125"
 created_at: 2026-03-17T13:38:53.245690+00:00
-updated_at: 2026-03-17T13:38:53.245690+00:00
+updated_at: 2026-03-17T18:30:08.811862+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/blocked"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Support label OR matching in node patterns: `MATCH (n:Person|Employee)` matches 
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,25 @@ Support label OR matching in node patterns: `MATCH (n:Person|Employee)` matches 
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Blocked — GLR grammar ambiguity
+
+**Attempted approach**: Added `|` as a separator in `label_list` grammar rule (`:Label1|Label2`), with sentinel-based detection in `make_node_pattern` and OR-based JOIN generation in `transform_match.c`.
+
+**Problem**: The `|` character creates a GLR ambiguity (5 S/R conflicts instead of 4) because it's already used in:
+- Pattern comprehensions: `[(n)-[r]->(m) | expr]`
+- Relationship type disjunction: `-[:TYPE1|TYPE2]->`
+- List comprehension: `[x IN list | expr]`
+
+The parser reports "syntax is ambiguous" at runtime for label disjunction patterns.
+
+**Possible solutions**:
+1. Add GLR merge rules to resolve the ambiguity based on context
+2. Use `%dprec` or `%merge` directives for the conflicting rules
+3. Handle `|` in label position at the scanner level (context-dependent tokenization)
+4. Use a completely different syntax (e.g., `(n:Label1+Label2)` for disjunction)
+
+**What was reverted**: All grammar, AST, and transform changes for label disjunction. Only list slicing changes remain.
+
+**Next step**: Needs focused grammar engineering — not a quick win.

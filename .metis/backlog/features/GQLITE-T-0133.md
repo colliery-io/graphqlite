@@ -4,15 +4,15 @@ level: task
 title: "CALL subquery support"
 short_code: "GQLITE-T-0133"
 created_at: 2026-03-17T13:40:58.710070+00:00
-updated_at: 2026-03-17T13:40:58.710070+00:00
+updated_at: 2026-03-17T18:58:20.298435+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/blocked"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Implement `CALL { subquery }` syntax for inline subquery evaluation. Subquery ca
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,21 @@ Implement `CALL { subquery }` syntax for inline subquery evaluation. Subquery ca
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Blocked — Scope too large for single task
+
+**Assessment**: CALL { subquery } requires changes across every layer:
+1. **Grammar**: New `CALL '{' clause_list '}'` rule as a clause type — the `CALL` keyword exists but has no production rules
+2. **AST**: New `AST_NODE_CALL_SUBQUERY` node type with embedded clause list
+3. **Transform**: New `transform_call_subquery.c` — must generate a CTE from the inner clause list, manage variable import (outer vars visible in subquery) and export (subquery RETURN vars join outer scope)
+4. **Executor**: New dispatch pattern in `query_dispatch.c` — must handle CALL as a clause that can appear mid-pipeline (after MATCH, before RETURN)
+5. **Variable scope**: Subquery has its own scope but imports outer variables — the `transform_var_context` needs scope nesting
+
+**Recommendation**: Decompose into a Metis initiative with 3-4 subtasks:
+- T1: Grammar + AST for CALL { }
+- T2: Transform (CTE generation with scope import/export)
+- T3: Executor dispatch integration
+- T4: COUNT { } and COLLECT { } subquery expressions
+
+**Not blocked by anything external** — just needs to be properly scoped as an initiative rather than a single task.

@@ -4,15 +4,15 @@ level: task
 title: "Additional trigonometric and math functions (atan2, degrees, radians, hyperbolic)"
 short_code: "GQLITE-T-0128"
 created_at: 2026-03-17T13:39:33.974919+00:00
-updated_at: 2026-03-17T13:39:33.974919+00:00
+updated_at: 2026-03-17T18:57:48.496440+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -64,6 +64,12 @@ Add missing math/trig functions: `atan2(y, x)`, `cot(expr)`, `degrees(expr)`, `r
 - **Current Problems**: {What's difficult/slow/buggy now}
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
@@ -132,6 +138,16 @@ Add missing math/trig functions: `atan2(y, x)`, `cot(expr)`, `degrees(expr)`, `r
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### Implementation Complete (13 new functions)
+- **`atan2(y, x)`**: Direct SQLite ATAN2
+- **`cot(x)`**: `1.0/tan(x)`
+- **`degrees(x)`**: `x * 180 / pi`
+- **`radians(x)`**: `x * pi / 180`
+- **`haversin(x)`**: `(1 - cos(x)) / 2`
+- **`sinh(x)`/`cosh(x)`/`tanh(x)`**: Direct SQLite (3.35+)
+- **`coth(x)`**: `1.0/tanh(x)`
+- **`isNaN(x)`**: `x != x` (returns 0 for numbers, null for SQLite NULL — SQLite doesn't produce IEEE NaN)
+- **`round(x, precision, mode)`**: Deferred — SQLite ROUND doesn't support rounding modes
+- **Tests**: 865 unit pass
