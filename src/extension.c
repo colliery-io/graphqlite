@@ -530,6 +530,64 @@ static void regexp_func(
     sqlite3_result_int(context, ret == 0 ? 1 : 0);
 }
 
+/* cypher_validate() - Parse and validate a Cypher query without executing it.
+ * Returns a JSON object with validation results:
+ *   {"valid": true} or {"valid": false, "error": "...", "line": N, "column": N}
+ */
+static void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc < 1) {
+        sqlite3_result_error(context, "cypher_validate requires a query argument", -1);
+        return;
+    }
+
+    const char *query = (const char*)sqlite3_value_text(argv[0]);
+    if (!query) {
+        sqlite3_result_text(context, "{\"valid\": false, \"error\": \"Query is NULL\"}", -1, SQLITE_STATIC);
+        return;
+    }
+
+    /* Parse the query */
+    cypher_parse_result *parse_result = parse_cypher_query_ext(query);
+    if (!parse_result) {
+        sqlite3_result_text(context, "{\"valid\": false, \"error\": \"Parser allocation failed\"}", -1, SQLITE_STATIC);
+        return;
+    }
+
+    if (parse_result->ast != NULL && parse_result->error_message == NULL) {
+        /* Valid query */
+        sqlite3_result_text(context, "{\"valid\": true}", -1, SQLITE_STATIC);
+    } else {
+        /* Invalid query - build JSON response with error details */
+        char *response = malloc(1024);
+        if (response) {
+            const char *err = parse_result->error_message ? parse_result->error_message : "Unknown parse error";
+            /* Escape quotes in error message for JSON */
+            char escaped_err[512];
+            char *dst = escaped_err;
+            const char *src = err;
+            while (*src && (dst - escaped_err) < 500) {
+                if (*src == '"') { *dst++ = '\\'; *dst++ = '"'; }
+                else if (*src == '\\') { *dst++ = '\\'; *dst++ = '\\'; }
+                else { *dst++ = *src; }
+                src++;
+            }
+            *dst = '\0';
+
+            snprintf(response, 1024,
+                "{\"valid\": false, \"error\": \"%s\", \"line\": %d, \"column\": %d}",
+                escaped_err,
+                parse_result->error_line > 0 ? parse_result->error_line : 1,
+                parse_result->error_column > 0 ? parse_result->error_column : 0);
+            sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
+            free(response);
+        } else {
+            sqlite3_result_text(context, "{\"valid\": false, \"error\": \"Memory allocation failed\"}", -1, SQLITE_STATIC);
+        }
+    }
+
+    cypher_parse_result_free(parse_result);
+}
+
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
@@ -562,6 +620,10 @@ int sqlite3_graphqlite_init(
   /* Register the regexp() function for =~ operator support */
   sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
                          regexp_func, 0, 0);
+
+  /* Register the cypher_validate() function for query validation without execution */
+  sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,
+                         cypher_validate_func, 0, 0);
 
   /* Register graph cache management functions */
   sqlite3_create_function(db, "gql_load_graph", 0, SQLITE_UTF8, cache,

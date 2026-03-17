@@ -118,12 +118,14 @@ cypher_parse_result* parse_cypher_query_ext(const char *query)
         result->ast = context->result;
         context->result = NULL; /* Transfer ownership */
     } else {
-        /* Parsing failed - copy error message */
+        /* Parsing failed - copy error message and location */
         if (context->error_message) {
             result->error_message = strdup(context->error_message);
         } else {
             result->error_message = strdup("Parse failed with unknown error");
         }
+        result->error_line = context->error_location;
+        result->error_column = context->error_column;
     }
     
     cypher_parser_context_destroy(context);

@@ -21,6 +21,8 @@ static const transform_func_entry dispatch_table[] = {
     /* Entity introspection functions */
     {"type",            transform_type_function},
     {"id",              transform_id_function},
+    {"elementId",       transform_id_function},
+    {"elementid",       transform_id_function},
     {"labels",          transform_labels_function},
     {"properties",      transform_properties_function},
     {"keys",            transform_keys_function},
@@ -40,7 +42,10 @@ static const transform_func_entry dispatch_table[] = {
     {"trim",            transform_string_function},
     {"ltrim",           transform_string_function},
     {"rtrim",           transform_string_function},
+    {"btrim",           transform_string_function},
     {"size",            transform_string_function},
+    {"isEmpty",         transform_isempty_function},
+    {"isempty",         transform_isempty_function},
     {"reverse",         transform_string_function},
     {"length",          transform_length_function},
 
@@ -81,12 +86,30 @@ static const transform_func_entry dispatch_table[] = {
     {"pi",              transform_noarg_function},
     {"e",               transform_noarg_function},
 
+    /* Scalar utility functions */
+    {"nullIf",          transform_nullif_function},
+    {"nullif",          transform_nullif_function},
+    {"valueType",       transform_valuetype_function},
+    {"valuetype",       transform_valuetype_function},
+    {"char_length",     transform_string_function},
+    {"character_length", transform_string_function},
+
     /* Type conversion functions */
     {"coalesce",        transform_coalesce_function},
     {"toString",        transform_tostring_function},
     {"toInteger",       transform_type_conversion_function},
     {"toFloat",         transform_type_conversion_function},
     {"toBoolean",       transform_type_conversion_function},
+
+    /* Safe type conversion (OrNull variants) */
+    {"toIntegerOrNull",  transform_type_conversion_ornull_function},
+    {"tointegerornull",  transform_type_conversion_ornull_function},
+    {"toFloatOrNull",    transform_type_conversion_ornull_function},
+    {"tofloatornull",    transform_type_conversion_ornull_function},
+    {"toBooleanOrNull",  transform_type_conversion_ornull_function},
+    {"tobooleanornull",  transform_type_conversion_ornull_function},
+    {"toStringOrNull",   transform_type_conversion_ornull_function},
+    {"tostringornull",   transform_type_conversion_ornull_function},
 
     /* Path functions */
     {"nodes",           transform_path_nodes_function},

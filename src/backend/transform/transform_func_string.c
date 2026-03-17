@@ -40,13 +40,16 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
         sql_func = "UPPER";
     } else if (strcasecmp(func_call->function_name, "toLower") == 0) {
         sql_func = "LOWER";
-    } else if (strcasecmp(func_call->function_name, "trim") == 0) {
+    } else if (strcasecmp(func_call->function_name, "trim") == 0 ||
+               strcasecmp(func_call->function_name, "btrim") == 0) {
         sql_func = "TRIM";
     } else if (strcasecmp(func_call->function_name, "ltrim") == 0) {
         sql_func = "LTRIM";
     } else if (strcasecmp(func_call->function_name, "rtrim") == 0) {
         sql_func = "RTRIM";
-    } else if (strcasecmp(func_call->function_name, "length") == 0) {
+    } else if (strcasecmp(func_call->function_name, "length") == 0 ||
+               strcasecmp(func_call->function_name, "char_length") == 0 ||
+               strcasecmp(func_call->function_name, "character_length") == 0) {
         sql_func = "LENGTH";
     } else if (strcasecmp(func_call->function_name, "size") == 0) {
         /* size() works on both strings and lists.

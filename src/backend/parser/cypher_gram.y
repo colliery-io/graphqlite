@@ -262,6 +262,15 @@ return_clause:
         {
             $$ = make_cypher_return($2, $3, $4, $5, $6);
         }
+    | RETURN '*' order_by_opt skip_opt limit_opt
+        {
+            /* RETURN * - return all bound variables (items=NULL signals star) */
+            $$ = make_cypher_return(false, NULL, $3, $4, $5);
+        }
+    | RETURN DISTINCT '*' order_by_opt skip_opt limit_opt
+        {
+            $$ = make_cypher_return(true, NULL, $4, $5, $6);
+        }
     ;
 
 /* WITH clause - projection with optional WHERE for filtering */
@@ -269,6 +278,11 @@ with_clause:
     WITH distinct_opt return_item_list order_by_opt skip_opt limit_opt where_opt
         {
             $$ = make_cypher_with($2, $3, $4, $5, $6, $7);
+        }
+    | WITH '*' order_by_opt skip_opt limit_opt where_opt
+        {
+            /* WITH * - pass all variables through */
+            $$ = make_cypher_with(false, NULL, $3, $4, $5, $6);
         }
     ;
 
@@ -1530,13 +1544,19 @@ void cypher_yyerror(CYPHER_YYLTYPE *yylloc, cypher_parser_context *context, cons
 
     context->has_error = true;
     context->error_location = yylloc ? yylloc->first_line : -1;
+    context->error_column = yylloc ? yylloc->first_column : -1;
 
     /* Create error message with line number - Bison's detailed error mode
      * provides good context about what was expected */
     char error_buffer[512];
     if (yylloc && yylloc->first_line > 0) {
-        snprintf(error_buffer, sizeof(error_buffer),
-                 "Line %d: %s", yylloc->first_line, msg);
+        if (yylloc->first_column > 0) {
+            snprintf(error_buffer, sizeof(error_buffer),
+                     "Line %d, Col %d: %s", yylloc->first_line, yylloc->first_column, msg);
+        } else {
+            snprintf(error_buffer, sizeof(error_buffer),
+                     "Line %d: %s", yylloc->first_line, msg);
+        }
     } else {
         snprintf(error_buffer, sizeof(error_buffer), "%s", msg);
     }

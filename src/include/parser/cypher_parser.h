@@ -9,7 +9,8 @@ typedef struct cypher_parser_context {
     CypherScannerState *scanner;
     ast_node *result;
     char *error_message;
-    int error_location;
+    int error_location;     /* Line number of error */
+    int error_column;       /* Column number of error */
     bool has_error;
     char *last_token_text;  /* For better error messages */
 } cypher_parser_context;
@@ -30,6 +31,8 @@ void cypher_parser_free_result(ast_node *result);
 typedef struct {
     ast_node *ast;
     char *error_message;
+    int error_line;
+    int error_column;
 } cypher_parse_result;
 
 cypher_parse_result* parse_cypher_query_ext(const char *query);

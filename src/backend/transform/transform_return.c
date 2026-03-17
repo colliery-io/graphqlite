@@ -155,6 +155,71 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             sql_distinct(ctx->unified_builder);
         }
 
+        /* Handle RETURN * - expand all visible variables */
+        if (ret->return_all) {
+            CYPHER_DEBUG("Expanding RETURN * with all bound variables");
+            int var_count = transform_var_count(ctx->var_ctx);
+            int added = 0;
+            for (int vi = 0; vi < var_count; vi++) {
+                transform_var *var = transform_var_at(ctx->var_ctx, vi);
+                if (!var || !var->is_visible || !var->name) continue;
+
+                /* Build expression for this variable based on its kind */
+                if (var->kind == VAR_KIND_NODE) {
+                    /* Return full node object using json_object */
+                    char expr_buf[2048];
+                    const char *alias = var->table_alias;
+                    bool skip_id = var->alias_is_id;
+                    snprintf(expr_buf, sizeof(expr_buf),
+                        "(SELECT json_object("
+                        "'id', %s%s, "
+                        "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s%s), json('[]')), "
+                        "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                            "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s%s AND npt.key_id = pk.id), "
+                            "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s%s AND npi.key_id = pk.id), "
+                            "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s%s AND npr.key_id = pk.id), "
+                            "(SELECT npb.value FROM node_props_bool npb WHERE npb.node_id = %s%s AND npb.key_id = pk.id), "
+                            "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %s%s AND npj.key_id = pk.id))) "
+                        "FROM property_keys pk WHERE "
+                            "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s%s AND key_id = pk.id) OR "
+                            "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s%s AND key_id = pk.id) OR "
+                            "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s%s AND key_id = pk.id) OR "
+                            "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s%s AND key_id = pk.id) OR "
+                            "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s%s AND key_id = pk.id)"
+                        "), json('{}'))"
+                        "))",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id",
+                        alias, skip_id ? "" : ".id");
+                    sql_select(ctx->unified_builder, expr_buf, var->name);
+                } else if (var->kind == VAR_KIND_EDGE) {
+                    /* Return edge as its type */
+                    char expr_buf[256];
+                    snprintf(expr_buf, sizeof(expr_buf), "%s.type", var->table_alias);
+                    sql_select(ctx->unified_builder, expr_buf, var->name);
+                } else if (var->kind == VAR_KIND_PROJECTED) {
+                    /* Projected variable - alias IS the value */
+                    sql_select(ctx->unified_builder, var->table_alias, var->name);
+                }
+                added++;
+            }
+            if (added == 0) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("RETURN * used but no variables are bound");
+                return -1;
+            }
+            goto return_star_done;
+        }
+
         /* Add SELECT columns to unified builder */
         for (int i = 0; i < ret->items->count; i++) {
             cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
@@ -221,6 +286,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             }
         }
 
+return_star_done:
         /* Add ORDER BY */
         if (ret->order_by && ret->order_by->count > 0) {
             for (int i = 0; i < ret->order_by->count; i++) {

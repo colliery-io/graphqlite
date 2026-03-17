@@ -788,6 +788,233 @@ static void test_end_as_identifier_regression(void)
     }
 }
 
+/* ===== New function tests added for 0.3.8+ ===== */
+
+/* isEmpty() */
+static void test_func_isempty_string(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN isEmpty('') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_isempty_nonempty(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN isEmpty('hello') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "0");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* btrim() */
+static void test_func_btrim(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN btrim('  hello  ') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "hello");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* toIntegerOrNull() */
+static void test_func_tointegerornull_valid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toIntegerOrNull('42') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "42");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_tointegerornull_invalid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toIntegerOrNull('hello') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0) {
+            CU_ASSERT_PTR_NULL(result->data[0][0]);
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* toFloatOrNull() */
+static void test_func_tofloatornull_valid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toFloatOrNull('3.14') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "3.14");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_tofloatornull_invalid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toFloatOrNull('nope') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0) {
+            CU_ASSERT_PTR_NULL(result->data[0][0]);
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* toBooleanOrNull() */
+static void test_func_tobooleanornull_valid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toBooleanOrNull('true') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_tobooleanornull_invalid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toBooleanOrNull('maybe') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0) {
+            CU_ASSERT_PTR_NULL(result->data[0][0]);
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* toStringOrNull() */
+static void test_func_tostringornull(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN toStringOrNull(42) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "42");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* elementId() */
+static void test_func_elementid(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (n:Person {name: 'Alice'}) RETURN elementId(n) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_TRUE(result->row_count > 0);
+        if (result->row_count > 0 && result->data[0][0]) {
+            /* elementId returns same as id() - an integer */
+            CU_ASSERT_TRUE(atoi(result->data[0][0]) > 0);
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* nullIf() */
+static void test_func_nullif_equal(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN nullIf(1, 1) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0) {
+            CU_ASSERT_PTR_NULL(result->data[0][0]);
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_nullif_different(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN nullIf(1, 2) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* valueType() */
+static void test_func_valuetype(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN valueType(42) AS r1, valueType('hello') AS r2, valueType(3.14) AS r3");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "INTEGER");
+            CU_ASSERT_STRING_EQUAL(result->data[0][1], "STRING");
+            CU_ASSERT_STRING_EQUAL(result->data[0][2], "FLOAT");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* char_length() / character_length() */
+static void test_func_char_length(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN char_length('hello') AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "5");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* RETURN * */
+static void test_return_star(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (n:Person {name: 'Alice'}) RETURN *");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 1);
+        CU_ASSERT_TRUE(result->column_count > 0);
+        cypher_result_free(result);
+    }
+}
+
 /* Initialize the functions test suite */
 int init_executor_functions_suite(void)
 {
@@ -857,7 +1084,25 @@ int init_executor_functions_suite(void)
         !CU_add_test(suite, "List function alias regression", test_list_function_alias_regression) ||
         !CU_add_test(suite, "Simple CASE syntax regression", test_simple_case_syntax_regression) ||
         !CU_add_test(suite, "keys() function returns property names", test_keys_function_regression) ||
-        !CU_add_test(suite, "'end' as identifier regression", test_end_as_identifier_regression))
+        !CU_add_test(suite, "'end' as identifier regression", test_end_as_identifier_regression) ||
+
+        /* New functions (0.3.8+) */
+        !CU_add_test(suite, "isEmpty() empty string", test_func_isempty_string) ||
+        !CU_add_test(suite, "isEmpty() non-empty", test_func_isempty_nonempty) ||
+        !CU_add_test(suite, "btrim()", test_func_btrim) ||
+        !CU_add_test(suite, "toIntegerOrNull() valid", test_func_tointegerornull_valid) ||
+        !CU_add_test(suite, "toIntegerOrNull() invalid", test_func_tointegerornull_invalid) ||
+        !CU_add_test(suite, "toFloatOrNull() valid", test_func_tofloatornull_valid) ||
+        !CU_add_test(suite, "toFloatOrNull() invalid", test_func_tofloatornull_invalid) ||
+        !CU_add_test(suite, "toBooleanOrNull() valid", test_func_tobooleanornull_valid) ||
+        !CU_add_test(suite, "toBooleanOrNull() invalid", test_func_tobooleanornull_invalid) ||
+        !CU_add_test(suite, "toStringOrNull()", test_func_tostringornull) ||
+        !CU_add_test(suite, "elementId()", test_func_elementid) ||
+        !CU_add_test(suite, "nullIf() equal", test_func_nullif_equal) ||
+        !CU_add_test(suite, "nullIf() different", test_func_nullif_different) ||
+        !CU_add_test(suite, "valueType()", test_func_valuetype) ||
+        !CU_add_test(suite, "char_length()", test_func_char_length) ||
+        !CU_add_test(suite, "RETURN *", test_return_star))
     {
         return CU_get_error();
     }

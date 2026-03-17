@@ -77,6 +77,10 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
 int transform_json_get_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_json_keys_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_json_type_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_isempty_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_type_conversion_ornull_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_nullif_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_valuetype_function(cypher_transform_context *ctx, cypher_function_call *func);
 
 /*
  * Predicate expressions - transform_expr_predicate.c

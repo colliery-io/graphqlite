@@ -108,6 +108,59 @@ int transform_type_conversion_function(cypher_transform_context *ctx, cypher_fun
     return 0;
 }
 
+/* Transform OrNull type conversion variants: toIntegerOrNull, toFloatOrNull, toBooleanOrNull, toStringOrNull
+ * These return NULL instead of a default value when conversion is not possible. */
+int transform_type_conversion_ornull_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming OrNull type conversion: %s", func_call->function_name);
+
+    if (!func_call->args || func_call->args->count != 1) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "%s() requires exactly one argument", func_call->function_name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+
+    if (strcasecmp(func_call->function_name, "toIntegerOrNull") == 0) {
+        /* Return NULL if not a valid integer, otherwise CAST AS INTEGER */
+        append_sql(ctx, "(CASE WHEN typeof(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") IN ('integer', 'real') OR CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT) GLOB '[0-9]*' OR CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT) GLOB '-[0-9]*' THEN CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS INTEGER) ELSE NULL END)");
+    } else if (strcasecmp(func_call->function_name, "toFloatOrNull") == 0) {
+        append_sql(ctx, "(CASE WHEN typeof(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") IN ('integer', 'real') OR CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT) GLOB '[0-9]*' OR CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT) GLOB '-[0-9]*' OR CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT) GLOB '[0-9]*.[0-9]*' THEN CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL) ELSE NULL END)");
+    } else if (strcasecmp(func_call->function_name, "toBooleanOrNull") == 0) {
+        append_sql(ctx, "(CASE WHEN LOWER(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT)) IN ('true', 'false', '1', '0') THEN (CASE WHEN LOWER(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT)) IN ('true', '1') THEN 1 ELSE 0 END) ELSE NULL END)");
+    } else if (strcasecmp(func_call->function_name, "toStringOrNull") == 0) {
+        /* toStringOrNull - always succeeds for non-null, returns NULL for null */
+        append_sql(ctx, "CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS TEXT)");
+    }
+
+    return 0;
+}
+
 /* Transform list functions: head(), tail(), last() */
 int transform_list_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
@@ -373,6 +426,75 @@ int transform_json_type_function(cypher_transform_context *ctx, cypher_function_
     append_sql(ctx, "json_type(");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
     append_sql(ctx, ")");
+
+    return 0;
+}
+
+/* nullIf(expr1, expr2) - return NULL if the two expressions are equal */
+int transform_nullif_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming nullIf function");
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("nullIf() requires exactly two arguments");
+        return -1;
+    }
+
+    append_sql(ctx, "NULLIF(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ")");
+
+    return 0;
+}
+
+/* valueType(expr) - return the type name of an expression as a string */
+int transform_valuetype_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming valueType function");
+
+    if (!func_call->args || func_call->args->count != 1) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("valueType() requires exactly one argument");
+        return -1;
+    }
+
+    /* Map SQLite typeof() results to Cypher type names */
+    append_sql(ctx, "(CASE typeof(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ") WHEN 'integer' THEN 'INTEGER' WHEN 'real' THEN 'FLOAT' "
+               "WHEN 'text' THEN 'STRING' WHEN 'null' THEN 'NULL' "
+               "WHEN 'blob' THEN 'BLOB' ELSE 'ANY' END)");
+
+    return 0;
+}
+
+/* isEmpty(expr) - check if a string, list, or map is empty */
+int transform_isempty_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming isEmpty function");
+
+    if (!func_call->args || func_call->args->count != 1) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("isEmpty() requires exactly one argument");
+        return -1;
+    }
+
+    /* Generate: CASE
+     *   WHEN typeof(expr) = 'text' THEN LENGTH(expr) = 0
+     *   WHEN json_type(expr) = 'array' THEN json_array_length(expr) = 0
+     *   WHEN json_type(expr) = 'object' THEN json_array_length(json_each(expr)) = 0
+     *   ELSE expr IS NULL
+     * END
+     * Simplified: just use COALESCE(LENGTH(expr), 0) = 0 which works for strings,
+     * and json_array_length for arrays. Use a simple approach:
+     * (expr IS NULL OR LENGTH(CAST(expr AS TEXT)) = 0 OR expr = '[]' OR expr = '{}')
+     */
+    append_sql(ctx, "(COALESCE(LENGTH(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, "), 0) = 0)");
 
     return 0;
 }

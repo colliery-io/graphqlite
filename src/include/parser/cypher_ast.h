@@ -147,7 +147,8 @@ typedef struct cypher_match {
 typedef struct cypher_return {
     ast_node base;
     bool distinct;        /* RETURN DISTINCT */
-    ast_list *items;      /* List of return items */
+    bool return_all;      /* RETURN * - return all bound variables */
+    ast_list *items;      /* List of return items (NULL if return_all) */
     ast_list *order_by;   /* Optional ORDER BY */
     ast_node *skip;       /* Optional SKIP */
     ast_node *limit;      /* Optional LIMIT */
@@ -157,7 +158,8 @@ typedef struct cypher_return {
 typedef struct cypher_with {
     ast_node base;
     bool distinct;        /* WITH DISTINCT */
-    ast_list *items;      /* List of projection items */
+    bool pass_all;        /* WITH * - pass all variables through */
+    ast_list *items;      /* List of projection items (NULL if pass_all) */
     ast_list *order_by;   /* Optional ORDER BY */
     ast_node *skip;       /* Optional SKIP */
     ast_node *limit;      /* Optional LIMIT */

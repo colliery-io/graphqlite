@@ -661,6 +661,7 @@ cypher_return* make_cypher_return(bool distinct, ast_list *items, ast_list *orde
     }
 
     ret->distinct = distinct;
+    ret->return_all = (items == NULL);
     ret->items = items;
     ret->order_by = order_by;
     ret->skip = skip;
@@ -676,6 +677,7 @@ cypher_with* make_cypher_with(bool distinct, ast_list *items, ast_list *order_by
     }
 
     with->distinct = distinct;
+    with->pass_all = (items == NULL);
     with->items = items;
     with->order_by = order_by;
     with->skip = skip;
