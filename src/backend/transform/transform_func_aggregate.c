@@ -370,30 +370,17 @@ int transform_percentile_function(cypher_transform_context *ctx, cypher_function
     bool is_continuous = (strcasecmp(func_call->function_name, "percentileCont") == 0 ||
                          strcasecmp(func_call->function_name, "percentilecont") == 0);
 
-    if (is_continuous) {
-        /* percentileCont - use SQLite's approach with ordered values
-         * For simplicity, use a subquery with LIMIT/OFFSET based on percentile position */
-        append_sql(ctx, "(SELECT AVG(val) FROM (SELECT ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " AS val FROM (SELECT ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " FROM nodes ORDER BY ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ") LIMIT 2 OFFSET CAST((SELECT COUNT(*) FROM nodes) * ");
-        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-        append_sql(ctx, " AS INTEGER)))");
-    } else {
-        /* percentileDisc - nearest value at the percentile position */
-        append_sql(ctx, "(SELECT ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " FROM (SELECT ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " FROM nodes ORDER BY ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ") LIMIT 1 OFFSET CAST((SELECT COUNT(*) FROM nodes) * ");
-        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-        append_sql(ctx, " AS INTEGER))");
-    }
+    /* Percentile is not straightforward as a pure SQL expression in SQLite.
+     * json_group_array() is an aggregate that can't be nested in correlated subqueries.
+     * For now, return an error directing users to use alternative approaches. */
+    ctx->has_error = true;
+    char error[256];
+    snprintf(error, sizeof(error),
+             "%s() is not yet fully supported in SQLite. "
+             "Use ORDER BY with LIMIT/OFFSET as a workaround.",
+             func_call->function_name);
+    ctx->error_message = strdup(error);
+    (void)is_continuous;
 
     return 0;
 }

@@ -1651,6 +1651,34 @@ static void test_func_distance_zero(void)
     }
 }
 
+/* Missing coverage tests */
+static void test_func_coth(void)
+{
+    cypher_result *result = cypher_executor_execute(executor, "RETURN coth(1.0) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->data[0][0]) {
+            double val = atof(result->data[0][0]);
+            CU_ASSERT_TRUE(val > 1.31 && val < 1.32); /* coth(1) ≈ 1.3130 */
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_percentile_error(void)
+{
+    /* percentileCont/Disc currently return error — verify graceful handling */
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (n:Person) RETURN percentileDisc(n.age, 0.5) AS median");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        /* Should fail gracefully with error, not crash */
+        CU_ASSERT_FALSE(result->success);
+        cypher_result_free(result);
+    }
+}
+
 /* Initialize the functions test suite */
 int init_executor_functions_suite(void)
 {
@@ -1796,7 +1824,11 @@ int init_executor_functions_suite(void)
         !CU_add_test(suite, "point() 3D", test_func_point_3d) ||
         !CU_add_test(suite, "point() geographic with height", test_func_point_geo_with_height) ||
         !CU_add_test(suite, "withinBBox geographic", test_func_within_bbox_geographic) ||
-        !CU_add_test(suite, "distance() zero", test_func_distance_zero))
+        !CU_add_test(suite, "distance() zero", test_func_distance_zero) ||
+
+        /* Missing coverage */
+        !CU_add_test(suite, "coth()", test_func_coth) ||
+        !CU_add_test(suite, "percentile error handling", test_func_percentile_error))
     {
         return CU_get_error();
     }
