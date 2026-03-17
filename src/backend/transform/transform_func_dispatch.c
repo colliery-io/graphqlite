@@ -35,6 +35,14 @@ static const transform_func_entry dispatch_table[] = {
     {"avg",             transform_aggregate_function},
     {"sum",             transform_aggregate_function},
     {"collect",         transform_collect_function},
+    {"stDev",           transform_stdev_function},
+    {"stdev",           transform_stdev_function},
+    {"stDevP",          transform_stdev_function},
+    {"stdevp",          transform_stdev_function},
+    {"percentileCont",  transform_percentile_function},
+    {"percentilecont",  transform_percentile_function},
+    {"percentileDisc",  transform_percentile_function},
+    {"percentiledisc",  transform_percentile_function},
 
     /* String functions - simple transforms */
     {"toUpper",         transform_string_function},
@@ -76,6 +84,21 @@ static const transform_func_entry dispatch_table[] = {
     {"asin",            transform_math_function},
     {"acos",            transform_math_function},
     {"atan",            transform_math_function},
+
+    /* Math functions - two argument */
+    {"atan2",           transform_atan2_function},
+
+    /* Math functions - computed from primitives */
+    {"cot",             transform_math_function},
+    {"degrees",         transform_math_function},
+    {"radians",         transform_math_function},
+    {"haversin",        transform_math_function},
+    {"isNaN",           transform_math_function},
+    {"isnan",           transform_math_function},
+    {"sinh",            transform_math_function},
+    {"cosh",            transform_math_function},
+    {"tanh",            transform_math_function},
+    {"coth",            transform_math_function},
 
     /* Math functions - special handling */
     {"round",           transform_round_function},

@@ -744,6 +744,33 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                  */
                 cypher_subscript *subscript = (cypher_subscript*)expr;
 
+                /* Handle list slicing: list[start..end] */
+                if (subscript->is_slice) {
+                    /* Generate: (SELECT json_group_array(value) FROM json_each(list)
+                     *            WHERE key >= start AND key < end) */
+                    append_sql(ctx, "(SELECT json_group_array(value) FROM json_each(");
+                    if (transform_expression(ctx, subscript->expr) < 0) return -1;
+                    append_sql(ctx, ")");
+                    if (subscript->slice_start || subscript->slice_end) {
+                        append_sql(ctx, " WHERE ");
+                        if (subscript->slice_start) {
+                            append_sql(ctx, "key >= (");
+                            if (transform_expression(ctx, subscript->slice_start) < 0) return -1;
+                            append_sql(ctx, ")");
+                        }
+                        if (subscript->slice_start && subscript->slice_end) {
+                            append_sql(ctx, " AND ");
+                        }
+                        if (subscript->slice_end) {
+                            append_sql(ctx, "key < (");
+                            if (transform_expression(ctx, subscript->slice_end) < 0) return -1;
+                            append_sql(ctx, ")");
+                        }
+                    }
+                    append_sql(ctx, ")");
+                    break;
+                }
+
                 /* Normalize string-key subscript to property access */
                 if (subscript->index->type == AST_NODE_LITERAL) {
                     cypher_literal *idx_lit = (cypher_literal*)subscript->index;

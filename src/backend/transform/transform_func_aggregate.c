@@ -285,3 +285,115 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
 
     return 0;
 }
+
+/* Transform stDev/stDevP - standard deviation aggregate functions
+ * stDev = sample standard deviation (divides by N-1)
+ * stDevP = population standard deviation (divides by N)
+ *
+ * SQLite doesn't have built-in stdev, so we compute it as:
+ * sqrt(avg(x*x) - avg(x)*avg(x)) for population, adjusted for sample.
+ * Using the computational formula: sqrt((sum(x^2)/n - (sum(x)/n)^2) * n/(n-1)) for sample
+ * Simplified: sqrt((SUM(x*x) - SUM(x)*SUM(x)/COUNT(x)) / (COUNT(x) - 1)) for sample
+ */
+int transform_stdev_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming stDev/stDevP function: %s", func_call->function_name);
+
+    if (!func_call->args || func_call->args->count != 1) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("stDev()/stDevP() requires exactly one argument");
+        return -1;
+    }
+
+    bool is_population = (strcasecmp(func_call->function_name, "stDevP") == 0 ||
+                         strcasecmp(func_call->function_name, "stdevp") == 0);
+
+    /* For population: sqrt(avg(x*x) - avg(x)*avg(x))
+     * For sample: sqrt((sum(x*x) - sum(x)*sum(x)/count(x)) / (count(x) - 1))
+     * Simpler approach using SQLite: */
+    if (is_population) {
+        /* Population std dev: sqrt(AVG(x*x) - AVG(x)*AVG(x)) */
+        append_sql(ctx, "CASE WHEN COUNT(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") = 0 THEN 0.0 ELSE SQRT(AVG(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " * ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") - AVG(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") * AVG(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")) END");
+    } else {
+        /* Sample std dev: sqrt(N/(N-1)) * population_stdev */
+        append_sql(ctx, "CASE WHEN COUNT(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") <= 1 THEN 0.0 ELSE SQRT(CAST(COUNT(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") AS REAL) / (COUNT(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") - 1) * (AVG(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " * ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") - AVG(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") * AVG(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, "))) END");
+    }
+
+    return 0;
+}
+
+/* Transform percentileCont/percentileDisc - percentile aggregate functions
+ * percentileCont(expr, pct) - continuous (interpolated) percentile
+ * percentileDisc(expr, pct) - discrete (nearest value) percentile
+ *
+ * Uses SQLite window functions or subquery-based approach.
+ * percentileDisc: the smallest value where cumulative fraction >= pct
+ * percentileCont: linear interpolation between adjacent values
+ */
+int transform_percentile_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming percentile function: %s", func_call->function_name);
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        char error[256];
+        snprintf(error, sizeof(error), "%s() requires exactly two arguments (expression, percentile)",
+                 func_call->function_name);
+        ctx->error_message = strdup(error);
+        return -1;
+    }
+
+    bool is_continuous = (strcasecmp(func_call->function_name, "percentileCont") == 0 ||
+                         strcasecmp(func_call->function_name, "percentilecont") == 0);
+
+    if (is_continuous) {
+        /* percentileCont - use SQLite's approach with ordered values
+         * For simplicity, use a subquery with LIMIT/OFFSET based on percentile position */
+        append_sql(ctx, "(SELECT AVG(val) FROM (SELECT ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS val FROM (SELECT ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " FROM nodes ORDER BY ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") LIMIT 2 OFFSET CAST((SELECT COUNT(*) FROM nodes) * ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, " AS INTEGER)))");
+    } else {
+        /* percentileDisc - nearest value at the percentile position */
+        append_sql(ctx, "(SELECT ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " FROM (SELECT ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " FROM nodes ORDER BY ");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") LIMIT 1 OFFSET CAST((SELECT COUNT(*) FROM nodes) * ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, " AS INTEGER))");
+    }
+
+    return 0;
+}

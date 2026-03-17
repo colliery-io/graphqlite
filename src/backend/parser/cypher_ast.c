@@ -1184,7 +1184,25 @@ cypher_subscript* make_subscript(ast_node *expr, ast_node *index, int location)
 
     subscript->expr = expr;
     subscript->index = index;
+    subscript->is_slice = false;
+    subscript->slice_start = NULL;
+    subscript->slice_end = NULL;
     return subscript;
+}
+
+cypher_subscript* make_slice(ast_node *expr, ast_node *start, ast_node *end, int location)
+{
+    cypher_subscript *slice = (cypher_subscript*)ast_node_create(AST_NODE_SUBSCRIPT, location, sizeof(cypher_subscript));
+    if (!slice) {
+        return NULL;
+    }
+
+    slice->expr = expr;
+    slice->index = NULL;
+    slice->is_slice = true;
+    slice->slice_start = start;
+    slice->slice_end = end;
+    return slice;
 }
 
 cypher_map* make_map(ast_list *pairs, int location)

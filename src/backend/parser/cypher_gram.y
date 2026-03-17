@@ -1070,6 +1070,18 @@ expr:
         {
             $$ = (ast_node*)make_subscript($1, $3, @2.first_line);
         }
+    | expr '[' expr DOT_DOT expr ']'
+        {
+            $$ = (ast_node*)make_slice($1, $3, $5, @2.first_line);
+        }
+    | expr '[' expr DOT_DOT ']'
+        {
+            $$ = (ast_node*)make_slice($1, $3, NULL, @2.first_line);
+        }
+    | expr '[' DOT_DOT expr ']'
+        {
+            $$ = (ast_node*)make_slice($1, NULL, $4, @2.first_line);
+        }
     ;
 
 primary_expr:

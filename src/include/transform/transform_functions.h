@@ -81,6 +81,9 @@ int transform_isempty_function(cypher_transform_context *ctx, cypher_function_ca
 int transform_type_conversion_ornull_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_nullif_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_valuetype_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_stdev_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_percentile_function(cypher_transform_context *ctx, cypher_function_call *func);
+int transform_atan2_function(cypher_transform_context *ctx, cypher_function_call *func);
 
 /*
  * Predicate expressions - transform_expr_predicate.c

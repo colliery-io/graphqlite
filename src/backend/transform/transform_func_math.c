@@ -101,6 +101,50 @@ int transform_math_function(cypher_transform_context *ctx, cypher_function_call 
         append_sql(ctx, "ACOS(CAST(");
     } else if (strcasecmp(func_name, "atan") == 0) {
         append_sql(ctx, "ATAN(CAST(");
+    } else if (strcasecmp(func_name, "cot") == 0) {
+        /* cot(x) = 1.0 / tan(x) */
+        append_sql(ctx, "(1.0 / TAN(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL)))");
+        return 0;
+    } else if (strcasecmp(func_name, "degrees") == 0) {
+        /* degrees(x) = x * 180.0 / pi */
+        append_sql(ctx, "(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL) * 180.0 / 3.141592653589793)");
+        return 0;
+    } else if (strcasecmp(func_name, "radians") == 0) {
+        /* radians(x) = x * pi / 180.0 */
+        append_sql(ctx, "(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL) * 3.141592653589793 / 180.0)");
+        return 0;
+    } else if (strcasecmp(func_name, "haversin") == 0) {
+        /* haversin(x) = (1 - cos(x)) / 2 */
+        append_sql(ctx, "((1.0 - COS(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL))) / 2.0)");
+        return 0;
+    } else if (strcasecmp(func_name, "sinh") == 0) {
+        append_sql(ctx, "SINH(CAST(");
+    } else if (strcasecmp(func_name, "cosh") == 0) {
+        append_sql(ctx, "COSH(CAST(");
+    } else if (strcasecmp(func_name, "tanh") == 0) {
+        append_sql(ctx, "TANH(CAST(");
+    } else if (strcasecmp(func_name, "coth") == 0) {
+        /* coth(x) = 1.0 / tanh(x) */
+        append_sql(ctx, "(1.0 / TANH(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL)))");
+        return 0;
+    } else if (strcasecmp(func_name, "isNaN") == 0 || strcasecmp(func_name, "isnan") == 0) {
+        /* isNaN: IEEE 754 NaN is the only value where x != x */
+        append_sql(ctx, "(CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL) != CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS REAL))");
+        return 0;
     } else {
         ctx->has_error = true;
         char error[256];
@@ -142,6 +186,26 @@ int transform_round_function(cypher_transform_context *ctx, cypher_function_call
     }
 
     append_sql(ctx, ")");
+    return 0;
+}
+
+/* Transform atan2(y, x) - two argument arctangent */
+int transform_atan2_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming atan2 function");
+
+    if (!func_call->args || func_call->args->count != 2) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("atan2() requires exactly two arguments: atan2(y, x)");
+        return -1;
+    }
+
+    append_sql(ctx, "ATAN2(CAST(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, " AS REAL), CAST(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, " AS REAL))");
+
     return 0;
 }
 
