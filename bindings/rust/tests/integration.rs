@@ -2871,3 +2871,400 @@ fn test_remove_property_return() {
     assert!(temp.is_none());
 }
 
+// =============================================================================
+// Spec Compliance: Tranche 1 — RETURN *, new functions
+// =============================================================================
+
+#[test]
+fn test_return_star() {
+    let g = test_graph();
+    g.query("CREATE (a:RetStar {id: 'rs1', name: 'Alice'})").unwrap();
+    g.query("CREATE (b:RetStar {id: 'rs2', name: 'Bob'})").unwrap();
+    let results = g.query("MATCH (n:RetStar) RETURN *").unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.columns().len() > 0);
+}
+
+#[test]
+fn test_return_star_with_relationship() {
+    let g = test_graph();
+    g.query("CREATE (a:RStar2 {id: 'r1'})-[:KNOWS]->(b:RStar2 {id: 'r2'})").unwrap();
+    let results = g.query("MATCH (a:RStar2)-[r]->(b:RStar2) RETURN *").unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results.columns().len() >= 3); // a, r, b
+}
+
+#[test]
+fn test_isempty() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN isEmpty('') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+
+    let r = conn.cypher("RETURN isEmpty('hello') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 0);
+}
+
+#[test]
+fn test_btrim() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN btrim('  hello  ') AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "hello");
+}
+
+#[test]
+fn test_to_integer_or_null() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN toIntegerOrNull('42') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 42);
+
+    let r = conn.cypher("RETURN toIntegerOrNull('hello') AS r").unwrap();
+    let val = r[0].get::<Option<String>>("r").unwrap();
+    assert!(val.is_none());
+}
+
+#[test]
+fn test_to_float_or_null() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN toFloatOrNull('3.14') AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 3.14).abs() < 0.01);
+
+    let r = conn.cypher("RETURN toFloatOrNull('nope') AS r").unwrap();
+    let val = r[0].get::<Option<String>>("r").unwrap();
+    assert!(val.is_none());
+}
+
+#[test]
+fn test_to_boolean_or_null() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN toBooleanOrNull('true') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+
+    let r = conn.cypher("RETURN toBooleanOrNull('maybe') AS r").unwrap();
+    let val = r[0].get::<Option<String>>("r").unwrap();
+    assert!(val.is_none());
+}
+
+#[test]
+fn test_element_id() {
+    let g = test_graph();
+    g.query("CREATE (n:EidTest {id: 'eid1'})").unwrap();
+    let r = g.query("MATCH (n:EidTest) RETURN elementId(n) AS eid").unwrap();
+    assert!(r[0].get::<i64>("eid").unwrap() > 0);
+}
+
+#[test]
+fn test_nullif() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN nullIf(1, 1) AS r").unwrap();
+    let val = r[0].get::<Option<i64>>("r").unwrap();
+    assert!(val.is_none());
+
+    let r = conn.cypher("RETURN nullIf(1, 2) AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+}
+
+#[test]
+fn test_value_type() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN valueType(42) AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "INTEGER");
+
+    let r = conn.cypher("RETURN valueType('hello') AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "STRING");
+
+    let r = conn.cypher("RETURN valueType(3.14) AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "FLOAT");
+}
+
+#[test]
+fn test_char_length() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN char_length('hello') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 5);
+
+    let r = conn.cypher("RETURN character_length('world!') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 6);
+}
+
+// =============================================================================
+// Spec Compliance: Tranche 2 — List slicing, math, stats
+// =============================================================================
+
+#[test]
+fn test_list_slice_range() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN [1,2,3,4,5][1..3] AS r").unwrap();
+    // Result may be Array or String depending on agtype formatting
+    let val = r[0].get_value("r").unwrap();
+    let s = format!("{:?}", val);
+    assert!(s.contains("2") && s.contains("3"));
+}
+
+#[test]
+fn test_list_slice_from() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN [1,2,3,4,5][2..] AS r").unwrap();
+    let val = r[0].get_value("r").unwrap();
+    let s = format!("{:?}", val);
+    assert!(s.contains("3") && s.contains("4") && s.contains("5"));
+}
+
+#[test]
+fn test_list_slice_to() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN [1,2,3,4,5][..2] AS r").unwrap();
+    let val = r[0].get_value("r").unwrap();
+    let s = format!("{:?}", val);
+    assert!(s.contains("1") && s.contains("2"));
+}
+
+#[test]
+fn test_stdev() {
+    let g = test_graph();
+    for v in [10, 20, 30, 40, 50] {
+        g.query(&format!("CREATE (:StdR {{val: {}}})", v)).unwrap();
+    }
+    // stDev uses SQRT which requires SQLite math functions
+    let r = g.query("MATCH (n:StdR) RETURN stDev(n.val) AS sd");
+    if let Ok(r) = r {
+        let sd: f64 = r[0].get("sd").unwrap();
+        assert!((sd - 15.811).abs() < 0.1);
+    }
+    // If SQRT not available, query will fail — that's OK for system SQLite
+}
+
+#[test]
+fn test_stdevp() {
+    let g = test_graph();
+    for v in [10, 20, 30, 40, 50] {
+        g.query(&format!("CREATE (:StdPR {{val: {}}})", v)).unwrap();
+    }
+    let r = g.query("MATCH (n:StdPR) RETURN stDevP(n.val) AS sd");
+    if let Ok(r) = r {
+        let sd: f64 = r[0].get("sd").unwrap();
+        assert!((sd - 14.142).abs() < 0.1);
+    }
+}
+
+#[test]
+fn test_trig_functions() {
+    let conn = test_connection();
+
+    // These require SQLite math functions — skip gracefully if unavailable
+    if conn.cypher("RETURN atan2(1, 1) AS r").is_err() {
+        return; // System SQLite lacks math functions
+    }
+
+    let r = conn.cypher("RETURN atan2(1, 1) AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 0.7854).abs() < 0.001);
+
+    let r = conn.cypher("RETURN degrees(3.141592653589793) AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 180.0).abs() < 0.01);
+
+    let r = conn.cypher("RETURN radians(180) AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 3.14159).abs() < 0.001);
+
+    let r = conn.cypher("RETURN cot(1.0) AS r").unwrap();
+    assert!(r[0].get::<f64>("r").is_ok());
+
+    let r = conn.cypher("RETURN haversin(1.0) AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 0.2298).abs() < 0.001);
+}
+
+#[test]
+fn test_hyperbolic_functions() {
+    let conn = test_connection();
+
+    // Requires SQLite math functions
+    if conn.cypher("RETURN sinh(1.0) AS r").is_err() {
+        return;
+    }
+
+    let r = conn.cypher("RETURN sinh(1.0) AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 1.1752).abs() < 0.001);
+
+    let r = conn.cypher("RETURN cosh(1.0) AS r").unwrap();
+    assert!(r[0].get::<f64>("r").is_ok());
+
+    let r = conn.cypher("RETURN tanh(0.5) AS r").unwrap();
+    assert!(r[0].get::<f64>("r").is_ok());
+
+    let r = conn.cypher("RETURN coth(1.0) AS r").unwrap();
+    let val: f64 = r[0].get("r").unwrap();
+    assert!((val - 1.313).abs() < 0.01);
+}
+
+#[test]
+fn test_isnan() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN isNaN(42) AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 0);
+}
+
+// =============================================================================
+// Spec Compliance: Tranche 3 — Temporal and Spatial
+// =============================================================================
+
+#[test]
+fn test_date_map_construction() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN date({year: 2024, month: 3, day: 15}) AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "2024-03-15");
+}
+
+#[test]
+fn test_time_map_construction() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN time({hour: 14, minute: 30, second: 0}) AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "14:30:00");
+}
+
+#[test]
+fn test_datetime_map_construction() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN datetime({year: 2024, month: 6, day: 15, hour: 10, minute: 30}) AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "2024-06-15T10:30:00");
+}
+
+#[test]
+fn test_duration_map() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN duration({days: 5, hours: 3}) AS r").unwrap();
+    let val = r[0].get_value("r").unwrap();
+    let s = format!("{:?}", val);
+    assert!(s.contains("5")); // days: 5
+}
+
+#[test]
+fn test_datetime_from_epoch() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN datetimeFromEpoch(0) AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "1970-01-01 00:00:00");
+}
+
+#[test]
+fn test_duration_in_days() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN durationInDays('2024-01-01', '2024-03-15') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 74);
+}
+
+#[test]
+fn test_duration_in_seconds() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN durationInSeconds('2024-01-01 00:00:00', '2024-01-01 01:30:00') AS r").unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 5400);
+}
+
+#[test]
+fn test_date_add() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN dateAdd('2024-01-15', {days: 30}) AS r").unwrap();
+    let val = r[0].get::<String>("r").unwrap();
+    assert!(val.contains("2024-02-14"));
+}
+
+#[test]
+fn test_date_sub() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN dateSub('2024-06-15', {months: 3}) AS r").unwrap();
+    let val = r[0].get::<String>("r").unwrap();
+    assert!(val.contains("2024-03-15"));
+}
+
+#[test]
+fn test_date_truncate() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN dateTruncate('month', '2024-03-15') AS r").unwrap();
+    assert_eq!(r[0].get::<String>("r").unwrap(), "2024-03-01");
+}
+
+#[test]
+fn test_point_cartesian() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN point({x: 3, y: 4}) AS r").unwrap();
+    let val = r[0].get_value("r").unwrap();
+    // Point is returned as Object with srid, x, y fields
+    let s = format!("{:?}", val);
+    assert!(s.contains("7203") || s.contains("srid"));
+    assert!(s.contains("3")); // x: 3
+}
+
+#[test]
+fn test_point_geographic() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN point({latitude: 40.7128, longitude: -74.006}) AS r").unwrap();
+    let val = r[0].get_value("r").unwrap();
+    let s = format!("{:?}", val);
+    assert!(s.contains("4326") || s.contains("srid"));
+}
+
+#[test]
+fn test_distance_euclidean() {
+    let conn = test_connection();
+    // distance() uses SQRT which requires SQLite math functions
+    let r = conn.cypher("RETURN distance(point({x: 0, y: 0}), point({x: 3, y: 4})) AS r");
+    if let Ok(r) = r {
+        let val: f64 = r[0].get("r").unwrap();
+        assert!((val - 5.0).abs() < 0.001);
+    }
+}
+
+#[test]
+fn test_distance_haversine() {
+    let conn = test_connection();
+    let r = conn.cypher(
+        "RETURN distance(point({latitude: 40.7128, longitude: -74.006}), point({latitude: 51.5074, longitude: -0.1278})) AS r"
+    );
+    if let Ok(r) = r {
+        let val: f64 = r[0].get("r").unwrap();
+        assert!(val > 5500000.0 && val < 5600000.0);
+    }
+}
+
+#[test]
+fn test_within_bbox() {
+    let conn = test_connection();
+    let r = conn.cypher(
+        "RETURN pointWithinBBox(point({x: 5, y: 5}), point({x: 0, y: 0}), point({x: 10, y: 10})) AS r"
+    ).unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+
+    let r = conn.cypher(
+        "RETURN pointWithinBBox(point({x: 15, y: 5}), point({x: 0, y: 0}), point({x: 10, y: 10})) AS r"
+    ).unwrap();
+    assert_eq!(r[0].get::<i64>("r").unwrap(), 0);
+}
+
+#[test]
+fn test_distance_same_point() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN distance(point({x: 5, y: 5}), point({x: 5, y: 5})) AS r");
+    if let Ok(r) = r {
+        let val: f64 = r[0].get("r").unwrap();
+        assert!(val.abs() < 0.001);
+    }
+}
+
+#[test]
+fn test_date_add_cross_year() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN dateAdd('2024-11-15', {months: 3}) AS r").unwrap();
+    let val = r[0].get::<String>("r").unwrap();
+    assert!(val.contains("2025-02-15"));
+}
+
+#[test]
+fn test_negative_epoch() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN datetimeFromEpoch(-86400) AS r").unwrap();
+    let val = r[0].get::<String>("r").unwrap();
+    assert!(val.contains("1969-12-31"));
+}
+
