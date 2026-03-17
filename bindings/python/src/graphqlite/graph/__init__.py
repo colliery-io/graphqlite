@@ -113,7 +113,7 @@ class Graph(
         import json
         cursor = self._conn.execute("SELECT gql_load_graph()")
         row = cursor.fetchone()
-        return json.loads(row[0]) if row else {}
+        return self._remap_cache_status(json.loads(row[0]) if row else {})
 
     def unload_graph(self) -> dict:
         """
@@ -155,7 +155,16 @@ class Graph(
         import json
         cursor = self._conn.execute("SELECT gql_reload_graph()")
         row = cursor.fetchone()
-        return json.loads(row[0]) if row else {}
+        return self._remap_cache_status(json.loads(row[0]) if row else {})
+
+    @staticmethod
+    def _remap_cache_status(d: dict) -> dict:
+        """Remap C extension keys 'nodes'/'edges' to 'node_count'/'edge_count'."""
+        if "nodes" in d:
+            d["node_count"] = d.pop("nodes")
+        if "edges" in d:
+            d["edge_count"] = d.pop("edges")
+        return d
 
     def graph_loaded(self) -> bool:
         """

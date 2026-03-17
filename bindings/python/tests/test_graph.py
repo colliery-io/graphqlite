@@ -143,7 +143,7 @@ def test_get_node_nonexistent(g):
 def test_upsert_node_updates(g):
     g.upsert_node("carol", {"name": "Carol", "age": 25}, label="Person")
     g.upsert_node("carol", {"name": "Carol", "age": 26}, label="Person")
-    assert g.stats()["nodes"] == 1
+    assert g.stats()["node_count"] == 1
 
 
 def test_delete_node(g):
@@ -329,8 +329,8 @@ def test_stats(g):
     g.upsert_edge("s1", "s2", {})
     g.upsert_edge("s2", "s3", {})
     stats = g.stats()
-    assert stats["nodes"] == 3
-    assert stats["edges"] == 2
+    assert stats["node_count"] == 3
+    assert stats["edge_count"] == 2
 
 
 def test_query_raw_cypher(g):
@@ -388,7 +388,7 @@ def test_upsert_nodes_batch(g):
     assert g.has_node("batch1")
     assert g.has_node("batch2")
     assert g.has_node("batch3")
-    assert g.stats()["nodes"] == 3
+    assert g.stats()["node_count"] == 3
 
 
 def test_upsert_edges_batch(g):
@@ -404,7 +404,7 @@ def test_upsert_edges_batch(g):
     assert g.has_edge("be1", "be2")
     assert g.has_edge("be2", "be3")
     assert g.has_edge("be1", "be3")
-    assert g.stats()["edges"] == 3
+    assert g.stats()["edge_count"] == 3
 
 
 # =============================================================================
@@ -430,14 +430,14 @@ def test_insert_nodes_bulk(g):
     assert g.has_node("bulk_alice")
     assert g.has_node("bulk_bob")
     assert g.has_node("bulk_charlie")
-    assert g.stats()["nodes"] == 3
+    assert g.stats()["node_count"] == 3
 
 
 def test_insert_nodes_bulk_empty(g):
     """Test bulk insert with empty list."""
     id_map = g.insert_nodes_bulk([])
     assert id_map == {}
-    assert g.stats()["nodes"] == 0
+    assert g.stats()["node_count"] == 0
 
 
 def test_insert_edges_bulk(g):
@@ -460,7 +460,7 @@ def test_insert_edges_bulk(g):
     assert g.has_edge("edge_a", "edge_b")
     assert g.has_edge("edge_b", "edge_c")
     assert g.has_edge("edge_a", "edge_c")
-    assert g.stats()["edges"] == 3
+    assert g.stats()["edge_count"] == 3
 
 
 def test_insert_edges_bulk_empty(g):
@@ -507,8 +507,8 @@ def test_insert_graph_bulk(g):
     assert "graph_y" in result.id_map
     assert "graph_z" in result.id_map
 
-    assert g.stats()["nodes"] == 3
-    assert g.stats()["edges"] == 2
+    assert g.stats()["node_count"] == 3
+    assert g.stats()["edge_count"] == 2
 
 
 def test_resolve_node_ids(g):
@@ -995,8 +995,8 @@ def test_load_graph(g):
     result = g.load_graph()
 
     assert result["status"] == "loaded"
-    assert result["nodes"] == 2
-    assert result["edges"] == 1
+    assert result["node_count"] == 2
+    assert result["edge_count"] == 1
     assert g.graph_loaded() is True
 
 
@@ -1041,7 +1041,7 @@ def test_reload_graph(g):
     result = g.reload_graph()
 
     assert result["status"] == "reloaded"
-    assert result["nodes"] == 3
+    assert result["node_count"] == 3
 
 
 def test_reload_graph_not_loaded(g):
@@ -1079,8 +1079,8 @@ def test_cache_empty_graph(g):
 
     # Empty graph should still load successfully
     assert result["status"] == "loaded"
-    assert result["nodes"] == 0
-    assert result["edges"] == 0
+    assert result["node_count"] == 0
+    assert result["edge_count"] == 0
 
 
 # =============================================================================

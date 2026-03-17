@@ -1,7 +1,7 @@
 //! Edge operations for Graph.
 
 use super::Graph;
-use crate::utils::{escape_string, format_value, rel_type_pattern, sanitize_rel_type};
+use crate::utils::{escape_string, rel_type_pattern, sanitize_rel_type, PropertyValue};
 use crate::{CypherResult, Result, Value};
 
 impl Graph {
@@ -53,15 +53,15 @@ impl Graph {
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<PropertyValue>,
     {
         let safe_rel_type = sanitize_rel_type(rel_type);
         let esc_source = escape_string(source_id);
         let esc_target = escape_string(target_id);
 
-        let props: Vec<(String, String)> = props
+        let props: Vec<(String, PropertyValue)> = props
             .into_iter()
-            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+            .map(|(k, v)| (k.as_ref().to_string(), v.into()))
             .collect();
 
         let merge_query = format!(
@@ -73,7 +73,7 @@ impl Graph {
         if !props.is_empty() {
             let set_parts: Vec<String> = props
                 .iter()
-                .map(|(k, v)| format!("r.{} = {}", k, format_value(v)))
+                .map(|(k, v)| format!("r.{} = {}", k, v.to_cypher()))
                 .collect();
             let set_str = set_parts.join(", ");
             let set_query = format!(

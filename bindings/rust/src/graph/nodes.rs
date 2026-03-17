@@ -1,6 +1,6 @@
 //! Node operations for Graph.
 
-use crate::utils::{escape_string, format_value};
+use crate::utils::{escape_string, PropertyValue};
 use crate::{Result, Value};
 use super::Graph;
 
@@ -42,22 +42,21 @@ impl Graph {
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<PropertyValue>,
     {
-        let props: Vec<(String, String)> = props
+        let props: Vec<(String, PropertyValue)> = props
             .into_iter()
-            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+            .map(|(k, v)| (k.as_ref().to_string(), v.into()))
             .collect();
 
         if self.has_node(node_id)? {
             // Update existing node
             for (k, v) in props {
-                let val = format_value(&v);
                 let query = format!(
                     "MATCH (n {{id: '{}'}}) SET n.{} = {} RETURN n",
                     escape_string(node_id),
                     k,
-                    val
+                    v.to_cypher()
                 );
                 self.connection().cypher(&query)?;
             }
@@ -65,7 +64,7 @@ impl Graph {
             // Create new node
             let mut prop_parts = vec![format!("id: '{}'", escape_string(node_id))];
             for (k, v) in props {
-                prop_parts.push(format!("{}: {}", k, format_value(&v)));
+                prop_parts.push(format!("{}: {}", k, v.to_cypher()));
             }
             let prop_str = prop_parts.join(", ");
             let query = format!("CREATE (n:{} {{{}}})", label, prop_str);

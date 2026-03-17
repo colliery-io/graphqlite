@@ -66,7 +66,7 @@ pub use error::Error;
 pub use graph::{graph, BulkInsertResult, CacheStatus, Graph, GraphStats};
 pub use manager::{graphs, GraphManager};
 pub use result::{CypherResult, Row, Value};
-pub use utils::{escape_string, format_value, sanitize_rel_type, CYPHER_RESERVED};
+pub use utils::{escape_string, format_value, sanitize_rel_type, PropertyValue, CYPHER_RESERVED};
 
 // Algorithm result types
 pub use algorithms::{

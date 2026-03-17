@@ -806,6 +806,19 @@ rel_pattern:
             if (p) p->varlen = (ast_node*)$6;
             $$ = p;
         }
+    /* Bare relationship patterns (no brackets): --, -->, <-- */
+    | '-' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen(NULL, NULL, NULL, false, true, NULL);
+        }
+    | '<' '-' '-'
+        {
+            $$ = make_rel_pattern_varlen(NULL, NULL, NULL, true, false, NULL);
+        }
+    | '-' '-'
+        {
+            $$ = make_rel_pattern_varlen(NULL, NULL, NULL, false, false, NULL);
+        }
     ;
 
 variable_opt:

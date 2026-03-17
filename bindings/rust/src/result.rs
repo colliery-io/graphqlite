@@ -135,6 +135,63 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Access a field of an [`Value::Object`] by key.
+    ///
+    /// Returns `None` if this is not an Object or the key doesn't exist.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let node = graph.get_node("alice")?.unwrap();
+    /// let props = node.get("properties").unwrap();
+    /// let name = props.get("name").and_then(|v| v.as_str());
+    /// ```
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        match self {
+            Value::Object(map) => map.get(key),
+            _ => None,
+        }
+    }
+
+    /// Access an element of a [`Value::Array`] by index.
+    ///
+    /// Returns `None` if this is not an Array or the index is out of bounds.
+    pub fn get_index(&self, index: usize) -> Option<&Value> {
+        match self {
+            Value::Array(arr) => arr.get(index),
+            _ => None,
+        }
+    }
+
+    /// Returns the array if this is a [`Value::Array`].
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        match self {
+            Value::Array(arr) => Some(arr),
+            _ => None,
+        }
+    }
+
+    /// Returns the object map if this is a [`Value::Object`].
+    pub fn as_object(&self) -> Option<&HashMap<String, Value>> {
+        match self {
+            Value::Object(map) => Some(map),
+            _ => None,
+        }
+    }
+}
+
+impl std::ops::Index<&str> for Value {
+    type Output = Value;
+
+    /// Index into an Object value by key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this is not an Object or the key doesn't exist.
+    fn index(&self, key: &str) -> &Self::Output {
+        self.get(key).unwrap_or_else(|| panic!("Value is not an Object or key '{}' not found", key))
+    }
 }
 
 /// A single row from a Cypher query result.

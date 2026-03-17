@@ -19,9 +19,9 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphStats {
     /// Total number of nodes in the graph.
-    pub nodes: i64,
+    pub node_count: i64,
     /// Total number of edges in the graph.
-    pub edges: i64,
+    pub edge_count: i64,
 }
 
 /// High-level graph operations.
@@ -108,6 +108,37 @@ impl Graph {
     /// ```
     pub fn query_builder<'a>(&'a self, cypher: &'a str) -> CypherQuery<'a> {
         self.conn.cypher_builder(cypher)
+    }
+
+    /// Execute a parameterized Cypher query in a single call.
+    ///
+    /// This is a convenience wrapper around [`query_builder`](Self::query_builder)
+    /// for when you don't need the builder pattern.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Graph;
+    ///
+    /// let g = Graph::open_in_memory()?;
+    /// g.query("CREATE (n:Person {name: 'Alice', age: 30})")?;
+    ///
+    /// let results = g.query_params(
+    ///     "MATCH (n:Person) WHERE n.name = $name RETURN n.age AS age",
+    ///     &[("name", &serde_json::json!("Alice"))],
+    /// )?;
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn query_params(
+        &self,
+        cypher: &str,
+        params: &[(&str, &serde_json::Value)],
+    ) -> Result<CypherResult> {
+        let mut builder = self.conn.cypher_builder(cypher);
+        for (key, value) in params {
+            builder = builder.param(key, (*value).clone());
+        }
+        builder.run()
     }
 
     // Cache management methods for algorithm acceleration
@@ -220,11 +251,11 @@ pub struct CacheStatus {
     /// Operation status: "loaded", "unloaded", "reloaded", or "already_loaded"
     pub status: String,
     /// Number of nodes in the cached graph (if loaded)
-    #[serde(default)]
-    pub nodes: Option<i64>,
+    #[serde(default, alias = "nodes")]
+    pub node_count: Option<i64>,
     /// Number of edges in the cached graph (if loaded)
-    #[serde(default)]
-    pub edges: Option<i64>,
+    #[serde(default, alias = "edges")]
+    pub edge_count: Option<i64>,
 }
 
 /// Response from graph_loaded() query.

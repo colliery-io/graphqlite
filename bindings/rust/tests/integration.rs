@@ -292,8 +292,8 @@ fn test_graph_stats() {
     g.upsert_edge("n2", "n3", empty, "E").unwrap();
 
     let stats = g.stats().unwrap();
-    assert_eq!(stats.nodes, 3);
-    assert_eq!(stats.edges, 2);
+    assert_eq!(stats.node_count, 3);
+    assert_eq!(stats.edge_count, 2);
 }
 
 #[test]
@@ -519,7 +519,7 @@ fn test_graph_batch_nodes() {
     .unwrap();
 
     let stats = g.stats().unwrap();
-    assert_eq!(stats.nodes, 3);
+    assert_eq!(stats.node_count, 3);
 }
 
 #[test]
@@ -1844,7 +1844,7 @@ fn test_manager_create_graph() {
         let graph = gm.create("social").unwrap();
         graph.upsert_node("alice", [("name", "Alice")], "Person").unwrap();
         let stats = graph.stats().unwrap();
-        assert_eq!(stats.nodes, 1);
+        assert_eq!(stats.node_count, 1);
     }
 
     // Now we can check the manager
@@ -1897,7 +1897,7 @@ fn test_manager_open_or_create() {
     // Should open existing (returns cached reference)
     let graph2 = gm.open_or_create("cache").unwrap();
     let stats = graph2.stats().unwrap();
-    assert_eq!(stats.nodes, 1);
+    assert_eq!(stats.node_count, 1);
 }
 
 #[test]
@@ -1970,7 +1970,7 @@ fn test_manager_graph_isolation() {
     {
         let social = gm.open_graph("social").unwrap();
         let social_stats = social.stats().unwrap();
-        assert_eq!(social_stats.nodes, 1);
+        assert_eq!(social_stats.node_count, 1);
 
         let social_results = social.query("MATCH (n) RETURN n.name").unwrap();
         assert_eq!(social_results.len(), 1);
@@ -1980,7 +1980,7 @@ fn test_manager_graph_isolation() {
     {
         let products = gm.open_graph("products").unwrap();
         let product_stats = products.stats().unwrap();
-        assert_eq!(product_stats.nodes, 1);
+        assert_eq!(product_stats.node_count, 1);
 
         let product_results = products.query("MATCH (n) RETURN n.name").unwrap();
         assert_eq!(product_results.len(), 1);
@@ -2076,7 +2076,7 @@ fn test_regression_gqlite_t_0092_detach_delete_property_filter() {
     g.upsert_node("node_c", [("name", "C")], "Test").expect("insert c");
 
     let stats = g.stats().expect("stats");
-    assert_eq!(stats.nodes, 3, "Should have 3 nodes after insert");
+    assert_eq!(stats.node_count, 3, "Should have 3 nodes after insert");
 
     // Verify all nodes exist
     assert!(g.has_node("node_a").expect("has a"), "node_a should exist");
@@ -2089,7 +2089,7 @@ fn test_regression_gqlite_t_0092_detach_delete_property_filter() {
     let stats = g.stats().expect("stats");
     // EXPECTED: 2 nodes remain
     // ACTUAL (bug): 0 nodes remain - all deleted due to AST mutation
-    assert_eq!(stats.nodes, 2, "Should have 2 nodes after deleting node_a");
+    assert_eq!(stats.node_count, 2, "Should have 2 nodes after deleting node_a");
     assert!(!g.has_node("node_a").expect("has a"), "node_a should NOT exist");
     assert!(g.has_node("node_b").expect("has b"), "node_b should still exist");
     assert!(g.has_node("node_c").expect("has c"), "node_c should still exist");
@@ -2117,8 +2117,8 @@ fn test_load_graph() {
     let status = g.load_graph().unwrap();
 
     assert_eq!(status.status, "loaded");
-    assert_eq!(status.nodes, Some(2));
-    assert_eq!(status.edges, Some(1));
+    assert_eq!(status.node_count, Some(2));
+    assert_eq!(status.edge_count, Some(1));
     assert!(g.graph_loaded().unwrap());
 }
 
@@ -2174,7 +2174,7 @@ fn test_reload_graph() {
     let status = g.reload_graph().unwrap();
 
     assert_eq!(status.status, "reloaded");
-    assert_eq!(status.nodes, Some(3));
+    assert_eq!(status.node_count, Some(3));
 }
 
 #[test]
@@ -2219,8 +2219,8 @@ fn test_cache_empty_graph() {
 
     // Empty graph should still load successfully
     assert_eq!(status.status, "loaded");
-    assert_eq!(status.nodes, Some(0));
-    assert_eq!(status.edges, Some(0));
+    assert_eq!(status.node_count, Some(0));
+    assert_eq!(status.edge_count, Some(0));
 }
 
 // =============================================================================
@@ -2253,7 +2253,7 @@ fn test_bulk_insert_nodes() {
 
     // Verify nodes exist via Graph API
     let stats = g.stats().unwrap();
-    assert_eq!(stats.nodes, 3);
+    assert_eq!(stats.node_count, 3);
 
     // Verify nodes via Cypher query
     let result = g.query("MATCH (n:Person) RETURN n.id ORDER BY n.id").unwrap();
@@ -2272,7 +2272,7 @@ fn test_bulk_insert_nodes_empty() {
         .unwrap();
 
     assert!(id_map.is_empty());
-    assert_eq!(g.stats().unwrap().nodes, 0);
+    assert_eq!(g.stats().unwrap().node_count, 0);
 }
 
 #[test]
@@ -2302,7 +2302,7 @@ fn test_bulk_insert_edges() {
 
     // Verify edges exist
     let stats = g.stats().unwrap();
-    assert_eq!(stats.edges, 3);
+    assert_eq!(stats.edge_count, 3);
 
     // Verify edges via query
     let result = g.query("MATCH ()-[r:CONNECTS]->() RETURN r.weight ORDER BY r.weight").unwrap();
@@ -2329,7 +2329,7 @@ fn test_bulk_insert_edges_empty() {
         .unwrap();
 
     assert_eq!(edges_inserted, 0);
-    assert_eq!(g.stats().unwrap().edges, 0);
+    assert_eq!(g.stats().unwrap().edge_count, 0);
 }
 
 #[test]
@@ -2377,8 +2377,8 @@ fn test_bulk_insert_graph() {
 
     // Verify via stats
     let stats = g.stats().unwrap();
-    assert_eq!(stats.nodes, 3);
-    assert_eq!(stats.edges, 2);
+    assert_eq!(stats.node_count, 3);
+    assert_eq!(stats.edge_count, 2);
 }
 
 #[test]

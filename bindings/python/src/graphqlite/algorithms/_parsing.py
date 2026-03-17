@@ -7,7 +7,7 @@ from typing import Any, List, Optional
 ALGO_COLUMN_NAMES = [
     "column_0", "wcc()", "scc()", "pagerank()", "degree_centrality()",
     "betweenness_centrality()", "closeness_centrality()", "eigenvector_centrality()",
-    "labelPropagation()", "louvain()"
+    "labelPropagation()", "louvain()", "bfs()", "dfs()", "apsp()"
 ]
 
 

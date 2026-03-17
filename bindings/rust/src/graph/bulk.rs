@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use rusqlite::params;
 
 use super::Graph;
+use crate::utils::PropertyValue;
 use crate::{Error, Result};
 
 /// Result of a bulk insert operation.
@@ -81,7 +82,7 @@ impl Graph {
         N: AsRef<str>,
         P: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<PropertyValue>,
         L: AsRef<str>,
     {
         let conn = self.connection().sqlite_connection();
@@ -140,7 +141,7 @@ impl Graph {
             // Insert other properties
             for (key, value) in props {
                 let key = key.as_ref();
-                let value = value.as_ref();
+                let pv: PropertyValue = value.into();
 
                 // Get or create property key ID
                 let key_id = if let Some(&cached_id) = prop_key_cache.get(key) {
@@ -151,17 +152,20 @@ impl Graph {
                     key_id
                 };
 
-                // Determine value type and insert
-                if let Ok(int_val) = value.parse::<i64>() {
-                    insert_int_prop_stmt.execute(params![node_id, key_id, int_val])?;
-                } else if let Ok(real_val) = value.parse::<f64>() {
-                    insert_real_prop_stmt.execute(params![node_id, key_id, real_val])?;
-                } else if value == "true" {
-                    insert_bool_prop_stmt.execute(params![node_id, key_id, 1])?;
-                } else if value == "false" {
-                    insert_bool_prop_stmt.execute(params![node_id, key_id, 0])?;
-                } else {
-                    insert_text_prop_stmt.execute(params![node_id, key_id, value])?;
+                // Insert into typed table based on PropertyValue variant
+                match &pv {
+                    PropertyValue::Integer(v) => {
+                        insert_int_prop_stmt.execute(params![node_id, key_id, v])?;
+                    }
+                    PropertyValue::Float(v) => {
+                        insert_real_prop_stmt.execute(params![node_id, key_id, v])?;
+                    }
+                    PropertyValue::Bool(v) => {
+                        insert_bool_prop_stmt.execute(params![node_id, key_id, *v as i32])?;
+                    }
+                    PropertyValue::Text(v) => {
+                        insert_text_prop_stmt.execute(params![node_id, key_id, v])?;
+                    }
                 }
             }
         }
@@ -212,7 +216,7 @@ impl Graph {
         T: AsRef<str>,
         P: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<PropertyValue>,
         R: AsRef<str>,
     {
         let conn = self.connection().sqlite_connection();
@@ -286,7 +290,7 @@ impl Graph {
             // Insert edge properties
             for (key, value) in props {
                 let key = key.as_ref();
-                let value = value.as_ref();
+                let pv: PropertyValue = value.into();
 
                 // Get or create property key ID
                 let key_id = if let Some(&cached_id) = prop_key_cache.get(key) {
@@ -297,17 +301,20 @@ impl Graph {
                     key_id
                 };
 
-                // Determine value type and insert
-                if let Ok(int_val) = value.parse::<i64>() {
-                    insert_int_prop_stmt.execute(params![edge_id, key_id, int_val])?;
-                } else if let Ok(real_val) = value.parse::<f64>() {
-                    insert_real_prop_stmt.execute(params![edge_id, key_id, real_val])?;
-                } else if value == "true" {
-                    insert_bool_prop_stmt.execute(params![edge_id, key_id, 1])?;
-                } else if value == "false" {
-                    insert_bool_prop_stmt.execute(params![edge_id, key_id, 0])?;
-                } else {
-                    insert_text_prop_stmt.execute(params![edge_id, key_id, value])?;
+                // Insert into typed table based on PropertyValue variant
+                match &pv {
+                    PropertyValue::Integer(v) => {
+                        insert_int_prop_stmt.execute(params![edge_id, key_id, v])?;
+                    }
+                    PropertyValue::Float(v) => {
+                        insert_real_prop_stmt.execute(params![edge_id, key_id, v])?;
+                    }
+                    PropertyValue::Bool(v) => {
+                        insert_bool_prop_stmt.execute(params![edge_id, key_id, *v as i32])?;
+                    }
+                    PropertyValue::Text(v) => {
+                        insert_text_prop_stmt.execute(params![edge_id, key_id, v])?;
+                    }
                 }
             }
         }
@@ -340,14 +347,14 @@ impl Graph {
         N: AsRef<str>,
         NP: IntoIterator<Item = (NK, NV)>,
         NK: AsRef<str>,
-        NV: AsRef<str>,
+        NV: Into<PropertyValue>,
         NL: AsRef<str>,
         EI: IntoIterator<Item = (S, T, EP, R)>,
         S: AsRef<str>,
         T: AsRef<str>,
         EP: IntoIterator<Item = (EK, EV)>,
         EK: AsRef<str>,
-        EV: AsRef<str>,
+        EV: Into<PropertyValue>,
         R: AsRef<str>,
     {
         let id_map = self.insert_nodes_bulk(nodes)?;

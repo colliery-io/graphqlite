@@ -455,11 +455,20 @@ static void test_edge_cases(void)
     cypher_token_free(&token);
     cypher_scanner_destroy(scanner);
     
-    /* Test multiple operators */
+    /* Test multiple operators - note: '-' is now a separate CHAR token
+     * to support bare relationship patterns (--, -->, <--) */
     scanner = create_string_scanner("+-*/");
     token = cypher_scanner_next_token(scanner);
     CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_OPERATOR);
-    CU_ASSERT_STRING_EQUAL(token.value.string, "+-*/");
+    CU_ASSERT_STRING_EQUAL(token.value.string, "+");
+    cypher_token_free(&token);
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_CHAR);
+    CU_ASSERT_EQUAL(token.value.character, '-');
+    cypher_token_free(&token);
+    token = cypher_scanner_next_token(scanner);
+    CU_ASSERT_EQUAL(token.type, CYPHER_TOKEN_OPERATOR);
+    CU_ASSERT_STRING_EQUAL(token.value.string, "*/");
     cypher_token_free(&token);
     cypher_scanner_destroy(scanner);
     

@@ -63,6 +63,57 @@ class QueriesMixin(BaseMixin):
         )
         return [(row["source"], row["target"], row.get("r", {})) for row in result]
 
+    def get_edges_from(self, node_id: str) -> list[dict]:
+        """
+        Get all outgoing edges from a node.
+
+        Args:
+            node_id: The node's id property value
+
+        Returns:
+            List of dicts with 'source', 'target', 'r' keys
+        """
+        result = self._conn.cypher(
+            f"MATCH (a {{id: '{self._escape(node_id)}'}})-[r]->(b) "
+            f"RETURN a.id AS source, b.id AS target, r"
+        )
+        return result.to_list()
+
+    def get_edges_to(self, node_id: str) -> list[dict]:
+        """
+        Get all incoming edges to a node.
+
+        Args:
+            node_id: The node's id property value
+
+        Returns:
+            List of dicts with 'source', 'target', 'r' keys
+        """
+        result = self._conn.cypher(
+            f"MATCH (a)-[r]->(b {{id: '{self._escape(node_id)}'}}) "
+            f"RETURN a.id AS source, b.id AS target, r"
+        )
+        return result.to_list()
+
+    def get_edges_by_type(self, node_id: str, rel_type: str) -> list[dict]:
+        """
+        Get outgoing edges of a specific type from a node.
+
+        Args:
+            node_id: The node's id property value
+            rel_type: The relationship type to filter by
+
+        Returns:
+            List of dicts with 'source', 'target', 'r' keys
+        """
+        from ..utils import sanitize_rel_type
+        safe_type = sanitize_rel_type(rel_type)
+        result = self._conn.cypher(
+            f"MATCH (a {{id: '{self._escape(node_id)}'}})-[r:{safe_type}]->(b) "
+            f"RETURN a.id AS source, b.id AS target, r"
+        )
+        return result.to_list()
+
     def stats(self) -> dict[str, int]:
         """
         Get graph statistics.
@@ -77,8 +128,8 @@ class QueriesMixin(BaseMixin):
         edge_cnt = edges[0].get("cnt", 0) if len(edges) > 0 else 0
 
         return {
-            "nodes": int(node_cnt) if node_cnt else 0,
-            "edges": int(edge_cnt) if edge_cnt else 0,
+            "node_count": int(node_cnt) if node_cnt else 0,
+            "edge_count": int(edge_cnt) if edge_cnt else 0,
         }
 
     def query(self, cypher: str, params: Optional[dict] = None) -> list[dict]:

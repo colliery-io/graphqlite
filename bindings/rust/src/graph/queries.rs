@@ -1,7 +1,7 @@
 //! Query operations for Graph.
 
-use crate::utils::escape_string;
-use crate::{Result, Value};
+use crate::utils::{escape_string, rel_type_pattern};
+use crate::{CypherResult, Result, Value};
 use super::{Graph, GraphStats};
 
 impl Graph {
@@ -51,6 +51,52 @@ impl Graph {
             edges_result[0].get("cnt").unwrap_or(0)
         };
 
-        Ok(GraphStats { nodes, edges })
+        Ok(GraphStats { node_count: nodes, edge_count: edges })
+    }
+
+    /// Get all outgoing edges from a node.
+    ///
+    /// Returns a [`CypherResult`] with columns: `source`, `target`, `r`.
+    pub fn get_edges_from(&self, node_id: &str) -> Result<CypherResult> {
+        let query = format!(
+            "MATCH (a {{id: '{}'}})-[r]->(b) RETURN a.id AS source, b.id AS target, r",
+            escape_string(node_id)
+        );
+        self.connection().cypher(&query)
+    }
+
+    /// Get all incoming edges to a node.
+    ///
+    /// Returns a [`CypherResult`] with columns: `source`, `target`, `r`.
+    pub fn get_edges_to(&self, node_id: &str) -> Result<CypherResult> {
+        let query = format!(
+            "MATCH (a)-[r]->(b {{id: '{}'}}) RETURN a.id AS source, b.id AS target, r",
+            escape_string(node_id)
+        );
+        self.connection().cypher(&query)
+    }
+
+    /// Get outgoing edges of a specific type from a node.
+    ///
+    /// Returns a [`CypherResult`] with columns: `source`, `target`, `r`.
+    pub fn get_edges_by_type(&self, node_id: &str, rel_type: &str) -> Result<CypherResult> {
+        let rel = rel_type_pattern(Some(rel_type));
+        let query = format!(
+            "MATCH (a {{id: '{}'}})-[r{}]->(b) RETURN a.id AS source, b.id AS target, r",
+            escape_string(node_id),
+            rel
+        );
+        self.connection().cypher(&query)
+    }
+
+    /// Get all edges (both directions) connected to a node.
+    ///
+    /// Returns a [`CypherResult`] with columns: `source`, `target`, `r`.
+    pub fn get_node_edges(&self, node_id: &str) -> Result<CypherResult> {
+        let query = format!(
+            "MATCH (n {{id: '{}'}})-[r]-(m) RETURN n.id AS source, m.id AS target, r",
+            escape_string(node_id)
+        );
+        self.connection().cypher(&query)
     }
 }

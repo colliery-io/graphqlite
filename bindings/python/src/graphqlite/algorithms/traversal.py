@@ -1,7 +1,7 @@
 """Graph traversal algorithms mixin."""
 
 from ..graph._base import BaseMixin
-from ._parsing import safe_int
+from ._parsing import extract_algo_array, parse_traversal_result
 
 
 class TraversalMixin(BaseMixin):
@@ -32,19 +32,13 @@ class TraversalMixin(BaseMixin):
             query = f"RETURN bfs('{self._escape(start_id)}', {max_depth})"
 
         result = self._conn.cypher(query)
+        rows = extract_algo_array(result.to_list())
 
         nodes = []
-        for row in result:
-            user_id = row.get("user_id")
-            depth = row.get("depth")
-            order = row.get("order")
-
-            if user_id is not None:
-                nodes.append({
-                    "user_id": user_id,
-                    "depth": safe_int(depth),
-                    "order": safe_int(order)
-                })
+        for row in rows:
+            parsed = parse_traversal_result(row)
+            if parsed is not None:
+                nodes.append(parsed)
 
         return nodes
 
@@ -75,19 +69,13 @@ class TraversalMixin(BaseMixin):
             query = f"RETURN dfs('{self._escape(start_id)}', {max_depth})"
 
         result = self._conn.cypher(query)
+        rows = extract_algo_array(result.to_list())
 
         nodes = []
-        for row in result:
-            user_id = row.get("user_id")
-            depth = row.get("depth")
-            order = row.get("order")
-
-            if user_id is not None:
-                nodes.append({
-                    "user_id": user_id,
-                    "depth": safe_int(depth),
-                    "order": safe_int(order)
-                })
+        for row in rows:
+            parsed = parse_traversal_result(row)
+            if parsed is not None:
+                nodes.append(parsed)
 
         return nodes
 

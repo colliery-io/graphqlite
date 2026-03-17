@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..graph._base import BaseMixin
-from ._parsing import safe_float, safe_int
+from ._parsing import extract_algo_array, safe_float, safe_int
 
 
 class PathsMixin(BaseMixin):
@@ -120,9 +120,10 @@ class PathsMixin(BaseMixin):
             reachable pair of nodes (excludes self-loops and unreachable pairs)
         """
         result = self._conn.cypher("RETURN apsp()")
+        rows = extract_algo_array(result.to_list())
 
         paths = []
-        for row in result:
+        for row in rows:
             source = row.get("source")
             target = row.get("target")
             distance = row.get("distance")

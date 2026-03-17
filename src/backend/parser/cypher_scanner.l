@@ -95,7 +95,8 @@ comment     "//"[^\n\r]*
 
 /* Multi-character operators that need special handling */
 /* Note: < and > are handled as individual chars for relationship arrows */
-operator    [+\-*/%^=!&|~]+
+/* Note: - is handled as individual char for bare relationship patterns (-->, <--, --) */
+operator    [+*/%^=!&|~]+
 
 %%
 
@@ -237,7 +238,7 @@ operator    [+\-*/%^=!&|~]+
 {operator}      { prepare_string_token(yyextra, CYPHER_TOKEN_OPERATOR, yytext, yytext); return CYPHER_TOKEN_OPERATOR; }
 
 :               { prepare_token(yyextra, CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
-[(){}[\],;.<>]  { prepare_token(yyextra, CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
+[(){}[\],;.<>\-]  { prepare_token(yyextra, CYPHER_TOKEN_CHAR, yytext); return CYPHER_TOKEN_CHAR; }
 
 <<EOF>>         { prepare_token(yyextra, CYPHER_TOKEN_EOF, ""); return CYPHER_TOKEN_EOF; }
 

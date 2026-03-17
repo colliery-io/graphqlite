@@ -469,21 +469,29 @@ agtype_value* create_property_agtype_value(const char* value)
         return agtype_value_create_bool(false);
     }
     
-    /* Check for integer values */
-    char *endptr;
-    errno = 0;
-    long long_val = strtoll(value, &endptr, 10);
-    if (errno == 0 && *endptr == '\0' && endptr != value) {
-        /* Successfully parsed as integer */
-        return agtype_value_create_integer((int64_t)long_val);
-    }
-    
-    /* Check for float values */
-    errno = 0;
-    double double_val = strtod(value, &endptr);
-    if (errno == 0 && *endptr == '\0' && endptr != value) {
-        /* Successfully parsed as float */
-        return agtype_value_create_float(double_val);
+    /* Check for integer values.
+     * Skip if value has a leading zero followed by more digits (e.g., "02134")
+     * since that indicates a text value like a zip code or padded ID. */
+    const char *digits = value;
+    if (*digits == '-') digits++;
+    bool has_leading_zero = (digits[0] == '0' && digits[1] >= '0' && digits[1] <= '9');
+
+    if (!has_leading_zero) {
+        char *endptr;
+        errno = 0;
+        long long_val = strtoll(value, &endptr, 10);
+        if (errno == 0 && *endptr == '\0' && endptr != value) {
+            /* Successfully parsed as integer */
+            return agtype_value_create_integer((int64_t)long_val);
+        }
+
+        /* Check for float values */
+        errno = 0;
+        double double_val = strtod(value, &endptr);
+        if (errno == 0 && *endptr == '\0' && endptr != value) {
+            /* Successfully parsed as float */
+            return agtype_value_create_float(double_val);
+        }
     }
     
     /* Default to string */

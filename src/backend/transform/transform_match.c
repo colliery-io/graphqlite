@@ -333,8 +333,13 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     /* <-[:TYPE]- (reversed: target -> source) */
                     dbuf_appendf(&rel_cond, "%s.source_id = %s AND %s.target_id = %s",
                               edge_alias, target_id_ref, edge_alias, source_id_ref);
+                } else if (!rel->left_arrow && !rel->right_arrow) {
+                    /* -[:TYPE]- or -- (undirected: match both directions) */
+                    dbuf_appendf(&rel_cond, "((%s.source_id = %s AND %s.target_id = %s) OR (%s.source_id = %s AND %s.target_id = %s))",
+                              edge_alias, source_id_ref, edge_alias, target_id_ref,
+                              edge_alias, target_id_ref, edge_alias, source_id_ref);
                 } else {
-                    /* -[:TYPE]-> or -[:TYPE]- (forward or undirected, treat as forward) */
+                    /* -[:TYPE]-> (forward only) */
                     dbuf_appendf(&rel_cond, "%s.source_id = %s AND %s.target_id = %s",
                               edge_alias, source_id_ref, edge_alias, target_id_ref);
                 }

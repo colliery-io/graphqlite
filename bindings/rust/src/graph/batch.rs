@@ -3,6 +3,7 @@
 //! These methods provide convenient batch upsert operations using Cypher MERGE semantics.
 //! For high-performance atomic batch inserts, use the bulk insert methods instead.
 
+use crate::utils::PropertyValue;
 use crate::Result;
 use super::Graph;
 
@@ -35,7 +36,7 @@ impl Graph {
         N: AsRef<str>,
         P: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<PropertyValue>,
         L: AsRef<str>,
     {
         for (node_id, props, label) in nodes {
@@ -76,7 +77,7 @@ impl Graph {
         T: AsRef<str>,
         P: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<PropertyValue>,
         R: AsRef<str>,
     {
         for (source, target, props, rel_type) in edges {
