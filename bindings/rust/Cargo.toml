@@ -1,6 +1,6 @@
 [package]
 name = "graphqlite"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2021"
 description = "SQLite extension for graph queries using Cypher"
 license = "MIT"
