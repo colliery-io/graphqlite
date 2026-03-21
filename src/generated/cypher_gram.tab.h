@@ -135,7 +135,7 @@ extern int cypher_yydebug;
 #if ! defined CYPHER_YYSTYPE && ! defined CYPHER_YYSTYPE_IS_DECLARED
 union CYPHER_YYSTYPE
 {
-#line 38 "src/backend/parser/cypher_gram.y"
+#line 39 "src/backend/parser/cypher_gram.y"
 
     int integer;
     double decimal;

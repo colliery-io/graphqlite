@@ -121,13 +121,28 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                     append_sql(ctx, " AND ");
                                 }
 
-                                /* Join source node with relationship */
-                                int source_node = i / 2;
-                                int target_node = source_node + 1;
+                                /* Join source node with relationship, respecting direction */
+                                int left_node = i / 2;
+                                int right_node = left_node + 1;
 
-                                append_sql(ctx, "e%d.source_id = %s.id AND e%d.target_id = %s.id",
-                                          rel_index, node_aliases[source_node],
-                                          rel_index, node_aliases[target_node]);
+                                if (rel->left_arrow && !rel->right_arrow) {
+                                    /* Incoming: <-[]-  means edge goes right_node -> left_node */
+                                    append_sql(ctx, "e%d.source_id = %s.id AND e%d.target_id = %s.id",
+                                              rel_index, node_aliases[right_node],
+                                              rel_index, node_aliases[left_node]);
+                                } else if (!rel->left_arrow && !rel->right_arrow) {
+                                    /* Undirected: -[]-  match either direction */
+                                    append_sql(ctx, "((e%d.source_id = %s.id AND e%d.target_id = %s.id) OR (e%d.source_id = %s.id AND e%d.target_id = %s.id))",
+                                              rel_index, node_aliases[left_node],
+                                              rel_index, node_aliases[right_node],
+                                              rel_index, node_aliases[right_node],
+                                              rel_index, node_aliases[left_node]);
+                                } else {
+                                    /* Outgoing: -[]->  (default) */
+                                    append_sql(ctx, "e%d.source_id = %s.id AND e%d.target_id = %s.id",
+                                              rel_index, node_aliases[left_node],
+                                              rel_index, node_aliases[right_node]);
+                                }
 
                                 /* Add relationship type constraint if specified */
                                 if (rel->type) {

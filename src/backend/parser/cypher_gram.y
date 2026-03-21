@@ -29,10 +29,11 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 /*
  * Expected grammar conflicts - handled correctly by GLR parsing.
  * These arise from pattern comprehension syntax [(...)-[r]->(...) | expr]
- * where the parser can't immediately distinguish a node pattern from
- * a parenthesized expression until it sees more context.
+ * and pattern predicates (n)-[:REL]->() in boolean context, where the
+ * parser can't immediately distinguish a node pattern from a parenthesized
+ * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 4
+%expect 9
 %expect-rr 3  /* One for IDENTIFIER, one for BQIDENT, one for END_P in variable_opt */
 
 %union {
@@ -1056,6 +1057,38 @@ expr:
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
     | '(' expr ')'      { $$ = $2; }
+    /* Pattern predicate: bare relationship pattern as boolean expression.
+     * Per openCypher 9 spec, a RelationshipsPattern in boolean context
+     * is an implicit existence check: (n)-[:REL]->() ≡ EXISTS((n)-[:REL]->())
+     * Requires at least one relationship to distinguish from parenthesized expr.
+     */
+    | node_pattern rel_pattern node_pattern
+        {
+            /* Build a path from the pattern elements */
+            ast_list *elements = ast_list_create();
+            ast_list_append(elements, (ast_node*)$1);
+            ast_list_append(elements, (ast_node*)$2);
+            ast_list_append(elements, (ast_node*)$3);
+            cypher_path *path = make_path(elements);
+            /* Wrap in pattern list and create EXISTS expression */
+            ast_list *pattern_list = ast_list_create();
+            ast_list_append(pattern_list, (ast_node*)path);
+            $$ = (ast_node*)make_exists_pattern_expr(pattern_list, @1.first_line);
+        }
+    | node_pattern rel_pattern node_pattern rel_pattern node_pattern
+        {
+            /* Chained pattern: (a)-[r1]->(b)-[r2]->(c) */
+            ast_list *elements = ast_list_create();
+            ast_list_append(elements, (ast_node*)$1);
+            ast_list_append(elements, (ast_node*)$2);
+            ast_list_append(elements, (ast_node*)$3);
+            ast_list_append(elements, (ast_node*)$4);
+            ast_list_append(elements, (ast_node*)$5);
+            cypher_path *path = make_path(elements);
+            ast_list *pattern_list = ast_list_create();
+            ast_list_append(pattern_list, (ast_node*)path);
+            $$ = (ast_node*)make_exists_pattern_expr(pattern_list, @1.first_line);
+        }
     | expr '.' IDENTIFIER
         {
             $$ = (ast_node*)make_property($1, $3, @3.first_line);
