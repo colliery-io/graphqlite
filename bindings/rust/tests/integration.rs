@@ -3268,3 +3268,111 @@ fn test_negative_epoch() {
     assert!(val.contains("1969-12-31"));
 }
 
+// =============================================================================
+// Clotho Bug Report Reproduction Tests
+// These mirror the exact query patterns reported as broken from the Clotho
+// integration (v0.3.7, rusqlite 0.31). All should pass — if any fail, the
+// issue is in the Rust binding layer, not the C extension.
+// =============================================================================
+
+#[test]
+fn test_clotho_bug1_count_aggregate_with_where_filter() {
+    // Reported: count() returns column headers but no rows
+    let conn = test_connection();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D1'})").unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D2'})").unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D3'})").unwrap();
+    conn.cypher("CREATE (:Other {entity_type: 'Other', title: 'O1'})").unwrap();
+
+    let results = conn
+        .cypher("MATCH (n) WHERE n.entity_type = 'Decision' RETURN count(n) AS total")
+        .unwrap();
+    assert_eq!(results.len(), 1, "count() should return exactly one row");
+    assert_eq!(results[0].get::<i64>("total").unwrap(), 3);
+}
+
+#[test]
+fn test_clotho_bug2_property_match_syntax() {
+    // Reported: {key: 'value'} causes "syntax error, unexpected ':'"
+    let conn = test_connection();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', id: 'd1', title: 'First'})").unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', id: 'd2', title: 'Second'})").unwrap();
+
+    let results = conn
+        .cypher("MATCH (n {entity_type: 'Decision'}) RETURN n.id, n.title")
+        .unwrap();
+    assert_eq!(results.len(), 2, "property-match should find 2 decisions");
+}
+
+#[test]
+fn test_clotho_bug3_optional_match_with_where_filter() {
+    // Reported: OPTIONAL MATCH produces no results at all
+    let conn = test_connection();
+    conn.cypher("CREATE (:ClothoDecision {entity_type: 'Decision', title: 'Connected'})").unwrap();
+    conn.cypher("CREATE (:ClothoDecision {entity_type: 'Decision', title: 'Orphan'})").unwrap();
+    conn.cypher("CREATE (:ClothoProgram {entity_type: 'Program', title: 'Alpha'})").unwrap();
+    conn.cypher("MATCH (d:ClothoDecision {title: 'Connected'}), (p:ClothoProgram {title: 'Alpha'}) CREATE (d)-[:BELONGS_TO]->(p)").unwrap();
+
+    let results = conn
+        .cypher("MATCH (d) WHERE d.entity_type = 'Decision' OPTIONAL MATCH (d)-[:BELONGS_TO]->(p) RETURN d.title, p.title AS program")
+        .unwrap();
+    assert_eq!(results.len(), 2, "OPTIONAL MATCH should return all decisions, including unmatched");
+
+    // Find the connected and orphan rows
+    let mut found_connected = false;
+    let mut found_orphan = false;
+    for row in results.iter() {
+        let title: String = row.get("d.title").unwrap();
+        if title == "Connected" {
+            assert_eq!(row.get::<String>("program").unwrap(), "Alpha");
+            found_connected = true;
+        } else if title == "Orphan" {
+            assert!(row.get::<Option<String>>("program").unwrap().is_none());
+            found_orphan = true;
+        }
+    }
+    assert!(found_connected, "Should find the connected decision");
+    assert!(found_orphan, "Should find the orphan decision with null program");
+}
+
+#[test]
+fn test_clotho_bug5_undirected_match_bare() {
+    // Reported: (a)--(b) not supported
+    let conn = test_connection();
+    conn.cypher("CREATE (:UndirA {name: 'Alice'})").unwrap();
+    conn.cypher("CREATE (:UndirB {name: 'Bob'})").unwrap();
+    conn.cypher("MATCH (a:UndirA), (b:UndirB) CREATE (a)-[:KNOWS]->(b)").unwrap();
+
+    // Bare -- syntax
+    let results = conn
+        .cypher("MATCH (a)--(b) WHERE a.name = 'Alice' RETURN b.name")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("b.name").unwrap(), "Bob");
+
+    // -[]- syntax
+    let results2 = conn
+        .cypher("MATCH (a)-[]-(b) WHERE a.name = 'Alice' RETURN b.name")
+        .unwrap();
+    assert_eq!(results2.len(), 1);
+    assert_eq!(results2[0].get::<String>("b.name").unwrap(), "Bob");
+}
+
+#[test]
+fn test_clotho_pattern_predicate_in_where() {
+    // The original trigger for this investigation:
+    // MATCH (n {entity_type: 'Note'}) WHERE NOT (n)-[:BELONGS_TO]->() RETURN n.id, n.title
+    let conn = test_connection();
+    conn.cypher("CREATE (:Note {entity_type: 'Note', id: 'n1', title: 'Orphan'})").unwrap();
+    conn.cypher("CREATE (:Note {entity_type: 'Note', id: 'n2', title: 'Connected'})").unwrap();
+    conn.cypher("CREATE (:Group {id: 'g1'})").unwrap();
+    conn.cypher("MATCH (n:Note {id: 'n2'}), (g:Group {id: 'g1'}) CREATE (n)-[:BELONGS_TO]->(g)").unwrap();
+
+    let results = conn
+        .cypher("MATCH (n {entity_type: 'Note'}) WHERE NOT (n)-[:BELONGS_TO]->() AND NOT (n)-[:RELATES_TO]->() RETURN n.id, n.title")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.id").unwrap(), "n1");
+    assert_eq!(results[0].get::<String>("n.title").unwrap(), "Orphan");
+}
+
