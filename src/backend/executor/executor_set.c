@@ -35,6 +35,13 @@ static int evaluate_function_call_via_sqlite(
     cypher_transform_free_context(ctx);
     if (rc != SQLITE_OK) return -1;
 
+    if (executor->params_json) {
+        if (bind_params_from_json(stmt, executor->params_json) < 0) {
+            sqlite3_finalize(stmt);
+            return -1;
+        }
+    }
+
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
         sqlite3_finalize(stmt);
@@ -125,9 +132,9 @@ static int set_properties_from_json_object(
         property_type pt;
         char str_buf[4096];
         const void *pv = NULL;
-        static int64_t json_int_buf;
-        static double json_real_buf;
-        static int json_bool_buf;
+        int64_t json_int_buf;
+        double json_real_buf;
+        int json_bool_buf;
 
         if (*p == '"') {
             /* String */
@@ -150,6 +157,11 @@ static int set_properties_from_json_object(
                 p++;
             }
             str_buf[i] = '\0';
+            /* Skip past closing quote, even if buffer was full */
+            while (*p && *p != '"') {
+                if (*p == '\\' && *(p+1)) p++;
+                p++;
+            }
             if (*p == '"') p++;
             pt = PROP_TYPE_TEXT;
             pv = str_buf;
