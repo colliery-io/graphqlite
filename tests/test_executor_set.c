@@ -1101,6 +1101,172 @@ static void test_set_json_edge_property(void)
     }
 }
 
+/* Test SET with function call: timestamp() — issue #35 */
+static void test_set_function_call_timestamp(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:FuncTs {name: \"ts_test\"})",
+            true, "CREATE for function call SET");
+
+        execute_and_verify(executor,
+            "MATCH (n:FuncTs {name: \"ts_test\"}) SET n.updated = timestamp()",
+            true, "SET n.updated = timestamp()");
+
+        /* Verify the property was set to a non-null value */
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:FuncTs {name: \"ts_test\"}) RETURN n.updated");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            CU_ASSERT_TRUE(verify->row_count > 0);
+            if (verify->success && verify->row_count > 0 && verify->data[0][0]) {
+                /* timestamp() returns an integer, should be non-empty */
+                CU_ASSERT_TRUE(strlen(verify->data[0][0]) > 0);
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test SET with function call: toUpper() — issue #35 */
+static void test_set_function_call_toUpper(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:FuncUpper {name: \"raw\"})",
+            true, "CREATE for toUpper SET");
+
+        execute_and_verify(executor,
+            "MATCH (n:FuncUpper {name: \"raw\"}) SET n.name = toUpper('alice')",
+            true, "SET n.name = toUpper('alice')");
+
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:FuncUpper) RETURN n.name");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0 && verify->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(verify->data[0][0], "ALICE");
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET with parameter map merge — issue #38 */
+static void test_bulk_set_parameter_merge(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPMerge {name: \"bob\", age: 25})",
+            true, "CREATE for bulk param merge");
+
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPMerge {name: \"bob\"}) SET n += $props",
+            "{\"props\": {\"city\": \"LA\", \"active\": true}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("Bulk param merge error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify original property preserved */
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:BulkPMerge {name: \"bob\"}) RETURN n.age");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0 && verify->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(verify->data[0][0], "25");
+            }
+            cypher_result_free(verify);
+        }
+
+        /* Verify new property added */
+        cypher_result *verify2 = cypher_executor_execute(executor,
+            "MATCH (n:BulkPMerge {name: \"bob\"}) RETURN n.city");
+        CU_ASSERT_PTR_NOT_NULL(verify2);
+        if (verify2) {
+            CU_ASSERT_TRUE(verify2->success);
+            if (verify2->success && verify2->row_count > 0 && verify2->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(verify2->data[0][0], "LA");
+            }
+            cypher_result_free(verify2);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET with parameter map replace — issue #38 */
+static void test_bulk_set_parameter_replace(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPReplace {name: \"alice\", age: 30, city: \"NYC\"})",
+            true, "CREATE for bulk param replace");
+
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPReplace {name: \"alice\"}) SET n = $props",
+            "{\"props\": {\"name\": \"alice\", \"score\": 100}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("Bulk param replace error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify new property exists */
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:BulkPReplace {name: \"alice\"}) RETURN n.score");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0 && verify->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(verify->data[0][0], "100");
+            }
+            cypher_result_free(verify);
+        }
+
+        /* Verify old property was removed (replace mode) */
+        cypher_result *verify2 = cypher_executor_execute(executor,
+            "MATCH (n:BulkPReplace {name: \"alice\"}) RETURN n.age");
+        CU_ASSERT_PTR_NOT_NULL(verify2);
+        if (verify2) {
+            CU_ASSERT_TRUE(verify2->success);
+            if (verify2->success && verify2->row_count > 0) {
+                /* age should be null after replace */
+                CU_ASSERT_PTR_NULL(verify2->data[0][0]);
+            }
+            cypher_result_free(verify2);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the SET executor test suite */
 int init_executor_set_suite(void)
 {
@@ -1141,7 +1307,11 @@ int init_executor_set_suite(void)
         !CU_add_test(suite, "SET unsupported expr", test_set_unsupported_expr) ||
         !CU_add_test(suite, "Bulk SET with WHERE", test_bulk_set_with_where) ||
         !CU_add_test(suite, "SET mixed property and bulk", test_set_mixed_property_and_bulk) ||
-        !CU_add_test(suite, "SET JSON edge property", test_set_json_edge_property)) {
+        !CU_add_test(suite, "SET JSON edge property", test_set_json_edge_property) ||
+        !CU_add_test(suite, "SET function call timestamp", test_set_function_call_timestamp) ||
+        !CU_add_test(suite, "SET function call toUpper", test_set_function_call_toUpper) ||
+        !CU_add_test(suite, "Bulk SET parameter merge", test_bulk_set_parameter_merge) ||
+        !CU_add_test(suite, "Bulk SET parameter replace", test_bulk_set_parameter_replace)) {
         return CU_get_error();
     }
     

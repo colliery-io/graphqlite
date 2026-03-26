@@ -1315,6 +1315,74 @@ def test_set_return_with_params(g):
     assert result[0]["n.verified"] in (True, "true")
 
 
+def test_set_timestamp_function(g):
+    """Issue #35: SET n.prop = timestamp() should evaluate the function."""
+    g.query('CREATE (n:TsTest {name: "ts"})')
+    g.query('MATCH (n:TsTest {name: "ts"}) SET n.updated = timestamp()')
+    result = g.query('MATCH (n:TsTest {name: "ts"}) RETURN n.updated')
+    assert len(result) == 1
+    ts = result[0]["n.updated"]
+    assert ts is not None
+    assert isinstance(ts, int)
+    assert ts > 0
+
+
+def test_set_toUpper_function(g):
+    """Issue #35: SET n.prop = toUpper('alice') should evaluate the function."""
+    g.query('CREATE (n:UpperTest {name: "raw"})')
+    g.query("MATCH (n:UpperTest {name: 'raw'}) SET n.name = toUpper('alice')")
+    result = g.query('MATCH (n:UpperTest) RETURN n.name')
+    assert len(result) == 1
+    assert result[0]["n.name"] == "ALICE"
+
+
+def test_merge_on_create_set_timestamp(g):
+    """Issue #35: MERGE ... ON CREATE SET n.created = timestamp()."""
+    g.query("MERGE (n:MergeTsTest {id: 'mt1'}) ON CREATE SET n.created = timestamp()")
+    result = g.query("MATCH (n:MergeTsTest {id: 'mt1'}) RETURN n.created")
+    assert len(result) == 1
+    assert result[0]["n.created"] is not None
+    assert isinstance(result[0]["n.created"], int)
+
+
+def test_bulk_set_parameter_merge(g):
+    """Issue #38: SET n += $param should merge parameter map into properties."""
+    g.query('CREATE (n:BulkParamMerge {name: "Bob", age: 25})')
+    g.query(
+        'MATCH (n:BulkParamMerge {name: "Bob"}) SET n += $props',
+        params={"props": {"city": "LA", "active": True}},
+    )
+    result = g.query('MATCH (n:BulkParamMerge {name: "Bob"}) RETURN n.age, n.city, n.active')
+    assert len(result) == 1
+    assert result[0]["n.age"] == 25  # preserved
+    assert result[0]["n.city"] == "LA"
+
+
+def test_bulk_set_parameter_replace(g):
+    """Issue #38: SET n = $param should replace all properties."""
+    g.query('CREATE (n:BulkParamReplace {name: "Alice", age: 30, city: "NYC"})')
+    g.query(
+        'MATCH (n:BulkParamReplace {name: "Alice"}) SET n = $props',
+        params={"props": {"name": "Alice", "score": 100}},
+    )
+    result = g.query('MATCH (n:BulkParamReplace {name: "Alice"}) RETURN n.score, n.age')
+    assert len(result) == 1
+    assert result[0]["n.score"] == 100
+    assert result[0]["n.age"] is None  # replaced away
+
+
+def test_bulk_set_parameter_nested_json(g):
+    """Issue #38: nested objects in parameter map should be stored as JSON."""
+    g.query('CREATE (n:BulkParamJson {name: "test"})')
+    g.query(
+        'MATCH (n:BulkParamJson {name: "test"}) SET n += $props',
+        params={"props": {"meta": {"team": "core", "priority": 1}}},
+    )
+    result = g.query('MATCH (n:BulkParamJson {name: "test"}) RETURN n.meta')
+    assert len(result) == 1
+    assert "core" in str(result[0]["n.meta"])
+
+
 def test_remove_return(g):
     """Test REMOVE + RETURN in a single query."""
     g.query('CREATE (n:RemRetPy {name: "Dave", temp: "delete_me"})')

@@ -12,6 +12,220 @@
 #include "parser/cypher_debug.h"
 #include "transform/transform_variables.h"
 
+/* Evaluate a function call by transforming to SQL and executing via SQLite.
+ * Returns 0 on success, -1 on error, -2 for NULL result. */
+static int evaluate_function_call_via_sqlite(
+    cypher_executor *executor,
+    cypher_function_call *func_call,
+    property_type *out_type,
+    void *out_value,
+    size_t value_size)
+{
+    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    if (!ctx) return -1;
+
+    append_sql(ctx, "SELECT ");
+    if (transform_expression(ctx, (ast_node*)func_call) < 0) {
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    cypher_transform_free_context(ctx);
+    if (rc != SQLITE_OK) return -1;
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    int col_type = sqlite3_column_type(stmt, 0);
+    switch (col_type) {
+        case SQLITE_INTEGER:
+            *out_type = PROP_TYPE_INTEGER;
+            *(int64_t*)out_value = sqlite3_column_int64(stmt, 0);
+            break;
+        case SQLITE_FLOAT:
+            *out_type = PROP_TYPE_REAL;
+            *(double*)out_value = sqlite3_column_double(stmt, 0);
+            break;
+        case SQLITE_TEXT: {
+            const char *text = (const char*)sqlite3_column_text(stmt, 0);
+            *out_type = PROP_TYPE_TEXT;
+            if (text) {
+                strncpy((char*)out_value, text, value_size - 1);
+                ((char*)out_value)[value_size - 1] = '\0';
+            } else {
+                ((char*)out_value)[0] = '\0';
+            }
+            break;
+        }
+        case SQLITE_NULL:
+            sqlite3_finalize(stmt);
+            return -2;
+        default:
+            sqlite3_finalize(stmt);
+            return -1;
+    }
+
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+/* Parse a JSON object string and set each key-value pair as a property.
+ * Follows the same hand-rolled JSON parsing pattern as get_param_value(). */
+static int set_properties_from_json_object(
+    cypher_executor *executor,
+    int entity_id,
+    bool is_edge,
+    const char *json_str,
+    cypher_result *result)
+{
+    const char *p = json_str;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+
+    if (*p != '{') {
+        set_result_error(result, "Bulk SET parameter must be a JSON object, not an array");
+        return -1;
+    }
+    p++;
+
+    while (*p) {
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+        if (*p == '}') break;
+        if (*p == ',') { p++; continue; }
+
+        /* Parse key */
+        if (*p != '"') {
+            set_result_error(result, "Invalid JSON in bulk SET parameter");
+            return -1;
+        }
+        p++;
+        const char *key_start = p;
+        while (*p && *p != '"') p++;
+        if (!*p) {
+            set_result_error(result, "Unterminated string in bulk SET parameter");
+            return -1;
+        }
+        size_t key_len = p - key_start;
+        char key[256];
+        if (key_len >= sizeof(key)) key_len = sizeof(key) - 1;
+        memcpy(key, key_start, key_len);
+        key[key_len] = '\0';
+        p++; /* closing quote */
+
+        while (*p && *p != ':') p++;
+        if (!*p) break;
+        p++; /* colon */
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+
+        /* Parse value */
+        property_type pt;
+        char str_buf[4096];
+        const void *pv = NULL;
+        static int64_t json_int_buf;
+        static double json_real_buf;
+        static int json_bool_buf;
+
+        if (*p == '"') {
+            /* String */
+            p++;
+            size_t i = 0;
+            while (*p && *p != '"' && i < sizeof(str_buf) - 1) {
+                if (*p == '\\' && *(p+1)) {
+                    p++;
+                    switch (*p) {
+                        case 'n': str_buf[i++] = '\n'; break;
+                        case 't': str_buf[i++] = '\t'; break;
+                        case 'r': str_buf[i++] = '\r'; break;
+                        case '"': str_buf[i++] = '"'; break;
+                        case '\\': str_buf[i++] = '\\'; break;
+                        default: str_buf[i++] = *p; break;
+                    }
+                } else {
+                    str_buf[i++] = *p;
+                }
+                p++;
+            }
+            str_buf[i] = '\0';
+            if (*p == '"') p++;
+            pt = PROP_TYPE_TEXT;
+            pv = str_buf;
+        } else if (*p == 't') {
+            pt = PROP_TYPE_BOOLEAN;
+            json_bool_buf = 1;
+            pv = &json_bool_buf;
+            while (*p && *p != ',' && *p != '}') p++;
+        } else if (*p == 'f') {
+            pt = PROP_TYPE_BOOLEAN;
+            json_bool_buf = 0;
+            pv = &json_bool_buf;
+            while (*p && *p != ',' && *p != '}') p++;
+        } else if (*p == 'n') {
+            /* null — skip this property */
+            p += 4;
+            continue;
+        } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
+            const char *num_start = p;
+            bool is_float = false;
+            if (*p == '-') p++;
+            while (*p >= '0' && *p <= '9') p++;
+            if (*p == '.') { is_float = true; p++; while (*p >= '0' && *p <= '9') p++; }
+            if (*p == 'e' || *p == 'E') { is_float = true; p++; if (*p == '+' || *p == '-') p++; while (*p >= '0' && *p <= '9') p++; }
+            if (is_float) {
+                pt = PROP_TYPE_REAL;
+                json_real_buf = strtod(num_start, NULL);
+                pv = &json_real_buf;
+            } else {
+                pt = PROP_TYPE_INTEGER;
+                json_int_buf = strtoll(num_start, NULL, 10);
+                pv = &json_int_buf;
+            }
+        } else if (*p == '{' || *p == '[') {
+            /* Nested object/array — store as JSON */
+            const char *json_start = p;
+            int depth = 1;
+            p++;
+            while (*p && depth > 0) {
+                if (*p == '{' || *p == '[') depth++;
+                else if (*p == '}' || *p == ']') depth--;
+                else if (*p == '"') {
+                    p++;
+                    while (*p && *p != '"') {
+                        if (*p == '\\' && *(p+1)) p++;
+                        p++;
+                    }
+                }
+                if (*p) p++;
+            }
+            size_t json_len = p - json_start;
+            if (json_len >= sizeof(str_buf)) json_len = sizeof(str_buf) - 1;
+            memcpy(str_buf, json_start, json_len);
+            str_buf[json_len] = '\0';
+            pt = PROP_TYPE_JSON;
+            pv = str_buf;
+        } else {
+            /* Skip unknown value types */
+            while (*p && *p != ',' && *p != '}') p++;
+            continue;
+        }
+
+        int rc;
+        if (is_edge) {
+            rc = cypher_schema_set_edge_property(executor->schema_mgr, entity_id, key, pt, pv);
+        } else {
+            rc = cypher_schema_set_node_property(executor->schema_mgr, entity_id, key, pt, pv);
+        }
+        if (rc == 0) {
+            result->properties_set++;
+        }
+    }
+
+    return 0;
+}
+
 /* Execute SET items from a list (used for ON CREATE/ON MATCH) */
 int execute_set_items(cypher_executor *executor, ast_list *items, variable_map *var_map, cypher_result *result)
 {
@@ -231,18 +445,33 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 return -1;
             }
 
-            /* Resolve the map expression — must be a map literal or parameter */
+            /* Resolve the map expression — map literal or parameter */
             cypher_map *map = NULL;
-            bool free_param_map = false;
+            char *resolved_json = NULL;
+            static char param_json_buf[4096];
 
             if (item->expr->type == AST_NODE_MAP) {
                 map = (cypher_map*)item->expr;
             } else if (item->expr->type == AST_NODE_PARAMETER && executor->params_json) {
-                /* Parameter — must resolve to a JSON object for bulk SET */
-                set_result_error(result, "Parameterized bulk SET (SET n = $param) is not yet supported");
-                return -1;
+                cypher_parameter *param = (cypher_parameter*)item->expr;
+                property_type pt;
+                int rc = get_param_value(executor->params_json, param->name,
+                                         &pt, param_json_buf, sizeof(param_json_buf));
+                if (rc == -2) {
+                    /* null parameter — fall through with resolved_json = NULL */
+                } else if (rc < 0) {
+                    char error[256];
+                    snprintf(error, sizeof(error), "Parameter '%s' not found for bulk SET", param->name);
+                    set_result_error(result, error);
+                    return -1;
+                } else if (pt != PROP_TYPE_JSON) {
+                    set_result_error(result, "Bulk SET parameter must be a JSON object");
+                    return -1;
+                } else {
+                    resolved_json = param_json_buf;
+                }
             } else {
-                set_result_error(result, "Bulk SET value must be a map literal");
+                set_result_error(result, "Bulk SET value must be a map literal or parameter");
                 return -1;
             }
 
@@ -337,7 +566,14 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 }
             }
 
-            (void)free_param_map; /* Suppress unused warning */
+            /* Set properties from resolved JSON parameter */
+            if (resolved_json) {
+                if (set_properties_from_json_object(executor, entity_id, is_edge,
+                                                     resolved_json, result) < 0) {
+                    return -1;
+                }
+            }
+
             continue;
         }
 
@@ -479,8 +715,34 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 set_result_error(result, error);
                 return -1;
             }
+        } else if (item->expr->type == AST_NODE_FUNCTION_CALL) {
+            cypher_function_call *func = (cypher_function_call*)item->expr;
+            int rc = evaluate_function_call_via_sqlite(
+                executor, func, &prop_type, set_str_buf, sizeof(set_str_buf));
+            if (rc == -2) {
+                /* NULL result — skip property */
+                continue;
+            } else if (rc < 0) {
+                char error[256];
+                snprintf(error, sizeof(error), "Failed to evaluate function '%s' in SET",
+                         func->function_name ? func->function_name : "unknown");
+                set_result_error(result, error);
+                return -1;
+            }
+            if (prop_type == PROP_TYPE_TEXT) {
+                prop_value = set_str_buf;
+            } else if (prop_type == PROP_TYPE_INTEGER) {
+                set_int_buf = *(int64_t*)set_str_buf;
+                prop_value = &set_int_buf;
+            } else if (prop_type == PROP_TYPE_REAL) {
+                set_real_buf = *(double*)set_str_buf;
+                prop_value = &set_real_buf;
+            } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                set_bool_buf = *(int*)set_str_buf;
+                prop_value = &set_bool_buf;
+            }
         } else {
-            set_result_error(result, "SET value must be a literal, map, list, or parameter");
+            set_result_error(result, "SET value must be a literal, map, list, parameter, or function call");
             return -1;
         }
 
