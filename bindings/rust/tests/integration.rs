@@ -2855,6 +2855,100 @@ fn test_set_bulk_replace_return() {
 }
 
 #[test]
+fn test_set_timestamp_function() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:TsTest {name: 'ts'})").unwrap();
+    conn.cypher("MATCH (n:TsTest {name: 'ts'}) SET n.updated = timestamp()")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:TsTest {name: 'ts'}) RETURN n.updated")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let ts = results[0].get::<i64>("n.updated").unwrap();
+    assert!(ts > 0);
+}
+
+#[test]
+fn test_set_to_upper_function() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:UpperTest {name: 'raw'})").unwrap();
+    conn.cypher("MATCH (n:UpperTest {name: 'raw'}) SET n.name = toUpper('alice')")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:UpperTest) RETURN n.name")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "ALICE");
+}
+
+#[test]
+fn test_merge_on_create_set_timestamp() {
+    let conn = test_connection();
+    conn.cypher("MERGE (n:MergeTsTest {id: 'mt1'}) ON CREATE SET n.created = timestamp()")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:MergeTsTest {id: 'mt1'}) RETURN n.created")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let ts = results[0].get::<i64>("n.created").unwrap();
+    assert!(ts > 0);
+}
+
+#[test]
+fn test_bulk_set_parameter_merge() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkPMerge {name: 'Bob', age: 25})")
+        .unwrap();
+    conn.cypher_builder("MATCH (n:BulkPMerge {name: 'Bob'}) SET n += $props")
+        .params(&json!({"props": {"city": "LA", "active": true}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkPMerge {name: 'Bob'}) RETURN n.age, n.city")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    // Original property preserved
+    assert_eq!(results[0].get::<i64>("n.age").unwrap(), 25);
+    // New property added
+    assert_eq!(results[0].get::<String>("n.city").unwrap(), "LA");
+}
+
+#[test]
+fn test_bulk_set_parameter_replace() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkPReplace {name: 'Alice', age: 30, city: 'NYC'})")
+        .unwrap();
+    conn.cypher_builder("MATCH (n:BulkPReplace {name: 'Alice'}) SET n = $props")
+        .params(&json!({"props": {"name": "Alice", "score": 100}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkPReplace {name: 'Alice'}) RETURN n.score, n.age")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<i64>("n.score").unwrap(), 100);
+    // age should be NULL after replace
+    let age = results[0].get::<Option<i64>>("n.age").unwrap();
+    assert!(age.is_none());
+}
+
+#[test]
+fn test_bulk_set_parameter_nested_json() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkPJson {name: 'test'})").unwrap();
+    conn.cypher_builder("MATCH (n:BulkPJson {name: 'test'}) SET n += $props")
+        .params(&json!({"props": {"meta": {"team": "core", "priority": 1}}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkPJson {name: 'test'}) RETURN n.meta")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let meta = results[0].get::<String>("n.meta").unwrap();
+    assert!(meta.contains("core"));
+}
+
+#[test]
 fn test_remove_property_return() {
     let conn = test_connection();
     conn.cypher("CREATE (n:RemRetTest {name: 'Dave', temp: 'delete_me'})")
