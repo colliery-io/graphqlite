@@ -60,7 +60,11 @@ static int evaluate_function_call_via_sqlite(
             break;
         case SQLITE_TEXT: {
             const char *text = (const char*)sqlite3_column_text(stmt, 0);
-            *out_type = PROP_TYPE_TEXT;
+            if (text && (*text == '{' || *text == '[')) {
+                *out_type = PROP_TYPE_JSON;
+            } else {
+                *out_type = PROP_TYPE_TEXT;
+            }
             if (text) {
                 strncpy((char*)out_value, text, value_size - 1);
                 ((char*)out_value)[value_size - 1] = '\0';
@@ -94,7 +98,7 @@ static int set_properties_from_json_object(
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
 
     if (*p != '{') {
-        set_result_error(result, "Bulk SET parameter must be a JSON object, not an array");
+        set_result_error(result, "Bulk SET parameter must be a JSON object");
         return -1;
     }
     p++;
