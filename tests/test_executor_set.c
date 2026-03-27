@@ -1267,6 +1267,293 @@ static void test_bulk_set_parameter_replace(void)
     }
 }
 
+/* Test SET with float-returning function: toFloat() */
+static void test_set_function_call_toFloat(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:FuncFloat {name: \"ftest\"})",
+            true, "CREATE for toFloat SET");
+
+        execute_and_verify(executor,
+            "MATCH (n:FuncFloat {name: \"ftest\"}) SET n.score = toFloat('3.14')",
+            true, "SET n.score = toFloat('3.14')");
+
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:FuncFloat {name: \"ftest\"}) RETURN n.score");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0 && verify->data[0][0]) {
+                /* Should be 3.14 */
+                double val = atof(verify->data[0][0]);
+                CU_ASSERT_DOUBLE_EQUAL(val, 3.14, 0.001);
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test SET with NULL-returning function: property should be skipped */
+static void test_set_function_call_null_result(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:FuncNull {name: \"ntest\", keep: \"yes\"})",
+            true, "CREATE for null function SET");
+
+        /* toIntegerOrNull on a non-numeric string returns NULL */
+        execute_and_verify(executor,
+            "MATCH (n:FuncNull {name: \"ntest\"}) SET n.bad = toIntegerOrNull('not_a_number')",
+            true, "SET n.bad = toIntegerOrNull('not_a_number')");
+
+        /* The property should not exist (NULL result skips SET) */
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:FuncNull {name: \"ntest\"}) RETURN n.bad, n.keep");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0) {
+                CU_ASSERT_PTR_NULL(verify->data[0][0]); /* n.bad should be NULL */
+                CU_ASSERT_STRING_EQUAL(verify->data[0][1], "yes"); /* n.keep preserved */
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET parameter with float values */
+static void test_bulk_set_parameter_float(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPFloat {name: \"flt\"})",
+            true, "CREATE for bulk param float");
+
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPFloat {name: \"flt\"}) SET n += $props",
+            "{\"props\": {\"temperature\": 98.6, \"ratio\": -0.5}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("Bulk param float error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:BulkPFloat {name: \"flt\"}) RETURN n.temperature, n.ratio");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0) {
+                CU_ASSERT_PTR_NOT_NULL(verify->data[0][0]);
+                if (verify->data[0][0]) {
+                    double temp = atof(verify->data[0][0]);
+                    CU_ASSERT_DOUBLE_EQUAL(temp, 98.6, 0.01);
+                }
+                CU_ASSERT_PTR_NOT_NULL(verify->data[0][1]);
+                if (verify->data[0][1]) {
+                    double ratio = atof(verify->data[0][1]);
+                    CU_ASSERT_DOUBLE_EQUAL(ratio, -0.5, 0.01);
+                }
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET parameter with null values (should skip null keys) */
+static void test_bulk_set_parameter_null_values(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPNull {name: \"nv\", existing: \"kept\"})",
+            true, "CREATE for bulk param null");
+
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPNull {name: \"nv\"}) SET n += $props",
+            "{\"props\": {\"added\": \"yes\", \"skipped\": null}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            cypher_result_free(result);
+        }
+
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:BulkPNull {name: \"nv\"}) RETURN n.added, n.skipped, n.existing");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0) {
+                CU_ASSERT_STRING_EQUAL(verify->data[0][0], "yes");   /* added */
+                CU_ASSERT_PTR_NULL(verify->data[0][1]);               /* skipped (null) */
+                CU_ASSERT_STRING_EQUAL(verify->data[0][2], "kept");   /* existing preserved */
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET parameter with boolean false */
+static void test_bulk_set_parameter_bool_false(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPBoolF {name: \"bf\"})",
+            true, "CREATE for bulk param bool false");
+
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPBoolF {name: \"bf\"}) SET n += $props",
+            "{\"props\": {\"active\": false, \"verified\": true}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            cypher_result_free(result);
+        }
+
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:BulkPBoolF {name: \"bf\"}) RETURN n.active, n.verified");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0) {
+                CU_ASSERT_PTR_NOT_NULL(verify->data[0][0]);
+                if (verify->data[0][0]) {
+                    /* false should be stored as 0 or "false" */
+                    CU_ASSERT_TRUE(
+                        strcmp(verify->data[0][0], "0") == 0 ||
+                        strcmp(verify->data[0][0], "false") == 0);
+                }
+                CU_ASSERT_PTR_NOT_NULL(verify->data[0][1]);
+                if (verify->data[0][1]) {
+                    /* true should be stored as 1 or "true" */
+                    CU_ASSERT_TRUE(
+                        strcmp(verify->data[0][1], "1") == 0 ||
+                        strcmp(verify->data[0][1], "true") == 0);
+                }
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET parameter with nested array */
+static void test_bulk_set_parameter_nested_array(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPArr {name: \"arr\"})",
+            true, "CREATE for bulk param array");
+
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPArr {name: \"arr\"}) SET n += $props",
+            "{\"props\": {\"tags\": [\"a\", \"b\", \"c\"]}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            cypher_result_free(result);
+        }
+
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:BulkPArr {name: \"arr\"}) RETURN n.tags");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            if (verify->success && verify->row_count > 0 && verify->data[0][0]) {
+                /* Should be stored as JSON array */
+                CU_ASSERT_TRUE(strstr(verify->data[0][0], "a") != NULL);
+                CU_ASSERT_TRUE(strstr(verify->data[0][0], "b") != NULL);
+                CU_ASSERT_TRUE(strstr(verify->data[0][0], "c") != NULL);
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET with non-JSON parameter (should error) */
+static void test_bulk_set_parameter_non_json_error(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPErr {name: \"err\"})",
+            true, "CREATE for bulk param error");
+
+        /* Pass a string parameter instead of a JSON object */
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPErr {name: \"err\"}) SET n += $props",
+            "{\"props\": \"not_an_object\"}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_FALSE(result->success);
+            CU_ASSERT_PTR_NOT_NULL(result->error_message);
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test bulk SET with missing parameter (should error) */
+static void test_bulk_set_parameter_missing_error(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (n:BulkPMiss {name: \"miss\"})",
+            true, "CREATE for bulk param missing");
+
+        /* Reference a parameter that doesn't exist */
+        cypher_result *result = cypher_executor_execute_params(executor,
+            "MATCH (n:BulkPMiss {name: \"miss\"}) SET n += $nonexistent",
+            "{\"other\": {\"a\": 1}}");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_FALSE(result->success);
+            CU_ASSERT_PTR_NOT_NULL(result->error_message);
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the SET executor test suite */
 int init_executor_set_suite(void)
 {
@@ -1311,7 +1598,15 @@ int init_executor_set_suite(void)
         !CU_add_test(suite, "SET function call timestamp", test_set_function_call_timestamp) ||
         !CU_add_test(suite, "SET function call toUpper", test_set_function_call_toUpper) ||
         !CU_add_test(suite, "Bulk SET parameter merge", test_bulk_set_parameter_merge) ||
-        !CU_add_test(suite, "Bulk SET parameter replace", test_bulk_set_parameter_replace)) {
+        !CU_add_test(suite, "Bulk SET parameter replace", test_bulk_set_parameter_replace) ||
+        !CU_add_test(suite, "SET function call toFloat", test_set_function_call_toFloat) ||
+        !CU_add_test(suite, "SET function call null result", test_set_function_call_null_result) ||
+        !CU_add_test(suite, "Bulk SET parameter float", test_bulk_set_parameter_float) ||
+        !CU_add_test(suite, "Bulk SET parameter null values", test_bulk_set_parameter_null_values) ||
+        !CU_add_test(suite, "Bulk SET parameter bool false", test_bulk_set_parameter_bool_false) ||
+        !CU_add_test(suite, "Bulk SET parameter nested array", test_bulk_set_parameter_nested_array) ||
+        !CU_add_test(suite, "Bulk SET parameter non-JSON error", test_bulk_set_parameter_non_json_error) ||
+        !CU_add_test(suite, "Bulk SET parameter missing error", test_bulk_set_parameter_missing_error)) {
         return CU_get_error();
     }
     

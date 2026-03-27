@@ -1,0 +1,7 @@
+CompileFlags:
+  Add:
+    - -I./src/include
+    - -Ibindings/python/vendor/sqlite
+    - -DGRAPHQLITE_DEBUG
+    - -DGRAPHQLITE_EXTENSION
+    - -std=c11

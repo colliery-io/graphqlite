@@ -519,7 +519,7 @@ test-unit: $(TEST_RUNNER)
 
 test-rust: extension install-bundled
 	@echo "Running Rust binding tests..."
-	cd $(RUST_BINDINGS_DIR) && cargo test
+	cd $(RUST_BINDINGS_DIR) && cargo test -- --test-threads=1
 
 test-python: extension
 	@echo "Running Python binding tests..."

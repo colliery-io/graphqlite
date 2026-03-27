@@ -2949,6 +2949,143 @@ fn test_bulk_set_parameter_nested_json() {
 }
 
 #[test]
+fn test_set_to_float_function() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:FloatFuncRs {name: 'ftest'})").unwrap();
+    conn.cypher("MATCH (n:FloatFuncRs {name: 'ftest'}) SET n.score = toFloat('3.14')")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:FloatFuncRs {name: 'ftest'}) RETURN n.score")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let score = results[0].get::<f64>("n.score").unwrap();
+    assert!((score - 3.14).abs() < 0.001);
+}
+
+#[test]
+fn test_set_function_null_result() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:NullFuncRs {name: 'ntest', keep: 'yes'})")
+        .unwrap();
+    conn.cypher("MATCH (n:NullFuncRs {name: 'ntest'}) SET n.bad = toIntegerOrNull('not_a_number')")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:NullFuncRs {name: 'ntest'}) RETURN n.bad, n.keep")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let bad = results[0].get::<Option<String>>("n.bad").unwrap();
+    assert!(bad.is_none());
+    assert_eq!(results[0].get::<String>("n.keep").unwrap(), "yes");
+}
+
+#[test]
+fn test_bulk_set_parameter_float_values() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkFloatRs {name: 'flt'})").unwrap();
+    conn.cypher_builder("MATCH (n:BulkFloatRs {name: 'flt'}) SET n += $props")
+        .params(&json!({"props": {"temperature": 98.6, "ratio": -0.5}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkFloatRs {name: 'flt'}) RETURN n.temperature, n.ratio")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let temp = results[0].get::<f64>("n.temperature").unwrap();
+    assert!((temp - 98.6).abs() < 0.01);
+    let ratio = results[0].get::<f64>("n.ratio").unwrap();
+    assert!((ratio - (-0.5)).abs() < 0.01);
+}
+
+#[test]
+fn test_bulk_set_parameter_null_skipped() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkNullRs {name: 'nv', existing: 'kept'})")
+        .unwrap();
+    conn.cypher_builder("MATCH (n:BulkNullRs {name: 'nv'}) SET n += $props")
+        .params(&json!({"props": {"added": "yes", "skipped": null}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkNullRs {name: 'nv'}) RETURN n.added, n.skipped, n.existing")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.added").unwrap(), "yes");
+    let skipped = results[0].get::<Option<String>>("n.skipped").unwrap();
+    assert!(skipped.is_none());
+    assert_eq!(results[0].get::<String>("n.existing").unwrap(), "kept");
+}
+
+#[test]
+fn test_bulk_set_parameter_bool_false() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkBoolFRs {name: 'bf'})").unwrap();
+    conn.cypher_builder("MATCH (n:BulkBoolFRs {name: 'bf'}) SET n += $props")
+        .params(&json!({"props": {"active": false, "verified": true}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkBoolFRs {name: 'bf'}) RETURN n.active, n.verified")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<bool>("n.active").unwrap(), false);
+    assert_eq!(results[0].get::<bool>("n.verified").unwrap(), true);
+}
+
+#[test]
+fn test_bulk_set_parameter_nested_array() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkArrRs {name: 'arr'})").unwrap();
+    conn.cypher_builder("MATCH (n:BulkArrRs {name: 'arr'}) SET n += $props")
+        .params(&json!({"props": {"tags": ["a", "b", "c"]}}))
+        .run()
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BulkArrRs {name: 'arr'}) RETURN n.tags")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let tags = results[0].get::<String>("n.tags").unwrap();
+    assert!(tags.contains("a"));
+    assert!(tags.contains("b"));
+    assert!(tags.contains("c"));
+}
+
+#[test]
+fn test_bulk_set_parameter_non_json_error() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkErrRs {name: 'err'})").unwrap();
+    let result = conn
+        .cypher_builder("MATCH (n:BulkErrRs {name: 'err'}) SET n += $props")
+        .params(&json!({"props": "not_an_object"}))
+        .run();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_bulk_set_parameter_missing_error() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:BulkMissRs {name: 'miss'})").unwrap();
+    let result = conn
+        .cypher_builder("MATCH (n:BulkMissRs {name: 'miss'}) SET n += $nonexistent")
+        .params(&json!({"other": {"a": 1}}))
+        .run();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_merge_on_match_set_function() {
+    let conn = test_connection();
+    conn.cypher("CREATE (n:MergeMatchFuncRs {id: 'mm1', name: 'original'})")
+        .unwrap();
+    conn.cypher("MERGE (n:MergeMatchFuncRs {id: 'mm1'}) ON MATCH SET n.name = toUpper('updated')")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:MergeMatchFuncRs {id: 'mm1'}) RETURN n.name")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "UPDATED");
+}
+
+#[test]
 fn test_remove_property_return() {
     let conn = test_connection();
     conn.cypher("CREATE (n:RemRetTest {name: 'Dave', temp: 'delete_me'})")

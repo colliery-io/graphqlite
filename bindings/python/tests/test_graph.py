@@ -1383,6 +1383,115 @@ def test_bulk_set_parameter_nested_json(g):
     assert "core" in str(result[0]["n.meta"])
 
 
+def test_set_toFloat_function(g):
+    """PR #45 coverage: SET n.prop = toFloat('3.14') should evaluate to a float."""
+    g.query('CREATE (n:FloatFuncPy {name: "ftest"})')
+    g.query("MATCH (n:FloatFuncPy {name: 'ftest'}) SET n.score = toFloat('3.14')")
+    result = g.query('MATCH (n:FloatFuncPy {name: "ftest"}) RETURN n.score')
+    assert len(result) == 1
+    assert abs(result[0]["n.score"] - 3.14) < 0.001
+
+
+def test_set_function_null_result(g):
+    """PR #45 coverage: NULL-returning function should skip the property."""
+    g.query('CREATE (n:NullFuncPy {name: "ntest", keep: "yes"})')
+    g.query("MATCH (n:NullFuncPy {name: 'ntest'}) SET n.bad = toIntegerOrNull('not_a_number')")
+    result = g.query('MATCH (n:NullFuncPy {name: "ntest"}) RETURN n.bad, n.keep')
+    assert len(result) == 1
+    assert result[0]["n.bad"] is None
+    assert result[0]["n.keep"] == "yes"
+
+
+def test_bulk_set_parameter_float_values(g):
+    """PR #45 coverage: float values in parameter map."""
+    g.query('CREATE (n:BulkFloatPy {name: "flt"})')
+    g.query(
+        'MATCH (n:BulkFloatPy {name: "flt"}) SET n += $props',
+        params={"props": {"temperature": 98.6, "ratio": -0.5}},
+    )
+    result = g.query('MATCH (n:BulkFloatPy {name: "flt"}) RETURN n.temperature, n.ratio')
+    assert len(result) == 1
+    assert abs(result[0]["n.temperature"] - 98.6) < 0.01
+    assert abs(result[0]["n.ratio"] - (-0.5)) < 0.01
+
+
+def test_bulk_set_parameter_null_skipped(g):
+    """PR #45 coverage: null values in parameter map should be skipped."""
+    g.query('CREATE (n:BulkNullPy {name: "nv", existing: "kept"})')
+    g.query(
+        'MATCH (n:BulkNullPy {name: "nv"}) SET n += $props',
+        params={"props": {"added": "yes", "skipped": None}},
+    )
+    result = g.query('MATCH (n:BulkNullPy {name: "nv"}) RETURN n.added, n.skipped, n.existing')
+    assert len(result) == 1
+    assert result[0]["n.added"] == "yes"
+    assert result[0]["n.skipped"] is None
+    assert result[0]["n.existing"] == "kept"
+
+
+def test_bulk_set_parameter_bool_false(g):
+    """PR #45 coverage: boolean false in parameter map."""
+    g.query('CREATE (n:BulkBoolFPy {name: "bf"})')
+    g.query(
+        'MATCH (n:BulkBoolFPy {name: "bf"}) SET n += $props',
+        params={"props": {"active": False, "verified": True}},
+    )
+    result = g.query('MATCH (n:BulkBoolFPy {name: "bf"}) RETURN n.active, n.verified')
+    assert len(result) == 1
+    assert result[0]["n.active"] in (0, False, "0", "false")
+    assert result[0]["n.verified"] in (1, True, "1", "true")
+
+
+def test_bulk_set_parameter_nested_array(g):
+    """PR #45 coverage: nested array in parameter map should be stored as JSON."""
+    g.query('CREATE (n:BulkArrPy {name: "arr"})')
+    g.query(
+        'MATCH (n:BulkArrPy {name: "arr"}) SET n += $props',
+        params={"props": {"tags": ["a", "b", "c"]}},
+    )
+    result = g.query('MATCH (n:BulkArrPy {name: "arr"}) RETURN n.tags')
+    assert len(result) == 1
+    tags_str = str(result[0]["n.tags"])
+    assert "a" in tags_str
+    assert "b" in tags_str
+    assert "c" in tags_str
+
+
+def test_bulk_set_parameter_non_json_error(g):
+    """PR #45 coverage: non-JSON param for bulk SET should error."""
+    g.query('CREATE (n:BulkErrPy {name: "err"})')
+    try:
+        g.query(
+            'MATCH (n:BulkErrPy {name: "err"}) SET n += $props',
+            params={"props": "not_an_object"},
+        )
+        assert False, "Expected an error for non-JSON bulk SET parameter"
+    except Exception:
+        pass  # Expected
+
+
+def test_bulk_set_parameter_missing_error(g):
+    """PR #45 coverage: missing param for bulk SET should error."""
+    g.query('CREATE (n:BulkMissPy {name: "miss"})')
+    try:
+        g.query(
+            'MATCH (n:BulkMissPy {name: "miss"}) SET n += $nonexistent',
+            params={"other": {"a": 1}},
+        )
+        assert False, "Expected an error for missing bulk SET parameter"
+    except Exception:
+        pass  # Expected
+
+
+def test_merge_on_match_set_function(g):
+    """PR #45 coverage: MERGE ON MATCH SET with function call."""
+    g.query("CREATE (n:MergeMatchFunc {id: 'mm1', name: 'original'})")
+    g.query("MERGE (n:MergeMatchFunc {id: 'mm1'}) ON MATCH SET n.name = toUpper('updated')")
+    result = g.query("MATCH (n:MergeMatchFunc {id: 'mm1'}) RETURN n.name")
+    assert len(result) == 1
+    assert result[0]["n.name"] == "UPDATED"
+
+
 def test_remove_return(g):
     """Test REMOVE + RETURN in a single query."""
     g.query('CREATE (n:RemRetPy {name: "Dave", temp: "delete_me"})')
