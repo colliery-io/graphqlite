@@ -204,7 +204,7 @@ jobs:
 
       - name: Run Rust tests
         working-directory: bindings/rust
-        run: cargo test --lib --test integration
+        run: cargo test --lib --test integration -- --test-threads=1
 
   full-python-tests-linux:
     needs: [build-and-test, rust-check, python-check, windows-build]
@@ -312,7 +312,7 @@ jobs:
       - name: Test Rust bindings
         shell: bash
         working-directory: bindings/rust
-        run: cargo test --lib --test integration
+        run: cargo test --lib --test integration -- --test-threads=1
 
   # =============================================================================
   # Performance Tests - Main branch only
