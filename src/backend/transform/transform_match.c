@@ -178,7 +178,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                         break;
                                     }
                                     case LITERAL_INTEGER:
-                                        dbuf_appendf(&cond, "_prop_%s.value = %d", alias, lit->value.integer);
+                                        dbuf_appendf(&cond, "_prop_%s.value = %lld", alias, (long long)lit->value.integer);
                                         break;
                                     case LITERAL_DECIMAL:
                                         dbuf_appendf(&cond, "_prop_%s.value = %f", alias, lit->value.decimal);
@@ -647,7 +647,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                                  pk_alias, prop_alias, pk_alias, first_pair->key);
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.integer);
+                            dbuf_appendf(&on_cond, " AND %s.value = %lld", prop_alias, (long long)lit->value.integer);
                             break;
                         case LITERAL_STRING:
                             dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
@@ -708,7 +708,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                                  pk_alias, prop_alias, pk_alias, first_pair->key);
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.integer);
+                            dbuf_appendf(&on_cond, " AND %s.value = %lld", prop_alias, (long long)lit->value.integer);
                             break;
                         case LITERAL_STRING:
                             dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
@@ -902,7 +902,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                                  pk_alias, prop_alias, pk_alias, first_pair->key);
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.integer);
+                            dbuf_appendf(&on_cond, " AND %s.value = %lld", prop_alias, (long long)lit->value.integer);
                             break;
                         case LITERAL_STRING:
                             dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);

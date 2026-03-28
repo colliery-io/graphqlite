@@ -287,13 +287,13 @@ static void prepare_integer_token(CypherScannerState *state, const char *text)
     /* Parse integer with proper base detection */
     if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
         /* Hexadecimal */
-        state->current_token.value.integer = strtol(text, NULL, 16);
+        state->current_token.value.integer = strtoll(text, NULL, 16);
     } else if (text[0] == '0' && strlen(text) > 1) {
         /* Octal */
-        state->current_token.value.integer = strtol(text, NULL, 8);
+        state->current_token.value.integer = strtoll(text, NULL, 8);
     } else {
         /* Decimal */
-        state->current_token.value.integer = strtol(text, NULL, 10);
+        state->current_token.value.integer = strtoll(text, NULL, 10);
     }
 }
 

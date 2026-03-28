@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include "parser/cypher_tokens.h"
 
 /* Forward declaration for scanner handle */
@@ -35,7 +36,7 @@ typedef enum CypherTokenType {
 
 /* Token value union */
 typedef union CypherTokenValue {
-    int integer;                   /* For integer tokens */
+    int64_t integer;               /* For integer tokens */
     double decimal;                /* For decimal tokens */
     char *string;                  /* For strings, identifiers, operators */
     char character;                /* For single character tokens */

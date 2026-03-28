@@ -2,6 +2,7 @@
 #define CYPHER_AST_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* AST node types */
 typedef enum ast_node_type {
@@ -316,7 +317,7 @@ typedef struct cypher_literal {
         LITERAL_NULL
     } literal_type;
     union {
-        int integer;
+        int64_t integer;
         double decimal;
         char *string;
         bool boolean;
@@ -523,7 +524,7 @@ cypher_varlen_range* make_varlen_range(int min_hops, int max_hops);
 cypher_path* make_path(ast_list *elements);
 cypher_path* make_path_with_var(char *var_name, ast_list *elements);
 cypher_path* make_shortest_path(ast_list *elements, path_type type);
-cypher_literal* make_integer_literal(int value, int location);
+cypher_literal* make_integer_literal(int64_t value, int location);
 cypher_literal* make_decimal_literal(double value, int location);
 cypher_literal* make_string_literal(char *value, int location);
 cypher_literal* make_boolean_literal(bool value, int location);

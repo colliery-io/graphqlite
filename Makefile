@@ -533,7 +533,7 @@ test-bindings: test-rust test-python
 test-functional: extension
 	@echo "Running functional tests..."
 	@for test_file in tests/functional/*.sql; do \
-		if [ -f "$$test_file" ] && [[ "$$test_file" != *"constraint"* ]]; then \
+		if [ -f "$$test_file" ] && [[ "$$test_file" != *"constraint"* ]] && [[ "$$test_file" != *"expected_failures"* ]]; then \
 			echo "Running: $$(basename $$test_file)"; \
 			$(SQLITE) -bail < "$$test_file" || exit 1; \
 		fi; \

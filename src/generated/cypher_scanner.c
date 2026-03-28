@@ -2099,13 +2099,13 @@ static void prepare_integer_token(const char *text)
     /* Parse integer with proper base detection */
     if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
         /* Hexadecimal */
-        current_token.value.integer = strtol(text, NULL, 16);
+        current_token.value.integer = strtoll(text, NULL, 16);
     } else if (text[0] == '0' && strlen(text) > 1) {
         /* Octal */
-        current_token.value.integer = strtol(text, NULL, 8);
+        current_token.value.integer = strtoll(text, NULL, 8);
     } else {
         /* Decimal */
-        current_token.value.integer = strtol(text, NULL, 10);
+        current_token.value.integer = strtoll(text, NULL, 10);
     }
 }
 

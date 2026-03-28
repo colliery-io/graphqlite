@@ -753,7 +753,7 @@ int cypher_schema_set_node_property(cypher_schema_manager *manager,
     /* Bind value based on type */
     switch (type) {
         case PROP_TYPE_INTEGER:
-            sqlite3_bind_int(stmt, 3, *(const int*)value);
+            sqlite3_bind_int64(stmt, 3, *(const int64_t*)value);
             break;
         case PROP_TYPE_TEXT:
             sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);
@@ -905,7 +905,7 @@ int cypher_schema_set_edge_property(cypher_schema_manager *manager,
     /* Bind value based on type */
     switch (type) {
         case PROP_TYPE_INTEGER:
-            sqlite3_bind_int(stmt, 3, *(const int*)value);
+            sqlite3_bind_int64(stmt, 3, *(const int64_t*)value);
             break;
         case PROP_TYPE_TEXT:
             sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);

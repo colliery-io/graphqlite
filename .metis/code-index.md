@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-03-17T13:55:27Z | 54 files | JavaScript, Python, Rust
+> Generated: 2026-03-28T00:46:36Z | 56 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -35,7 +35,9 @@
 │   │   └── tests/
 │   │       ├── test_connection.py
 │   │       ├── test_graph.py
-│   │       └── test_manager.py
+│   │       ├── test_issue_repro.py
+│   │       ├── test_manager.py
+│   │       └── test_new_functions.py
 │   └── rust/
 │       ├── build.rs
 │       ├── src/
@@ -498,7 +500,47 @@
 - pub `test_set_return_single_property` function L1288-1293 — `def test_set_return_single_property(g)` — Test SET + RETURN in a single query.
 - pub `test_set_return_bulk_merge` function L1296-1303 — `def test_set_return_bulk_merge(g)` — Test SET n += {map} + RETURN in a single query.
 - pub `test_set_return_with_params` function L1306-1315 — `def test_set_return_with_params(g)` — Test parameterized SET + RETURN.
-- pub `test_remove_return` function L1318-1324 — `def test_remove_return(g)` — Test REMOVE + RETURN in a single query.
+- pub `test_set_timestamp_function` function L1318-1327 — `def test_set_timestamp_function(g)` — Issue #35: SET n.prop = timestamp() should evaluate the function.
+- pub `test_set_toUpper_function` function L1330-1336 — `def test_set_toUpper_function(g)` — Issue #35: SET n.prop = toUpper('alice') should evaluate the function.
+- pub `test_merge_on_create_set_timestamp` function L1339-1345 — `def test_merge_on_create_set_timestamp(g)` — Issue #35: MERGE ...
+- pub `test_bulk_set_parameter_merge` function L1348-1358 — `def test_bulk_set_parameter_merge(g)` — Issue #38: SET n += $param should merge parameter map into properties.
+- pub `test_bulk_set_parameter_replace` function L1361-1371 — `def test_bulk_set_parameter_replace(g)` — Issue #38: SET n = $param should replace all properties.
+- pub `test_bulk_set_parameter_nested_json` function L1374-1383 — `def test_bulk_set_parameter_nested_json(g)` — Issue #38: nested objects in parameter map should be stored as JSON.
+- pub `test_set_toFloat_function` function L1386-1392 — `def test_set_toFloat_function(g)` — PR #45 coverage: SET n.prop = toFloat('3.14') should evaluate to a float.
+- pub `test_set_function_null_result` function L1395-1402 — `def test_set_function_null_result(g)` — PR #45 coverage: NULL-returning function should skip the property.
+- pub `test_bulk_set_parameter_float_values` function L1405-1415 — `def test_bulk_set_parameter_float_values(g)` — PR #45 coverage: float values in parameter map.
+- pub `test_bulk_set_parameter_null_skipped` function L1418-1429 — `def test_bulk_set_parameter_null_skipped(g)` — PR #45 coverage: null values in parameter map should be skipped.
+- pub `test_bulk_set_parameter_bool_false` function L1432-1442 — `def test_bulk_set_parameter_bool_false(g)` — PR #45 coverage: boolean false in parameter map.
+- pub `test_bulk_set_parameter_nested_array` function L1445-1457 — `def test_bulk_set_parameter_nested_array(g)` — PR #45 coverage: nested array in parameter map should be stored as JSON.
+- pub `test_bulk_set_parameter_non_json_error` function L1460-1470 — `def test_bulk_set_parameter_non_json_error(g)` — PR #45 coverage: non-JSON param for bulk SET should error.
+- pub `test_bulk_set_parameter_missing_error` function L1473-1483 — `def test_bulk_set_parameter_missing_error(g)` — PR #45 coverage: missing param for bulk SET should error.
+- pub `test_merge_on_match_set_function` function L1486-1492 — `def test_merge_on_match_set_function(g)` — PR #45 coverage: MERGE ON MATCH SET with function call.
+- pub `test_remove_return` function L1495-1501 — `def test_remove_return(g)` — Test REMOVE + RETURN in a single query.
+
+#### bindings/python/tests/test_issue_repro.py
+
+- pub `get_extension_path` function L17-28 — `def get_extension_path()` — Get path to the built extension.
+- pub `TestIssue34` class L46-84 — `{ test_label_filter_respected, test_null_rows_preserved_with_where }` — OPTIONAL MATCH should respect label filters and preserve null rows.
+- pub `test_label_filter_respected` method L49-65 — `def test_label_filter_respected(self, g)` — OPTIONAL MATCH (a)-->(r:Car) should not return :Pet nodes.
+- pub `test_null_rows_preserved_with_where` method L67-84 — `def test_null_rows_preserved_with_where(self, g)` — OPTIONAL MATCH with WHERE filtering all matches should preserve rows with nulls.
+- pub `TestIssue36` class L93-114 — `{ test_merge_variable_in_with_then_match }` — MERGE-bound variables should persist through WITH clauses.
+- pub `test_merge_variable_in_with_then_match` method L96-114 — `def test_merge_variable_in_with_then_match(self, g)` — Variable bound by MERGE should persist through WITH into a second MATCH.
+- pub `TestIssue37` class L123-142 — `{ test_unwind_parameter_list, test_unwind_parameter_map_list }` — UNWIND should accept parameter references ($param).
+- pub `test_unwind_parameter_list` method L126-133 — `def test_unwind_parameter_list(self, g)` — UNWIND $items AS item should work with a parameter list.
+- pub `test_unwind_parameter_map_list` method L135-142 — `def test_unwind_parameter_map_list(self, g)` — UNWIND over a list of maps from parameters should bind map items.
+- pub `TestIssue39` class L151-164 — `{ test_delete_return_count }` — DELETE + RETURN COUNT should report the actual number deleted.
+- pub `test_delete_return_count` method L154-164 — `def test_delete_return_count(self, g)` — DETACH DELETE n RETURN COUNT(n) should return the count of deleted nodes.
+- pub `TestIssue40` class L173-184 — `{ test_call_subquery_basic }` — CALL {} subqueries should parse and execute.
+- pub `test_call_subquery_basic` method L176-184 — `def test_call_subquery_basic(self, g)` — Basic CALL {} subquery should not raise a parse error.
+- pub `TestIssue41` class L193-222 — `{ test_startnode_property_access, test_endnode_property_access }` — startNode() and endNode() should return Node objects, not integer IDs.
+- pub `test_startnode_property_access` method L196-208 — `def test_startnode_property_access(self, g)` — startNode(r).name should return the source node's name property.
+- pub `test_endnode_property_access` method L210-222 — `def test_endnode_property_access(self, g)` — endNode(r).name should return the target node's name property.
+- pub `TestIssue42` class L231-250 — `{ test_size_labels_single, test_size_labels_multiple }` — size(labels(n)) should return the number of labels, not string length.
+- pub `test_size_labels_single` method L234-241 — `def test_size_labels_single(self, g)` — size(labels(n)) on a node with one label should return 1.
+- pub `test_size_labels_multiple` method L243-250 — `def test_size_labels_multiple(self, g)` — size(labels(n)) on a node with two labels should return 2.
+- pub `TestIssue43` class L259-285 — `{ test_large_integer_preserved, test_timestamp_not_truncated }` — Integer properties should support full 64-bit range.
+- pub `test_large_integer_preserved` method L262-272 — `def test_large_integer_preserved(self, g)` — Integers larger than 2^31 should round-trip correctly.
+- pub `test_timestamp_not_truncated` method L274-285 — `def test_timestamp_not_truncated(self, g)` — timestamp() values (epoch millis) should not be truncated.
 
 #### bindings/python/tests/test_manager.py
 
@@ -528,6 +570,130 @@
 - pub `TestGraphManagerPersistence` class L213-237 — `{ test_data_persists, test_graphs_persist }` — Test persistence across manager instances.
 - pub `test_data_persists` method L216-228 — `def test_data_persists(self, temp_dir)` — Test that data persists across manager instances.
 - pub `test_graphs_persist` method L230-237 — `def test_graphs_persist(self, temp_dir)` — Test that graph list persists.
+
+#### bindings/python/tests/test_new_functions.py
+
+- pub `get_extension_path` function L12-26 — `def get_extension_path()` — Get path to the built extension.
+- pub `TestReturnStar` class L54-61 — `{ test_return_star }`
+- pub `test_return_star` method L55-61 — `def test_return_star(self, db)`
+- pub `TestIsEmpty` class L64-71 — `{ test_isempty_empty_string, test_isempty_nonempty_string }`
+- pub `test_isempty_empty_string` method L65-67 — `def test_isempty_empty_string(self, db)`
+- pub `test_isempty_nonempty_string` method L69-71 — `def test_isempty_nonempty_string(self, db)`
+- pub `TestBtrim` class L74-77 — `{ test_btrim }`
+- pub `test_btrim` method L75-77 — `def test_btrim(self, db)`
+- pub `TestToIntegerOrNull` class L80-87 — `{ test_valid_integer, test_invalid_integer }`
+- pub `test_valid_integer` method L81-83 — `def test_valid_integer(self, db)`
+- pub `test_invalid_integer` method L85-87 — `def test_invalid_integer(self, db)`
+- pub `TestToFloatOrNull` class L90-97 — `{ test_valid_float, test_invalid_float }`
+- pub `test_valid_float` method L91-93 — `def test_valid_float(self, db)`
+- pub `test_invalid_float` method L95-97 — `def test_invalid_float(self, db)`
+- pub `TestToBooleanOrNull` class L100-107 — `{ test_valid_boolean, test_invalid_boolean }`
+- pub `test_valid_boolean` method L101-103 — `def test_valid_boolean(self, db)`
+- pub `test_invalid_boolean` method L105-107 — `def test_invalid_boolean(self, db)`
+- pub `TestToStringOrNull` class L110-117 — `{ test_valid_tostring, test_null_tostring }`
+- pub `test_valid_tostring` method L111-113 — `def test_valid_tostring(self, db)`
+- pub `test_null_tostring` method L115-117 — `def test_null_tostring(self, db)`
+- pub `TestElementId` class L120-124 — `{ test_elementid }`
+- pub `test_elementid` method L121-124 — `def test_elementid(self, db)`
+- pub `TestNullIf` class L127-134 — `{ test_nullif_equal, test_nullif_different }`
+- pub `test_nullif_equal` method L128-130 — `def test_nullif_equal(self, db)`
+- pub `test_nullif_different` method L132-134 — `def test_nullif_different(self, db)`
+- pub `TestValueType` class L137-148 — `{ test_valuetype_integer, test_valuetype_string, test_valuetype_float }`
+- pub `test_valuetype_integer` method L138-140 — `def test_valuetype_integer(self, db)`
+- pub `test_valuetype_string` method L142-144 — `def test_valuetype_string(self, db)`
+- pub `test_valuetype_float` method L146-148 — `def test_valuetype_float(self, db)`
+- pub `TestCharLength` class L151-158 — `{ test_char_length, test_character_length }`
+- pub `test_char_length` method L152-154 — `def test_char_length(self, db)`
+- pub `test_character_length` method L156-158 — `def test_character_length(self, db)`
+- pub `TestListSlicing` class L166-190 — `{ test_slice_range, test_slice_from, test_slice_to }`
+- pub `test_slice_range` method L167-174 — `def test_slice_range(self, db)`
+- pub `test_slice_from` method L176-182 — `def test_slice_from(self, db)`
+- pub `test_slice_to` method L184-190 — `def test_slice_to(self, db)`
+- pub `TestStDev` class L193-208 — `{ test_stdev, test_stdevp }`
+- pub `test_stdev` method L194-200 — `def test_stdev(self, db_with_nodes)`
+- pub `test_stdevp` method L202-208 — `def test_stdevp(self, db_with_nodes)`
+- pub `TestTrigFunctions` class L211-236 — `{ test_atan2, test_degrees, test_radians, test_cot, test_haversin }`
+- pub `test_atan2` method L212-215 — `def test_atan2(self, db)`
+- pub `test_degrees` method L217-220 — `def test_degrees(self, db)`
+- pub `test_radians` method L222-225 — `def test_radians(self, db)`
+- pub `test_cot` method L227-230 — `def test_cot(self, db)`
+- pub `test_haversin` method L232-236 — `def test_haversin(self, db)`
+- pub `TestHyperbolicFunctions` class L239-259 — `{ test_sinh, test_cosh, test_tanh, test_coth }`
+- pub `test_sinh` method L240-243 — `def test_sinh(self, db)`
+- pub `test_cosh` method L245-248 — `def test_cosh(self, db)`
+- pub `test_tanh` method L250-253 — `def test_tanh(self, db)`
+- pub `test_coth` method L255-259 — `def test_coth(self, db)`
+- pub `TestIsNaN` class L262-265 — `{ test_isnan_number }`
+- pub `test_isnan_number` method L263-265 — `def test_isnan_number(self, db)`
+- pub `TestDateConstruction` class L273-300 — `{ test_date, test_time, test_datetime, test_duration }`
+- pub `test_date` method L274-279 — `def test_date(self, db)`
+- pub `test_time` method L281-286 — `def test_time(self, db)`
+- pub `test_datetime` method L288-293 — `def test_datetime(self, db)`
+- pub `test_duration` method L295-300 — `def test_duration(self, db)`
+- pub `TestTemporalFromEpoch` class L303-314 — `{ test_datetime_from_epoch, test_datetime_from_epoch_millis }`
+- pub `test_datetime_from_epoch` method L304-308 — `def test_datetime_from_epoch(self, db)`
+- pub `test_datetime_from_epoch_millis` method L310-314 — `def test_datetime_from_epoch_millis(self, db)`
+- pub `TestDurationIn` class L317-331 — `{ test_duration_in_days, test_duration_in_seconds }`
+- pub `test_duration_in_days` method L318-324 — `def test_duration_in_days(self, db)`
+- pub `test_duration_in_seconds` method L326-331 — `def test_duration_in_seconds(self, db)`
+- pub `TestDateTruncate` class L334-340 — `{ test_date_truncate }`
+- pub `test_date_truncate` method L335-340 — `def test_date_truncate(self, db)`
+- pub `TestDateArithmetic` class L343-356 — `{ test_date_add, test_date_sub }`
+- pub `test_date_add` method L344-349 — `def test_date_add(self, db)`
+- pub `test_date_sub` method L351-356 — `def test_date_sub(self, db)`
+- pub `TestPointConstruction` class L359-372 — `{ test_point_cartesian, test_point_geographic }`
+- pub `test_point_cartesian` method L360-365 — `def test_point_cartesian(self, db)`
+- pub `test_point_geographic` method L367-372 — `def test_point_geographic(self, db)`
+- pub `TestDistance` class L375-390 — `{ test_distance_cartesian, test_distance_geographic }`
+- pub `test_distance_cartesian` method L376-381 — `def test_distance_cartesian(self, db)`
+- pub `test_distance_geographic` method L383-390 — `def test_distance_geographic(self, db)`
+- pub `TestPointWithinBBox` class L393-411 — `{ test_point_within_bbox_true, test_point_within_bbox_false, test_point_within_b...`
+- pub `test_point_within_bbox_true` method L394-398 — `def test_point_within_bbox_true(self, db)`
+- pub `test_point_within_bbox_false` method L400-404 — `def test_point_within_bbox_false(self, db)`
+- pub `test_point_within_bbox_edge` method L406-411 — `def test_point_within_bbox_edge(self, db)` — Point exactly on the boundary should be inside.
+- pub `TestOrNullEdgeCases` class L419-453 — `{ test_tointegerornull_float_string, test_tointegerornull_empty_string, test_toi...` — Boundary tests for OrNull type conversion functions.
+- pub `test_tointegerornull_float_string` method L422-427 — `def test_tointegerornull_float_string(self, db)` — Float string should convert to integer (truncated).
+- pub `test_tointegerornull_empty_string` method L429-431 — `def test_tointegerornull_empty_string(self, db)`
+- pub `test_tointegerornull_negative` method L433-435 — `def test_tointegerornull_negative(self, db)`
+- pub `test_tofloatornull_negative` method L437-441 — `def test_tofloatornull_negative(self, db)`
+- pub `test_tobooleanornull_integer_one` method L443-445 — `def test_tobooleanornull_integer_one(self, db)`
+- pub `test_tobooleanornull_integer_zero` method L447-449 — `def test_tobooleanornull_integer_zero(self, db)`
+- pub `test_tostringornull_boolean` method L451-453 — `def test_tostringornull_boolean(self, db)`
+- pub `TestIsEmptyEdgeCases` class L456-469 — `{ test_isempty_null, test_isempty_whitespace, test_isempty_single_char }`
+- pub `test_isempty_null` method L457-460 — `def test_isempty_null(self, db)`
+- pub `test_isempty_whitespace` method L462-465 — `def test_isempty_whitespace(self, db)` — Whitespace-only string is NOT empty (has length > 0).
+- pub `test_isempty_single_char` method L467-469 — `def test_isempty_single_char(self, db)`
+- pub `TestListSlicingEdgeCases` class L472-494 — `{ test_slice_empty_result, test_slice_single_element, test_slice_full_range, tes...`
+- pub `test_slice_empty_result` method L473-477 — `def test_slice_empty_result(self, db)` — Slice beyond array length returns empty array.
+- pub `test_slice_single_element` method L479-482 — `def test_slice_single_element(self, db)`
+- pub `test_slice_full_range` method L484-488 — `def test_slice_full_range(self, db)` — Slice covering entire list.
+- pub `test_slice_zero_length` method L490-494 — `def test_slice_zero_length(self, db)` — Start == end gives empty slice.
+- pub `TestTemporalEdgeCases` class L497-534 — `{ test_date_leap_year, test_date_end_of_year, test_date_add_cross_month, test_da...`
+- pub `test_date_leap_year` method L498-500 — `def test_date_leap_year(self, db)`
+- pub `test_date_end_of_year` method L502-504 — `def test_date_end_of_year(self, db)`
+- pub `test_date_add_cross_month` method L506-509 — `def test_date_add_cross_month(self, db)` — Adding days that cross a month boundary.
+- pub `test_date_add_cross_year` method L511-514 — `def test_date_add_cross_year(self, db)` — Adding months that cross a year boundary.
+- pub `test_date_sub_cross_year` method L516-518 — `def test_date_sub_cross_year(self, db)`
+- pub `test_duration_in_days_same_date` method L520-522 — `def test_duration_in_days_same_date(self, db)`
+- pub `test_duration_in_seconds_negative` method L524-529 — `def test_duration_in_seconds_negative(self, db)` — Earlier date first gives negative duration.
+- pub `test_datetime_from_epoch_negative` method L531-534 — `def test_datetime_from_epoch_negative(self, db)` — Negative epoch = before 1970.
+- pub `TestSpatialEdgeCases` class L537-577 — `{ test_distance_same_point, test_distance_negative_coords, test_point_3d, test_g...`
+- pub `test_distance_same_point` method L538-542 — `def test_distance_same_point(self, db)`
+- pub `test_distance_negative_coords` method L544-548 — `def test_distance_negative_coords(self, db)`
+- pub `test_point_3d` method L550-553 — `def test_point_3d(self, db)`
+- pub `test_geographic_distance_same_point` method L555-559 — `def test_geographic_distance_same_point(self, db)`
+- pub `test_geographic_distance_antipodal` method L561-567 — `def test_geographic_distance_antipodal(self, db)` — North pole to south pole ≈ 20,015 km.
+- pub `test_bbox_geographic` method L569-577 — `def test_bbox_geographic(self, db)` — NYC is within a US northeast bounding box.
+- pub `TestNullIfEdgeCases` class L580-593 — `{ test_nullif_strings, test_nullif_null_args, test_nullif_mixed_types }`
+- pub `test_nullif_strings` method L581-583 — `def test_nullif_strings(self, db)`
+- pub `test_nullif_null_args` method L585-587 — `def test_nullif_null_args(self, db)`
+- pub `test_nullif_mixed_types` method L589-593 — `def test_nullif_mixed_types(self, db)`
+- pub `TestValueTypeEdgeCases` class L596-604 — `{ test_valuetype_null, test_valuetype_boolean }`
+- pub `test_valuetype_null` method L597-599 — `def test_valuetype_null(self, db)`
+- pub `test_valuetype_boolean` method L601-604 — `def test_valuetype_boolean(self, db)`
+- pub `TestReturnStarEdgeCases` class L607-620 — `{ test_return_star_with_relationship, test_return_star_multiple_nodes }`
+- pub `test_return_star_with_relationship` method L608-614 — `def test_return_star_with_relationship(self, db)`
+- pub `test_return_star_multiple_nodes` method L616-620 — `def test_return_star_multiple_nodes(self, db)`
 
 ### bindings/rust
 
@@ -1065,7 +1231,64 @@
 -  `test_bulk_set_with_builder_params` function L2814-2825 — `()` — Integration tests for GraphQLite Rust bindings.
 -  `test_set_single_property_return` function L2828-2837 — `()` — Integration tests for GraphQLite Rust bindings.
 -  `test_set_bulk_replace_return` function L2840-2855 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_remove_property_return` function L2858-2872 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_set_timestamp_function` function L2858-2869 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_set_to_upper_function` function L2872-2882 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_merge_on_create_set_timestamp` function L2885-2895 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_merge` function L2898-2914 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_replace` function L2917-2933 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_nested_json` function L2936-2949 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_set_to_float_function` function L2952-2963 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_set_function_null_result` function L2966-2979 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_float_values` function L2982-2997 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_null_skipped` function L3000-3016 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_bool_false` function L3019-3032 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_nested_array` function L3035-3050 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_non_json_error` function L3053-3061 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_bulk_set_parameter_missing_error` function L3064-3072 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_merge_on_match_set_function` function L3075-3086 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_remove_property_return` function L3089-3103 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_return_star` function L3110-3117 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_return_star_with_relationship` function L3120-3126 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_isempty` function L3129-3136 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_btrim` function L3139-3143 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_to_integer_or_null` function L3146-3154 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_to_float_or_null` function L3157-3166 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_to_boolean_or_null` function L3169-3177 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_element_id` function L3180-3185 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_nullif` function L3188-3196 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_value_type` function L3199-3209 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_char_length` function L3212-3219 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_list_slice_range` function L3226-3233 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_list_slice_from` function L3236-3242 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_list_slice_to` function L3245-3251 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_stdev` function L3254-3266 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_stdevp` function L3269-3279 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_trig_functions` function L3282-3308 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_hyperbolic_functions` function L3311-3332 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_isnan` function L3335-3339 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_map_construction` function L3346-3350 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_time_map_construction` function L3353-3357 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_datetime_map_construction` function L3360-3364 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_duration_map` function L3367-3373 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_datetime_from_epoch` function L3376-3380 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_duration_in_days` function L3383-3387 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_duration_in_seconds` function L3390-3394 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_add` function L3397-3402 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_sub` function L3405-3410 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_truncate` function L3413-3417 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_point_cartesian` function L3420-3428 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_point_geographic` function L3431-3437 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_distance_euclidean` function L3440-3448 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_distance_haversine` function L3451-3460 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_within_bbox` function L3463-3474 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_distance_same_point` function L3477-3484 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_add_cross_year` function L3487-3492 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_negative_epoch` function L3495-3500 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug1_count_aggregate_with_where_filter` function L3510-3523 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug2_property_match_syntax` function L3526-3536 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug3_optional_match_with_where_filter` function L3539-3567 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug5_undirected_match_bare` function L3570-3590 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_pattern_predicate_in_where` function L3593-3608 — `()` — Integration tests for GraphQLite Rust bindings.
 
 ### docs/theme
 

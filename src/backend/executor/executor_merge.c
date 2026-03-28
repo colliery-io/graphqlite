@@ -40,7 +40,7 @@ static int bind_all_params(sqlite3_stmt *stmt, param_binding *bindings, int coun
                 rc = sqlite3_bind_text(stmt, i + 1, bindings[i].value.text, -1, SQLITE_STATIC);
                 break;
             case BIND_INT:
-                rc = sqlite3_bind_int(stmt, i + 1, bindings[i].value.integer);
+                rc = sqlite3_bind_int64(stmt, i + 1, bindings[i].value.integer);
                 break;
             case BIND_DOUBLE:
                 rc = sqlite3_bind_double(stmt, i + 1, bindings[i].value.real);

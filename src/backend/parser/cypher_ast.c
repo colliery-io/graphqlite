@@ -968,7 +968,7 @@ cypher_path* make_shortest_path(ast_list *elements, path_type type)
     return path;
 }
 
-cypher_literal* make_integer_literal(int value, int location)
+cypher_literal* make_integer_literal(int64_t value, int location)
 {
     cypher_literal *literal = (cypher_literal*)ast_node_create(AST_NODE_LITERAL, location, sizeof(cypher_literal));
     if (!literal) {
@@ -1404,7 +1404,7 @@ void ast_node_print(ast_node *node, int indent)
                 cypher_literal *literal = (cypher_literal*)node;
                 switch (literal->literal_type) {
                     case LITERAL_INTEGER:
-                        printf(" = %d", literal->value.integer);
+                        printf(" = %lld", (long long)literal->value.integer);
                         break;
                     case LITERAL_DECIMAL:
                         printf(" = %f", literal->value.decimal);

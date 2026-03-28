@@ -109,7 +109,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     cypher_literal *lit = (cypher_literal*)item;
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
-                            dbuf_appendf(&cte_query, "%d", lit->value.integer);
+                            dbuf_appendf(&cte_query, "%lld", (long long)lit->value.integer);
                             break;
                         case LITERAL_DECIMAL:
                             dbuf_appendf(&cte_query, "%g", lit->value.decimal);

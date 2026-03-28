@@ -37,7 +37,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %expect-rr 3  /* One for IDENTIFIER, one for BQIDENT, one for END_P in variable_opt */
 
 %union {
-    int integer;
+    int64_t integer;
     double decimal;
     char *string;
     bool boolean;

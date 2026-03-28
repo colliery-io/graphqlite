@@ -137,7 +137,7 @@ union CYPHER_YYSTYPE
 {
 #line 39 "src/backend/parser/cypher_gram.y"
 
-    int integer;
+    int64_t integer;
     double decimal;
     char *string;
     bool boolean;

@@ -818,7 +818,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 cypher_literal *lit = (cypher_literal*)expr;
                 switch (lit->literal_type) {
                     case LITERAL_INTEGER:
-                        append_sql(ctx, "%d", lit->value.integer);
+                        append_sql(ctx, "%lld", (long long)lit->value.integer);
                         break;
                     case LITERAL_DECIMAL:
                         append_sql(ctx, "%f", lit->value.decimal);
