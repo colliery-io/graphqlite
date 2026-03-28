@@ -4,15 +4,15 @@ level: task
 title: "startNode() and endNode() return integer ID instead of Node"
 short_code: "GQLITE-T-0146"
 created_at: 2026-03-28T00:47:02.423475+00:00
-updated_at: 2026-03-28T00:47:02.423475+00:00
+updated_at: 2026-03-28T01:55:02.249449+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -55,6 +55,10 @@ MATCH ()-[r:KNOWS]->() RETURN endNode(r).name     -- Error: Failed to transform
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] `startNode(r).name` returns the source node's property value
 - [ ] `endNode(r).name` returns the target node's property value
 - [ ] `elementId(startNode(r))` works (function composition)
@@ -66,7 +70,15 @@ MATCH ()-[r:KNOWS]->() RETURN endNode(r).name     -- Error: Failed to transform
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-03-27: Implementation complete
+
+**Change:** `src/backend/transform/transform_expr_ops.c` — Added `AST_NODE_FUNCTION_CALL` handling in `transform_property_access()` for `startNode()` and `endNode()`. When property access is done on these functions (e.g., `startNode(r).name`), generates a COALESCE property lookup using the node ID subquery from the function as the `node_id`.
+
+**Test results:**
+- 921/921 C unit tests pass
+- `TestIssue41::test_startnode_property_access` — PASSES (`startNode(r).name` returns "Alice")
+- `TestIssue41::test_endnode_property_access` — PASSES (`endNode(r).name` returns "Bob")
+- All 43 functional test files pass
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 

@@ -336,6 +336,49 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return 0;
     }
 
+    /* Handle function call base: startNode(r).name, endNode(r).name */
+    if (prop->expr->type == AST_NODE_FUNCTION_CALL) {
+        cypher_function_call *func = (cypher_function_call*)prop->expr;
+        if (func->function_name &&
+            (strcasecmp(func->function_name, "startNode") == 0 ||
+             strcasecmp(func->function_name, "endNode") == 0)) {
+            /* Generate property lookup using the node ID from startNode/endNode.
+             * The function generates (SELECT source_id/target_id FROM edges WHERE id = alias.id)
+             * so we use that as the node_id in the property lookup. */
+            const char *gprefix = "";
+            append_sql(ctx, "(SELECT COALESCE(");
+            append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = ", gprefix, gprefix);
+            if (transform_expression(ctx, prop->expr) < 0) return -1;
+            append_sql(ctx, " AND pk.key = ");
+            append_string_literal(ctx, prop->property_name);
+            append_sql(ctx, "), ");
+            append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = ", gprefix, gprefix);
+            if (transform_expression(ctx, prop->expr) < 0) return -1;
+            append_sql(ctx, " AND pk.key = ");
+            append_string_literal(ctx, prop->property_name);
+            append_sql(ctx, "), ");
+            append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = ", gprefix, gprefix);
+            if (transform_expression(ctx, prop->expr) < 0) return -1;
+            append_sql(ctx, " AND pk.key = ");
+            append_string_literal(ctx, prop->property_name);
+            append_sql(ctx, "), ");
+            append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = ", gprefix, gprefix);
+            if (transform_expression(ctx, prop->expr) < 0) return -1;
+            append_sql(ctx, " AND pk.key = ");
+            append_string_literal(ctx, prop->property_name);
+            append_sql(ctx, "), ");
+            append_sql(ctx, "(SELECT npj.value FROM %snode_props_json npj JOIN %sproperty_keys pk ON npj.key_id = pk.id WHERE npj.node_id = ", gprefix, gprefix);
+            if (transform_expression(ctx, prop->expr) < 0) return -1;
+            append_sql(ctx, " AND pk.key = ");
+            append_string_literal(ctx, prop->property_name);
+            append_sql(ctx, ")))");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("Property access on function call not supported for this function");
+        return -1;
+    }
+
     /* Get the base expression (should be an identifier) */
     if (prop->expr->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
