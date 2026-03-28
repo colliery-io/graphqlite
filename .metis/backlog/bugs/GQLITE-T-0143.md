@@ -4,15 +4,15 @@ level: task
 title: "Variables from MERGE are unbound in subsequent WITH/SET clauses"
 short_code: "GQLITE-T-0143"
 created_at: 2026-03-28T00:46:59.327842+00:00
-updated_at: 2026-03-28T00:46:59.327842+00:00
+updated_at: 2026-03-28T01:56:41.993259+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -50,6 +50,10 @@ MERGE (c)-[:EMPLOYS]->(i)
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] Variables bound by MERGE persist through WITH into subsequent clauses
 - [ ] MERGE + SET + WITH + MATCH + MERGE pattern works end-to-end
 - [ ] Repro test passes: `TestIssue36` in `test_issue_repro.py`
@@ -61,7 +65,44 @@ MERGE (c)-[:EMPLOYS]->(i)
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-03-27: Investigation — architectural blocker identified
+
+**Finding:** This is NOT a simple fix. MERGE is handled entirely at the executor level (in `executor_merge.c`) because it has CREATE-if-not-exists semantics that can't be expressed as SQL. The generic transform pipeline (`cypher_transform_query`) has no `AST_NODE_MERGE` case and errors on it.
+
+The query `MERGE ... SET ... WITH ... MATCH ... MERGE ...` requires:
+1. Execute MERGE (executor-level, creates/matches node)
+2. Execute SET (needs variable from step 1)
+3. Pipe variable through WITH
+4. Execute MATCH (SQL-level)  
+5. Execute second MERGE (executor-level, needs variables from steps 3-4)
+
+This is a clause pipeline problem — variables must flow between executor-level operations (MERGE) and SQL-level operations (MATCH). Currently, each pattern handler runs in isolation with its own variable map.
+
+**Possible approaches:**
+- Add a `MERGE+SET+WITH+MATCH+MERGE` pattern handler (narrow fix, fragile)
+- Implement a general clause pipeline executor that can chain executor-level and SQL-level clauses (proper fix, significant effort)
+- Store MERGE output in a temp table that WITH can reference (intermediate approach)
+
+**Recommendation:** This should be elevated to an initiative with its own decomposition. It touches `query_dispatch.c` pattern matching, `executor_merge.c` variable lifetime, and potentially requires a new pipeline executor.
+
+### 2026-03-27: Implemented via clause pipeline handler
+
+**Approach:** Added a `MERGE+WITH` pattern handler (priority 55) that splits execution at the WITH boundary:
+1. Executes pre-WITH MERGE + SET using existing `execute_merge_clause` + `execute_set_operations` with re-resolved variable map
+2. Transforms and executes post-WITH MATCH to find additional variables
+3. Calls new `execute_merge_with_variables()` for post-WITH MERGE with combined variable map (pre-bound MERGE variables + MATCH results)
+
+Also added `CLAUSE_WITH` to forbidden list for `MATCH+SET` and `MATCH+MERGE` patterns to prevent them from incorrectly matching queries that contain WITH boundaries.
+
+**Changes (3 files):**
+- `src/backend/executor/query_dispatch.c` — new `handle_merge_with_pipeline()`, pattern entry, WITH forbidden on MATCH+SET/MATCH+MERGE
+- `src/backend/executor/executor_merge.c` — new `execute_merge_with_variables()`
+- `src/include/executor/executor_internal.h` — declaration
+
+**Test results:**
+- 921/921 C unit tests pass
+- `TestIssue36::test_merge_variable_in_with_then_match` — PASSES
+- All 43 functional test files pass
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 

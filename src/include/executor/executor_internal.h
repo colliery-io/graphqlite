@@ -87,6 +87,8 @@ int get_param_value(const char *params_json, const char *param_name,
 int execute_create_clause(cypher_executor *executor, cypher_create *create, cypher_result *result);
 int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, cypher_result *result);
 int execute_merge_clause(cypher_executor *executor, cypher_merge *merge, cypher_result *result);
+int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
+                                 variable_map *var_map, cypher_result *result);
 int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result);
 int execute_match_clause(cypher_executor *executor, cypher_match *match, cypher_result *result);
 

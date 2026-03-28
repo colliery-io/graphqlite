@@ -700,6 +700,132 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge, cypher_
     return 0;
 }
 
+/* Execute MERGE with pre-bound variables (for MERGE+WITH pipeline).
+ * Uses the provided variable_map to resolve variables that were
+ * bound by a previous MERGE clause. */
+int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
+                                 variable_map *var_map, cypher_result *result)
+{
+    if (!executor || !merge || !var_map || !result) {
+        return -1;
+    }
+
+    CYPHER_DEBUG("Executing MERGE with pre-bound variables");
+
+    int nodes_matched = 0, nodes_created_in_merge = 0;
+
+    for (int p = 0; p < merge->pattern->count; p++) {
+        ast_node *pattern = merge->pattern->items[p];
+        if (pattern->type != AST_NODE_PATH) continue;
+
+        cypher_path *path = (cypher_path*)pattern;
+        if (!path->elements) continue;
+
+        int previous_node_id = -1;
+
+        for (int i = 0; i < path->elements->count; i++) {
+            ast_node *element = path->elements->items[i];
+
+            if (element->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *node_pattern = (cypher_node_pattern*)element;
+                int node_id = -1;
+
+                /* Check pre-bound variables first */
+                if (node_pattern->variable) {
+                    node_id = get_variable_node_id(var_map, node_pattern->variable);
+                    if (node_id >= 0) {
+                        CYPHER_DEBUG("Using pre-bound variable '%s' = node %d", node_pattern->variable, node_id);
+                        previous_node_id = node_id;
+                        continue;
+                    }
+                }
+
+                /* Try to find by pattern */
+                node_id = find_node_by_pattern(executor, node_pattern);
+
+                if (node_id >= 0) {
+                    nodes_matched++;
+                } else {
+                    /* Create the node */
+                    node_id = cypher_schema_create_node(executor->schema_mgr);
+                    if (node_id < 0) {
+                        set_result_error(result, "Failed to create node in MERGE");
+                        return -1;
+                    }
+                    nodes_created_in_merge++;
+                    result->nodes_created++;
+
+                    if (has_labels(node_pattern)) {
+                        for (int li = 0; li < node_pattern->labels->count; li++) {
+                            const char *label = get_label_string(node_pattern->labels->items[li]);
+                            if (label) {
+                                cypher_schema_add_node_label(executor->schema_mgr, node_id, label);
+                            }
+                        }
+                    }
+                }
+
+                if (node_pattern->variable) {
+                    set_variable_node_id(var_map, node_pattern->variable, node_id);
+                }
+                previous_node_id = node_id;
+
+            } else if (element->type == AST_NODE_REL_PATTERN && i + 1 < path->elements->count) {
+                cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+                cypher_node_pattern *target = (cypher_node_pattern*)path->elements->items[i + 1];
+
+                int target_node_id = -1;
+
+                /* Check pre-bound variables for target */
+                if (target->variable) {
+                    target_node_id = get_variable_node_id(var_map, target->variable);
+                }
+
+                if (target_node_id < 0) {
+                    target_node_id = find_node_by_pattern(executor, target);
+                }
+
+                if (target_node_id < 0) {
+                    /* Create target node */
+                    target_node_id = cypher_schema_create_node(executor->schema_mgr);
+                    if (target_node_id < 0) {
+                        set_result_error(result, "Failed to create target node in MERGE");
+                        return -1;
+                    }
+                    result->nodes_created++;
+
+                    if (has_labels(target)) {
+                        for (int li = 0; li < target->labels->count; li++) {
+                            const char *label = get_label_string(target->labels->items[li]);
+                            if (label) {
+                                cypher_schema_add_node_label(executor->schema_mgr, target_node_id, label);
+                            }
+                        }
+                    }
+                }
+
+                if (target->variable) {
+                    set_variable_node_id(var_map, target->variable, target_node_id);
+                }
+
+                /* Create edge if it doesn't exist */
+                int source_id = previous_node_id;
+                if (source_id >= 0 && target_node_id >= 0) {
+                    const char *rel_type = rel->type ? rel->type : "RELATED";
+                    int edge_id = cypher_schema_create_edge(executor->schema_mgr, source_id, target_node_id, rel_type);
+                    if (edge_id >= 0) {
+                        result->relationships_created++;
+                    }
+                }
+
+                previous_node_id = target_node_id;
+                i++; /* Skip target node */
+            }
+        }
+    }
+
+    return 0;
+}
 
 /* Execute MATCH+MERGE query combination */
 int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cypher_merge *merge, cypher_result *result)

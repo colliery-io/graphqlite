@@ -156,6 +156,8 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags);
 static int handle_return_only(cypher_executor *executor, cypher_query *query,
                               cypher_result *result, clause_flags flags);
+static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
+                                      cypher_result *result, clause_flags flags);
 
 /*
  * Pattern registry - ordered by priority (highest first)
@@ -199,7 +201,7 @@ static const query_pattern patterns[] = {
     {
         .name = "MATCH+SET",
         .required = CLAUSE_MATCH | CLAUSE_SET,
-        .forbidden = CLAUSE_NONE,
+        .forbidden = CLAUSE_WITH,
         .handler = handle_match_set,
         .priority = 90
     },
@@ -220,7 +222,7 @@ static const query_pattern patterns[] = {
     {
         .name = "MATCH+MERGE",
         .required = CLAUSE_MATCH | CLAUSE_MERGE,
-        .forbidden = CLAUSE_NONE,
+        .forbidden = CLAUSE_WITH,
         .handler = handle_match_merge,
         .priority = 90
     },
@@ -283,6 +285,13 @@ static const query_pattern patterns[] = {
         .forbidden = CLAUSE_MATCH | CLAUSE_UNWIND,
         .handler = handle_create,
         .priority = 50
+    },
+    {
+        .name = "MERGE+WITH",
+        .required = CLAUSE_MERGE | CLAUSE_WITH,
+        .forbidden = CLAUSE_NONE,
+        .handler = handle_merge_with_pipeline,
+        .priority = 55
     },
     {
         .name = "MERGE",
@@ -834,6 +843,236 @@ static int handle_set(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Executing SET via pattern dispatch");
     int rc = execute_set_clause(executor, set, result);
+    if (rc >= 0) {
+        result->success = true;
+    }
+    return rc;
+}
+
+/* Pipeline handler for MERGE + WITH + subsequent clauses.
+ * Splits execution at the WITH boundary:
+ * 1. Execute pre-WITH clauses (MERGE + SET) as a standalone MERGE
+ * 2. Re-resolve MERGE'd node IDs by pattern
+ * 3. Dispatch post-WITH clauses as a new sub-query */
+static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
+                                      cypher_result *result, clause_flags flags)
+{
+    (void)flags;
+    CYPHER_DEBUG("Executing MERGE+WITH pipeline");
+
+    if (!query || !query->clauses) {
+        set_result_error(result, "Invalid query in MERGE+WITH pipeline");
+        return -1;
+    }
+
+    /* Find the WITH clause position to split */
+    int with_pos = -1;
+    for (int i = 0; i < query->clauses->count; i++) {
+        if (query->clauses->items[i]->type == AST_NODE_WITH) {
+            with_pos = i;
+            break;
+        }
+    }
+
+    if (with_pos < 0) {
+        set_result_error(result, "MERGE+WITH pipeline: no WITH clause found");
+        return -1;
+    }
+
+    /* --- Phase 1: Execute pre-WITH clauses (MERGE + SET) --- */
+    cypher_merge *merge = NULL;
+    for (int i = 0; i < with_pos; i++) {
+        if (query->clauses->items[i]->type == AST_NODE_MERGE) {
+            merge = (cypher_merge*)query->clauses->items[i];
+            break;
+        }
+    }
+
+    if (!merge) {
+        set_result_error(result, "MERGE+WITH pipeline: no MERGE clause before WITH");
+        return -1;
+    }
+
+    /* Execute the MERGE clause (handles ON CREATE SET internally) */
+    int rc = execute_merge_clause(executor, merge, result);
+    if (rc < 0) return -1;
+
+    /* Execute any standalone SET clauses between MERGE and WITH */
+    for (int i = 0; i < with_pos; i++) {
+        if (query->clauses->items[i]->type == AST_NODE_SET) {
+            cypher_set *set_clause = (cypher_set*)query->clauses->items[i];
+
+            /* Build variable map from MERGE pattern by re-resolving node IDs */
+            variable_map *var_map = create_variable_map();
+            if (!var_map) {
+                set_result_error(result, "Failed to create variable map for SET");
+                return -1;
+            }
+
+            for (int p = 0; p < merge->pattern->count; p++) {
+                ast_node *pat = merge->pattern->items[p];
+                if (pat->type != AST_NODE_PATH) continue;
+                cypher_path *path = (cypher_path*)pat;
+                for (int j = 0; j < path->elements->count; j++) {
+                    ast_node *elem = path->elements->items[j];
+                    if (elem->type == AST_NODE_NODE_PATTERN) {
+                        cypher_node_pattern *np = (cypher_node_pattern*)elem;
+                        if (np->variable) {
+                            int node_id = find_node_by_pattern(executor, np);
+                            if (node_id >= 0) {
+                                set_variable_node_id(var_map, np->variable, node_id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            rc = execute_set_operations(executor, set_clause, var_map, result);
+            free_variable_map(var_map);
+            if (rc < 0) return -1;
+        }
+    }
+
+    /* --- Phase 2: Execute post-WITH clauses --- */
+
+    /* Build a variable map with all MERGE'd node IDs for the post-WITH phase */
+    variable_map *post_var_map = create_variable_map();
+    if (!post_var_map) {
+        set_result_error(result, "Failed to create post-WITH variable map");
+        return -1;
+    }
+
+    for (int p = 0; p < merge->pattern->count; p++) {
+        ast_node *pat = merge->pattern->items[p];
+        if (pat->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path*)pat;
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *elem = path->elements->items[j];
+            if (elem->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *np = (cypher_node_pattern*)elem;
+                if (np->variable) {
+                    int node_id = find_node_by_pattern(executor, np);
+                    if (node_id >= 0) {
+                        set_variable_node_id(post_var_map, np->variable, node_id);
+                        CYPHER_DEBUG("MERGE+WITH pipeline: carrying variable '%s' = node %d", np->variable, node_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Find post-WITH MATCH and MERGE clauses */
+    cypher_match *post_match = NULL;
+    cypher_merge *post_merge = NULL;
+    cypher_return *post_return = NULL;
+    for (int i = with_pos + 1; i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (clause->type == AST_NODE_MATCH && !post_match) post_match = (cypher_match*)clause;
+        if (clause->type == AST_NODE_MERGE && !post_merge) post_merge = (cypher_merge*)clause;
+        if (clause->type == AST_NODE_RETURN && !post_return) post_return = (cypher_return*)clause;
+    }
+
+    if (post_match && post_merge) {
+        /* Execute MATCH to find additional variables, then MERGE with combined var_map */
+        /* Transform MATCH to SQL and execute to get matched node IDs */
+        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+        if (!ctx) {
+            free_variable_map(post_var_map);
+            set_result_error(result, "Failed to create transform context for post-WITH");
+            return -1;
+        }
+
+        if (transform_match_clause(ctx, post_match) < 0) {
+            cypher_transform_free_context(ctx);
+            free_variable_map(post_var_map);
+            set_result_error(result, "Failed to transform post-WITH MATCH clause");
+            return -1;
+        }
+
+        if (finalize_sql_generation(ctx) < 0) {
+            cypher_transform_free_context(ctx);
+            free_variable_map(post_var_map);
+            set_result_error(result, "Failed to finalize post-WITH SQL");
+            return -1;
+        }
+
+        /* Build SELECT with node variable IDs */
+        char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
+        if (select_pos) {
+            char *after_star = select_pos + strlen("SELECT *");
+            char *temp = strdup(after_star);
+            ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
+            ctx->sql_buffer[ctx->sql_size] = '\0';
+
+            bool first = true;
+            int var_count = transform_var_count(ctx->var_ctx);
+            for (int vi = 0; vi < var_count; vi++) {
+                transform_var *var = transform_var_at(ctx->var_ctx, vi);
+                if (var && var->kind == VAR_KIND_NODE) {
+                    if (!first) append_sql(ctx, ", ");
+                    append_sql(ctx, "%s.id AS %s_id", var->table_alias, var->name);
+                    first = false;
+                }
+            }
+            append_sql(ctx, " %s", temp);
+            free(temp);
+        }
+
+        CYPHER_DEBUG("MERGE+WITH pipeline: post-WITH MATCH SQL: %s", ctx->sql_buffer);
+
+        sqlite3_stmt *stmt;
+        rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+        if (rc != SQLITE_OK) {
+            cypher_transform_free_context(ctx);
+            free_variable_map(post_var_map);
+            set_result_error(result, "Failed to prepare post-WITH MATCH SQL");
+            return -1;
+        }
+
+        if (executor->params_json) {
+            bind_params_from_json(stmt, executor->params_json);
+        }
+
+        /* Execute MATCH and add found variables to our map */
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int col_count = sqlite3_column_count(stmt);
+            for (int c = 0; c < col_count; c++) {
+                const char *col_name = sqlite3_column_name(stmt, c);
+                if (col_name) {
+                    /* Column names are "varname_id" */
+                    char var_name[128];
+                    strncpy(var_name, col_name, sizeof(var_name) - 1);
+                    var_name[sizeof(var_name) - 1] = '\0';
+                    char *suffix = strstr(var_name, "_id");
+                    if (suffix) {
+                        *suffix = '\0';
+                        int node_id = sqlite3_column_int(stmt, c);
+                        /* Only add if not already in map (MERGE variables take priority) */
+                        if (get_variable_node_id(post_var_map, var_name) < 0) {
+                            set_variable_node_id(post_var_map, var_name, node_id);
+                            CYPHER_DEBUG("MERGE+WITH pipeline: MATCH found '%s' = node %d", var_name, node_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        sqlite3_finalize(stmt);
+        cypher_transform_free_context(ctx);
+
+        /* Now execute the post-WITH MERGE with the combined variable map */
+        rc = execute_merge_with_variables(executor, post_merge, post_var_map, result);
+    } else if (post_return) {
+        /* MERGE + WITH + RETURN: just return the MERGE'd variables */
+        result->success = true;
+        rc = 0;
+    } else {
+        set_result_error(result, "MERGE+WITH pipeline: unsupported post-WITH clause combination");
+        rc = -1;
+    }
+
+    free_variable_map(post_var_map);
+
     if (rc >= 0) {
         result->success = true;
     }
