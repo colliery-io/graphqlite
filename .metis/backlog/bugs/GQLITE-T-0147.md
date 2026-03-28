@@ -4,15 +4,15 @@ level: task
 title: "size(labels(n)) returns string length instead of list length"
 short_code: "GQLITE-T-0147"
 created_at: 2026-03-28T00:47:03.841649+00:00
-updated_at: 2026-03-28T00:47:03.841649+00:00
+updated_at: 2026-03-28T01:08:49.550927+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -51,6 +51,10 @@ RETURN size([1, 2, 3]) AS sz                               -- Returns 3 (correct
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] `size(labels(n))` returns the number of labels
 - [ ] `size([literal list])` still works correctly
 - [ ] `size()` on strings still returns string length
@@ -62,7 +66,17 @@ RETURN size([1, 2, 3]) AS sz                               -- Returns 3 (correct
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-03-27: Implementation complete
+
+**Change:** `src/backend/transform/transform_func_string.c` — extended `size()` handling to detect `AST_NODE_FUNCTION_CALL` arguments from known list-returning functions (`labels`, `keys`, `nodes`, `relationships`, `collect`, `range`, `tail`, `split`, `json_keys`) and use `json_array_length()` instead of `LENGTH()`.
+
+**Test results:**
+- 921/921 C unit tests pass
+- `TestIssue42::test_size_labels_single` — PASSES (was returning 12, now returns 1)
+- `TestIssue42::test_size_labels_multiple` — PASSES (was returning 23, now returns 2)
+- `size("hello")` = 5 (string length still works)
+- `size([1,2,3])` = 3 (literal list still works)
+- All 43 functional test files pass
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 

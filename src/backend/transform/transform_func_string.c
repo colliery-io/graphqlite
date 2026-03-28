@@ -55,8 +55,29 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
         /* size() works on both strings and lists.
          * For lists (json arrays), use json_array_length.
          * For strings, use LENGTH. */
-        if (func_call->args && func_call->args->count > 0 &&
-            func_call->args->items[0]->type == AST_NODE_LIST) {
+        bool use_json_array_length = false;
+        if (func_call->args && func_call->args->count > 0) {
+            ast_node *arg = func_call->args->items[0];
+            if (arg->type == AST_NODE_LIST) {
+                use_json_array_length = true;
+            } else if (arg->type == AST_NODE_FUNCTION_CALL) {
+                /* Check if the function returns a list (JSON array) */
+                cypher_function_call *inner = (cypher_function_call*)arg;
+                if (inner->function_name &&
+                    (strcasecmp(inner->function_name, "labels") == 0 ||
+                     strcasecmp(inner->function_name, "keys") == 0 ||
+                     strcasecmp(inner->function_name, "nodes") == 0 ||
+                     strcasecmp(inner->function_name, "relationships") == 0 ||
+                     strcasecmp(inner->function_name, "collect") == 0 ||
+                     strcasecmp(inner->function_name, "range") == 0 ||
+                     strcasecmp(inner->function_name, "tail") == 0 ||
+                     strcasecmp(inner->function_name, "split") == 0 ||
+                     strcasecmp(inner->function_name, "json_keys") == 0)) {
+                    use_json_array_length = true;
+                }
+            }
+        }
+        if (use_json_array_length) {
             append_sql(ctx, "json_array_length(");
             if (transform_expression(ctx, func_call->args->items[0]) < 0) {
                 return -1;
