@@ -1032,9 +1032,32 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             }
 
             if (!target_already_added) {
-                char target_cond[256];
-                snprintf(target_cond, sizeof(target_cond), "%s.id = %s.target_id", target_alias, edge_alias);
-                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), target_alias, target_cond);
+                /* For OPTIONAL MATCH with labels on the target, fold the label
+                 * condition into the target node's LEFT JOIN ON clause so that
+                 * nodes without the required label produce NULLs. */
+                if (has_labels(target_node)) {
+                    dynamic_buffer target_cond;
+                    dbuf_init(&target_cond);
+                    dbuf_appendf(&target_cond, "%s.id = %s.target_id", target_alias, edge_alias);
+
+                    for (int i = 0; i < target_node->labels->count; i++) {
+                        const char *label = get_label_string(target_node->labels->items[i]);
+                        if (label) {
+                            dbuf_appendf(&target_cond,
+                                " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s.id AND label = '%s')",
+                                ctx->current_graph ? ctx->current_graph : "",
+                                target_alias, label);
+                        }
+                    }
+
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                             get_graph_table(ctx, "nodes"), target_alias, dbuf_get(&target_cond));
+                    dbuf_free(&target_cond);
+                } else {
+                    char target_cond[256];
+                    snprintf(target_cond, sizeof(target_cond), "%s.id = %s.target_id", target_alias, edge_alias);
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), target_alias, target_cond);
+                }
             }
         } else {
             /* Non-optional: use CROSS JOIN for edges (will be filtered by WHERE) */

@@ -4,15 +4,15 @@ level: task
 title: "OPTIONAL MATCH ignores label filter and drops null rows"
 short_code: "GQLITE-T-0142"
 created_at: 2026-03-28T00:46:58.952686+00:00
-updated_at: 2026-03-28T00:46:58.952686+00:00
+updated_at: 2026-03-28T01:18:46.075522+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -57,6 +57,10 @@ MATCH (a:Person) OPTIONAL MATCH (a)-->(r:Pet) WHERE r.name = 'nonexistent' RETUR
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] `OPTIONAL MATCH (a)-->(r:Label)` only matches nodes with the specified label
 - [ ] Unmatched OPTIONAL MATCH returns rows with null columns (not empty results)
 - [ ] Label joins use LEFT JOIN when inside an OPTIONAL MATCH context
@@ -69,4 +73,16 @@ MATCH (a:Person) OPTIONAL MATCH (a)-->(r:Pet) WHERE r.name = 'nonexistent' RETUR
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-03-27: Label filter fix implemented (partial)
+
+**Fixed:** OPTIONAL MATCH now respects label filters on target nodes. `OPTIONAL MATCH (a)-->(r:Car)` no longer returns `:Pet` nodes — it correctly returns NULL when no `:Car` node exists.
+
+**Change:** `src/backend/transform/transform_match.c` — in `generate_relationship_match()`, for OPTIONAL MATCH with labeled target nodes, fold the label condition into the target node's LEFT JOIN ON clause using `EXISTS (SELECT 1 FROM node_labels ...)` instead of a separate INNER JOIN.
+
+**Not fixed:** WHERE clause after OPTIONAL MATCH still drops rows instead of preserving NULLs. This is a deeper issue: `WHERE r.name = 'nonexistent'` after OPTIONAL MATCH becomes a regular SQL WHERE that converts the LEFT JOIN to an effective INNER JOIN. The correct fix requires moving WHERE conditions that reference optional variables into the LEFT JOIN ON clause. This should be a separate task.
+
+**Test results:**
+- 921/921 C unit tests pass
+- `TestIssue34::test_label_filter_respected` — PASSES
+- `TestIssue34::test_null_rows_preserved_with_where` — still fails (WHERE semantics, separate issue)
+- All 43 functional test files pass
