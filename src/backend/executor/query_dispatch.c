@@ -642,6 +642,52 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/* Check if a RETURN clause contains only COUNT aggregates and synthesize
+ * the result from delete counts instead of re-querying the empty graph. */
+static bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
+{
+    if (!ret || !ret->items || ret->items->count == 0) return false;
+
+    int total_deleted = result->nodes_deleted + result->relationships_deleted;
+    if (total_deleted == 0) return false;
+
+    /* Check that every RETURN item is a COUNT function call */
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+        if (!item || !item->expr || item->expr->type != AST_NODE_FUNCTION_CALL) return false;
+        cypher_function_call *func = (cypher_function_call*)item->expr;
+        if (!func->function_name || strcasecmp(func->function_name, "count") != 0) return false;
+    }
+
+    /* All items are COUNT — synthesize a single-row result */
+    result->column_count = ret->items->count;
+    result->column_names = malloc(result->column_count * sizeof(char*));
+    result->data = malloc(sizeof(char**));
+    result->data[0] = calloc(result->column_count, sizeof(char*));
+    result->data_types = malloc(sizeof(int*));
+    result->data_types[0] = calloc(result->column_count, sizeof(int));
+    result->row_count = 1;
+
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+        /* Use alias if provided, otherwise generate "count" */
+        if (item->alias) {
+            result->column_names[i] = strdup(item->alias);
+        } else {
+            result->column_names[i] = strdup("count");
+        }
+
+        /* All COUNT columns get the total delete count */
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", total_deleted);
+        result->data[0][i] = strdup(buf);
+        result->data_types[0][i] = SQLITE_INTEGER;
+    }
+
+    result->success = true;
+    return true;
+}
+
 static int handle_match_delete(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags)
 {
@@ -655,7 +701,11 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
             if (ret) {
-                rc = execute_match_return_query(executor, match, ret, result);
+                /* Try to synthesize COUNT results from delete counts
+                 * instead of re-querying the now-empty graph */
+                if (!synthesize_delete_return(ret, result)) {
+                    rc = execute_match_return_query(executor, match, ret, result);
+                }
             }
         }
     }

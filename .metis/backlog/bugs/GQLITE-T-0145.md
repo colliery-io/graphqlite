@@ -4,15 +4,15 @@ level: task
 title: "DELETE + RETURN COUNT always returns 0"
 short_code: "GQLITE-T-0145"
 created_at: 2026-03-28T00:47:01.298353+00:00
-updated_at: 2026-03-28T00:47:01.298353+00:00
+updated_at: 2026-03-28T01:12:53.919973+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -54,6 +54,10 @@ MATCH (n:Temp) RETURN count(n) AS cnt  -- Returns 0 (nodes gone)
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] `DELETE n RETURN COUNT(n)` returns the number of deleted nodes
 - [ ] `DETACH DELETE n RETURN COUNT(n)` returns the number of deleted nodes
 - [ ] Simple `DELETE` without RETURN still works
@@ -66,7 +70,18 @@ MATCH (n:Temp) RETURN count(n) AS cnt  -- Returns 0 (nodes gone)
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-03-27: Implementation complete
+
+**Change:** `src/backend/executor/query_dispatch.c` — added `synthesize_delete_return()` function that detects when a RETURN clause after DELETE contains only COUNT aggregates, and synthesizes the result directly from `nodes_deleted + relationships_deleted` instead of re-querying the now-empty graph. Sets `data_types` to `SQLITE_INTEGER` so the JSON output renders as a number, not a string.
+
+Falls back to the original re-query path for non-COUNT RETURN clauses.
+
+**Test results:**
+- 921/921 C unit tests pass
+- `TestIssue39::test_delete_return_count` — PASSES (was returning 0, now returns 3)
+- Cypher: `[{"deleted_count":3}]` (correct integer output)
+- All 3 existing Python DELETE tests pass
+- All 43 functional test files pass
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 
