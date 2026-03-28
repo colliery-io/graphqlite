@@ -229,9 +229,31 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         dbuf_appendf(&cte_query, "json_each(%s)", func_sql);
         free(func_sql);
+    } else if (unwind->expr->type == AST_NODE_PARAMETER) {
+        /* Parameter reference: use json_each on the bound parameter value.
+         * Parameters become SQLite named parameters (:name), and json_each()
+         * can iterate over JSON array text directly. */
+        cypher_parameter *param = (cypher_parameter*)unwind->expr;
+        if (!param->name) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("UNWIND parameter must be named");
+            dbuf_free(&cte_query);
+            free(inner_sql);
+            return -1;
+        }
+
+        register_parameter(ctx, param->name);
+
+        dbuf_append(&cte_query, "SELECT json_each.value AS value FROM ");
+
+        if (inner_sql && strlen(inner_sql) > 0) {
+            dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
+        }
+
+        dbuf_appendf(&cte_query, "json_each(:%s)", param->name);
     } else {
         ctx->has_error = true;
-        ctx->error_message = strdup("UNWIND requires list literal, property access, variable, or function call");
+        ctx->error_message = strdup("UNWIND requires list literal, property access, variable, function call, or parameter");
         dbuf_free(&cte_query);
         free(inner_sql);
         return -1;
@@ -250,10 +272,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     snprintf(unwind_source, sizeof(unwind_source), "%s.value", cte_name);
     transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
 
-    /* Build the outer query using unified builder */
-    char select_expr[256];
-    snprintf(select_expr, sizeof(select_expr), "%s.value", cte_name);
-    sql_select(ctx->unified_builder, select_expr, unwind->alias);
+    /* Set up FROM for the outer query — SELECT columns are added by RETURN clause */
     sql_from(ctx->unified_builder, cte_name, NULL);
 
     free(inner_sql);

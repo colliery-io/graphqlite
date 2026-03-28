@@ -4,15 +4,15 @@ level: task
 title: "UNWIND does not accept parameter references"
 short_code: "GQLITE-T-0144"
 created_at: 2026-03-28T00:47:00.323568+00:00
-updated_at: 2026-03-28T00:47:00.323568+00:00
+updated_at: 2026-03-28T01:42:24.925424+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -55,6 +55,10 @@ UNWIND [1, 2, 3] AS x RETURN x
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] `UNWIND $param AS item` works when parameter is a JSON array
 - [ ] `UNWIND $batch AS item RETURN item.id` works when parameter is a list of objects
 - [ ] Existing literal list UNWIND behavior unchanged
@@ -67,7 +71,20 @@ UNWIND [1, 2, 3] AS x RETURN x
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-03-27: Implementation complete
+
+**Changes (3 files):**
+
+1. **`src/backend/transform/transform_unwind.c`** — Added `AST_NODE_PARAMETER` case that generates `json_each(:param_name)` for parameter-based UNWIND. Removed `sql_select()` call that added an extra column conflicting with RETURN clause column indexing.
+
+2. **`src/backend/transform/transform_expr_ops.c`** — Added UNWIND JSON property access: when accessing a property on an UNWIND variable (detected by `_unwind_` prefix in projected source), generate `json_extract(source, '$.property')` instead of property table lookups.
+
+**Test results:**
+- 921/921 C unit tests pass
+- `TestIssue37::test_unwind_parameter_list` — PASSES (scalar parameter list)
+- `TestIssue37::test_unwind_parameter_map_list` — PASSES (map list + property access)
+- Literal UNWIND still works: `UNWIND [1,2,3] AS x RETURN x` → `[{x:1},{x:2},{x:3}]`
+- All 43 functional test files pass
 
 ## Parent Initiative **[CONDITIONAL: Assigned Task]**
 

@@ -359,6 +359,14 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     bool skip_id_suffix = is_projected || alias_is_id;
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
 
+    /* For UNWIND variables holding JSON values (from json_each), use json_extract
+     * instead of property table lookup. Detect by checking if the alias source
+     * references an UNWIND CTE value column. */
+    if (is_projected && alias && strstr(alias, "_unwind_") && strstr(alias, ".value")) {
+        append_sql(ctx, "json_extract(%s, '$.%s')", alias, prop->property_name);
+        return 0;
+    }
+
     /* Multi-graph support: get graph prefix for property table references */
     const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
     const char *gprefix = "";
