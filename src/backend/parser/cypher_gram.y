@@ -17,6 +17,11 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 
 %}
 
+%code requires {
+#include <stdint.h>
+#include <stdbool.h>
+}
+
 %locations
 %define api.pure
 %define api.prefix {cypher_yy}

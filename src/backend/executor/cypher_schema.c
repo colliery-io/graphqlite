@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <stdint.h>
 
 #include "executor/cypher_schema.h"
 #include "parser/cypher_debug.h"
