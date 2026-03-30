@@ -1492,6 +1492,42 @@ def test_merge_on_match_set_function(g):
     assert result[0]["n.name"] == "UPDATED"
 
 
+def test_merge_with_set_return(g):
+    """Issue #48: MERGE + WITH + SET + RETURN returns column data."""
+    result = g.query("""
+        MERGE (n:MergeWithPy {id: 'mwp1'})
+        WITH n
+        SET n.updated = true
+        RETURN n.id, n.updated
+    """)
+    assert len(result) == 1
+    assert result[0]["n.id"] == "mwp1"
+    assert result[0]["n.updated"] is True
+
+
+def test_merge_with_set_no_return(g):
+    """Issue #48: MERGE + WITH + SET without RETURN succeeds."""
+    g.query("""
+        MERGE (n:MergeWithPy2 {id: 'mwp2'})
+        WITH n
+        SET n.updated = true
+    """)
+    result = g.query("MATCH (n:MergeWithPy2 {id: 'mwp2'}) RETURN n.updated")
+    assert len(result) == 1
+    assert result[0]["n.updated"] is True
+
+
+def test_merge_with_return_no_set(g):
+    """Issue #48: MERGE + WITH + RETURN without SET returns column data."""
+    result = g.query("""
+        MERGE (n:MergeWithPy3 {id: 'mwp3'})
+        WITH n
+        RETURN n.id
+    """)
+    assert len(result) == 1
+    assert result[0]["n.id"] == "mwp3"
+
+
 def test_remove_return(g):
     """Test REMOVE + RETURN in a single query."""
     g.query('CREATE (n:RemRetPy {name: "Dave", temp: "delete_me"})')

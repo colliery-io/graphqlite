@@ -703,6 +703,110 @@ static void test_merge_relationship_with_props(void)
     }
 }
 
+/* Test MERGE + WITH + SET + RETURN returns column data (issue #48 test 1) */
+static void test_merge_with_set_return(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        cypher_result *result = cypher_executor_execute(executor,
+            "MERGE (n:MergeWithTest {id: 'mw1'}) WITH n SET n.updated = true RETURN n.id, n.updated");
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE+WITH+SET+RETURN error: %s\n", result->error_message);
+            } else {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                CU_ASSERT_EQUAL(result->column_count, 2);
+                if (result->row_count > 0 && result->column_count >= 2) {
+                    CU_ASSERT_STRING_EQUAL(result->column_names[0], "n.id");
+                    CU_ASSERT_STRING_EQUAL(result->column_names[1], "n.updated");
+                    CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+                    if (result->data[0][0]) {
+                        CU_ASSERT_STRING_EQUAL(result->data[0][0], "mw1");
+                    }
+                    CU_ASSERT_PTR_NOT_NULL(result->data[0][1]);
+                    if (result->data[0][1]) {
+                        CU_ASSERT_STRING_EQUAL(result->data[0][1], "true");
+                    }
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test MERGE + WITH + SET without RETURN succeeds (issue #48 test 2) */
+static void test_merge_with_set_no_return(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        cypher_result *result = cypher_executor_execute(executor,
+            "MERGE (n:MergeWithTest2 {id: 'mw2'}) WITH n SET n.updated = true");
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE+WITH+SET error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+
+        /* Verify the property was persisted */
+        cypher_result *verify = cypher_executor_execute(executor,
+            "MATCH (n:MergeWithTest2 {id: 'mw2'}) RETURN n.updated");
+        CU_ASSERT_PTR_NOT_NULL(verify);
+
+        if (verify) {
+            CU_ASSERT_TRUE(verify->success);
+            CU_ASSERT_EQUAL(verify->row_count, 1);
+            if (verify->row_count > 0 && verify->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(verify->data[0][0], "true");
+            }
+            cypher_result_free(verify);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test MERGE + WITH + RETURN without SET returns column data */
+static void test_merge_with_return_no_set(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        cypher_result *result = cypher_executor_execute(executor,
+            "MERGE (n:MergeWithTest3 {id: 'mw3'}) WITH n RETURN n.id");
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE+WITH+RETURN error: %s\n", result->error_message);
+            } else {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                CU_ASSERT_EQUAL(result->column_count, 1);
+                if (result->row_count > 0 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "mw3");
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the MERGE executor test suite */
 int init_executor_merge_suite(void)
 {
@@ -725,7 +829,10 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE create relationship", test_merge_create_relationship) ||
         !CU_add_test(suite, "MERGE match relationship", test_merge_match_relationship) ||
         !CU_add_test(suite, "MERGE full path", test_merge_full_path) ||
-        !CU_add_test(suite, "MERGE relationship with props", test_merge_relationship_with_props)) {
+        !CU_add_test(suite, "MERGE relationship with props", test_merge_relationship_with_props) ||
+        !CU_add_test(suite, "MERGE+WITH+SET+RETURN", test_merge_with_set_return) ||
+        !CU_add_test(suite, "MERGE+WITH+SET no RETURN", test_merge_with_set_no_return) ||
+        !CU_add_test(suite, "MERGE+WITH+RETURN no SET", test_merge_with_return_no_set)) {
         return CU_get_error();
     }
 

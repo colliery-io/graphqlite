@@ -3086,6 +3086,39 @@ fn test_merge_on_match_set_function() {
 }
 
 #[test]
+fn test_merge_with_set_return() {
+    let conn = test_connection();
+    let results = conn
+        .cypher("MERGE (n:MergeWithRs {id: 'mwr1'}) WITH n SET n.updated = true RETURN n.id, n.updated")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.id").unwrap(), "mwr1");
+    assert_eq!(results[0].get::<bool>("n.updated").unwrap(), true);
+}
+
+#[test]
+fn test_merge_with_set_no_return() {
+    let conn = test_connection();
+    conn.cypher("MERGE (n:MergeWithRs2 {id: 'mwr2'}) WITH n SET n.updated = true")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:MergeWithRs2 {id: 'mwr2'}) RETURN n.updated")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<bool>("n.updated").unwrap(), true);
+}
+
+#[test]
+fn test_merge_with_return_no_set() {
+    let conn = test_connection();
+    let results = conn
+        .cypher("MERGE (n:MergeWithRs3 {id: 'mwr3'}) WITH n RETURN n.id")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<String>("n.id").unwrap(), "mwr3");
+}
+
+#[test]
 fn test_remove_property_return() {
     let conn = test_connection();
     conn.cypher("CREATE (n:RemRetTest {name: 'Dave', temp: 'delete_me'})")

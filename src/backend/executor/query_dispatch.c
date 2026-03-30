@@ -875,6 +875,96 @@ static int handle_set(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/*
+ * Execute a RETURN clause using known node IDs from a variable_map.
+ * Sets up a transform context with synthetic FROM/WHERE targeting
+ * the specific node IDs, then uses the standard transform pipeline
+ * to generate SELECT projections and build results.
+ */
+static int merge_with_execute_return(cypher_executor *executor,
+                                     cypher_return *ret,
+                                     variable_map *var_map,
+                                     cypher_result *result)
+{
+    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    if (!ctx) {
+        set_result_error(result, "MERGE+WITH RETURN: failed to create transform context");
+        return -1;
+    }
+
+    ctx->query_type = QUERY_TYPE_READ;
+
+    /* Register each variable from var_map as a node in the transform context
+     * and set up FROM/WHERE to select by known node IDs */
+    bool first_var = true;
+    for (int i = 0; i < var_map->count; i++) {
+        variable_mapping *m = &var_map->mappings[i];
+        if (m->type != VAR_MAP_TYPE_NODE) continue;
+
+        char alias[64];
+        snprintf(alias, sizeof(alias), "%s_0", m->variable);
+
+        transform_var_register_node(ctx->var_ctx, m->variable, alias, NULL);
+        transform_var_set_bound(ctx->var_ctx, m->variable, true);
+
+        char where_cond[128];
+        snprintf(where_cond, sizeof(where_cond), "%s.id = %d", alias, m->entity_id);
+
+        if (first_var) {
+            sql_from(ctx->unified_builder, "nodes", alias);
+            first_var = false;
+        } else {
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", alias, NULL);
+        }
+        sql_where(ctx->unified_builder, where_cond);
+    }
+
+    if (first_var) {
+        /* No node variables in map */
+        cypher_transform_free_context(ctx);
+        set_result_error(result, "MERGE+WITH RETURN: no node variables to return");
+        return -1;
+    }
+
+    /* Transform the RETURN clause (generates SELECT, calls finalize_sql_generation) */
+    if (transform_return_clause(ctx, ret) < 0) {
+        const char *msg = ctx->error_message ? ctx->error_message
+                                             : "MERGE+WITH RETURN: failed to transform RETURN clause";
+        set_result_error(result, msg);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
+    prepend_cte_to_sql(ctx);
+    CYPHER_DEBUG("MERGE+WITH RETURN SQL: %s", ctx->sql_buffer);
+
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        char error[512];
+        snprintf(error, sizeof(error), "MERGE+WITH RETURN: SQL prepare failed: %s",
+                 sqlite3_errmsg(executor->db));
+        set_result_error(result, error);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
+    if (executor->params_json) {
+        bind_params_from_json(stmt, executor->params_json);
+    }
+
+    if (build_query_results(executor, stmt, ret, result, ctx) < 0) {
+        sqlite3_finalize(stmt);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
+    result->success = true;
+    sqlite3_finalize(stmt);
+    cypher_transform_free_context(ctx);
+    return 0;
+}
+
 /* Pipeline handler for MERGE + WITH + subsequent clauses.
  * Splits execution at the WITH boundary:
  * 1. Execute pre-WITH clauses (MERGE + SET) as a standalone MERGE
@@ -987,15 +1077,17 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
         }
     }
 
-    /* Find post-WITH MATCH and MERGE clauses */
+    /* Find post-WITH clauses */
     cypher_match *post_match = NULL;
     cypher_merge *post_merge = NULL;
     cypher_return *post_return = NULL;
+    cypher_set *post_set = NULL;
     for (int i = with_pos + 1; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
         if (clause->type == AST_NODE_MATCH && !post_match) post_match = (cypher_match*)clause;
         if (clause->type == AST_NODE_MERGE && !post_merge) post_merge = (cypher_merge*)clause;
         if (clause->type == AST_NODE_RETURN && !post_return) post_return = (cypher_return*)clause;
+        if (clause->type == AST_NODE_SET && !post_set) post_set = (cypher_set*)clause;
     }
 
     if (post_match && post_merge) {
@@ -1088,13 +1180,33 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
 
         /* Now execute the post-WITH MERGE with the combined variable map */
         rc = execute_merge_with_variables(executor, post_merge, post_var_map, result);
-    } else if (post_return) {
-        /* MERGE + WITH + RETURN: just return the MERGE'd variables */
-        result->success = true;
-        rc = 0;
     } else {
-        set_result_error(result, "MERGE+WITH pipeline: unsupported post-WITH clause combination");
-        rc = -1;
+        /* Handle post-WITH SET and/or RETURN */
+
+        /* Execute post-WITH SET if present */
+        if (post_set) {
+            rc = execute_set_operations(executor, post_set, post_var_map, result);
+            if (rc < 0) {
+                free_variable_map(post_var_map);
+                return -1;
+            }
+        }
+
+        /* Execute post-WITH RETURN if present */
+        if (post_return) {
+            rc = merge_with_execute_return(executor, post_return, post_var_map, result);
+            if (rc < 0) {
+                free_variable_map(post_var_map);
+                return -1;
+            }
+        } else if (post_set) {
+            /* SET without RETURN: mark success */
+            result->success = true;
+            rc = 0;
+        } else {
+            set_result_error(result, "MERGE+WITH pipeline: unsupported post-WITH clause combination");
+            rc = -1;
+        }
     }
 
     free_variable_map(post_var_map);
