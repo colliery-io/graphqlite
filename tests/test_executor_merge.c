@@ -807,6 +807,80 @@ static void test_merge_with_return_no_set(void)
     }
 }
 
+/* Test MERGE + WITH + multiple SET clauses (issue #54 test) */
+static void test_merge_with_multiple_set(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        cypher_result *result = cypher_executor_execute(executor,
+            "MERGE (n:MergeMultiSet {id: 'ms1'}) WITH n SET n.a = 'one' SET n.b = 'two' RETURN n.a, n.b");
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE+WITH+multi-SET error: %s\n", result->error_message);
+            } else {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                CU_ASSERT_EQUAL(result->column_count, 2);
+                if (result->row_count > 0 && result->column_count >= 2) {
+                    CU_ASSERT_STRING_EQUAL(result->column_names[0], "n.a");
+                    CU_ASSERT_STRING_EQUAL(result->column_names[1], "n.b");
+                    if (result->data[0][0]) {
+                        CU_ASSERT_STRING_EQUAL(result->data[0][0], "one");
+                    }
+                    if (result->data[0][1]) {
+                        CU_ASSERT_STRING_EQUAL(result->data[0][1], "two");
+                    }
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
+/* Test MERGE relationship + WITH + RETURN edge variable (issue #54 test) */
+static void test_merge_with_edge_variable_return(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        /* First create the relationship */
+        cypher_result *setup = cypher_executor_execute(executor,
+            "MERGE (a:EdgeVarTest {id: 'ev1'})-[r:KNOWS]->(b:EdgeVarTest {id: 'ev2'})");
+        CU_ASSERT_PTR_NOT_NULL(setup);
+        if (setup) {
+            CU_ASSERT_TRUE(setup->success);
+            cypher_result_free(setup);
+        }
+
+        /* Now test WITH + RETURN on the edge variable */
+        cypher_result *result = cypher_executor_execute(executor,
+            "MERGE (a:EdgeVarTest {id: 'ev1'})-[r:KNOWS]->(b:EdgeVarTest {id: 'ev2'}) WITH a, r RETURN a.id");
+        CU_ASSERT_PTR_NOT_NULL(result);
+
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE+WITH+edge var error: %s\n", result->error_message);
+            } else {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                if (result->row_count > 0 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "ev1");
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 /* Initialize the MERGE executor test suite */
 int init_executor_merge_suite(void)
 {
@@ -832,7 +906,9 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE relationship with props", test_merge_relationship_with_props) ||
         !CU_add_test(suite, "MERGE+WITH+SET+RETURN", test_merge_with_set_return) ||
         !CU_add_test(suite, "MERGE+WITH+SET no RETURN", test_merge_with_set_no_return) ||
-        !CU_add_test(suite, "MERGE+WITH+RETURN no SET", test_merge_with_return_no_set)) {
+        !CU_add_test(suite, "MERGE+WITH+RETURN no SET", test_merge_with_return_no_set) ||
+        !CU_add_test(suite, "MERGE+WITH+multi-SET", test_merge_with_multiple_set) ||
+        !CU_add_test(suite, "MERGE+WITH+edge variable", test_merge_with_edge_variable_return)) {
         return CU_get_error();
     }
 

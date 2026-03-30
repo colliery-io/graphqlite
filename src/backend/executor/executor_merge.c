@@ -666,14 +666,12 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge, cypher_
                     set_variable_edge_id(var_map, rel_pattern->variable, edge_id);
                 }
 
-                /* Apply ON CREATE SET if edge was created */
+                /* ON CREATE/ON MATCH SET for edges not yet implemented */
                 if (edge_was_created && merge->on_create && merge->on_create->count > 0) {
-                    CYPHER_DEBUG("Applying ON CREATE SET for edge %d", edge_id);
+                    CYPHER_DEBUG("ON CREATE SET for edge %d: not yet implemented for relationship variables", edge_id);
                 }
-
-                /* Apply ON MATCH SET if edge was matched */
                 if (!edge_was_created && merge->on_match && merge->on_match->count > 0) {
-                    CYPHER_DEBUG("Applying ON MATCH SET for edge %d", edge_id);
+                    CYPHER_DEBUG("ON MATCH SET for edge %d: not yet implemented for relationship variables", edge_id);
                 }
 
                 /* Also apply ON CREATE/MATCH for target node if it was created/matched */

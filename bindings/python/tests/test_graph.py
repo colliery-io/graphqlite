@@ -1528,6 +1528,34 @@ def test_merge_with_return_no_set(g):
     assert result[0]["n.id"] == "mwp3"
 
 
+def test_merge_with_multiple_set(g):
+    """Issue #54: MERGE + WITH + multiple SET clauses all execute."""
+    result = g.query("""
+        MERGE (n:MergeMultiSetPy {id: 'mms1'})
+        WITH n
+        SET n.a = 'one'
+        SET n.b = 'two'
+        RETURN n.a, n.b
+    """)
+    assert len(result) == 1
+    assert result[0]["n.a"] == "one"
+    assert result[0]["n.b"] == "two"
+
+
+def test_merge_with_edge_variable(g):
+    """Issue #54: MERGE relationship + WITH carries edge variable."""
+    g.query("""
+        MERGE (a:EdgeVarPy {id: 'evp1'})-[:KNOWS]->(b:EdgeVarPy {id: 'evp2'})
+    """)
+    result = g.query("""
+        MERGE (a:EdgeVarPy {id: 'evp1'})-[r:KNOWS]->(b:EdgeVarPy {id: 'evp2'})
+        WITH a, r
+        RETURN a.id
+    """)
+    assert len(result) == 1
+    assert result[0]["a.id"] == "evp1"
+
+
 def test_remove_return(g):
     """Test REMOVE + RETURN in a single query."""
     g.query('CREATE (n:RemRetPy {name: "Dave", temp: "delete_me"})')

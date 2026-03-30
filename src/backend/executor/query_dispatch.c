@@ -1094,14 +1094,16 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
                         cypher_node_pattern *src_np = (cypher_node_pattern*)src_elem;
                         cypher_node_pattern *tgt_np = (cypher_node_pattern*)tgt_elem;
                         int src_id = src_np->variable ? get_variable_node_id(post_var_map, src_np->variable) : -1;
+                        if (src_id < 0) src_id = find_node_by_pattern(executor, src_np);
                         int tgt_id = tgt_np->variable ? get_variable_node_id(post_var_map, tgt_np->variable) : -1;
+                        if (tgt_id < 0) tgt_id = find_node_by_pattern(executor, tgt_np);
                         if (src_id >= 0 && tgt_id >= 0) {
                             int source_id = src_id, dest_id = tgt_id;
                             if (rp->left_arrow && !rp->right_arrow) {
                                 source_id = tgt_id;
                                 dest_id = src_id;
                             }
-                            const char *rel_type = rp->type ? rp->type : NULL;
+                            const char *rel_type = rp->type ? rp->type : "RELATED";
                             int edge_id = find_edge_by_pattern(executor, source_id, dest_id, rel_type, rp);
                             if (edge_id >= 0) {
                                 set_variable_edge_id(post_var_map, rp->variable, edge_id);
