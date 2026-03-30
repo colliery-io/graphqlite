@@ -894,35 +894,41 @@ static int merge_with_execute_return(cypher_executor *executor,
 
     ctx->query_type = QUERY_TYPE_READ;
 
-    /* Register each variable from var_map as a node in the transform context
-     * and set up FROM/WHERE to select by known node IDs */
+    /* Register each variable from var_map in the transform context
+     * and set up FROM/WHERE to select by known entity IDs */
     bool first_var = true;
     for (int i = 0; i < var_map->count; i++) {
         variable_mapping *m = &var_map->mappings[i];
-        if (m->type != VAR_MAP_TYPE_NODE) continue;
 
         char alias[64];
         snprintf(alias, sizeof(alias), "%s_0", m->variable);
-
-        transform_var_register_node(ctx->var_ctx, m->variable, alias, NULL);
-        transform_var_set_bound(ctx->var_ctx, m->variable, true);
-
         char where_cond[128];
         snprintf(where_cond, sizeof(where_cond), "%s.id = %d", alias, m->entity_id);
 
+        const char *table = NULL;
+        if (m->type == VAR_MAP_TYPE_NODE) {
+            transform_var_register_node(ctx->var_ctx, m->variable, alias, NULL);
+            table = get_graph_table(ctx, "nodes");
+        } else if (m->type == VAR_MAP_TYPE_EDGE) {
+            transform_var_register_edge(ctx->var_ctx, m->variable, alias, NULL);
+            table = get_graph_table(ctx, "edges");
+        } else {
+            continue;
+        }
+        transform_var_set_bound(ctx->var_ctx, m->variable, true);
+
         if (first_var) {
-            sql_from(ctx->unified_builder, "nodes", alias);
+            sql_from(ctx->unified_builder, table, alias);
             first_var = false;
         } else {
-            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", alias, NULL);
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, table, alias, NULL);
         }
         sql_where(ctx->unified_builder, where_cond);
     }
 
     if (first_var) {
-        /* No node variables in map */
         cypher_transform_free_context(ctx);
-        set_result_error(result, "MERGE+WITH RETURN: no node variables to return");
+        set_result_error(result, "MERGE+WITH RETURN: no node or edge variables to return");
         return -1;
     }
 
@@ -950,7 +956,12 @@ static int merge_with_execute_return(cypher_executor *executor,
     }
 
     if (executor->params_json) {
-        bind_params_from_json(stmt, executor->params_json);
+        if (bind_params_from_json(stmt, executor->params_json) < 0) {
+            set_result_error(result, "MERGE+WITH RETURN: failed to bind parameters");
+            sqlite3_finalize(stmt);
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
     }
 
     if (build_query_results(executor, stmt, ret, result, ctx) < 0) {
@@ -1073,6 +1084,32 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
                         CYPHER_DEBUG("MERGE+WITH pipeline: carrying variable '%s' = node %d", np->variable, node_id);
                     }
                 }
+            } else if (elem->type == AST_NODE_REL_PATTERN) {
+                cypher_rel_pattern *rp = (cypher_rel_pattern*)elem;
+                if (rp->variable && j > 0 && j + 1 < path->elements->count) {
+                    ast_node *src_elem = path->elements->items[j - 1];
+                    ast_node *tgt_elem = path->elements->items[j + 1];
+                    if (src_elem->type == AST_NODE_NODE_PATTERN &&
+                        tgt_elem->type == AST_NODE_NODE_PATTERN) {
+                        cypher_node_pattern *src_np = (cypher_node_pattern*)src_elem;
+                        cypher_node_pattern *tgt_np = (cypher_node_pattern*)tgt_elem;
+                        int src_id = src_np->variable ? get_variable_node_id(post_var_map, src_np->variable) : -1;
+                        int tgt_id = tgt_np->variable ? get_variable_node_id(post_var_map, tgt_np->variable) : -1;
+                        if (src_id >= 0 && tgt_id >= 0) {
+                            int source_id = src_id, dest_id = tgt_id;
+                            if (rp->left_arrow && !rp->right_arrow) {
+                                source_id = tgt_id;
+                                dest_id = src_id;
+                            }
+                            const char *rel_type = rp->type ? rp->type : NULL;
+                            int edge_id = find_edge_by_pattern(executor, source_id, dest_id, rel_type, rp);
+                            if (edge_id >= 0) {
+                                set_variable_edge_id(post_var_map, rp->variable, edge_id);
+                                CYPHER_DEBUG("MERGE+WITH pipeline: carrying edge variable '%s' = edge %d", rp->variable, edge_id);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1081,13 +1118,13 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
     cypher_match *post_match = NULL;
     cypher_merge *post_merge = NULL;
     cypher_return *post_return = NULL;
-    cypher_set *post_set = NULL;
+    bool has_post_set = false;
     for (int i = with_pos + 1; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
         if (clause->type == AST_NODE_MATCH && !post_match) post_match = (cypher_match*)clause;
         if (clause->type == AST_NODE_MERGE && !post_merge) post_merge = (cypher_merge*)clause;
         if (clause->type == AST_NODE_RETURN && !post_return) post_return = (cypher_return*)clause;
-        if (clause->type == AST_NODE_SET && !post_set) post_set = (cypher_set*)clause;
+        if (clause->type == AST_NODE_SET) has_post_set = true;
     }
 
     if (post_match && post_merge) {
@@ -1148,7 +1185,13 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
         }
 
         if (executor->params_json) {
-            bind_params_from_json(stmt, executor->params_json);
+            if (bind_params_from_json(stmt, executor->params_json) < 0) {
+                set_result_error(result, "MERGE+WITH pipeline: failed to bind parameters");
+                sqlite3_finalize(stmt);
+                cypher_transform_free_context(ctx);
+                free_variable_map(post_var_map);
+                return -1;
+            }
         }
 
         /* Execute MATCH and add found variables to our map */
@@ -1183,12 +1226,15 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
     } else {
         /* Handle post-WITH SET and/or RETURN */
 
-        /* Execute post-WITH SET if present */
-        if (post_set) {
-            rc = execute_set_operations(executor, post_set, post_var_map, result);
-            if (rc < 0) {
-                free_variable_map(post_var_map);
-                return -1;
+        /* Execute all post-WITH SET clauses */
+        for (int i = with_pos + 1; i < query->clauses->count; i++) {
+            if (query->clauses->items[i]->type == AST_NODE_SET) {
+                cypher_set *set_clause = (cypher_set*)query->clauses->items[i];
+                rc = execute_set_operations(executor, set_clause, post_var_map, result);
+                if (rc < 0) {
+                    free_variable_map(post_var_map);
+                    return -1;
+                }
             }
         }
 
@@ -1199,7 +1245,7 @@ static int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *q
                 free_variable_map(post_var_map);
                 return -1;
             }
-        } else if (post_set) {
+        } else if (has_post_set) {
             /* SET without RETURN: mark success */
             result->success = true;
             rc = 0;
