@@ -230,6 +230,46 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
+                            } else if (pair->value && pair->value->type == AST_NODE_PROPERTY) {
+                                /* Handle property access RHS like `item.id` where
+                                 * `item` is an UNWIND-projected variable (GQLITE-T-0185).
+                                 * Resolve the base through var_ctx to its SQL alias
+                                 * (e.g. `_unwind_0.value`), then emit
+                                 * json_extract(<alias>, '$.<field>') as the comparison RHS. */
+                                cypher_property *prop = (cypher_property*)pair->value;
+                                if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER && prop->property_name) {
+                                    cypher_identifier *base_id = (cypher_identifier*)prop->expr;
+                                    const char *base_alias = transform_var_get_alias(ctx->var_ctx, base_id->name);
+                                    if (base_alias) {
+                                        dynamic_buffer cond;
+                                        dbuf_init(&cond);
+                                        dbuf_appendf(&cond,
+                                            "("
+                                            "EXISTS(SELECT 1 FROM node_props_text npt "
+                                            "JOIN property_keys pk ON npt.key_id = pk.id "
+                                            "WHERE npt.node_id = %s.id AND pk.key = '%s' "
+                                            "AND npt.value = json_extract(%s, '$.%s')) OR "
+                                            "EXISTS(SELECT 1 FROM node_props_int npi "
+                                            "JOIN property_keys pk ON npi.key_id = pk.id "
+                                            "WHERE npi.node_id = %s.id AND pk.key = '%s' "
+                                            "AND npi.value = json_extract(%s, '$.%s')) OR "
+                                            "EXISTS(SELECT 1 FROM node_props_real npr "
+                                            "JOIN property_keys pk ON npr.key_id = pk.id "
+                                            "WHERE npr.node_id = %s.id AND pk.key = '%s' "
+                                            "AND npr.value = json_extract(%s, '$.%s')) OR "
+                                            "EXISTS(SELECT 1 FROM node_props_bool npb "
+                                            "JOIN property_keys pk ON npb.key_id = pk.id "
+                                            "WHERE npb.node_id = %s.id AND pk.key = '%s' "
+                                            "AND npb.value = json_extract(%s, '$.%s'))"
+                                            ")",
+                                            alias, pair->key, base_alias, prop->property_name,
+                                            alias, pair->key, base_alias, prop->property_name,
+                                            alias, pair->key, base_alias, prop->property_name,
+                                            alias, pair->key, base_alias, prop->property_name);
+                                        sql_where(ctx->unified_builder, dbuf_get(&cond));
+                                        dbuf_free(&cond);
+                                    }
+                                }
                             }
                         }
                     }

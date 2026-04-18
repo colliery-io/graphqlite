@@ -285,7 +285,7 @@ static const query_pattern patterns[] = {
         .name = "MATCH+RETURN",
         .required = CLAUSE_MATCH | CLAUSE_RETURN,
         .forbidden = CLAUSE_OPTIONAL | CLAUSE_MULTI_MATCH | CLAUSE_CREATE |
-                     CLAUSE_SET | CLAUSE_DELETE | CLAUSE_MERGE,
+                     CLAUSE_SET | CLAUSE_DELETE | CLAUSE_MERGE | CLAUSE_UNWIND,
         .handler = handle_match_return,
         .priority = 70
     },

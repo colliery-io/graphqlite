@@ -4,7 +4,7 @@ level: task
 title: "UNWIND variable in MATCH property pattern doesn't filter (bug #61.1)"
 short_code: "GQLITE-T-0185"
 created_at: 2026-04-18T16:54:18.439013+00:00
-updated_at: 2026-04-18T19:48:27.842035+00:00
+updated_at: 2026-04-18T22:56:22.640844+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,7 +12,7 @@ archived: false
 tags:
   - "#task"
   - "#bug"
-  - "#phase/blocked"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -50,6 +50,10 @@ Ensure an `UNWIND` variable referenced inside a subsequent `MATCH` property patt
 
 ### Validity
 - [x] **Confirmed reproducible on graphqlite built from `main` (v0.4.3, 2026-04-18)**
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -13,6 +13,10 @@
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
+/* Declared in executor/executor_internal.h. Re-declared here to avoid a
+ * cross-layer include from transform → executor internals. */
+extern char *serialize_ast_to_json(ast_node *expr);
+
 /**
  * Transform UNWIND clause - expands list into rows
  *
@@ -122,6 +126,22 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                         case LITERAL_NULL:
                             dbuf_append(&cte_query, "NULL");
                             break;
+                    }
+                } else if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
+                    /* Nested map/list item — serialize to JSON and emit as a
+                     * JSON literal so downstream property access can use
+                     * json_extract(_unwind_N.value, '$.key') (GQLITE-T-0185). */
+                    char *json_str = serialize_ast_to_json(item);
+                    if (json_str) {
+                        dbuf_append(&cte_query, "json('");
+                        for (const char *p = json_str; *p; p++) {
+                            if (*p == '\'') dbuf_append(&cte_query, "''");
+                            else dbuf_appendf(&cte_query, "%c", *p);
+                        }
+                        dbuf_append(&cte_query, "')");
+                        free(json_str);
+                    } else {
+                        dbuf_append(&cte_query, "NULL");
                     }
                 } else {
                     /* For other expression types, we'd need to transform them */

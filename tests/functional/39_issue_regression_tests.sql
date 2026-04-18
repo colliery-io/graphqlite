@@ -329,4 +329,21 @@ SELECT cypher('MATCH ()-[r:L198b]->() RETURN r.created, r.touched') as result;
 --   first MATCH clause; second MATCH's variables are unbound inside SET.
 --   See initiative GQLITE-I-0036 task T-0197 scope extension (future work).
 
+-- =======================================================================
+-- GQLITE-T-0185 / Issue #61.1: UNWIND variable in MATCH property pattern
+-- =======================================================================
+SELECT '=== GQLITE-T-0185 / #61.1: UNWIND var in MATCH pattern ===' as section;
+
+SELECT cypher('CREATE (a:U185 {node_id:"a", name:"alice"})') as result;
+SELECT cypher('CREATE (b:U185 {node_id:"b", name:"bob"})') as result;
+
+SELECT 'Test T-0185a - UNWIND list-of-maps literal + MATCH {k: item.field}:' as test_name;
+SELECT cypher('UNWIND [{id:"b"}] AS item MATCH (n:U185 {node_id: item.id}) RETURN n.node_id, n.name') as result;
+-- Expected: [{"n.node_id":"b","n.name":"bob"}]  (was: both rows)
+
+SELECT 'Test T-0185b - UNWIND $param list-of-maps + MATCH {k: item.field}:' as test_name;
+SELECT cypher('UNWIND $items AS item MATCH (n:U185 {node_id: item.id}) RETURN n.node_id',
+              '{"items":[{"id":"a"},{"id":"b"}]}') as result;
+-- Expected: [{"n.node_id":"a"},{"n.node_id":"b"}] (one per UNWIND item)
+
 SELECT '=== Issue Regression Tests Complete ===' as test_section;
