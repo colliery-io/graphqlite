@@ -321,13 +321,17 @@ SELECT cypher('MATCH (a:Mmm198 {id:"a"}) MATCH (b:Mmm198 {id:"b"})
                SET r.touched = true') as result;
 SELECT cypher('MATCH ()-[r:L198b]->() RETURN r.created, r.touched') as result;
 
--- KNOWN HOLES (not resolved by GQLITE-I-0036; follow-ups filed or scoped):
--- * MATCH+CREATE (single MATCH) + trailing SET — handle_match_create still
---   drops SET. Workaround: use CREATE+SET on its own, or MATCH+MATCH+CREATE
---   with ON CREATE SET inside a MERGE instead of CREATE.
--- * MATCH+MATCH+SET (no intervening write) — handle_match_set only binds the
---   first MATCH clause; second MATCH's variables are unbound inside SET.
---   See initiative GQLITE-I-0036 task T-0197 scope extension (future work).
+-- GQLITE-I-0036 follow-up: previously-documented holes now closed:
+SELECT 'T-0198c - MATCH+CREATE (single) + trailing SET on new node:' as test_name;
+SELECT cypher('CREATE (seed198c:Mc198c {id:"s"})') as result;
+SELECT cypher('MATCH (a:Mc198c {id:"s"}) CREATE (a)-[:R198c]->(b:Mc198c {id:"t"}) SET b.name = "target"') as result;
+SELECT cypher('MATCH (:Mc198c {id:"s"})-[:R198c]->(t:Mc198c) RETURN t.id, t.name') as result;
+
+SELECT 'T-0198d - MATCH+MATCH+SET (multi-MATCH, no write clause):' as test_name;
+SELECT cypher('CREATE (a198d:Mmm198d {id:"a"})') as result;
+SELECT cypher('CREATE (b198d:Mmm198d {id:"b"})') as result;
+SELECT cypher('MATCH (a:Mmm198d {id:"a"}) MATCH (b:Mmm198d {id:"b"}) SET a.v = 1, b.v = 2') as result;
+SELECT cypher('MATCH (n:Mmm198d) RETURN n.id, n.v ORDER BY n.id') as result;
 
 -- =======================================================================
 -- GQLITE-T-0185 / Issue #61.1: UNWIND variable in MATCH property pattern

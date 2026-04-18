@@ -817,7 +817,21 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
 int execute_multi_match_create_query(cypher_executor *executor, cypher_query *query,
                                      cypher_create *create, cypher_result *result)
 {
-    if (!executor || !query || !create || !result) return -1;
+    return execute_multi_match_create_query_with_varmap(executor, query, create, result, NULL);
+}
+
+/* Same as execute_multi_match_create_query but optionally returns the
+ * accumulated var_map (MATCH bindings + CREATE-introduced node vars)
+ * so callers can thread it into a trailing SET. */
+int execute_multi_match_create_query_with_varmap(cypher_executor *executor, cypher_query *query,
+                                                 cypher_create *create, cypher_result *result,
+                                                 variable_map **out_var_map)
+{
+    if (!executor || !query || !create || !result) {
+        if (out_var_map) *out_var_map = NULL;
+        return -1;
+    }
+    if (out_var_map) *out_var_map = NULL;
 
     variable_map *var_map = create_variable_map();
     if (!var_map) {
@@ -848,7 +862,12 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
             }
         }
     }
-    free_variable_map(var_map);
+
+    if (out_var_map) {
+        *out_var_map = var_map;
+    } else {
+        free_variable_map(var_map);
+    }
     return 0;
 }
 

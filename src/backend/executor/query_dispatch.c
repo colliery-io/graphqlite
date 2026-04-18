@@ -672,8 +672,37 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
     cypher_match *match = find_match_clause(query);
     cypher_set *set = find_set_clause(query);
 
-    CYPHER_DEBUG("Executing MATCH+SET via pattern dispatch");
-    int rc = execute_match_set_query(executor, match, set, result);
+    int match_count = 0;
+    for (int i = 0; i < query->clauses->count; i++) {
+        if (query->clauses->items[i]->type == AST_NODE_MATCH) match_count++;
+    }
+
+    CYPHER_DEBUG("Executing MATCH+SET via pattern dispatch (match_count=%d)", match_count);
+
+    int rc;
+    if (match_count > 1) {
+        /* Multi-MATCH + SET: union bindings across every MATCH clause
+         * (first-row-each semantics, consistent with multi-MATCH+CREATE),
+         * then apply SET once. Resolves the GQLITE-T-0198 follow-up. */
+        variable_map *ms_vars = create_variable_map();
+        if (!ms_vars) {
+            set_result_error(result, "Failed to create variable map");
+            return -1;
+        }
+        for (int i = 0; i < query->clauses->count; i++) {
+            ast_node *clause = query->clauses->items[i];
+            if (!clause || clause->type != AST_NODE_MATCH) continue;
+            if (bind_match_clause_into_varmap(executor, (cypher_match*)clause, ms_vars, result) < 0) {
+                free_variable_map(ms_vars);
+                return -1;
+            }
+        }
+        rc = execute_set_operations(executor, set, ms_vars, result);
+        free_variable_map(ms_vars);
+    } else {
+        rc = execute_match_set_query(executor, match, set, result);
+    }
+
     if (rc >= 0) {
         result->success = true;
         if (flags & CLAUSE_RETURN) {
@@ -817,23 +846,29 @@ static int handle_match_create(cypher_executor *executor, cypher_query *query,
 {
     (void)flags;
     cypher_create *create = find_create_clause(query);
+    cypher_set *set = find_set_clause(query);
 
-    /* Count MATCH clauses to decide single-MATCH (legacy path) vs multi-MATCH
-     * (GQLITE-T-0197 path). */
-    int match_count = 0;
-    for (int i = 0; i < query->clauses->count; i++) {
-        if (query->clauses->items[i]->type == AST_NODE_MATCH) match_count++;
+    CYPHER_DEBUG("Executing MATCH+CREATE via pattern dispatch");
+
+    /* Always take the multi-MATCH path — it handles 1+ MATCH clauses and
+     * optionally returns the post-CREATE var_map so a trailing SET can
+     * thread its scope. Single-MATCH queries behave identically to the
+     * legacy execute_match_create_query path. */
+    variable_map *mc_vars = NULL;
+    int rc = execute_multi_match_create_query_with_varmap(executor, query, create, result,
+                                                          set ? &mc_vars : NULL);
+    if (rc < 0) {
+        if (mc_vars) free_variable_map(mc_vars);
+        return rc;
     }
-
-    CYPHER_DEBUG("Executing MATCH+CREATE via pattern dispatch (match_count=%d)", match_count);
-
-    int rc;
-    if (match_count > 1) {
-        rc = execute_multi_match_create_query(executor, query, create, result);
-    } else {
-        cypher_match *match = find_match_clause(query);
-        rc = execute_match_create_query(executor, match, create, result);
+    if (set && mc_vars) {
+        rc = execute_set_operations(executor, set, mc_vars, result);
+        if (rc < 0) {
+            free_variable_map(mc_vars);
+            return rc;
+        }
     }
+    if (mc_vars) free_variable_map(mc_vars);
     if (rc >= 0) result->success = true;
     return rc;
 }
