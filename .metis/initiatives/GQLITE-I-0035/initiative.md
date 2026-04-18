@@ -4,14 +4,14 @@ level: initiative
 title: "Semantic Coverage Matrix: close functional-test blind spots in write/read round-trips"
 short_code: "GQLITE-I-0035"
 created_at: 2026-04-18T19:43:43.419741+00:00
-updated_at: 2026-04-18T19:43:43.419741+00:00
+updated_at: 2026-04-18T23:12:16.956728+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

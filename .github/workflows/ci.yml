@@ -315,6 +315,40 @@ jobs:
         run: cargo test --lib --test integration -- --test-threads=1
 
   # =============================================================================
+  # Semantic Coverage Matrix - PR discipline (GQLITE-T-0204)
+  # Fails when a PR touches src/backend/transform/ or src/backend/executor/
+  # without updating tests/functional/*.sql or the matrix doc. Override by
+  # applying the `skip-coverage-matrix` label (reserved for pure refactors).
+  # =============================================================================
+
+  coverage-matrix-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for override label
+        id: override
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = context.payload.pull_request.labels || [];
+            const skip = labels.some(l => l.name === 'skip-coverage-matrix');
+            core.setOutput('skip', skip ? '1' : '');
+
+      - name: Run coverage-matrix check
+        if: steps.override.outputs.skip != '1'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: scripts/check-coverage-matrix.sh
+
+      - name: Override acknowledged
+        if: steps.override.outputs.skip == '1'
+        run: echo "skip-coverage-matrix label present — check bypassed"
+
+  # =============================================================================
   # Performance Tests - Main branch only
   # =============================================================================
 

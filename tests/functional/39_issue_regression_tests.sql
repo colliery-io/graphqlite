@@ -369,4 +369,92 @@ SELECT cypher('CREATE (c:M191b {name:"x", age: 30, active: true})') as result;
 SELECT cypher('MATCH (n:M191b {name:"x", age: 30, active: true}) RETURN n.name') as result;
 -- Expected: [{"n.name":"x"}]
 
+-- =======================================================================
+-- GQLITE-T-0201: traversal read-back per scalar type (src / rel / tgt)
+-- Matrix row: Section 2 - endpoint property access
+-- =======================================================================
+SELECT '=== GQLITE-T-0201: traversal read-back per scalar type ===' as section;
+
+SELECT 'T-0201 INTEGER - s.v, r.w, t.v through (a)-[r]->(b):' as test_name;
+SELECT cypher('CREATE (a:Ty201i {v:1})-[:T201i {w:10}]->(b:Ty201i {v:2})') as result;
+SELECT cypher('MATCH (s:Ty201i)-[r:T201i]->(t:Ty201i) RETURN s.v, r.w, t.v') as result;
+-- Expected: [{"s.v":1,"r.w":10,"t.v":2}]
+
+SELECT 'T-0201 REAL:' as test_name;
+SELECT cypher('CREATE (a:Ty201r {v:1.5})-[:T201r {w:2.5}]->(b:Ty201r {v:3.5})') as result;
+SELECT cypher('MATCH (s:Ty201r)-[r:T201r]->(t:Ty201r) RETURN s.v, r.w, t.v') as result;
+
+SELECT 'T-0201 BOOLEAN:' as test_name;
+SELECT cypher('CREATE (a:Ty201b {v:true})-[:T201b {w:true}]->(b:Ty201b {v:false})') as result;
+SELECT cypher('MATCH (s:Ty201b)-[r:T201b]->(t:Ty201b) RETURN s.v, r.w, t.v') as result;
+
+SELECT 'T-0201 JSON (map):' as test_name;
+SELECT cypher('CREATE (a:Ty201j {m:{k:"v1"}})-[:T201j {m:{k:"v2"}}]->(b:Ty201j {m:{k:"v3"}})') as result;
+SELECT cypher('MATCH (s:Ty201j)-[r:T201j]->(t:Ty201j) RETURN s.m, r.m, t.m') as result;
+-- Expected: JSON text round-trip on all three endpoints
+
+SELECT 'T-0201 LIST:' as test_name;
+SELECT cypher('CREATE (a:Ty201l {l:[1,2]})-[:T201l {l:[3,4]}]->(b:Ty201l {l:[5,6]})') as result;
+SELECT cypher('MATCH (s:Ty201l)-[r:T201l]->(t:Ty201l) RETURN s.l, r.l, t.l') as result;
+
+-- =======================================================================
+-- GQLITE-T-0202: ON MATCH SET and SET+=-on-rel coverage
+-- Matrix rows: Section 1 (ON MATCH SET) and Section 3 (literal vs $param)
+-- =======================================================================
+SELECT '=== GQLITE-T-0202: ON MATCH SET + SET+= on rel ===' as section;
+
+SELECT cypher('CREATE (a202:M202 {id:"a"})') as result;
+SELECT cypher('CREATE (b202:M202 {id:"b"})') as result;
+
+SELECT 'T-0202a - ON MATCH SET with literal:' as test_name;
+-- First MERGE creates; re-MERGE triggers ON MATCH.
+SELECT cypher('MATCH (a:M202 {id:"a"}), (b:M202 {id:"b"})
+               MERGE (a)-[r:K202]->(b) ON CREATE SET r.created = 1, r.hits = 0') as result;
+SELECT cypher('MATCH (a:M202 {id:"a"}), (b:M202 {id:"b"})
+               MERGE (a)-[r:K202]->(b) ON MATCH SET r.hits = 5, r.touched = "yes"') as result;
+SELECT cypher('MATCH ()-[r:K202]->() RETURN r.created, r.hits, r.touched') as result;
+-- Expected: [{"r.created":1,"r.hits":5,"r.touched":"yes"}]
+
+SELECT 'T-0202b - ON MATCH SET with $param:' as test_name;
+SELECT cypher('MATCH (a:M202 {id:"a"}), (b:M202 {id:"b"})
+               MERGE (a)-[r:KP202]->(b) ON CREATE SET r.pass = 1') as result;
+SELECT cypher('MATCH (a:M202 {id:"a"}), (b:M202 {id:"b"})
+               MERGE (a)-[r:KP202]->(b) ON MATCH SET r.name = $n, r.count = $c',
+              '{"n":"beta","c":7}') as result;
+SELECT cypher('MATCH ()-[r:KP202]->() RETURN r.pass, r.name, r.count') as result;
+
+SELECT 'T-0202c - SET r += literal map on rel var:' as test_name;
+SELECT cypher('MATCH (a:M202 {id:"a"}), (b:M202 {id:"b"})
+               MERGE (a)-[r:L202]->(b) SET r += {k1:"v1", k2:42}') as result;
+SELECT cypher('MATCH ()-[r:L202]->() RETURN r.k1, r.k2') as result;
+
+SELECT 'T-0202d - SET r += $map on rel var:' as test_name;
+SELECT cypher('MATCH (a:M202 {id:"a"}), (b:M202 {id:"b"})
+               MERGE (a)-[r:LP202]->(b) SET r += $m',
+              '{"m":{"score":99,"tag":"primary"}}') as result;
+SELECT cypher('MATCH ()-[r:LP202]->() RETURN r.score, r.tag') as result;
+
+-- =======================================================================
+-- GQLITE-T-0203: multi-hop traversal read-back
+-- Binds 5 variables (a, r1, b, r2, c) and reads properties off every one.
+-- =======================================================================
+SELECT '=== GQLITE-T-0203: multi-hop read-back ===' as section;
+
+SELECT 'T-0203a - multi-hop bare, TEXT read-back at all 5 endpoints:' as test_name;
+SELECT cypher('CREATE (a:MH203 {n:"A"})-[:R203 {w:"r1"}]->(b:MH203 {n:"B"})-[:R203 {w:"r2"}]->(c:MH203 {n:"C"})') as result;
+SELECT cypher('MATCH (a:MH203)-[r1:R203]->(b:MH203)-[r2:R203]->(c:MH203)
+               RETURN a.n, r1.w, b.n, r2.w, c.n') as result;
+-- Expected: [{"a.n":"A","r1.w":"r1","b.n":"B","r2.w":"r2","c.n":"C"}]
+
+SELECT 'T-0203b - parameterized filters at both endpoints:' as test_name;
+SELECT cypher('MATCH (a:MH203 {n:$an})-[r1:R203]->(b:MH203)-[r2:R203]->(c:MH203 {n:$cn})
+               RETURN a.n, r1.w, b.n, r2.w, c.n',
+              '{"an":"A","cn":"C"}') as result;
+
+SELECT 'T-0203c - DISTINCT + ORDER BY over multi-hop:' as test_name;
+SELECT cypher('CREATE (d:MH203 {n:"A"})-[:R203 {w:"r1"}]->(e:MH203 {n:"B"})-[:R203 {w:"r2"}]->(f:MH203 {n:"C"})') as result;
+SELECT cypher('MATCH (a:MH203)-[:R203]->(b:MH203)-[:R203]->(c:MH203)
+               RETURN DISTINCT a.n, c.n ORDER BY a.n, c.n') as result;
+-- Two parallel paths A→B→C should collapse to one row via DISTINCT.
+
 SELECT '=== Issue Regression Tests Complete ===' as test_section;
