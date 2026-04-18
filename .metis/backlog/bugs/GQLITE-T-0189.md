@@ -4,7 +4,7 @@ level: task
 title: "SET on relationship variable after MERGE raises Unbound variable (bug #61.5)"
 short_code: "GQLITE-T-0189"
 created_at: 2026-04-18T16:54:24.149371+00:00
-updated_at: 2026-04-18T20:56:14.095486+00:00
+updated_at: 2026-04-18T22:43:14.997274+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,7 +12,7 @@ archived: false
 tags:
   - "#task"
   - "#bug"
-  - "#phase/blocked"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -49,6 +49,10 @@ Fix scope resolution so that a relationship variable bound by `MERGE (a)-[r:T ..
 
 ### Validity
 - [x] **Confirmed reproducible on graphqlite built from `main` (v0.4.3, 2026-04-18)**. Exact error message: `Unbound variable in SET: r`.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

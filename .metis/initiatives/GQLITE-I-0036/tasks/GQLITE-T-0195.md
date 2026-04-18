@@ -4,14 +4,14 @@ level: task
 title: "Wire handle_merge to run trailing SET with MERGE var_map"
 short_code: "GQLITE-T-0195"
 created_at: 2026-04-18T21:43:01.933004+00:00
-updated_at: 2026-04-18T21:43:01.933004+00:00
+updated_at: 2026-04-18T22:13:21.250658+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -33,6 +33,10 @@ Make `MERGE ... SET ...` (no ON CREATE / ON MATCH clauses) dispatch to `execute_
 ## Depends on
 
 - GQLITE-T-0193 (requires `execute_merge_clause_with_varmap`).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -4,14 +4,14 @@ level: task
 title: "Aggregate multi-MATCH variable bindings before write clauses"
 short_code: "GQLITE-T-0197"
 created_at: 2026-04-18T21:43:04.453067+00:00
-updated_at: 2026-04-18T21:43:04.453067+00:00
+updated_at: 2026-04-18T22:42:02.224374+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -29,6 +29,10 @@ Make queries with multiple standalone MATCH clauses (`MATCH (a) MATCH (b) ...`) 
 ## Resolves
 
 - GQLITE-T-0190.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

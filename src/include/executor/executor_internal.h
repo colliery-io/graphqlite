@@ -91,6 +91,11 @@ int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, c
 int execute_merge_clause(cypher_executor *executor, cypher_merge *merge, cypher_result *result);
 int execute_merge_clause_with_vars(cypher_executor *executor, cypher_merge *merge,
                                     cypher_result *result, variable_map *external_vars);
+int execute_merge_clause_with_varmap(cypher_executor *executor, cypher_merge *merge,
+                                     cypher_result *result, variable_map **out_var_map);
+int execute_merge_clause_with_vars_ex(cypher_executor *executor, cypher_merge *merge,
+                                       cypher_result *result, variable_map *external_vars,
+                                       variable_map **out_var_map);
 int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
                                  variable_map *var_map, cypher_result *result);
 int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result);
@@ -108,6 +113,11 @@ int execute_set_items(cypher_executor *executor, ast_list *items, variable_map *
 /* MATCH-based query execution functions */
 int execute_match_return_query(cypher_executor *executor, cypher_match *match, cypher_return *return_clause, cypher_result *result);
 int execute_match_create_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_result *result);
+int execute_multi_match_create_query(cypher_executor *executor, cypher_query *query, cypher_create *create, cypher_result *result);
+int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match,
+                                  variable_map *var_map, cypher_result *result);
+int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_match *match, cypher_merge *merge,
+                                          cypher_result *result, variable_map **out_var_map);
 int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result);
 int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result);

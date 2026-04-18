@@ -399,8 +399,23 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge, cypher_
     return execute_merge_clause_with_vars(executor, merge, result, NULL);
 }
 
+int execute_merge_clause_with_varmap(cypher_executor *executor, cypher_merge *merge,
+                                     cypher_result *result, variable_map **out_var_map)
+{
+    if (!out_var_map) return -1;
+    *out_var_map = NULL;
+    return execute_merge_clause_with_vars_ex(executor, merge, result, NULL, out_var_map);
+}
+
 int execute_merge_clause_with_vars(cypher_executor *executor, cypher_merge *merge,
                                     cypher_result *result, variable_map *external_vars)
+{
+    return execute_merge_clause_with_vars_ex(executor, merge, result, external_vars, NULL);
+}
+
+int execute_merge_clause_with_vars_ex(cypher_executor *executor, cypher_merge *merge,
+                                       cypher_result *result, variable_map *external_vars,
+                                       variable_map **out_var_map)
 {
     if (!executor || !merge || !result) {
         return -1;
@@ -826,7 +841,11 @@ int execute_merge_clause_with_vars(cypher_executor *executor, cypher_merge *merg
 
     CYPHER_DEBUG("MERGE complete: %d nodes matched, %d nodes created", nodes_matched, nodes_created_in_merge);
 
-    free_variable_map(var_map);
+    if (out_var_map) {
+        *out_var_map = var_map;
+    } else {
+        free_variable_map(var_map);
+    }
     return 0;
 }
 
@@ -963,9 +982,18 @@ int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
 /* Execute MATCH+MERGE query combination */
 int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cypher_merge *merge, cypher_result *result)
 {
+    return execute_match_merge_query_with_varmap(executor, match, merge, result, NULL);
+}
+
+int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_match *match, cypher_merge *merge,
+                                          cypher_result *result, variable_map **out_var_map)
+{
     if (!executor || !match || !merge || !result) {
+        if (out_var_map) *out_var_map = NULL;
         return -1;
     }
+
+    if (out_var_map) *out_var_map = NULL;
 
     CYPHER_DEBUG("Executing MATCH+MERGE query");
 
@@ -1461,7 +1489,11 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
 
     CYPHER_DEBUG("MERGE complete: %d nodes matched, %d nodes created", nodes_matched, nodes_created_in_merge);
 
-    free_variable_map(var_map);
+    if (out_var_map) {
+        *out_var_map = var_map;
+    } else {
+        free_variable_map(var_map);
+    }
     return 0;
 }
 

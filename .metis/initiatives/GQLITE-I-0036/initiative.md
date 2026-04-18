@@ -4,14 +4,14 @@ level: initiative
 title: "Cross-clause variable-map threading in dispatch layer"
 short_code: "GQLITE-I-0036"
 created_at: 2026-04-18T21:06:06.965126+00:00
-updated_at: 2026-04-18T21:42:54.885512+00:00
+updated_at: 2026-04-18T21:51:49.991027+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/decompose"
+  - "#phase/active"
 
 
 exit_criteria_met: false

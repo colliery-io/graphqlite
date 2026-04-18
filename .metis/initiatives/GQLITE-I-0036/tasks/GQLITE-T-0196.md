@@ -4,14 +4,14 @@ level: task
 title: "Thread MATCH+MERGE var_map through to trailing SET"
 short_code: "GQLITE-T-0196"
 created_at: 2026-04-18T21:43:03.298158+00:00
-updated_at: 2026-04-18T21:43:03.298158+00:00
+updated_at: 2026-04-18T22:35:43.548052+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -33,6 +33,10 @@ Thread the MATCH+MERGE composite var_map into a trailing SET so `MATCH (a) MERGE
 ## Depends on
 
 - GQLITE-T-0193 (needs the MERGE varmap variant).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

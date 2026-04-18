@@ -4,14 +4,14 @@ level: task
 title: "Close out blocked issue-61 bugs and promote regression tests"
 short_code: "GQLITE-T-0199"
 created_at: 2026-04-18T21:43:07.066413+00:00
-updated_at: 2026-04-18T21:43:07.066413+00:00
+updated_at: 2026-04-18T22:43:16.544264+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -29,6 +29,10 @@ After the dispatcher fixes land, re-validate each previously-blocked sub-bug of 
 ## Depends on
 
 - GQLITE-T-0193 through T-0197 (all functional fixes).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

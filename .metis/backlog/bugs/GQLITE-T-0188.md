@@ -4,7 +4,7 @@ level: task
 title: "SET node += map doesn't apply map properties (bug #61.4)"
 short_code: "GQLITE-T-0188"
 created_at: 2026-04-18T16:54:23.029615+00:00
-updated_at: 2026-04-18T20:55:40.203775+00:00
+updated_at: 2026-04-18T22:43:14.237659+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,7 +12,7 @@ archived: false
 tags:
   - "#task"
   - "#bug"
-  - "#phase/blocked"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -48,6 +48,10 @@ Implement Cypher map-merge semantics for `SET node += {k: v, ...}` so that the m
 
 ### Validity
 - [x] **Confirmed reproducible on graphqlite built from `main` (v0.4.3, 2026-04-18)**. No parse/runtime error — properties silently NULL.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -4,14 +4,14 @@ level: task
 title: "Cross-clause dispatch combination smoke tests"
 short_code: "GQLITE-T-0198"
 created_at: 2026-04-18T21:43:05.946950+00:00
-updated_at: 2026-04-18T21:43:05.946950+00:00
+updated_at: 2026-04-18T22:42:44.197666+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -29,6 +29,10 @@ Add a focused regression test file covering the cross-product of write clauses Ã
 ## Depends on
 
 - GQLITE-T-0194, T-0195, T-0196, T-0197 (the functional fixes that make these combinations pass).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

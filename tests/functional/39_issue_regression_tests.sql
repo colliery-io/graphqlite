@@ -222,4 +222,111 @@ SELECT cypher('MATCH (a:N61r3 {node_id:"a"}) MATCH (b:N61r3 {node_id:"b"})
 SELECT cypher('MATCH ()-[r:CALLS61r3]->() RETURN r.edge_id, r.file, r.line') as result;
 -- Expected: [{"r.edge_id":"e1","r.file":"test.py","r.line":42}]  (was: all NULL)
 
+-- =======================================================================
+-- GQLITE-T-0194: CREATE + trailing SET (bare scalar, += map, += $param)
+-- Formerly manifested as bug #61.4 (SET n += map silently NULL)
+-- =======================================================================
+SELECT '=== GQLITE-T-0194: CREATE + trailing SET ===' as section;
+
+SELECT 'Test T-0194a - CREATE + SET n.x = literal:' as test_name;
+SELECT cypher('CREATE (n:Ct194a {node_id: "a"}) SET n.name = "alice"') as result;
+SELECT cypher('MATCH (n:Ct194a) RETURN n.node_id, n.name') as result;
+
+SELECT 'Test T-0194b - CREATE + SET n += {literal map}:' as test_name;
+SELECT cypher('CREATE (m:Ct194b) SET m += {name: "bob", type: "person"}') as result;
+SELECT cypher('MATCH (m:Ct194b) RETURN m.name, m.type') as result;
+
+SELECT 'Test T-0194c - CREATE + SET n += $param:' as test_name;
+SELECT cypher('CREATE (p:Ct194c) SET p += $props',
+              '{"props":{"name":"carol","age":30}}') as result;
+SELECT cypher('MATCH (p:Ct194c) RETURN p.name, p.age') as result;
+
+-- =======================================================================
+-- GQLITE-T-0195: MERGE + trailing SET (scalar, += map, internal + trailing)
+-- =======================================================================
+SELECT '=== GQLITE-T-0195: MERGE + trailing SET ===' as section;
+
+SELECT 'Test T-0195a - MERGE + SET n.x = literal:' as test_name;
+SELECT cypher('MERGE (n:Mt195a {node_id:"a"}) SET n.name = "alice"') as result;
+SELECT cypher('MATCH (n:Mt195a) RETURN n.node_id, n.name') as result;
+
+SELECT 'Test T-0195b - MERGE + SET n += {literal map}:' as test_name;
+SELECT cypher('MERGE (m:Mt195b {id:"b"}) SET m += {name:"bob", type:"person"}') as result;
+SELECT cypher('MATCH (m:Mt195b) RETURN m.name, m.type') as result;
+
+SELECT 'Test T-0195c - MERGE + ON CREATE SET + trailing SET:' as test_name;
+SELECT cypher('MERGE (p:Mt195c {id:"c"}) ON CREATE SET p.y = 2 SET p.x = 1') as result;
+SELECT cypher('MATCH (p:Mt195c) RETURN p.x, p.y') as result;
+
+-- =======================================================================
+-- GQLITE-T-0196: MATCH + MERGE (rel) + trailing SET on rel variable
+-- Formerly manifested as bug #61.5 (Unbound variable in SET: r)
+-- =======================================================================
+SELECT '=== GQLITE-T-0196: MATCH+MERGE rel + trailing SET ===' as section;
+
+SELECT cypher('CREATE (a:Mn196 {id:"a"})') as result;
+SELECT cypher('CREATE (b:Mn196 {id:"b"})') as result;
+
+SELECT 'Test T-0196 - MATCH+MERGE rel + SET rel props:' as test_name;
+SELECT cypher('MATCH (a:Mn196 {id:"a"}), (b:Mn196 {id:"b"})
+               MERGE (a)-[r:T196 {k:"v"}]->(b)
+               SET r.x = "X", r.y = "Y"') as result;
+SELECT cypher('MATCH ()-[r:T196]->() RETURN r.k, r.x, r.y') as result;
+-- Expected: [{"r.k":"v","r.x":"X","r.y":"Y"}]  (was: "Unbound variable in SET: r")
+
+-- =======================================================================
+-- GQLITE-T-0197: multi-MATCH variable-binding aggregation for MATCH+CREATE
+-- Formerly manifested as bug #61.6 (target node props NULL after
+-- MATCH ... MATCH ... CREATE rel due to phantom anonymous target node)
+-- =======================================================================
+SELECT '=== GQLITE-T-0197: multi-MATCH + CREATE rel ===' as section;
+
+SELECT cypher('CREATE (a:Mm197 {node_id:"a", name:"alice"})') as result;
+SELECT cypher('CREATE (b:Mm197 {node_id:"b", name:"bob"})') as result;
+
+SELECT 'Test T-0197a - MATCH (a) MATCH (b) CREATE (a)-[:T]->(b):' as test_name;
+SELECT cypher('MATCH (a:Mm197 {node_id:"a"}) MATCH (b:Mm197 {node_id:"b"})
+               CREATE (a)-[:T197]->(b)') as result;
+
+SELECT 'Test T-0197b - traverse and read target properties:' as test_name;
+SELECT cypher('MATCH (src:Mm197)-[r:T197]->(tgt) RETURN src.name, tgt.name') as result;
+-- Expected: [{"src.name":"alice","tgt.name":"bob"}]  (was: tgt.name NULL)
+
+SELECT 'Test T-0197c - parameterized MATCH+MATCH+CREATE rel with $param edge prop:' as test_name;
+SELECT cypher('MATCH (a:Mm197 {node_id:"a"}) MATCH (b:Mm197 {node_id:"b"})
+               CREATE (a)-[:T197p {k: $v}]->(b)', '{"v":"bound"}') as result;
+SELECT cypher('MATCH ()-[r:T197p]->() RETURN r.k') as result;
+
+-- =======================================================================
+-- GQLITE-T-0198: Cross-clause dispatch combination smoke tests
+-- Every green cell documents a dispatcher path that threads the
+-- write-clause var_map into the trailing SET / next clause correctly.
+-- Red (commented "KNOWN HOLE") marks paths still dropped today.
+-- =======================================================================
+SELECT '=== GQLITE-T-0198: cross-clause dispatch matrix ===' as section;
+
+SELECT cypher('CREATE (mm:Mmm198 {id:"a"})') as result;
+SELECT cypher('CREATE (nn:Mmm198 {id:"b"})') as result;
+
+SELECT 'T-0198a - MATCH+MATCH+MERGE rel + trailing SET on rel:' as test_name;
+SELECT cypher('MATCH (a:Mmm198 {id:"a"}) MATCH (b:Mmm198 {id:"b"})
+               MERGE (a)-[r:L198]->(b) SET r.weight = 7, r.label = "x"') as result;
+SELECT cypher('MATCH ()-[r:L198]->() RETURN r.weight, r.label') as result;
+-- Expected: [{"r.weight":7,"r.label":"x"}]
+
+SELECT 'T-0198b - MATCH+MATCH+MERGE rel + ON CREATE SET + trailing SET:' as test_name;
+SELECT cypher('MATCH (a:Mmm198 {id:"a"}) MATCH (b:Mmm198 {id:"b"})
+               MERGE (a)-[r:L198b]->(b)
+               ON CREATE SET r.created = true
+               SET r.touched = true') as result;
+SELECT cypher('MATCH ()-[r:L198b]->() RETURN r.created, r.touched') as result;
+
+-- KNOWN HOLES (not resolved by GQLITE-I-0036; follow-ups filed or scoped):
+-- * MATCH+CREATE (single MATCH) + trailing SET — handle_match_create still
+--   drops SET. Workaround: use CREATE+SET on its own, or MATCH+MATCH+CREATE
+--   with ON CREATE SET inside a MERGE instead of CREATE.
+-- * MATCH+MATCH+SET (no intervening write) — handle_match_set only binds the
+--   first MATCH clause; second MATCH's variables are unbound inside SET.
+--   See initiative GQLITE-I-0036 task T-0197 scope extension (future work).
+
 SELECT '=== Issue Regression Tests Complete ===' as test_section;

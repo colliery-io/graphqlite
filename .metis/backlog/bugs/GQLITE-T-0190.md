@@ -4,7 +4,7 @@ level: task
 title: "Target node properties inaccessible in pattern match traversals (bug #61.6)"
 short_code: "GQLITE-T-0190"
 created_at: 2026-04-18T16:54:25.738054+00:00
-updated_at: 2026-04-18T20:58:39.439878+00:00
+updated_at: 2026-04-18T22:43:16.143218+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,7 +12,7 @@ archived: false
 tags:
   - "#task"
   - "#bug"
-  - "#phase/blocked"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -52,6 +52,10 @@ Return correct target-node property values when traversing a relationship patter
 
 ### Validity
 - [x] **Confirmed reproducible on graphqlite built from `main` (v0.4.3, 2026-04-18)**. Likely cascades to GQLITE-T-0191 (bug #61.7: empty-result traversal) as a sub-symptom.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

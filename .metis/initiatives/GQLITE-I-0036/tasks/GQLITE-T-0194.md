@@ -4,14 +4,14 @@ level: task
 title: "Wire handle_create to run trailing SET with CREATE var_map"
 short_code: "GQLITE-T-0194"
 created_at: 2026-04-18T21:43:00.640482+00:00
-updated_at: 2026-04-18T21:43:00.640482+00:00
+updated_at: 2026-04-18T22:11:34.936561+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -29,6 +29,10 @@ Make `CREATE ... SET ...` dispatch to `execute_set_operations` with the CREATE c
 ## Resolves
 
 - GQLITE-T-0188 partial (CREATE half).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

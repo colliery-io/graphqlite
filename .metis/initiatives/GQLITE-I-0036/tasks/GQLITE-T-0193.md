@@ -4,14 +4,14 @@ level: task
 title: "Expose execute_merge_clause_with_varmap out-parameter variant"
 short_code: "GQLITE-T-0193"
 created_at: 2026-04-18T21:42:59.116087+00:00
-updated_at: 2026-04-18T21:42:59.116087+00:00
+updated_at: 2026-04-18T22:09:24.789676+00:00
 parent: GQLITE-I-0036
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -25,6 +25,10 @@ initiative_id: GQLITE-I-0036
 Add an `execute_merge_clause_with_varmap` variant that exposes the MERGE handler's internal `variable_map` through an out-parameter, mirroring the existing `execute_create_clause_with_varmap` signature. Foundation every subsequent task in GQLITE-I-0036 builds on.
 
 ## Size: S (≤1 day)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
