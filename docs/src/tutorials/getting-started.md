@@ -26,7 +26,7 @@ Verify the installation:
 
 ```python
 import graphqlite
-print(graphqlite.__version__)  # 0.4.3
+print(graphqlite.__version__)  # 0.4.4
 ```
 
 ## Step 2: Create an In-Memory Graph

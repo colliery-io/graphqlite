@@ -1,6 +1,6 @@
 # Python API Reference
 
-Version: **0.4.3**
+Version: **0.4.4**
 
 ---
 
