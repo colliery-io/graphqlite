@@ -346,4 +346,23 @@ SELECT cypher('UNWIND $items AS item MATCH (n:U185 {node_id: item.id}) RETURN n.
               '{"items":[{"id":"a"},{"id":"b"}]}') as result;
 -- Expected: [{"n.node_id":"a"},{"n.node_id":"b"}] (one per UNWIND item)
 
+-- =======================================================================
+-- GQLITE-T-0191 / Issue #61.7: multi-property MATCH inline filter
+-- Previously reused _prop_<alias> for every pair, producing contradictory
+-- WHERE clauses (value = 't' AND value = 'r' AND value = 'file').
+-- =======================================================================
+SELECT '=== GQLITE-T-0191 / #61.7: multi-property MATCH inline filter ===' as section;
+
+SELECT cypher('CREATE (a:M191 {node_id:"a", node_type:"file", tenant_id:"t", repo_id:"r"})-[:DEPENDS_ON]->(b:M191 {node_id:"b", name:"numpy"})') as result;
+
+SELECT 'Test T-0191a - MATCH with 3 inline string props + traversal:' as test_name;
+SELECT cypher('MATCH (src:M191 {tenant_id:"t", repo_id:"r", node_type:"file"})-[r:DEPENDS_ON]->(pkg:M191)
+               RETURN DISTINCT pkg.name AS package ORDER BY pkg.name LIMIT 10') as result;
+-- Expected: [{"package":"numpy"}]   (was: [])
+
+SELECT 'Test T-0191b - multi-property filter with mixed types:' as test_name;
+SELECT cypher('CREATE (c:M191b {name:"x", age: 30, active: true})') as result;
+SELECT cypher('MATCH (n:M191b {name:"x", age: 30, active: true}) RETURN n.name') as result;
+-- Expected: [{"n.name":"x"}]
+
 SELECT '=== Issue Regression Tests Complete ===' as test_section;

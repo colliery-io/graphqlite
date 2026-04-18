@@ -4,7 +4,7 @@ level: task
 title: "RETURN DISTINCT with relationship traversal returns empty result (bug #61.7)"
 short_code: "GQLITE-T-0191"
 created_at: 2026-04-18T16:54:27.225857+00:00
-updated_at: 2026-04-18T20:59:06.644462+00:00
+updated_at: 2026-04-18T22:58:38.352171+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,7 +12,7 @@ archived: false
 tags:
   - "#task"
   - "#bug"
-  - "#phase/blocked"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -55,6 +55,10 @@ Make `MATCH (src {props})-[r:TYPE]->(pkg) RETURN DISTINCT pkg.name ORDER BY pkg.
 
 ### Likely relation to other bugs
 Almost certainly a downstream manifestation of **GQLITE-T-0190** (bug #61.6 — target node properties inaccessible). If `pkg.name` resolves to NULL, `ORDER BY pkg.name` + `DISTINCT` under certain plan shapes can elide the row, producing `[]`.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
