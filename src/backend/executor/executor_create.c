@@ -456,15 +456,47 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     default:
                                         continue; /* Skip unsupported types */
                                 }
+                            } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
+                                cypher_parameter *param = (cypher_parameter*)pair->value;
+                                property_value pv;
+                                property_value_init(&pv);
+                                static int64_t rel_int_buf;
+                                static double rel_real_buf;
+                                static int rel_bool_buf;
 
-                                /* Set the property on the edge */
+                                int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
+                                if (rc == -2) {
+                                    property_value_free(&pv);
+                                    continue;
+                                } else if (rc == 0) {
+                                    if (prop_type == PROP_TYPE_TEXT) {
+                                        prop_value = pv.as_str;
+                                    } else if (prop_type == PROP_TYPE_INTEGER) {
+                                        rel_int_buf = pv.as_int;
+                                        prop_value = &rel_int_buf;
+                                    } else if (prop_type == PROP_TYPE_REAL) {
+                                        rel_real_buf = pv.as_real;
+                                        prop_value = &rel_real_buf;
+                                    } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                        rel_bool_buf = pv.as_bool;
+                                        prop_value = &rel_bool_buf;
+                                    } else if (prop_type == PROP_TYPE_JSON) {
+                                        prop_value = pv.as_str;
+                                    }
+                                } else {
+                                    CYPHER_DEBUG("Parameter '%s' not found in params_json (rel)", param->name);
+                                    property_value_free(&pv);
+                                    continue;
+                                }
+                            }
+
+                            if (prop_value) {
                                 if (cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value) < 0) {
                                     set_result_error(result, "Failed to set edge property");
                                     return -1;
                                 }
-
                                 result->properties_set++;
-                                CYPHER_DEBUG("Added edge property: %s", pair->key);
+                                CYPHER_DEBUG("Set edge property: %s", pair->key);
                             }
                         }
                     }

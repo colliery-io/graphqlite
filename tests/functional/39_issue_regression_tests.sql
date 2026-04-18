@@ -183,4 +183,43 @@ SELECT cypher('MATCH (c:Co51r {id: "acme"}) CALL { With c MATCH (d:Dep51r {id: "
 SELECT cypher('MATCH (a)-[:HAS51r]->(b) RETURN a.id, labels(a) AS al, b.id, labels(b) AS bl') as result;
 -- Was BUG: b.id=acme (self-loop) instead of b.id=eng
 
+-- =======================================================================
+-- Issue #61.2: $param values in CREATE relationship inline properties
+-- https://github.com/colliery-io/graphqlite/issues/61  (GQLITE-T-0186)
+-- =======================================================================
+SELECT '=== Issue #61.2: $param in rel inline props ===' as section;
+
+SELECT cypher('CREATE (a:N61r2 {node_id:"a"})') as result;
+SELECT cypher('CREATE (b:N61r2 {node_id:"b"})') as result;
+
+SELECT 'Test #61.2a - CREATE rel with $param text/int properties:' as test_name;
+SELECT cypher('MATCH (a:N61r2 {node_id:"a"}) MATCH (b:N61r2 {node_id:"b"})
+               CREATE (a)-[:REL61r2 {prop1: $p1, prop2: $p2}]->(b)',
+              '{"p1":"world","p2":99}') as result;
+SELECT cypher('MATCH ()-[r:REL61r2]->() RETURN r.prop1, r.prop2') as result;
+-- Expected: [{"r.prop1":"world","r.prop2":99}]   (was: both NULL)
+
+SELECT 'Test #61.2b - CREATE rel with $param real/bool properties:' as test_name;
+SELECT cypher('MATCH (a:N61r2 {node_id:"a"}) MATCH (b:N61r2 {node_id:"b"})
+               CREATE (a)-[:REL61r2b {weight: $w, active: $act}]->(b)',
+              '{"w":3.14,"act":true}') as result;
+SELECT cypher('MATCH ()-[r:REL61r2b]->() RETURN r.weight, r.active') as result;
+
+-- =======================================================================
+-- Issue #61.3: ON CREATE SET with $param on relationship variable
+-- https://github.com/colliery-io/graphqlite/issues/61  (GQLITE-T-0187)
+-- =======================================================================
+SELECT '=== Issue #61.3: ON CREATE SET $param on rel var ===' as section;
+
+SELECT cypher('CREATE (a:N61r3 {node_id:"a"})') as result;
+SELECT cypher('CREATE (b:N61r3 {node_id:"b"})') as result;
+
+SELECT 'Test #61.3 - MERGE rel with inline $param + ON CREATE SET $param:' as test_name;
+SELECT cypher('MATCH (a:N61r3 {node_id:"a"}) MATCH (b:N61r3 {node_id:"b"})
+               MERGE (a)-[r:CALLS61r3 {edge_id: $eid}]->(b)
+               ON CREATE SET r.file = $file, r.line = $line',
+              '{"eid":"e1","file":"test.py","line":42}') as result;
+SELECT cypher('MATCH ()-[r:CALLS61r3]->() RETURN r.edge_id, r.file, r.line') as result;
+-- Expected: [{"r.edge_id":"e1","r.file":"test.py","r.line":42}]  (was: all NULL)
+
 SELECT '=== Issue Regression Tests Complete ===' as test_section;

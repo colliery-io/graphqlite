@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-03-29T17:54:46Z | 55 files | JavaScript, Python, Rust
+> Generated: 2026-03-31T13:05:15Z | 55 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -514,10 +514,29 @@
 - pub `test_bulk_set_parameter_non_json_error` function L1460-1470 — `def test_bulk_set_parameter_non_json_error(g)` — PR #45 coverage: non-JSON param for bulk SET should error.
 - pub `test_bulk_set_parameter_missing_error` function L1473-1483 — `def test_bulk_set_parameter_missing_error(g)` — PR #45 coverage: missing param for bulk SET should error.
 - pub `test_merge_on_match_set_function` function L1486-1492 — `def test_merge_on_match_set_function(g)` — PR #45 coverage: MERGE ON MATCH SET with function call.
-- pub `test_remove_return` function L1495-1501 — `def test_remove_return(g)` — Test REMOVE + RETURN in a single query.
-- pub `test_call_subquery_standalone` function L1508-1515 — `def test_call_subquery_standalone(g)` — Test standalone CALL { MATCH ...
-- pub `test_call_subquery_with_import` function L1518-1527 — `def test_call_subquery_with_import(g)` — Test CALL with WITH variable import and SET.
-- pub `test_call_subquery_union` function L1530-1535 — `def test_call_subquery_union(g)` — Test CALL with UNION inside.
+- pub `test_merge_with_set_return` function L1495-1505 — `def test_merge_with_set_return(g)` — Issue #48: MERGE + WITH + SET + RETURN returns column data.
+- pub `test_merge_with_set_no_return` function L1508-1517 — `def test_merge_with_set_no_return(g)` — Issue #48: MERGE + WITH + SET without RETURN succeeds.
+- pub `test_merge_with_return_no_set` function L1520-1528 — `def test_merge_with_return_no_set(g)` — Issue #48: MERGE + WITH + RETURN without SET returns column data.
+- pub `test_merge_with_multiple_set` function L1531-1542 — `def test_merge_with_multiple_set(g)` — Issue #54: MERGE + WITH + multiple SET clauses all execute.
+- pub `test_merge_with_edge_variable` function L1545-1556 — `def test_merge_with_edge_variable(g)` — Issue #54: MERGE relationship + WITH carries edge variable.
+- pub `test_remove_return` function L1559-1565 — `def test_remove_return(g)` — Test REMOVE + RETURN in a single query.
+- pub `test_call_subquery_standalone` function L1572-1579 — `def test_call_subquery_standalone(g)` — Test standalone CALL { MATCH ...
+- pub `test_call_subquery_with_import` function L1582-1591 — `def test_call_subquery_with_import(g)` — Test CALL with WITH variable import and SET.
+- pub `test_call_subquery_union` function L1594-1599 — `def test_call_subquery_union(g)` — Test CALL with UNION inside.
+- pub `test_issue_49_unwind_param_create_set` function L1606-1617 — `def test_issue_49_unwind_param_create_set(g)` — Issue #49: UNWIND $param + CREATE + SET should work.
+- pub `test_issue_49_unwind_param_merge` function L1620-1629 — `def test_issue_49_unwind_param_merge(g)` — Issue #49: UNWIND $param + MERGE should iterate per item.
+- pub `test_issue_49_unwind_literal_set` function L1632-1638 — `def test_issue_49_unwind_literal_set(g)` — Issue #49: UNWIND literal + SET should propagate item value.
+- pub `test_issue_50_startnode_endnode_same_return` function L1641-1651 — `def test_issue_50_startnode_endnode_same_return(g)` — Issue #50: startNode(r).name and endNode(r).name in same RETURN should have distinct columns.
+- pub `test_issue_51_call_merge_scoping` function L1654-1665 — `def test_issue_51_call_merge_scoping(g)` — Issue #51: CALL { WITH c MATCH (d) MERGE (c)-[:REL]->(d) } should link c to d, not self-loop.
+- pub `test_issue_34b_optional_match_where_null_row` function L1668-1682 — `def test_issue_34b_optional_match_where_null_row(g)` — Issue #34b: OPTIONAL MATCH WHERE filter should preserve null rows.
+- pub `test_with_match_merge` function L1685-1696 — `def test_with_match_merge(g)` — MATCH+WITH+MATCH+MERGE should work without errors.
+- pub `test_functions_in_set` function L1699-1705 — `def test_functions_in_set(g)` — SET n.x = func(n.prop) should resolve node properties in function args.
+- pub `test_unwind_merge_on_create_set` function L1708-1719 — `def test_unwind_merge_on_create_set(g)` — Batch MERGE with ON CREATE SET from params.
+- pub `test_count_skips_nulls_from_optional_match` function L1726-1733 — `def test_count_skips_nulls_from_optional_match(g)` — COUNT(r) where r is null from OPTIONAL MATCH should return 0.
+- pub `test_edge_variable_through_with` function L1736-1742 — `def test_edge_variable_through_with(g)` — Relationship variables should pass through WITH for type() and property access.
+- pub `test_function_call_in_create_property_map` function L1745-1751 — `def test_function_call_in_create_property_map(g)` — Functions like toUpper() should be evaluated in CREATE property maps.
+- pub `test_call_subquery_exports_inner_return` function L1754-1760 — `def test_call_subquery_exports_inner_return(g)` — Variables returned from CALL subquery should be visible in outer scope.
+- pub `test_call_subquery_processes_all_inner_match_rows` function L1763-1771 — `def test_call_subquery_processes_all_inner_match_rows(g)` — CALL subquery should iterate all inner MATCH rows, not just the first.
 
 #### bindings/python/tests/test_manager.py
 
@@ -1227,52 +1246,69 @@
 -  `test_bulk_set_parameter_non_json_error` function L3053-3061 — `()` — Integration tests for GraphQLite Rust bindings.
 -  `test_bulk_set_parameter_missing_error` function L3064-3072 — `()` — Integration tests for GraphQLite Rust bindings.
 -  `test_merge_on_match_set_function` function L3075-3086 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_remove_property_return` function L3089-3103 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_return_star` function L3110-3117 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_return_star_with_relationship` function L3120-3126 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_isempty` function L3129-3136 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_btrim` function L3139-3143 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_to_integer_or_null` function L3146-3154 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_to_float_or_null` function L3157-3166 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_to_boolean_or_null` function L3169-3177 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_element_id` function L3180-3185 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_nullif` function L3188-3196 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_value_type` function L3199-3209 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_char_length` function L3212-3219 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_list_slice_range` function L3226-3233 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_list_slice_from` function L3236-3242 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_list_slice_to` function L3245-3251 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_stdev` function L3254-3266 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_stdevp` function L3269-3279 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_trig_functions` function L3282-3308 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_hyperbolic_functions` function L3311-3332 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_isnan` function L3335-3339 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_date_map_construction` function L3346-3350 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_time_map_construction` function L3353-3357 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_datetime_map_construction` function L3360-3364 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_duration_map` function L3367-3373 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_datetime_from_epoch` function L3376-3380 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_duration_in_days` function L3383-3387 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_duration_in_seconds` function L3390-3394 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_date_add` function L3397-3402 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_date_sub` function L3405-3410 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_date_truncate` function L3413-3417 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_point_cartesian` function L3420-3428 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_point_geographic` function L3431-3437 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_distance_euclidean` function L3440-3448 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_distance_haversine` function L3451-3460 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_within_bbox` function L3463-3474 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_distance_same_point` function L3477-3484 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_date_add_cross_year` function L3487-3492 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_negative_epoch` function L3495-3500 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_clotho_bug1_count_aggregate_with_where_filter` function L3510-3523 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_clotho_bug2_property_match_syntax` function L3526-3536 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_clotho_bug3_optional_match_with_where_filter` function L3539-3567 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_clotho_bug5_undirected_match_bare` function L3570-3590 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_clotho_pattern_predicate_in_where` function L3593-3608 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_call_subquery_standalone` function L3615-3626 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_call_subquery_with_import` function L3629-3641 — `()` — Integration tests for GraphQLite Rust bindings.
--  `test_call_subquery_union` function L3644-3654 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_merge_with_set_return` function L3089-3097 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_merge_with_set_no_return` function L3100-3109 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_merge_with_return_no_set` function L3112-3119 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_remove_property_return` function L3122-3136 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_return_star` function L3143-3150 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_return_star_with_relationship` function L3153-3159 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_isempty` function L3162-3169 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_btrim` function L3172-3176 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_to_integer_or_null` function L3179-3187 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_to_float_or_null` function L3190-3199 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_to_boolean_or_null` function L3202-3210 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_element_id` function L3213-3218 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_nullif` function L3221-3229 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_value_type` function L3232-3242 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_char_length` function L3245-3252 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_list_slice_range` function L3259-3266 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_list_slice_from` function L3269-3275 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_list_slice_to` function L3278-3284 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_stdev` function L3287-3299 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_stdevp` function L3302-3312 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_trig_functions` function L3315-3341 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_hyperbolic_functions` function L3344-3365 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_isnan` function L3368-3372 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_map_construction` function L3379-3383 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_time_map_construction` function L3386-3390 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_datetime_map_construction` function L3393-3397 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_duration_map` function L3400-3406 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_datetime_from_epoch` function L3409-3413 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_duration_in_days` function L3416-3420 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_duration_in_seconds` function L3423-3427 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_add` function L3430-3435 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_sub` function L3438-3443 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_truncate` function L3446-3450 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_point_cartesian` function L3453-3461 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_point_geographic` function L3464-3470 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_distance_euclidean` function L3473-3481 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_distance_haversine` function L3484-3493 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_within_bbox` function L3496-3507 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_distance_same_point` function L3510-3517 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_date_add_cross_year` function L3520-3525 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_negative_epoch` function L3528-3533 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug1_count_aggregate_with_where_filter` function L3543-3556 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug2_property_match_syntax` function L3559-3569 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug3_optional_match_with_where_filter` function L3572-3600 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_bug5_undirected_match_bare` function L3603-3623 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_clotho_pattern_predicate_in_where` function L3626-3641 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_call_subquery_standalone` function L3648-3659 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_call_subquery_with_import` function L3662-3674 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_call_subquery_union` function L3677-3687 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_issue_49_unwind_param_create_set` function L3694-3707 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_issue_49_unwind_param_merge` function L3710-3721 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_issue_49_unwind_literal_set` function L3724-3731 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_issue_50_startnode_endnode_same_return` function L3734-3747 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_issue_51_call_merge_scoping` function L3750-3763 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_issue_34b_optional_match_where_null` function L3766-3778 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_with_match_merge` function L3781-3792 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_functions_in_set` function L3795-3802 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_unwind_merge_on_create_set` function L3805-3818 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_count_skips_nulls_from_optional_match` function L3825-3835 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_edge_variable_through_with` function L3838-3845 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_function_call_in_create_property_map` function L3848-3855 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_call_subquery_exports_inner_return` function L3858-3865 — `()` — Integration tests for GraphQLite Rust bindings.
+-  `test_call_subquery_processes_all_inner_match_rows` function L3868-3877 — `()` — Integration tests for GraphQLite Rust bindings.
 
 ### docs/theme
 

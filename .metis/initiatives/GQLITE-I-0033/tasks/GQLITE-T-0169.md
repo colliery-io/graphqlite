@@ -4,14 +4,14 @@ level: task
 title: "REC-14: Migrate static transform globals into per-query context"
 short_code: "GQLITE-T-0169"
 created_at: 2026-03-28T13:59:39.599156+00:00
-updated_at: 2026-03-29T18:04:49.150967+00:00
+updated_at: 2026-03-29T19:35:27.032941+00:00
 parent: GQLITE-I-0033
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -40,6 +40,8 @@ Migrate static/global transform state into a `cypher_transform_context` struct, 
 4. Move `pending_prop_joins` and `id_ref_buf` into the context
 5. Add formal `push_buffer()` / `pop_buffer()` API for nested transform scopes
 6. Extract duplicate `transform_expression_to_string()` implementations into `transform_helpers.c`
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -726,11 +726,13 @@ int execute_merge_clause_with_vars(cypher_executor *executor, cypher_merge *merg
                         if (map->pairs) {
                             for (int j = 0; j < map->pairs->count; j++) {
                                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                    cypher_literal *lit = (cypher_literal*)pair->value;
-                                    property_type prop_type = PROP_TYPE_TEXT;
-                                    const void *prop_value = NULL;
+                                if (!pair->key || !pair->value) continue;
 
+                                property_type prop_type = PROP_TYPE_TEXT;
+                                const void *prop_value = NULL;
+
+                                if (pair->value->type == AST_NODE_LITERAL) {
+                                    cypher_literal *lit = (cypher_literal*)pair->value;
                                     switch (lit->literal_type) {
                                         case LITERAL_STRING:
                                             prop_type = PROP_TYPE_TEXT;
@@ -751,11 +753,42 @@ int execute_merge_clause_with_vars(cypher_executor *executor, cypher_merge *merg
                                         default:
                                             continue;
                                     }
+                                } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
+                                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                                    property_value pv;
+                                    property_value_init(&pv);
+                                    static int64_t merge_int_buf;
+                                    static double merge_real_buf;
+                                    static int merge_bool_buf;
 
-                                    if (prop_value) {
-                                        cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
-                                        result->properties_set++;
+                                    int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
+                                    if (rc == -2) {
+                                        property_value_free(&pv);
+                                        continue;
+                                    } else if (rc == 0) {
+                                        if (prop_type == PROP_TYPE_TEXT) {
+                                            prop_value = pv.as_str;
+                                        } else if (prop_type == PROP_TYPE_INTEGER) {
+                                            merge_int_buf = pv.as_int;
+                                            prop_value = &merge_int_buf;
+                                        } else if (prop_type == PROP_TYPE_REAL) {
+                                            merge_real_buf = pv.as_real;
+                                            prop_value = &merge_real_buf;
+                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                            merge_bool_buf = pv.as_bool;
+                                            prop_value = &merge_bool_buf;
+                                        } else if (prop_type == PROP_TYPE_JSON) {
+                                            prop_value = pv.as_str;
+                                        }
+                                    } else {
+                                        property_value_free(&pv);
+                                        continue;
                                     }
+                                }
+
+                                if (prop_value) {
+                                    cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
+                                    result->properties_set++;
                                 }
                             }
                         }
@@ -767,22 +800,17 @@ int execute_merge_clause_with_vars(cypher_executor *executor, cypher_merge *merg
                     set_variable_edge_id(var_map, rel_pattern->variable, edge_id);
                 }
 
-                /* ON CREATE/ON MATCH SET for edges not yet implemented */
-                if (edge_was_created && merge->on_create && merge->on_create->count > 0) {
-                    CYPHER_DEBUG("ON CREATE SET for edge %d: not yet implemented for relationship variables", edge_id);
-                }
-                if (!edge_was_created && merge->on_match && merge->on_match->count > 0) {
-                    CYPHER_DEBUG("ON MATCH SET for edge %d: not yet implemented for relationship variables", edge_id);
-                }
-
-                /* Also apply ON CREATE/MATCH for target node if it was created/matched */
-                if (target_was_created && merge->on_create && merge->on_create->count > 0) {
+                /* Apply ON CREATE / ON MATCH for the MERGE as a whole.
+                 * A MERGE of a relationship pattern is considered "created" when
+                 * either the edge or the target endpoint was newly created. */
+                bool merge_was_create = edge_was_created || target_was_created;
+                if (merge_was_create && merge->on_create && merge->on_create->count > 0) {
                     if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
                         free_variable_map(var_map);
                         return -1;
                     }
                 }
-                if (!target_was_created && merge->on_match && merge->on_match->count > 0) {
+                if (!merge_was_create && merge->on_match && merge->on_match->count > 0) {
                     if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
                         free_variable_map(var_map);
                         return -1;
@@ -1313,6 +1341,7 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
 
                 /* Try to find existing edge */
                 int edge_id = find_edge_by_pattern(executor, source_id, dest_id, rel_type, rel_pattern);
+                bool edge_was_created = false;
 
                 if (edge_id >= 0) {
                     CYPHER_DEBUG("MERGE matched existing edge %d", edge_id);
@@ -1325,6 +1354,7 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
                         return -1;
                     }
 
+                    edge_was_created = true;
                     result->relationships_created++;
                     CYPHER_DEBUG("MERGE created new edge %d: %d -[:%s]-> %d", edge_id, source_id, rel_type, dest_id);
 
@@ -1334,11 +1364,13 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
                         if (map->pairs) {
                             for (int j = 0; j < map->pairs->count; j++) {
                                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                    cypher_literal *lit = (cypher_literal*)pair->value;
-                                    property_type prop_type = PROP_TYPE_TEXT;
-                                    const void *prop_value = NULL;
+                                if (!pair->key || !pair->value) continue;
 
+                                property_type prop_type = PROP_TYPE_TEXT;
+                                const void *prop_value = NULL;
+
+                                if (pair->value->type == AST_NODE_LITERAL) {
+                                    cypher_literal *lit = (cypher_literal*)pair->value;
                                     switch (lit->literal_type) {
                                         case LITERAL_STRING:
                                             prop_type = PROP_TYPE_TEXT;
@@ -1359,11 +1391,42 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
                                         default:
                                             continue;
                                     }
+                                } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
+                                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                                    property_value pv;
+                                    property_value_init(&pv);
+                                    static int64_t mv_int_buf;
+                                    static double mv_real_buf;
+                                    static int mv_bool_buf;
 
-                                    if (prop_value) {
-                                        cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
-                                        result->properties_set++;
+                                    int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
+                                    if (rc == -2) {
+                                        property_value_free(&pv);
+                                        continue;
+                                    } else if (rc == 0) {
+                                        if (prop_type == PROP_TYPE_TEXT) {
+                                            prop_value = pv.as_str;
+                                        } else if (prop_type == PROP_TYPE_INTEGER) {
+                                            mv_int_buf = pv.as_int;
+                                            prop_value = &mv_int_buf;
+                                        } else if (prop_type == PROP_TYPE_REAL) {
+                                            mv_real_buf = pv.as_real;
+                                            prop_value = &mv_real_buf;
+                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                            mv_bool_buf = pv.as_bool;
+                                            prop_value = &mv_bool_buf;
+                                        } else if (prop_type == PROP_TYPE_JSON) {
+                                            prop_value = pv.as_str;
+                                        }
+                                    } else {
+                                        property_value_free(&pv);
+                                        continue;
                                     }
+                                }
+
+                                if (prop_value) {
+                                    cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
+                                    result->properties_set++;
                                 }
                             }
                         }
@@ -1373,6 +1436,20 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
                 /* Store edge variable mapping */
                 if (rel_pattern->variable) {
                     set_variable_edge_id(var_map, rel_pattern->variable, edge_id);
+                }
+
+                /* Apply ON CREATE / ON MATCH for the edge half of the MERGE */
+                if (edge_was_created && merge->on_create && merge->on_create->count > 0) {
+                    if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
+                        free_variable_map(var_map);
+                        return -1;
+                    }
+                }
+                if (!edge_was_created && merge->on_match && merge->on_match->count > 0) {
+                    if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
+                        free_variable_map(var_map);
+                        return -1;
+                    }
                 }
 
                 previous_node_id = target_node_id;

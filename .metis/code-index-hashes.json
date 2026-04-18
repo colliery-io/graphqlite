@@ -1,6 +1,6 @@
 {
   "files": {
-    "bindings/python/src/graphqlite/__init__.py": "6e4651897b6ccf3141809caca19310c64a0325ce875a381779e500127a8496cd",
+    "bindings/python/src/graphqlite/__init__.py": "1a128e3c7f0d1cd1f4ae2d8f9d5683fb97c9fce27e07f4f7f0c08c964a75dda5",
     "bindings/python/src/graphqlite/_platform.py": "3d0908c46378bb4c539026ddf1d7c58278b6ff9b01ceae5ee8d04456d1166334",
     "bindings/python/src/graphqlite/algorithms/__init__.py": "616875690e2e716bd3dd9bdb3d0518c4dc5b3598700d29b3646cddf096827cfb",
     "bindings/python/src/graphqlite/algorithms/_parsing.py": "8fab1231488fe1ec57eca00593eb6d4de3ebaa4220af3bda009cf297c007d4ff",
@@ -22,7 +22,7 @@
     "bindings/python/src/graphqlite/manager.py": "921e6c817a0e0e446c3990d097991526320caf5d2c5eecc45df07dd16a95210f",
     "bindings/python/src/graphqlite/utils.py": "0346f37c60547d97b62ca65de69e823966030031bc25afcbd9ae11b37e65a712",
     "bindings/python/tests/test_connection.py": "de1c79104d55f9e5dd5b0b0ae66ce18994ce405d554804ec0a774d76afd58fe8",
-    "bindings/python/tests/test_graph.py": "f2620d7968a87d49f62c3e402b086dd163c803bd4e08b37191aa167a13001206",
+    "bindings/python/tests/test_graph.py": "dce6cea3cbfa0ebf1ac14002446c680c639af5a0660824521390c62a9c77b30d",
     "bindings/python/tests/test_manager.py": "22220d47b53960cbfd06c003090033dd71876efc0392a2c33e0c983deeb5b7d0",
     "bindings/python/tests/test_new_functions.py": "20edde40c57ba1d3861abb764d3b9964a24ef3024a67ff334822353f32d13f39",
     "bindings/rust/build.rs": "e4b209fae36edddf2220559b38a591a971b97a1a30db591a227e5fd921da321b",
@@ -48,7 +48,7 @@
     "bindings/rust/src/query_builder.rs": "21afdc2e1d2e245487bb5a7ff298b6b9fb184cff3a3d098a07ac2402cc030105",
     "bindings/rust/src/result.rs": "f0dfc422caff905be41bb7d1a512d3f1dea8a5c63ddd97943da5978d77fea955",
     "bindings/rust/src/utils.rs": "af2b6b66c7107c7218fca2929992a8202b4f33595fd90e1ed18b8c7c98425202",
-    "bindings/rust/tests/integration.rs": "7c4417f700e1fc4709290cd0f86dd842ba0f172fa6d3f06d9b9f4fad788235e6",
+    "bindings/rust/tests/integration.rs": "ba09c93f856197129bef6c79641c0367dba5f1465e10162537d65d6efed4fd2c",
     "docs/theme/version-select.js": "cd79bd35046b556b4ef221f06ad8b18b89ceaa05f3347e77885f2f698188332e",
     "examples/llm-graphrag/analyze.py": "cbfbf8fadda6f32de87891d291eec7e2754d8e617aa760e89d1289c5d99a8c50",
     "examples/llm-graphrag/hotpotqa.py": "7058230532a58b2480e75264ef2017b89a525ad2f6e71cef46a1a86b9abe6345",
