@@ -1942,6 +1942,10 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
     result->row_count = 1;
     result->data = malloc(sizeof(char**));
     result->data[0] = malloc(col_count * sizeof(char*));
+    /* GQLITE-T-0227: track per-cell SQLite types so the JSON formatter can
+     * emit integers/floats unquoted instead of stringifying everything. */
+    result->data_types = malloc(sizeof(int*));
+    result->data_types[0] = calloc(col_count, sizeof(int));
 
     for (int i = 0; i < col_count; i++) {
         cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
@@ -1988,7 +1992,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                     for (int t = 0; type_tables[t]; t++) {
                         char sql[512];
                         snprintf(sql, sizeof(sql),
-                            "SELECT CAST(value AS TEXT) FROM %s "
+                            "SELECT value FROM %s "
                             "WHERE node_id = %d AND key_id = "
                             "(SELECT id FROM property_keys WHERE key = '%s')",
                             type_tables[t], node_id, prop_name);
@@ -1996,9 +2000,20 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                         sqlite3_stmt *stmt;
                         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
                             if (sqlite3_step(stmt) == SQLITE_ROW) {
+                                int sql_type = sqlite3_column_type(stmt, 0);
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
                                 if (val) {
-                                    result->data[0][i] = strdup(val);
+                                    /* node_props_bool stores 0/1; expose as
+                                     * "true"/"false" so the JSON formatter
+                                     * treats it as a string and openCypher's
+                                     * boolean literal is preserved. */
+                                    if (strcmp(type_tables[t], "node_props_bool") == 0) {
+                                        result->data[0][i] = strdup(atoi(val) ? "true" : "false");
+                                        result->data_types[0][i] = SQLITE_TEXT;
+                                    } else {
+                                        result->data[0][i] = strdup(val);
+                                        result->data_types[0][i] = sql_type;
+                                    }
                                 }
                             }
                             sqlite3_finalize(stmt);

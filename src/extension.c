@@ -308,6 +308,10 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             /* Numeric value - output without quotes */
                             size_t slen = strlen(val);
                             if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
+                        } else if (strcmp(val, "true") == 0 || strcmp(val, "false") == 0) {
+                            /* Boolean literal - output without quotes (GQLITE-T-0227) */
+                            size_t slen = strlen(val);
+                            if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
                         } else {
                             /* String value - quote and escape */
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");

@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-13T22:27:59Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-13T23:00:08Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -1481,9 +1481,9 @@
 -  `_h_result_empty` function L233-238 — `def _h_result_empty(step, state, backend, m)`
 -  `_h_expect_error` function L240-243 — `def _h_expect_error(step, state, backend, m)`
 -  `_h_no_side_effects` function L245-247 — `def _h_no_side_effects(step, state, backend, m)`
--  `_h_side_effects_table` function L249-252 — `def _h_side_effects_table(step, state, backend, m)`
--  `_compare_result_table` function L270-305 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
--  `_rows_equal` function L308-311 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
+-  `_h_side_effects_table` function L249-255 — `def _h_side_effects_table(step, state, backend, m)`
+-  `_compare_result_table` function L273-308 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
+-  `_rows_equal` function L311-314 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
 
 #### tests/tck/values.py
 

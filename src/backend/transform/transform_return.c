@@ -999,8 +999,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     /* Use properties() function approach for n{.*} */
                     append_sql(ctx, "(SELECT json_group_object(pk.key, COALESCE("
                                "npt.value, "
-                               "CAST(npi.value AS TEXT), "
-                               "CAST(npr.value AS TEXT), "
+                               "npi.value, "
+                               "npr.value, "
                                "CASE npb.value WHEN 1 THEN 'true' WHEN 0 THEN 'false' END, "
                                "json(npj.value)"
                                ")) FROM property_keys pk "
@@ -1036,11 +1036,11 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                        base_alias, is_projected ? "" : ".id");
                             append_string_literal(ctx, item->property);
                             append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
+                            append_sql(ctx, "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
                                        base_alias, is_projected ? "" : ".id");
                             append_string_literal(ctx, item->property);
                             append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
+                            append_sql(ctx, "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
                                        base_alias, is_projected ? "" : ".id");
                             append_string_literal(ctx, item->property);
                             append_sql(ctx, "), ");

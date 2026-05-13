@@ -358,12 +358,12 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
             append_sql(ctx, " AND pk.key = ");
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = ", gprefix, gprefix);
+            append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = ", gprefix, gprefix);
             if (transform_expression(ctx, prop->expr) < 0) return -1;
             append_sql(ctx, " AND pk.key = ");
             append_string_literal(ctx, prop->property_name);
             append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = ", gprefix, gprefix);
+            append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = ", gprefix, gprefix);
             if (transform_expression(ctx, prop->expr) < 0) return -1;
             append_sql(ctx, " AND pk.key = ");
             append_string_literal(ctx, prop->property_name);
@@ -503,11 +503,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
                    gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT CAST(npi.value AS TEXT) FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
+        append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
                    gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT CAST(npr.value AS TEXT) FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
+        append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
                    gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
         append_string_literal(ctx, prop->property_name);
         append_sql(ctx, "), ");
