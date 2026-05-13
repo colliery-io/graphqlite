@@ -183,6 +183,28 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
         return -1;
     }
 
+    /* GQLITE-T-0218: callers from the generic-transform dispatch path (e.g.
+     * MATCH ... WITH ... MATCH ... RETURN *) may arrive here with the AST's
+     * items list never populated — the SQL has been generated and the column
+     * list lives only in the prepared statement. Synthesize identifier items
+     * from sqlite3_column_count/name so the rest of this function works
+     * uniformly. Previously this dereferenced NULL and SIGSEGV'd. */
+    if (!return_clause->items) {
+        int n_cols = sqlite3_column_count(stmt);
+        ast_list *synth = ast_list_create();
+        for (int c = 0; c < n_cols; c++) {
+            const char *col_name = sqlite3_column_name(stmt, c);
+            if (!col_name) col_name = "";
+            ast_node *id_node = (ast_node *)make_identifier(strdup(col_name), -1);
+            if (!id_node) continue;
+            cypher_return_item *ri = make_return_item(id_node, NULL);
+            if (!ri) continue;
+            ast_list_append(synth, (ast_node *)ri);
+        }
+        return_clause->items = synth;
+        return_clause->return_all = false;
+    }
+
     /* Get column count from return clause */
     int column_count = return_clause->items->count;
 

@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Extension SIGSEGV in build_query_results — 8 crashing scenarios"
 short_code: "GQLITE-T-0218"
 created_at: 2026-05-13T17:03:48.991954+00:00
-updated_at: 2026-05-13T17:03:48.991954+00:00
+updated_at: 2026-05-13T20:26:55.833124+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
