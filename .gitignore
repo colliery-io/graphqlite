@@ -95,7 +95,10 @@ stamp-h1
 
 # Package managers
 node_modules/
-vendor/
+# Ignore everything under vendor/ except the deliberately-vendored openCypher
+# TCK snapshot — that's not a transient dependency cache, it ships with the repo.
+vendor/*
+!vendor/tck/
 
 # Documentation build
 docs/_build/

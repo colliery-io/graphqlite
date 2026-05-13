@@ -1,6 +1,6 @@
 {
   "files": {
-    "bindings/python/src/graphqlite/__init__.py": "1a128e3c7f0d1cd1f4ae2d8f9d5683fb97c9fce27e07f4f7f0c08c964a75dda5",
+    "bindings/python/src/graphqlite/__init__.py": "63534967a4afe9dbb72e92dec3efe82242be2d152ee8c813bc9bcfe1f06e4ed9",
     "bindings/python/src/graphqlite/_platform.py": "3d0908c46378bb4c539026ddf1d7c58278b6ff9b01ceae5ee8d04456d1166334",
     "bindings/python/src/graphqlite/algorithms/__init__.py": "616875690e2e716bd3dd9bdb3d0518c4dc5b3598700d29b3646cddf096827cfb",
     "bindings/python/src/graphqlite/algorithms/_parsing.py": "8fab1231488fe1ec57eca00593eb6d4de3ebaa4220af3bda009cf297c007d4ff",
@@ -26,6 +26,7 @@
     "bindings/python/tests/test_manager.py": "22220d47b53960cbfd06c003090033dd71876efc0392a2c33e0c983deeb5b7d0",
     "bindings/python/tests/test_new_functions.py": "20edde40c57ba1d3861abb764d3b9964a24ef3024a67ff334822353f32d13f39",
     "bindings/rust/build.rs": "e4b209fae36edddf2220559b38a591a971b97a1a30db591a227e5fd921da321b",
+    "bindings/rust/examples/tck_runner.rs": "bb8eac23202d20b1d993ea39ba20154d8ed5231a28ada1bc9388212fbcec53c4",
     "bindings/rust/src/algorithms/centrality.rs": "d374994b0d5cfce8257c0b29a30b6b54b4279a5a8f7b44adeac92b6390b94692",
     "bindings/rust/src/algorithms/community.rs": "f4b0bd76ab1cef68dd4c0269d40aea71ed3a666917860833176b641b4fd0c2e4",
     "bindings/rust/src/algorithms/components.rs": "31878c66ff9a071e9566e43247d684fc41af0079dc9364cf36426a7a4588c3a0",
@@ -54,6 +55,20 @@
     "examples/llm-graphrag/hotpotqa.py": "7058230532a58b2480e75264ef2017b89a525ad2f6e71cef46a1a86b9abe6345",
     "examples/llm-graphrag/ingest.py": "8e00192cf4ce7a4fd6582b7afda53f8b5ada3ce6ca9396854e0bbd76cc1a6fd2",
     "examples/llm-graphrag/ollama_client.py": "9a02e3572fb1398a3fda8afe6e567b78782b9d61854b17c399e57c92ed08cd04",
-    "examples/llm-graphrag/rag.py": "ce87cba1b8cd2c8e2ef9a129f31b7c535d710a8b340128429e15870f308f8d17"
+    "examples/llm-graphrag/rag.py": "ce87cba1b8cd2c8e2ef9a129f31b7c535d710a8b340128429e15870f308f8d17",
+    "tests/tck/__init__.py": "66c84da2664eccf38bd14ca535891f7644cb3a2b70f75c998455ecf922ca03cb",
+    "tests/tck/__main__.py": "b62bdefd39c1660f2abd26131d5bf154b8972ba55c5f6d51a82b62052a11e63c",
+    "tests/tck/backends/__init__.py": "b2b2b3776cc4ff23adca8dde82912fc0912fdf89a7ceb89a78609b6baaf8a5db",
+    "tests/tck/backends/base.py": "e3d3cf17c09b857acd8ee3db5470676105b197f7ff14374a8d4f920a6a64a592",
+    "tests/tck/backends/extension.py": "fa4f451d38232e248c71fb97b80bc2ce94ee87f00f58725f92a4f2a3772bcb95",
+    "tests/tck/backends/python_binding.py": "ea52b62a3e26dc05dbcfd3cdb87a1de09603360c8fa429a4a0fd162d97c10536",
+    "tests/tck/backends/rust_binding.py": "b65ba9a65309720bdc88f140383862c16641da94063815c8181b7da1ec92a297",
+    "tests/tck/gherkin.py": "d549f12e4fa2e491998dd97653a9165fdf58bad8c07bfe4b636a5bb1b3b9579d",
+    "tests/tck/runner.py": "c74dc2910067d71e4d69c7f28171634c0e07c435e5f4e16c760f9f02fbf5b476",
+    "tests/tck/tests/__init__.py": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    "tests/tck/tests/test_gherkin.py": "823c54601f616cbb42a52eedf1e93faec54eb5036320fad19680e7d2a863b2d4",
+    "tests/tck/tests/test_smoke_extension.py": "9e871c8e21662916f119fdc095c5f441b2056b20b508c600456594419d0b5870",
+    "tests/tck/tests/test_values.py": "9ad7d878f4168fcdb881fa5b035a74c822b3e073d5e4e0a264f35a355230caa7",
+    "tests/tck/values.py": "c43f0f4022a97b0038c2e019667f2dc5560235eab0581123270015b34959f753"
   }
 }

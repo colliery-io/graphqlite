@@ -253,6 +253,143 @@ def test_functional(verbose: bool = False) -> int:
 
 @test()
 @angreal.command(
+    name="tck",
+    about="Run openCypher TCK conformance suite",
+    tool=angreal.ToolDescription(
+        """
+Run the openCypher Technology Compatibility Kit (TCK) against GraphQLite.
+
+The TCK is the canonical openCypher conformance suite. This task runs the
+vendored `.feature` corpus (`vendor/tck/features/`) through the Python
+harness (`tests/tck/`) against one or more backends and writes structured
+results to `build/tck-results.json`.
+
+## When to use
+- Measuring openCypher conformance coverage.
+- Detecting regressions in parser/transform/executor.
+- Cross-checking that the SQLite extension, Python binding, and Rust binding
+  return identical results for the same Cypher.
+
+## Examples
+```
+angreal test tck                          # full corpus, extension backend
+angreal test tck --filter Match1          # smoke a single feature
+angreal test tck --backend all            # all three backends + parity report
+angreal test tck --debug                  # leak extension debug to stderr
+```
+
+## Output
+- `build/tck-results.json` — structured per-scenario records.
+- `build/tck-debug.log` — captured extension debug noise.
+- Stdout: pass/fail/error/skipped totals + top-10 failing feature files.
+
+## Exit code
+Returns 0 if the harness completed (regardless of scenario failures);
+non-zero only on harness errors. Regression gating happens in CI (TCK-12).
+
+## Prerequisites
+- Extension must be built (auto-built if missing).
+- A `python3` with `enable_load_extension` support (Apple's Xcode python3
+  does NOT have this; MacPorts/Homebrew/uv pythons do).
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(
+    name="backend",
+    long="backend",
+    help="Backend to run against: extension|python|rust|all (default: extension)"
+)
+@angreal.argument(
+    name="filter",
+    long="filter",
+    help="Substring filter on feature file path"
+)
+@angreal.argument(
+    name="limit",
+    long="limit",
+    python_type="int",
+    help="Stop after N scenarios (smoke test)"
+)
+@angreal.argument(
+    name="debug",
+    long="debug",
+    is_flag=True,
+    takes_value=False,
+    help="Don't redirect extension debug output"
+)
+@angreal.argument(
+    name="verbose",
+    long="verbose",
+    short="v",
+    is_flag=True,
+    takes_value=False,
+    help="Show verbose output"
+)
+def test_tck(backend: str = "extension", filter: str = "", limit: int = 0,
+             debug: bool = False, verbose: bool = False) -> int:
+    """Run openCypher TCK conformance suite."""
+    if not ensure_extension_built():
+        return 1
+
+    root = get_project_root()
+    python = _pick_python_with_extension_support(verbose=verbose)
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        print("       Apple's /usr/bin/python3 is built without loadable extensions.", flush=True)
+        print("       Install MacPorts python313 or Homebrew python3 and retry.", flush=True)
+        return 2
+
+    cmd = [python, "-m", "tests.tck",
+           "--backend", backend or "extension",
+           "--out", os.path.join("build", "tck-results.json")]
+    if filter:
+        cmd += ["--filter", filter]
+    if limit:
+        cmd += ["--limit", str(limit)]
+    if debug:
+        cmd += ["--debug"]
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+
+    if verbose:
+        print(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=root, env=env)
+    return result.returncode
+
+
+def _pick_python_with_extension_support(verbose: bool = False) -> str | None:
+    """Return path to a python3 whose sqlite3 supports load_extension, else None."""
+    import shutil
+    candidates = [
+        os.environ.get("GQLITE_TCK_PYTHON"),
+        shutil.which("python3.13"),
+        shutil.which("python3.12"),
+        shutil.which("python3.11"),
+        shutil.which("python3"),
+    ]
+    probe = (
+        "import sqlite3, sys; "
+        "c=sqlite3.connect(':memory:'); "
+        "sys.exit(0 if hasattr(c,'enable_load_extension') else 1)"
+    )
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            r = subprocess.run([cand, "-c", probe], capture_output=True)
+            if r.returncode == 0:
+                if verbose:
+                    print(f"Using python: {cand}")
+                return cand
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return None
+
+
+@test()
+@angreal.command(
     name="constraints",
     about="Run constraint tests (expected failures)",
     tool=angreal.ToolDescription(
