@@ -32,6 +32,10 @@ class Scenario:
     steps: list[Step] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     line: int = 0
+    # For Scenario Outline: each row of the Examples table becomes one
+    # expanded scenario. The parser produces those expansions directly so the
+    # runner sees concrete Scenarios.
+    is_outline: bool = False
 
 
 @dataclass
@@ -72,9 +76,11 @@ def parse_feature(path: Path) -> Feature:
             continue
 
         if line.startswith("Scenario:") or line.startswith("Scenario Outline:"):
-            kw = "Scenario Outline:" if line.startswith("Scenario Outline:") else "Scenario:"
+            is_outline = line.startswith("Scenario Outline:")
+            kw = "Scenario Outline:" if is_outline else "Scenario:"
             name = line[len(kw):].strip()
-            current_scenario = Scenario(name=name, tags=pending_tags, line=i)
+            current_scenario = Scenario(name=name, tags=pending_tags, line=i,
+                                        is_outline=is_outline)
             pending_tags = []
             assert feature is not None, f"Scenario before Feature in {path}"
             feature.scenarios.append(current_scenario)
@@ -91,10 +97,39 @@ def parse_feature(path: Path) -> Feature:
             continue
 
         if line.startswith("Examples:"):
-            # Scenario Outline examples — out of scope for v1; skip until
-            # next blank or end. The scenario will be marked skipped.
-            while i < n and lines[i].strip():
+            # Read the Examples pipe-table and, for each data row, expand
+            # the current Scenario Outline into a concrete Scenario with
+            # <placeholders> in step text/docstring/tables substituted.
+            rows: list[list[str]] = []
+            while i < n:
+                ln = lines[i].strip()
                 i += 1
+                if not ln:
+                    if rows:
+                        break
+                    continue
+                if not ln.startswith("|"):
+                    i -= 1
+                    break
+                rows.append(_parse_table_row(lines[i - 1]))
+            if rows and current_scenario is not None and current_scenario.is_outline:
+                headers = rows[0]
+                template = current_scenario
+                # Remove the template from the feature; we replace it with
+                # one expanded scenario per example row.
+                feature.scenarios.pop()
+                for ridx, row in enumerate(rows[1:], 1):
+                    subs = dict(zip(headers, row))
+                    expanded = Scenario(
+                        name=f"{template.name} (example {ridx})",
+                        tags=list(template.tags),
+                        line=template.line,
+                        is_outline=False,
+                    )
+                    for s in template.steps:
+                        expanded.steps.append(_substitute_step(s, subs))
+                    feature.scenarios.append(expanded)
+                current_scenario = None
             continue
 
         kw_match = _match_step_keyword(line)
@@ -158,6 +193,21 @@ def _consume_step_payload(lines: list[str], i: int, step: Step) -> int:
         return j
 
     return i
+
+
+def _substitute_step(s: Step, subs: dict[str, str]) -> Step:
+    """Return a copy of step `s` with <placeholder> substitutions applied."""
+    def sub(text: str) -> str:
+        out = text
+        for k, v in subs.items():
+            out = out.replace(f"<{k}>", v)
+        return out
+    new_step = Step(keyword=s.keyword, text=sub(s.text), line=s.line)
+    if s.docstring is not None:
+        new_step.docstring = sub(s.docstring)
+    if s.table is not None:
+        new_step.table = [[sub(c) for c in row] for row in s.table]
+    return new_step
 
 
 def _parse_table_row(raw: str) -> list[str]:

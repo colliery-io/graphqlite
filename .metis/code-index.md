@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-13T19:14:36Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-13T22:27:59Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -1442,14 +1442,15 @@
 #### tests/tck/gherkin.py
 
 - pub `Step` class L21-26 — `-`
-- pub `Scenario` class L30-34 — `-`
-- pub `Feature` class L38-42 — `-`
-- pub `parse_feature` function L45-113 — `def parse_feature(path: Path) -> Feature`
-- pub `walk_features` function L191-193 — `def walk_features(root: Path) -> Iterable[Feature]`
--  `_match_step_keyword` function L116-125 — `def _match_step_keyword(line: str) -> tuple[str, str] | None`
--  `_consume_step_payload` function L128-160 — `def _consume_step_payload(lines: list[str], i: int, step: Step) -> int`
--  `_parse_table_row` function L163-171 — `def _parse_table_row(raw: str) -> list[str]`
--  `_inline_background` function L174-188 — `def _inline_background(feature: Feature) -> None` — Inline a Background scenario's steps into every real scenario.
+- pub `Scenario` class L30-38 — `-`
+- pub `Feature` class L42-46 — `-`
+- pub `parse_feature` function L49-148 — `def parse_feature(path: Path) -> Feature`
+- pub `walk_features` function L241-243 — `def walk_features(root: Path) -> Iterable[Feature]`
+-  `_match_step_keyword` function L151-160 — `def _match_step_keyword(line: str) -> tuple[str, str] | None`
+-  `_consume_step_payload` function L163-195 — `def _consume_step_payload(lines: list[str], i: int, step: Step) -> int`
+-  `_substitute_step` function L198-210 — `def _substitute_step(s: Step, subs: dict[str, str]) -> Step` — Return a copy of step `s` with <placeholder> substitutions applied.
+-  `_parse_table_row` function L213-221 — `def _parse_table_row(raw: str) -> list[str]`
+-  `_inline_background` function L224-238 — `def _inline_background(feature: Feature) -> None` — Inline a Background scenario's steps into every real scenario.
 
 #### tests/tck/report.py
 

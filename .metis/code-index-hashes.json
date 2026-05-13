@@ -65,7 +65,7 @@
     "tests/tck/backends/extension.py": "df6fbe0386823907732c82eb4d6a15677f8760f70950b46601064f54c18c8051",
     "tests/tck/backends/python_binding.py": "4c7999d4af5059aaca51f90f7055dd61ebd4bae5ba199b11ca34a03f5e8d31a8",
     "tests/tck/backends/rust_binding.py": "33c42cf252b87ce341c73c5b6442a018a66d0359dd698cc1dba553a773417c3e",
-    "tests/tck/gherkin.py": "d549f12e4fa2e491998dd97653a9165fdf58bad8c07bfe4b636a5bb1b3b9579d",
+    "tests/tck/gherkin.py": "4a61280974a71382d38d469d7a04f490bdc527f39a1d265c00ef19e46e6c220e",
     "tests/tck/report.py": "794cdffd8aa35e8470f769565e01f521ef6ec1ca79b83b8e12a76256de2d117a",
     "tests/tck/runner.py": "2a1ae0d25517b35782cbcd2ac0d635070fac1e4b9f8c215b2742e652b06a54fe",
     "tests/tck/tests/__init__.py": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
