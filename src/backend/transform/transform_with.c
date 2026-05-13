@@ -271,10 +271,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 strcasecmp(func->function_name, "collect") == 0) {
                 has_aggregate = true;
             }
-        } else if (item->expr->type == AST_NODE_BINARY_OP ||
-                   item->expr->type == AST_NODE_CASE_EXPR ||
-                   item->expr->type == AST_NODE_LITERAL) {
-            /* Handle binary operations (arithmetic), CASE expressions, and literals */
+        } else {
+            /* GQLITE-T-0225: any other expression type — let
+             * transform_expression try. Common cases: list/map literals,
+             * comparisons, unary ops, IS NULL, list comprehensions, etc.
+             * If transform_expression doesn't know the type, it sets
+             * ctx->error and we surface that to the user. */
             const char *col_name = item->alias;
             if (!col_name) {
                 /* Generate a column name for expressions without alias */
@@ -313,14 +315,6 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             ctx->sql_size = saved_size;
             strcpy(ctx->sql_buffer, saved_buffer);
             free(saved_buffer);
-        } else {
-            /* For other expression types, we'd need more complex handling */
-            ctx->has_error = true;
-            ctx->error_message = strdup("Complex expressions in WITH not yet supported");
-            dbuf_free(&col_buf);
-            dbuf_free(&group_buf);
-            free(saved_cte);
-            return -1;
         }
     }
 
