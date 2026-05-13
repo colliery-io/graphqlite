@@ -73,6 +73,28 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     /* Reset pending property JOINs for this WITH clause */
     reset_pending_prop_joins(ctx);
 
+    /* GQLITE-T-0220: translate `with->where` in the PRE-WITH variable scope so
+     * it can reference variables bound by prior MATCH/OPTIONAL MATCH that are
+     * NOT in the projection (e.g. `WITH other WHERE r IS NULL` after an
+     * `OPTIONAL MATCH (a)-[r]->(other)`). We embed the translated predicate in
+     * the CTE body's WHERE below; the post-projection `with->where` path is
+     * still used as a fallback for predicates that reference projected
+     * aliases only. */
+    char *with_where_pre = NULL;
+    if (with->where) {
+        with_where_pre = transform_expression_to_string(ctx, with->where);
+        if (!with_where_pre && ctx->has_error) {
+            /* Couldn't translate in pre-WITH scope (e.g. only projected
+             * variables exist). Clear the error and try again post-projection
+             * (the legacy path at the bottom of this function). */
+            ctx->has_error = false;
+            if (ctx->error_message) {
+                free(ctx->error_message);
+                ctx->error_message = NULL;
+            }
+        }
+    }
+
     /* Generate a unique CTE name */
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_with_%d", ctx->with_cte_counter++);
@@ -326,9 +348,15 @@ with_star_columns_done:
         reset_pending_prop_joins(ctx);
     }
 
-    if (where_clause) {
+    if (where_clause || with_where_pre) {
         dbuf_append(&cte_body, " WHERE ");
-        dbuf_append(&cte_body, where_clause);
+        if (where_clause && with_where_pre) {
+            dbuf_appendf(&cte_body, "(%s) AND (%s)", where_clause, with_where_pre);
+        } else if (where_clause) {
+            dbuf_append(&cte_body, where_clause);
+        } else {
+            dbuf_append(&cte_body, with_where_pre);
+        }
     }
 
     /* Add GROUP BY if we have aggregates and non-aggregate columns */
@@ -472,8 +500,10 @@ with_star_columns_done:
     /* Free saved kinds array */
     free(source_kinds);
 
-    /* Handle WHERE clause (applied after projection) */
-    if (with->where) {
+    /* Handle WHERE clause (applied after projection) — only if the pre-WITH
+     * translation didn't succeed (i.e., the WHERE references projected
+     * aliases only, which weren't in scope earlier). */
+    if (with->where && !with_where_pre) {
         char *where_str = transform_expression_to_string(ctx, with->where);
         if (where_str) {
             sql_where(ctx->unified_builder, where_str);
@@ -481,6 +511,9 @@ with_star_columns_done:
         } else {
             return -1;
         }
+    }
+    if (with_where_pre) {
+        free(with_where_pre);
     }
 
     /* Handle ORDER BY */
