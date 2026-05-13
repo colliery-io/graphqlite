@@ -58,5 +58,22 @@ Filed during [[GQLITE-T-0211]] triage of the [[GQLITE-I-0037]] baseline run. See
 2. Run `angreal test tck --filter With1 --limit 5` (or any of the affected files).
 3. macOS shows a crash dialog; `build/tck-results.json` records the scenario as `error: ExtensionCrash`.
 
+## Resolution — 2026-05-13
+
+`src/backend/executor/executor_match.c:build_query_results` now synthesizes identifier return-items from `sqlite3_column_count` / `sqlite3_column_name` when the caller arrived with `return_clause->items == NULL` (the generic-transform dispatch path on queries like `MATCH ... WITH ... MATCH ... RETURN *`). The original NULL+8 dereference at line 187 is gone.
+
+**Verification (1615-scenario baseline, commit bbe6dd0 vs prior bff8aa6):**
+
+| metric | before | after | delta |
+| --- | ---: | ---: | ---: |
+| pass    | 495 | 494 | -1 |
+| fail    | 389 | 398 | +9 |
+| error   | 542 | 534 | **-8** (crash class eliminated) |
+| skipped | 189 | 189 |  0 |
+
+The 1-pass dip is not a real regression — 4 negative-test scenarios in `clauses/with/With6` and `clauses/with-orderBy/WithOrderBy4` previously "passed" only because the extension crashed (counted by the comparator as "expected error raised"). With the crash gone, those queries now succeed silently when openCypher requires them to raise — moving into [[GQLITE-T-0222]] (accepts queries spec requires rejected). Three other scenarios moved from `error` → `pass` (real wins): With1[5], With6[5], WithWhere7[2].
+
+Closing as fixed.
+
 ## Parent
 Backlog item filed under initiative [[GQLITE-I-0037]] (openCypher TCK Conformance Audit).

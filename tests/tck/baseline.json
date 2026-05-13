@@ -1,9 +1,9 @@
 {
   "backend": "extension",
   "total": 1615,
-  "pass": 494,
-  "fail": 398,
-  "error": 534,
-  "skipped": 189,
+  "pass": 498,
+  "fail": 406,
+  "error": 517,
+  "skipped": 194,
   "generated_from": "build/tck-baseline-results.json"
 }

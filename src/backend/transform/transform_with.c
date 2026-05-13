@@ -81,17 +81,23 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
      * Extract builder state directly instead of generating SQL and doing string manipulation.
      * This avoids the fragile "SELECT *" replacement pattern.
      */
-    if (!ctx->unified_builder || !sql_builder_has_from(ctx->unified_builder)) {
+    if (!ctx->unified_builder) {
         ctx->has_error = true;
-        ctx->error_message = strdup("WITH clause requires a preceding MATCH");
+        ctx->error_message = strdup("WITH clause requires a query builder context");
         return -1;
     }
 
-    /* Extract FROM, JOINs, WHERE from builder */
-    const char *from_clause = sql_builder_get_from(ctx->unified_builder);
-    const char *joins_clause = sql_builder_get_joins(ctx->unified_builder);
-    const char *where_clause = sql_builder_get_where(ctx->unified_builder);
-    const char *group_by_clause = sql_builder_get_group_by(ctx->unified_builder);
+    /* GQLITE-T-0219: WITH does NOT require a preceding MATCH in openCypher.
+     * `WITH 1 AS x RETURN x`, `WITH 'hi' AS msg RETURN msg`, etc. are legal
+     * (FROM-less projection). When no FROM has been built yet, emit a CTE of
+     * the form `_with_N AS (SELECT <cols>)` with no FROM/JOIN/WHERE/GROUP BY. */
+    bool no_from = !sql_builder_has_from(ctx->unified_builder);
+
+    /* Extract FROM, JOINs, WHERE from builder (NULL/empty in no-FROM mode) */
+    const char *from_clause = no_from ? NULL : sql_builder_get_from(ctx->unified_builder);
+    const char *joins_clause = no_from ? NULL : sql_builder_get_joins(ctx->unified_builder);
+    const char *where_clause = no_from ? NULL : sql_builder_get_where(ctx->unified_builder);
+    const char *group_by_clause = no_from ? NULL : sql_builder_get_group_by(ctx->unified_builder);
 
     /* Save CTE buffer before reset */
     char *saved_cte = NULL;
@@ -302,8 +308,10 @@ with_star_columns_done:
 
     dbuf_append(&cte_body, "SELECT ");
     dbuf_append(&cte_body, dbuf_get(&col_buf));
-    dbuf_append(&cte_body, " FROM ");
-    dbuf_append(&cte_body, from_clause);
+    if (from_clause) {
+        dbuf_append(&cte_body, " FROM ");
+        dbuf_append(&cte_body, from_clause);
+    }
 
     if (joins_clause) {
         dbuf_append(&cte_body, joins_clause);
