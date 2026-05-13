@@ -61,6 +61,11 @@ def parse_value(text: str) -> Any:
 
 
 def values_equal(a: Any, b: Any) -> bool:
+    # Normalize: the extension emits nodes/relationships as dicts; the TCK
+    # comparator parses them into Node/Relationship dataclasses. Coerce dicts
+    # that look like nodes/rels into the dataclass before comparing.
+    a = _coerce_graph_value(a)
+    b = _coerce_graph_value(b)
     if isinstance(a, float) or isinstance(b, float):
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             if math.isnan(float(a)) and math.isnan(float(b)):
@@ -86,6 +91,23 @@ def values_equal(a: Any, b: Any) -> bool:
                     for r1, r2 in zip(a.rels, b.rels))
         )
     return a == b
+
+
+def _coerce_graph_value(v: Any) -> Any:
+    """Coerce extension-side dict representations to our dataclasses.
+
+    Node:         {"id": ..., "labels": [...], "properties": {...}}
+    Relationship: {"id": ..., "type": "...", "properties": {...}, ...}
+    """
+    if isinstance(v, dict):
+        if "labels" in v and "properties" in v and isinstance(v["labels"], list):
+            labels = tuple(v["labels"])
+            props = tuple(sorted((k, v["properties"][k]) for k in v["properties"]))
+            return Node(labels=labels, properties=props)
+        if "type" in v and "properties" in v and isinstance(v["type"], str):
+            props = tuple(sorted((k, v["properties"][k]) for k in v["properties"]))
+            return Relationship(type=v["type"], properties=props)
+    return v
 
 
 def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...]) -> bool:

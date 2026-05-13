@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="don't redirect extension stdout/stderr to a log file")
     p.add_argument("--limit", type=int, default=None,
                    help="stop after running N scenarios per backend (smoke test)")
+    p.add_argument("--quiet", action="store_true",
+                   help="suppress per-feature progress lines")
     args = p.parse_args(argv)
 
     backends = _select_backends(args.backend, debug=args.debug)
@@ -40,9 +42,12 @@ def main(argv: list[str] | None = None) -> int:
 
     outcomes: list[ScenarioOutcome] = []
     scanned_per_backend: dict[str, int] = {b.name: 0 for b in backends}
+    feature_count = 0
     for feat in walk_features(args.features):
         if args.filter and args.filter not in str(feat.path):
             continue
+        feature_count += 1
+        feature_outcomes: list[ScenarioOutcome] = []
         for backend in backends:
             if args.limit is not None and scanned_per_backend[backend.name] >= args.limit:
                 continue
@@ -51,7 +56,15 @@ def main(argv: list[str] | None = None) -> int:
                 remaining = args.limit - scanned_per_backend[backend.name]
                 results = results[:remaining]
             outcomes.extend(results)
+            feature_outcomes.extend(results)
             scanned_per_backend[backend.name] += len(results)
+        if not args.quiet and feature_outcomes:
+            counts = Counter(o.status for o in feature_outcomes)
+            rel = _rel_to_features(feat.path, args.features)
+            print(f"[{feature_count:3d}] {rel:65s}  "
+                  f"pass={counts['pass']:3d} fail={counts['fail']:3d} "
+                  f"error={counts['error']:3d} skipped={counts['skipped']:3d}",
+                  flush=True)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps([dataclasses.asdict(o) for o in outcomes], indent=2, default=_json_default))
@@ -149,6 +162,13 @@ def _print_parity_summary(parity: list[dict]) -> None:
         for b, counts in per_backend_status.items():
             top = ", ".join(f"{s}={n}" for s, n in counts.most_common())
             print(f"  {b}: {top}")
+
+
+def _rel_to_features(p, root) -> str:
+    try:
+        return str(p.relative_to(root))
+    except ValueError:
+        return str(p)
 
 
 def _json_default(o):

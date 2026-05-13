@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-13T13:40:10Z | 70 files | JavaScript, Python, Rust
+> Generated: 2026-05-13T19:14:36Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -82,6 +82,8 @@
     └── tck/
         ├── __init__.py
         ├── __main__.py
+        ├── _extension_worker.py
+        ├── _python_binding_worker.py
         ├── backends/
         │   ├── __init__.py
         │   ├── base.py
@@ -89,6 +91,7 @@
         │   ├── python_binding.py
         │   └── rust_binding.py
         ├── gherkin.py
+        ├── report.py
         ├── runner.py
         ├── tests/
         │   ├── __init__.py
@@ -1413,12 +1416,28 @@
 
 #### tests/tck/__main__.py
 
-- pub `main` function L22-69 — `def main(argv: list[str] | None = None) -> int`
--  `_select_backends` function L72-92 — `def _select_backends(name: str, debug: bool)`
--  `_print_summary` function L95-112 — `def _print_summary(outcomes: list[ScenarioOutcome]) -> None`
--  `_build_parity_matrix` function L115-136 — `def _build_parity_matrix(outcomes: list[ScenarioOutcome], backend_names: list[st...` — Group outcomes by (feature_file, scenario_name) and emit a parity row.
--  `_print_parity_summary` function L139-151 — `def _print_parity_summary(parity: list[dict]) -> None`
--  `_json_default` function L154-155 — `def _json_default(o)`
+- pub `main` function L22-82 — `def main(argv: list[str] | None = None) -> int`
+-  `_select_backends` function L85-105 — `def _select_backends(name: str, debug: bool)`
+-  `_print_summary` function L108-125 — `def _print_summary(outcomes: list[ScenarioOutcome]) -> None`
+-  `_build_parity_matrix` function L128-149 — `def _build_parity_matrix(outcomes: list[ScenarioOutcome], backend_names: list[st...` — Group outcomes by (feature_file, scenario_name) and emit a parity row.
+-  `_print_parity_summary` function L152-164 — `def _print_parity_summary(parity: list[dict]) -> None`
+-  `_rel_to_features` function L167-171 — `def _rel_to_features(p, root) -> str`
+-  `_json_default` function L174-175 — `def _json_default(o)`
+
+#### tests/tck/_extension_worker.py
+
+- pub `main` function L34-90 — `def main() -> int`
+-  `_decode_payload` function L93-156 — `def _decode_payload(raw_payloads: list) -> dict` — Decode the extension's `cypher()` return into the harness wire format:
+-  `_new_conn` function L159-163 — `def _new_conn(ext_path: Path) -> sqlite3.Connection`
+-  `_named_graph_file` function L166-173 — `def _named_graph_file(name: str) -> Path | None` — TCK named-graph fixture: vendor/tck/graphs/<name>/<name>.cypher (preferred)
+-  `_write` function L176-178 — `def _write(proto, msg: dict) -> None`
+-  `_classify` function L181-195 — `def _classify(msg: str) -> str`
+
+#### tests/tck/_python_binding_worker.py
+
+- pub `main` function L22-81 — `def main() -> int`
+-  `_write` function L84-86 — `def _write(proto, msg: dict) -> None`
+-  `_bootstrap_error` function L89-92 — `def _bootstrap_error(msg: str) -> None`
 
 #### tests/tck/gherkin.py
 
@@ -1432,31 +1451,38 @@
 -  `_parse_table_row` function L163-171 — `def _parse_table_row(raw: str) -> list[str]`
 -  `_inline_background` function L174-188 — `def _inline_background(feature: Feature) -> None` — Inline a Background scenario's steps into every real scenario.
 
+#### tests/tck/report.py
+
+- pub `main` function L21-46 — `def main(argv: list[str] | None = None) -> int`
+-  `_render` function L49-155 — `def _render(data: list[dict], title: str) -> str`
+
 #### tests/tck/runner.py
 
 - pub `ScenarioOutcome` class L29-37 — `-`
-- pub `run_feature` function L64-69 — `def run_feature(feature: Feature, backend: Backend) -> list[ScenarioOutcome]`
-- pub `__init__` method L151-154 — `def __init__(self, msg: str, expected: Any = None, actual: Any = None)`
+- pub `run_feature` function L65-70 — `def run_feature(feature: Feature, backend: Backend) -> list[ScenarioOutcome]`
+- pub `__init__` method L156-159 — `def __init__(self, msg: str, expected: Any = None, actual: Any = None)`
+- pub `__init__` method L165-168 — `def __init__(self, error_class: str, message: str)`
 -  `_State` class L41-44 — `-`
--  `_rel_to_features_root` function L72-77 — `def _rel_to_features_root(path: Path) -> str`
--  `_run_scenario` function L80-130 — `def _run_scenario(feature_file: str, sc: Scenario, backend: Backend) -> Scenario...`
--  `_outcome` function L133-144 — `def _outcome(feature_file: str, sc: Scenario, status: str, backend: Backend, t0:...`
--  `_Mismatch` class L150-154 — `(Exception) { __init__ }`
--  `_Marker` class L157 — `-`
--  `_dispatch` function L162-169 — `def _dispatch(step: Step)`
--  `_h_empty_graph` function L175-176 — `def _h_empty_graph(step, state, backend, m)`
--  `_h_named_graph` function L178-180 — `def _h_named_graph(step, state, backend, m)`
--  `_h_having_executed` function L182-185 — `def _h_having_executed(step, state, backend, m)`
--  `_h_parameters` function L187-201 — `def _h_parameters(step, state, backend, m)`
--  `_h_executing_query` function L203-206 — `def _h_executing_query(step, state, backend, m)`
--  `_h_result_ordered` function L208-210 — `def _h_result_ordered(step, state, backend, m)`
--  `_h_result_any_order` function L212-214 — `def _h_result_any_order(step, state, backend, m)`
--  `_h_result_empty` function L216-221 — `def _h_result_empty(step, state, backend, m)`
--  `_h_expect_error` function L223-226 — `def _h_expect_error(step, state, backend, m)`
--  `_h_no_side_effects` function L228-230 — `def _h_no_side_effects(step, state, backend, m)`
--  `_h_side_effects_table` function L232-235 — `def _h_side_effects_table(step, state, backend, m)`
--  `_compare_result_table` function L253-284 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
--  `_rows_equal` function L287-290 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
+-  `_rel_to_features_root` function L73-78 — `def _rel_to_features_root(path: Path) -> str`
+-  `_run_scenario` function L81-135 — `def _run_scenario(feature_file: str, sc: Scenario, backend: Backend) -> Scenario...`
+-  `_outcome` function L138-149 — `def _outcome(feature_file: str, sc: Scenario, status: str, backend: Backend, t0:...`
+-  `_Mismatch` class L155-159 — `(Exception) { __init__ }`
+-  `_BackendErrorAtThen` class L162-168 — `(Exception) { __init__ }` — Backend raised/crashed when the scenario expected a successful result table.
+-  `_Marker` class L171 — `-`
+-  `_dispatch` function L176-183 — `def _dispatch(step: Step)`
+-  `_h_empty_graph` function L189-190 — `def _h_empty_graph(step, state, backend, m)`
+-  `_h_named_graph` function L192-194 — `def _h_named_graph(step, state, backend, m)`
+-  `_h_having_executed` function L196-199 — `def _h_having_executed(step, state, backend, m)`
+-  `_h_parameters` function L201-215 — `def _h_parameters(step, state, backend, m)`
+-  `_h_executing_query` function L217-223 — `def _h_executing_query(step, state, backend, m)`
+-  `_h_result_ordered` function L225-227 — `def _h_result_ordered(step, state, backend, m)`
+-  `_h_result_any_order` function L229-231 — `def _h_result_any_order(step, state, backend, m)`
+-  `_h_result_empty` function L233-238 — `def _h_result_empty(step, state, backend, m)`
+-  `_h_expect_error` function L240-243 — `def _h_expect_error(step, state, backend, m)`
+-  `_h_no_side_effects` function L245-247 — `def _h_no_side_effects(step, state, backend, m)`
+-  `_h_side_effects_table` function L249-252 — `def _h_side_effects_table(step, state, backend, m)`
+-  `_compare_result_table` function L270-305 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
+-  `_rows_equal` function L308-311 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
 
 #### tests/tck/values.py
 
@@ -1465,26 +1491,27 @@
 - pub `Path` class L44-47 — `-`
 - pub `ValueParseError` class L50-51 — `(ValueError)`
 - pub `parse_value` function L54-60 — `def parse_value(text: str) -> Any`
-- pub `values_equal` function L63-88 — `def values_equal(a: Any, b: Any) -> bool`
-- pub `__init__` method L101-103 — `def __init__(self, text: str)`
-- pub `eof` method L105-106 — `def eof(self) -> bool`
-- pub `peek` method L108-109 — `def peek(self) -> str`
-- pub `skip_ws` method L111-113 — `def skip_ws(self) -> None`
-- pub `expect` method L115-119 — `def expect(self, ch: str) -> None`
-- pub `parse_top` method L121-123 — `def parse_top(self) -> Any`
--  `_props_equal` function L91-94 — `def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...])...`
--  `_Parser` class L100-307 — `{ __init__, eof, peek, skip_ws, expect, parse_top }`
--  `_parse_value` method L125-142 — `def _parse_value(self) -> Any`
--  `_parse_node` method L144-157 — `def _parse_node(self) -> Node`
--  `_parse_list_or_rel` method L159-187 — `def _parse_list_or_rel(self) -> Any`
--  `_parse_map` method L189-209 — `def _parse_map(self) -> dict[str, Any]`
--  `_parse_path` method L211-239 — `def _parse_path(self) -> Path`
--  `_parse_rel_segment` method L241-250 — `def _parse_rel_segment(self) -> Relationship`
--  `_parse_string` method L252-268 — `def _parse_string(self) -> str`
--  `_parse_ident` method L270-276 — `def _parse_ident(self) -> str`
--  `_parse_ident_or_string` method L278-281 — `def _parse_ident_or_string(self) -> str`
--  `_parse_atom` method L283-307 — `def _parse_atom(self) -> Any`
--  `_props_from_map` function L310-311 — `def _props_from_map(d: dict[str, Any]) -> tuple[tuple[str, Any], ...]`
+- pub `values_equal` function L63-93 — `def values_equal(a: Any, b: Any) -> bool`
+- pub `__init__` method L123-125 — `def __init__(self, text: str)`
+- pub `eof` method L127-128 — `def eof(self) -> bool`
+- pub `peek` method L130-131 — `def peek(self) -> str`
+- pub `skip_ws` method L133-135 — `def skip_ws(self) -> None`
+- pub `expect` method L137-141 — `def expect(self, ch: str) -> None`
+- pub `parse_top` method L143-145 — `def parse_top(self) -> Any`
+-  `_coerce_graph_value` function L96-110 — `def _coerce_graph_value(v: Any) -> Any` — Coerce extension-side dict representations to our dataclasses.
+-  `_props_equal` function L113-116 — `def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...])...`
+-  `_Parser` class L122-329 — `{ __init__, eof, peek, skip_ws, expect, parse_top }`
+-  `_parse_value` method L147-164 — `def _parse_value(self) -> Any`
+-  `_parse_node` method L166-179 — `def _parse_node(self) -> Node`
+-  `_parse_list_or_rel` method L181-209 — `def _parse_list_or_rel(self) -> Any`
+-  `_parse_map` method L211-231 — `def _parse_map(self) -> dict[str, Any]`
+-  `_parse_path` method L233-261 — `def _parse_path(self) -> Path`
+-  `_parse_rel_segment` method L263-272 — `def _parse_rel_segment(self) -> Relationship`
+-  `_parse_string` method L274-290 — `def _parse_string(self) -> str`
+-  `_parse_ident` method L292-298 — `def _parse_ident(self) -> str`
+-  `_parse_ident_or_string` method L300-303 — `def _parse_ident_or_string(self) -> str`
+-  `_parse_atom` method L305-329 — `def _parse_atom(self) -> Any`
+-  `_props_from_map` function L332-333 — `def _props_from_map(d: dict[str, Any]) -> tuple[tuple[str, Any], ...]`
 
 ### tests/tck/backends
 
@@ -1502,32 +1529,43 @@
 
 #### tests/tck/backends/extension.py
 
-- pub `ExtensionBackend` class L26-120 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
-- pub `__init__` method L29-34 — `def __init__(self, extension_path: Path | None = None, debug_log: Path | None = ...`
-- pub `reset` method L36-43 — `def reset(self) -> None`
-- pub `load_named_graph` method L45-57 — `def load_named_graph(self, name: str) -> None`
-- pub `execute` method L59-83 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
-- pub `close` method L85-89 — `def close(self) -> None`
--  `_classify_error` function L123-133 — `def _classify_error(msg: str) -> str`
+- pub `ExtensionBackend` class L26-168 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
+- pub `__init__` method L29-38 — `def __init__(self, extension_path: Path | None = None, debug_log: Path | None = ...`
+- pub `reset` method L42-47 — `def reset(self) -> None`
+- pub `load_named_graph` method L49-59 — `def load_named_graph(self, name: str) -> None`
+- pub `execute` method L61-80 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
+- pub `close` method L82-94 — `def close(self) -> None`
+-  `_spawn` method L98-120 — `def _spawn(self) -> None`
+-  `_send` method L122-139 — `def _send(self, msg: dict, timeout: float | None = None) -> dict`
+-  `_read_with_timeout` method L141-168 — `def _read_with_timeout(self, timeout: float | None) -> str` — Read one line from worker stdout; SIGKILL the worker on timeout.
+-  `_Timeout` class L171-172 — `(BackendError)`
+-  `_signal_of` function L175-184 — `def _signal_of(rc: int) -> str`
 
 #### tests/tck/backends/python_binding.py
 
-- pub `PythonBindingBackend` class L14-95 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
-- pub `__init__` method L17-33 — `def __init__(self, debug_log: Path | None = None, keep_debug: bool = False)`
-- pub `reset` method L35-39 — `def reset(self) -> None`
-- pub `load_named_graph` method L41-47 — `def load_named_graph(self, name: str) -> None`
-- pub `execute` method L49-64 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
-- pub `close` method L66-70 — `def close(self) -> None`
+- pub `PythonBindingBackend` class L27-173 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
+- pub `__init__` method L30-38 — `def __init__(self, debug_log: Path | None = None, keep_debug: bool = False, pyth...`
+- pub `reset` method L40-45 — `def reset(self) -> None`
+- pub `load_named_graph` method L47-57 — `def load_named_graph(self, name: str) -> None`
+- pub `execute` method L59-83 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
+- pub `close` method L85-102 — `def close(self) -> None`
+-  `_spawn` method L106-134 — `def _spawn(self) -> None`
+-  `_send` method L136-151 — `def _send(self, msg: dict, timeout: float | None = None) -> dict`
+-  `_read_with_timeout` method L153-173 — `def _read_with_timeout(self, timeout: float | None) -> str`
+-  `_Timeout` class L176-177 — `(BackendError)`
 
 #### tests/tck/backends/rust_binding.py
 
-- pub `RustBindingBackend` class L27-104 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
-- pub `__init__` method L30-48 — `def __init__(self, runner: Path | None = None, debug_log: Path | None = None)`
-- pub `reset` method L50-51 — `def reset(self) -> None`
+- pub `RustBindingBackend` class L28-164 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
+- pub `__init__` method L31-44 — `def __init__(self, runner: Path | None = None, debug_log: Path | None = None, ex...`
+- pub `reset` method L46-51 — `def reset(self) -> None`
 - pub `load_named_graph` method L53-59 — `def load_named_graph(self, name: str) -> None`
-- pub `execute` method L61-74 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
-- pub `close` method L76-88 — `def close(self) -> None`
--  `_send` method L90-104 — `def _send(self, msg: dict[str, Any]) -> dict[str, Any]`
+- pub `execute` method L61-81 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
+- pub `close` method L83-100 — `def close(self) -> None`
+-  `_spawn` method L102-126 — `def _spawn(self) -> None`
+-  `_send` method L128-142 — `def _send(self, msg: dict[str, Any], timeout: float | None = None) -> dict[str, ...`
+-  `_read_with_timeout` method L144-164 — `def _read_with_timeout(self, timeout: float | None) -> str`
+-  `_Timeout` class L167-168 — `(BackendError)`
 
 ### tests/tck/tests
 

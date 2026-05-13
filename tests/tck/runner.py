@@ -47,7 +47,8 @@ class _State:
 # Step matchers ordered by specificity.
 _STEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^an empty graph$"), "given_empty_graph"),
-    (re.compile(r"^the (?P<name>\w+) graph$"), "given_named_graph"),
+    (re.compile(r"^any graph$"), "given_empty_graph"),
+    (re.compile(r"^the (?P<name>[\w-]+) graph$"), "given_named_graph"),
     (re.compile(r"^having executed$"), "having_executed"),
     (re.compile(r"^parameters are$"), "parameters_are"),
     (re.compile(r"^executing query$"), "executing_query"),
@@ -102,6 +103,10 @@ def _run_scenario(feature_file: str, sc: Scenario, backend: Backend) -> Scenario
             diag = f"backend error at step {step.keyword} {step.text!r}: {e}"
             verdict = "error"
             break
+        except _BackendErrorAtThen as be:
+            diag = f"{be.error_class}: {be.message[:200]}"
+            verdict = "error"
+            break
         except ValueParseError as e:
             state.skipped_reason = f"value parse: {e} (step: {step.text!r})"
             break
@@ -154,6 +159,15 @@ class _Mismatch(Exception):
         self.actual = actual
 
 
+class _BackendErrorAtThen(Exception):
+    """Backend raised/crashed when the scenario expected a successful result table."""
+
+    def __init__(self, error_class: str, message: str):
+        super().__init__(f"{error_class}: {message}")
+        self.error_class = error_class
+        self.message = message
+
+
 class _Marker: pass
 _ExpectErrorMarker = _Marker()
 _PassMarker = _Marker()
@@ -204,6 +218,9 @@ def _h_executing_query(step, state, backend, m):
     if not step.docstring:
         raise _Mismatch("missing docstring for 'executing query'")
     state.last_result = backend.execute(step.docstring, state.parameters or None)
+    # Record backend-side trouble so the runner can decide between fail and error
+    # at the Then-step. We don't raise here — TCK has scenarios that *expect* an
+    # error, and the verdict is decided by the matching Then-step.
 
 def _h_result_ordered(step, state, backend, m):
     _compare_result_table(state.last_result, step.table, ordered=True)
@@ -257,6 +274,10 @@ def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N
         raise _Mismatch("empty expected table")
     if result is None:
         raise _Mismatch("no result captured")
+    if result.error:
+        # Backend raised/crashed where the scenario expected a result table —
+        # surface as a BackendError so the outcome is `error`, not `fail`.
+        raise _BackendErrorAtThen(result.error, result.error_message or "")
     headers = table[0]
     expected_rows = [[parse_value(c) for c in row] for row in table[1:]]
     # v1: result.rows is opaque single-column payloads from cypher(); we

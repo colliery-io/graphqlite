@@ -1,133 +1,184 @@
 """
-SQLite extension backend.
+SQLite extension backend — supervises a worker subprocess that hosts the
+extension, so a crash in the C code is observable as a `BackendError` and
+the harness can continue with the next scenario after respawning.
 
-Opens an in-memory SQLite, loads the GraphQLite extension, and routes
-each Cypher query through `SELECT cypher(?)`.
-
-The extension's stderr `[CYPHER_DEBUG]` chatter is redirected to a log
-file for the duration of each call unless `keep_debug=True`.
+Talks one-JSON-per-line on stdin/stdout (`_extension_worker.py`).
 """
 
 from __future__ import annotations
 
-import contextlib
+import json
 import os
-import sqlite3
+import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 from .base import Backend, BackendError, QueryResult
 
 
-DEFAULT_EXTENSION_PATH = Path("build/graphqlite")  # SQLite appends .dylib/.so/.dll
+DEFAULT_EXTENSION_PATH = Path("build/graphqlite")
+WORKER_MODULE = "tests.tck._extension_worker"
 
 
 class ExtensionBackend(Backend):
     name = "extension"
 
-    def __init__(self, extension_path: Path | None = None, debug_log: Path | None = None, keep_debug: bool = False):
+    def __init__(self, extension_path: Path | None = None, debug_log: Path | None = None,
+                 keep_debug: bool = False, python: str | None = None,
+                 execute_timeout: float = 10.0):
         self._ext_path = extension_path or DEFAULT_EXTENSION_PATH
         self._debug_log = debug_log
         self._keep_debug = keep_debug
-        self._conn: sqlite3.Connection | None = None
-        self.reset()
+        self._python = python or sys.executable
+        self._execute_timeout = execute_timeout
+        self._proc: subprocess.Popen | None = None
+        self._spawn()
+
+    # --- Backend API ------------------------------------------------------
 
     def reset(self) -> None:
-        with self._silenced():
-            if self._conn is not None:
-                self._conn.close()
-            conn = sqlite3.connect(":memory:")
-            conn.enable_load_extension(True)
-            conn.load_extension(str(self._ext_path))
-            self._conn = conn
+        try:
+            self._send({"cmd": "reset"})
+        except BackendError:
+            self._spawn()  # worker died on reset; retry once
+            self._send({"cmd": "reset"})
 
     def load_named_graph(self, name: str) -> None:
-        # TCK named graphs live in vendor/tck/graphs/<name>/. v1: try a
-        # cypher.cyp file in that dir and execute it as setup. If absent,
-        # surface a backend error so the scenario is marked errored.
         root = Path("vendor/tck/graphs") / name
-        cyp = root / "cypher.cyp"
-        if not cyp.exists():
-            raise BackendError(f"named graph not found or unsupported: {name!r}")
-        text = cyp.read_text(encoding="utf-8")
-        # Some named-graph files contain multiple statements separated by ';'.
-        for stmt in (s.strip() for s in text.split(";")):
+        for candidate in (root / f"{name}.cypher", root / "cypher.cyp"):
+            if candidate.exists():
+                cyp = candidate
+                break
+        else:
+            raise BackendError(f"named graph not found: {name!r}")
+        for stmt in (s.strip() for s in cyp.read_text(encoding="utf-8").split(";")):
             if stmt:
                 self.execute(stmt)
 
     def execute(self, query: str, parameters: dict[str, Any] | None = None) -> QueryResult:
-        assert self._conn is not None
-        # Parameter substitution is parameter-passing through the extension's
-        # own mechanism, but v1 does textual substitution of $name placeholders
-        # only when the extension does not accept parameters. We expose the
-        # raw query and let the extension parse it; TCK's parameters tables
-        # are recorded but plumbing them through cypher() is a TODO.
-        if parameters:
-            # TODO: thread parameters through cypher(); for now scenarios that
-            # require them will likely fail / error and be triaged in TCK-06.
-            pass
         try:
-            with self._silenced():
-                cur = self._conn.execute("SELECT cypher(?)", (query,))
-                rows = cur.fetchall()
-        except sqlite3.Error as e:
-            return QueryResult(error=_classify_error(str(e)), error_message=str(e))
+            resp = self._send({"cmd": "execute", "query": query}, timeout=self._execute_timeout)
+        except _Timeout as e:
+            self._spawn()
+            return QueryResult(error="ExtensionTimeout", error_message=str(e))
+        except BackendError as e:
+            # Worker died (likely a crash in the extension). Respawn so the
+            # next scenario starts clean, and surface as an error result.
+            self._spawn()
+            return QueryResult(error="ExtensionCrash", error_message=str(e))
 
-        # cypher() returns a single TEXT column. The shape (table vs scalar)
-        # is opaque at this layer; the runner attempts to decode it via
-        # values.parse_value. v1: keep the raw payload in `rows` and let the
-        # runner unpack into headers/rows when the textual form looks like a
-        # result set.
-        raw = [r[0] for r in rows]
-        return QueryResult(headers=[], rows=[[v] for v in raw])
+        if not resp.get("ok"):
+            return QueryResult(
+                error=resp.get("error_class", "ExtensionError"),
+                error_message=resp.get("error_message", ""),
+            )
+        columns = list(resp.get("columns") or [])
+        rows = [list(r) for r in (resp.get("rows") or [])]
+        return QueryResult(headers=columns, rows=rows)
 
     def close(self) -> None:
-        if self._conn is not None:
-            with self._silenced():
-                self._conn.close()
-            self._conn = None
-
-    @contextlib.contextmanager
-    def _silenced(self):
-        """Redirect fds 1 and 2 to the debug log.
-
-        The extension emits [CYPHER_DEBUG] lines to stdout (fd 1) via libc
-        printf; some error paths use stderr (fd 2). We capture both for the
-        duration of each call unless `keep_debug=True`.
-        """
-        if self._keep_debug:
-            yield
+        if self._proc is None or self._proc.poll() is not None:
             return
-        target = self._debug_log or Path(os.devnull)
-        if str(target) != os.devnull:
-            target.parent.mkdir(parents=True, exist_ok=True)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        old_out, old_err = os.dup(1), os.dup(2)
-        sink = open(target, "ab", buffering=0)
         try:
-            os.dup2(sink.fileno(), 1)
-            os.dup2(sink.fileno(), 2)
-            yield
+            self._send({"cmd": "shutdown"})
+        except BackendError:
+            pass
+        try:
+            self._proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait()
+        self._proc = None
+
+    # --- internals --------------------------------------------------------
+
+    def _spawn(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            try:
+                self._proc.kill()
+            except OSError:
+                pass
+            self._proc.wait()
+        env = os.environ.copy()
+        env["GQLITE_TCK_EXT"] = str(self._ext_path)
+        if self._debug_log and not self._keep_debug:
+            env["GQLITE_TCK_DEBUG_LOG"] = str(self._debug_log)
+        # Ensure the worker can import the harness package.
+        repo_root = Path(__file__).resolve().parents[3]
+        env["PYTHONPATH"] = str(repo_root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        stderr_target = subprocess.DEVNULL if self._keep_debug is False and self._debug_log is None else None
+        if self._debug_log and not self._keep_debug:
+            stderr_target = open(self._debug_log, "ab", buffering=0)
+        self._proc = subprocess.Popen(
+            [self._python, "-m", WORKER_MODULE],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=stderr_target,
+            text=True, bufsize=1, env=env,
+        )
+
+    def _send(self, msg: dict, timeout: float | None = None) -> dict:
+        if self._proc is None or self._proc.stdin is None or self._proc.stdout is None:
+            raise BackendError("extension worker not running")
+        try:
+            self._proc.stdin.write(json.dumps(msg) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            rc = self._proc.poll()
+            raise BackendError(f"extension worker died (rc={rc}): {e}") from e
+
+        line = self._read_with_timeout(timeout)
+        if not line:
+            rc = self._proc.wait()
+            raise BackendError(f"extension worker exited unexpectedly (rc={rc}, signal={_signal_of(rc)})")
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError as e:
+            raise BackendError(f"extension worker emitted non-JSON: {line!r} ({e})") from e
+
+    def _read_with_timeout(self, timeout: float | None) -> str:
+        """Read one line from worker stdout; SIGKILL the worker on timeout.
+
+        Implemented with a threading.Timer that kills the process; when killed,
+        the worker's stdout EOFs and readline returns "" — which is then
+        translated into a _Timeout by the caller observing the watchdog flag.
+        """
+        if timeout is None or timeout <= 0:
+            return self._proc.stdout.readline()
+
+        timed_out = {"v": False}
+
+        def _kill():
+            timed_out["v"] = True
+            try:
+                self._proc.kill()
+            except OSError:
+                pass
+
+        t = threading.Timer(timeout, _kill)
+        t.start()
+        try:
+            line = self._proc.stdout.readline()
         finally:
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os.dup2(old_out, 1)
-            os.dup2(old_err, 2)
-            os.close(old_out)
-            os.close(old_err)
-            sink.close()
+            t.cancel()
+        if timed_out["v"]:
+            raise _Timeout(f"extension worker timed out after {timeout:.1f}s")
+        return line
 
 
-def _classify_error(msg: str) -> str:
-    lower = msg.lower()
-    if "syntax" in lower or "parse" in lower:
-        return "SyntaxError"
-    if "type" in lower:
-        return "TypeError"
-    if "not found" in lower:
-        return "EntityNotFound"
-    if "constraint" in lower:
-        return "ConstraintViolation"
-    return "GraphQLiteError"
+class _Timeout(BackendError):
+    pass
+
+
+def _signal_of(rc: int) -> str:
+    # subprocess returns negative for signal-killed; on macOS rc can also be
+    # 128+signal in some shells. Surface both.
+    if rc is None:
+        return "?"
+    if rc < 0:
+        return f"SIG{-rc}"
+    if rc > 128:
+        return f"SIG{rc - 128}"
+    return f"exit={rc}"

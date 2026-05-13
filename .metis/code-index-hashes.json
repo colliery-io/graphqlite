@@ -57,18 +57,21 @@
     "examples/llm-graphrag/ollama_client.py": "9a02e3572fb1398a3fda8afe6e567b78782b9d61854b17c399e57c92ed08cd04",
     "examples/llm-graphrag/rag.py": "ce87cba1b8cd2c8e2ef9a129f31b7c535d710a8b340128429e15870f308f8d17",
     "tests/tck/__init__.py": "66c84da2664eccf38bd14ca535891f7644cb3a2b70f75c998455ecf922ca03cb",
-    "tests/tck/__main__.py": "b62bdefd39c1660f2abd26131d5bf154b8972ba55c5f6d51a82b62052a11e63c",
+    "tests/tck/__main__.py": "171d8b0717e09d8e300a7f535aa33a07afd1d1effc9b72788888b332fc01129a",
+    "tests/tck/_extension_worker.py": "af892107b47bed8598421a6b05c433bd0996b1254ea7f0e42825b37e02fd4c5c",
+    "tests/tck/_python_binding_worker.py": "141116fc271461791bb027ba92ea54e32af197481152534a85cdf74a1da335f8",
     "tests/tck/backends/__init__.py": "b2b2b3776cc4ff23adca8dde82912fc0912fdf89a7ceb89a78609b6baaf8a5db",
     "tests/tck/backends/base.py": "e3d3cf17c09b857acd8ee3db5470676105b197f7ff14374a8d4f920a6a64a592",
-    "tests/tck/backends/extension.py": "fa4f451d38232e248c71fb97b80bc2ce94ee87f00f58725f92a4f2a3772bcb95",
-    "tests/tck/backends/python_binding.py": "ea52b62a3e26dc05dbcfd3cdb87a1de09603360c8fa429a4a0fd162d97c10536",
-    "tests/tck/backends/rust_binding.py": "b65ba9a65309720bdc88f140383862c16641da94063815c8181b7da1ec92a297",
+    "tests/tck/backends/extension.py": "df6fbe0386823907732c82eb4d6a15677f8760f70950b46601064f54c18c8051",
+    "tests/tck/backends/python_binding.py": "4c7999d4af5059aaca51f90f7055dd61ebd4bae5ba199b11ca34a03f5e8d31a8",
+    "tests/tck/backends/rust_binding.py": "33c42cf252b87ce341c73c5b6442a018a66d0359dd698cc1dba553a773417c3e",
     "tests/tck/gherkin.py": "d549f12e4fa2e491998dd97653a9165fdf58bad8c07bfe4b636a5bb1b3b9579d",
-    "tests/tck/runner.py": "c74dc2910067d71e4d69c7f28171634c0e07c435e5f4e16c760f9f02fbf5b476",
+    "tests/tck/report.py": "794cdffd8aa35e8470f769565e01f521ef6ec1ca79b83b8e12a76256de2d117a",
+    "tests/tck/runner.py": "2a1ae0d25517b35782cbcd2ac0d635070fac1e4b9f8c215b2742e652b06a54fe",
     "tests/tck/tests/__init__.py": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
     "tests/tck/tests/test_gherkin.py": "823c54601f616cbb42a52eedf1e93faec54eb5036320fad19680e7d2a863b2d4",
     "tests/tck/tests/test_smoke_extension.py": "9e871c8e21662916f119fdc095c5f441b2056b20b508c600456594419d0b5870",
     "tests/tck/tests/test_values.py": "9ad7d878f4168fcdb881fa5b035a74c822b3e073d5e4e0a264f35a355230caa7",
-    "tests/tck/values.py": "c43f0f4022a97b0038c2e019667f2dc5560235eab0581123270015b34959f753"
+    "tests/tck/values.py": "7ebf16f55545f906ca956a57721b5fbc47f4409ee853c60f6ea133635e0b0424"
   }
 }
