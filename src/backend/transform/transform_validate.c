@@ -702,6 +702,39 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 if (rc == 0) collect_pattern_names(c->pattern, &bound);
                 break;
             }
+            case AST_NODE_MERGE: {
+                cypher_merge *m = (cypher_merge *)clause;
+                /* MERGE shares the same re-binding rules as CREATE. */
+                rc = check_create_rebinds(m->pattern, &bound, error_message);
+                if (rc == 0) {
+                    /* MERGE also requires relationships to have an explicit
+                     * type — `MERGE (a)-->(b)` is illegal. */
+                    if (m->pattern) {
+                        for (int pi = 0; pi < m->pattern->count && rc == 0; pi++) {
+                            ast_node *pn = m->pattern->items[pi];
+                            if (!pn || pn->type != AST_NODE_PATH) continue;
+                            cypher_path *p = (cypher_path *)pn;
+                            if (!p->elements) continue;
+                            for (int ei = 0; ei < p->elements->count; ei++) {
+                                ast_node *el = p->elements->items[ei];
+                                if (!el || el->type != AST_NODE_REL_PATTERN) continue;
+                                cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+                                bool has_type = (rp->type != NULL) ||
+                                                (rp->types && rp->types->count > 0);
+                                if (!has_type) {
+                                    set_error(error_message,
+                                              "%s",
+                                              "SyntaxError: NoSingleRelationshipType: MERGE requires a single relationship type");
+                                    rc = -1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (rc == 0) collect_pattern_names(m->pattern, &bound);
+                }
+                break;
+            }
             default:
                 break;
         }
