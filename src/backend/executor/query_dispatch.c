@@ -908,26 +908,49 @@ static int handle_create(cypher_executor *executor, cypher_query *query,
                          cypher_result *result, clause_flags flags)
 {
     (void)flags;
-    cypher_create *create = find_create_clause(query);
     cypher_set *set = find_set_clause(query);
 
     CYPHER_DEBUG("Executing CREATE via pattern dispatch");
 
-    /* If no trailing SET, keep the fast path. */
+    /* No trailing SET: run every CREATE clause in document order.
+     * `CREATE (a),(b),(c) CREATE (a)-[:X]->(b)` is valid Cypher and must
+     * execute both CREATEs — find_create_clause used to return only the
+     * first one, silently dropping the second. */
     if (!set) {
-        int rc = execute_create_clause(executor, create, result);
-        if (rc >= 0) result->success = true;
+        int rc = 0;
+        bool any = false;
+        for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+            ast_node *clause = query->clauses->items[i];
+            if (clause->type != AST_NODE_CREATE) continue;
+            rc = execute_create_clause(executor, (cypher_create *)clause, result);
+            if (rc < 0) return rc;
+            any = true;
+        }
+        if (any) result->success = true;
         return rc;
     }
 
-    /* CREATE + SET: execute CREATE via the varmap variant, thread bindings
-     * into execute_set_operations. Keeps the dispatch table flat instead of
-     * adding a dedicated CREATE+SET entry. */
+    /* CREATE + SET: execute every CREATE clause (accumulating bindings) via
+     * the varmap variant, then thread the merged map into
+     * execute_set_operations. */
     variable_map *create_vars = NULL;
-    int rc = execute_create_clause_with_varmap(executor, create, result, &create_vars);
-    if (rc < 0) {
+    int rc = 0;
+    bool any = false;
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (clause->type != AST_NODE_CREATE) continue;
+        rc = execute_create_clause_with_varmap(executor,
+                                                (cypher_create *)clause,
+                                                result, &create_vars);
+        if (rc < 0) {
+            if (create_vars) free_variable_map(create_vars);
+            return rc;
+        }
+        any = true;
+    }
+    if (!any) {
         if (create_vars) free_variable_map(create_vars);
-        return rc;
+        return 0;
     }
     rc = execute_set_operations(executor, set, create_vars, result);
     free_variable_map(create_vars);
