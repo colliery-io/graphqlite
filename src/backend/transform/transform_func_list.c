@@ -508,26 +508,115 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
     if (func_call->args && func_call->args->count > 0) {
         ast_node *arg = func_call->args->items[0];
         if (arg->type == AST_NODE_MAP) {
-            /* datetime({year: 2024, month: 3, day: 15, hour: 14, minute: 30}) */
-            append_sql(ctx, "(SELECT printf('%%04d-%%02d-%%02dT%%02d:%%02d:%%02d', "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.year'), strftime('%%Y','now')), "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.month'), 1), "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.day'), 1), "
-                       "COALESCE(json_extract(json(");
+            /* localdatetime/datetime({...}): emit the precise format TCK
+             * expects, which depends on the highest-precision sub-second
+             * field present (nanosecond > microsecond > millisecond > none)
+             * and whether second is present at all (else format ends at
+             * "HH:MM"). Date portion uses the same calendar variants the
+             * `date()` map constructor supports.
+             *
+             * We do this by inspecting the map AST keys at compile time so
+             * the generated SQL has a fixed printf format. This avoids
+             * deep CASE expressions at runtime. */
+            cypher_map *map = (cypher_map *)arg;
+            bool has_week=false, has_ordinal=false, has_quarter=false;
+            bool has_hour=false, has_minute=false, has_second=false;
+            bool has_ms=false, has_us=false, has_ns=false;
+            if (map->pairs) {
+                for (int i = 0; i < map->pairs->count; i++) {
+                    cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
+                    if (!p || !p->key) continue;
+                    if (strcasecmp(p->key, "week") == 0) has_week = true;
+                    else if (strcasecmp(p->key, "ordinalDay") == 0) has_ordinal = true;
+                    else if (strcasecmp(p->key, "quarter") == 0) has_quarter = true;
+                    else if (strcasecmp(p->key, "hour") == 0) has_hour = true;
+                    else if (strcasecmp(p->key, "minute") == 0) has_minute = true;
+                    else if (strcasecmp(p->key, "second") == 0) has_second = true;
+                    else if (strcasecmp(p->key, "millisecond") == 0) has_ms = true;
+                    else if (strcasecmp(p->key, "microsecond") == 0) has_us = true;
+                    else if (strcasecmp(p->key, "nanosecond") == 0) has_ns = true;
+                }
+            }
+
+            /* Compose the time portion's printf format + args. The format
+             * string is embedded into the SQL via append_sql's vsnprintf
+             * pass, where `%%` reduces to `%` and SQLite sees the right
+             * format. */
+            const char *time_fmt_in_sql;
+            const char *frac_arg = NULL;  /* JSON key for the sub-second value */
+            /* These are inserted into the SQL via append_sql's `%s` arg, so
+             * the `%`s here are taken literally and end up in the SQL where
+             * SQLite's `printf()` will interpret them. */
+            if (has_ns)        { time_fmt_in_sql = "'T%02d:%02d:%02d.%09d'"; frac_arg = "$.nanosecond"; }
+            else if (has_us)   { time_fmt_in_sql = "'T%02d:%02d:%02d.%06d'"; frac_arg = "$.microsecond"; }
+            else if (has_ms)   { time_fmt_in_sql = "'T%02d:%02d:%02d.%03d'"; frac_arg = "$.millisecond"; }
+            else if (has_second) time_fmt_in_sql = "'T%02d:%02d:%02d'";
+            else                 time_fmt_in_sql = "'T%02d:%02d'";  /* hour/minute/none all use HH:MM */
+
+            /* Build the date prefix once (same logic as date() function). */
+            append_sql(ctx, "(SELECT ");
+            if (has_week) {
+                append_sql(ctx, "date("
+                                 "printf('%%04d-01-04', json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year')),"
+                                 "'-' || ((CAST(strftime('%%w', "
+                                     "printf('%%04d-01-04', json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year'))) AS INTEGER) + 6) %% 7) || ' days',"
+                                 "'+' || ((COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.week'), 1) - 1) * 7 + "
+                                     "(COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.dayOfWeek'), 1) - 1)) || ' days')");
+            } else if (has_ordinal) {
+                append_sql(ctx, "date(printf('%%04d-01-01', json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year')), '+' || (COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.ordinalDay'), 1) - 1) || ' days')");
+            } else if (has_quarter) {
+                append_sql(ctx, "date(printf('%%04d-%%02d-01', json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year'), (COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.quarter'), 1) - 1) * 3 + 1), "
+                                 "'+' || (COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.dayOfQuarter'), 1) - 1) || ' days')");
+            } else {
+                append_sql(ctx, "printf('%%04d-%%02d-%%02d', "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year'), strftime('%%Y','now')), "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.month'), 1), "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.day'), 1))");
+            }
+
+            /* Append the time portion via concatenation. */
+            append_sql(ctx, " || printf(%s, "
+                              "COALESCE(json_extract(json(", time_fmt_in_sql);
             if (transform_expression(ctx, arg) < 0) return -1;
             append_sql(ctx, "), '$.hour'), 0), "
-                       "COALESCE(json_extract(json(");
+                              "COALESCE(json_extract(json(");
             if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.minute'), 0), "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.second'), 0)))");
+            append_sql(ctx, "), '$.minute'), 0)");
+            if (has_second || frac_arg) {
+                append_sql(ctx, ", COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.second'), 0)");
+            }
+            if (frac_arg) {
+                append_sql(ctx, ", COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '%s'), 0)", frac_arg);
+            }
+            append_sql(ctx, "))");
         } else {
             /* datetime(string) */
             append_sql(ctx, "datetime(");
