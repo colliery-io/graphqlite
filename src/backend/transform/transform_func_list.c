@@ -448,10 +448,35 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
                 append_sql(ctx, "), '$.day'), 1)))");
             }
         } else {
-            /* date(string) - parse date from string */
-            append_sql(ctx, "date(");
+            /* date(string) - parse the openCypher date string formats:
+             *   'YYYY-MM-DD' / 'YYYYMMDD'  / 'YYYY-MM' / 'YYYYMM' / 'YYYY'
+             *   ordinal: 'YYYY-DDD' / 'YYYYDDD' (year + day-of-year)
+             *   week: 'YYYY-Www-d' / 'YYYYWwwd' / 'YYYY-Www' / 'YYYYWww'
+             * Normalise to a canonical YYYY-MM-DD via CASE on length/shape
+             * and let SQLite's date() compute. */
+            append_sql(ctx, "(SELECT date(CASE "
+                /* basic ISO date YYYYMMDD (8 chars, no dash, no W) */
+                "WHEN length(_str)=8 AND substr(_str,5,1) BETWEEN '0' AND '9' "
+                    "AND instr(_str,'W')=0 AND instr(_str,'-')=0 "
+                    "THEN substr(_str,1,4)||'-'||substr(_str,5,2)||'-'||substr(_str,7,2) "
+                /* extended year-month YYYY-MM (7 chars) */
+                "WHEN length(_str)=7 AND substr(_str,5,1)='-' THEN _str||'-01' "
+                /* basic year-month YYYYMM (6 chars) */
+                "WHEN length(_str)=6 AND instr(_str,'-')=0 AND instr(_str,'W')=0 "
+                    "THEN substr(_str,1,4)||'-'||substr(_str,5,2)||'-01' "
+                /* year only YYYY (4 chars) */
+                "WHEN length(_str)=4 THEN _str||'-01-01' "
+                /* extended ordinal YYYY-DDD (8 chars: 4-digit year, dash, 3-digit day) */
+                "WHEN length(_str)=8 AND substr(_str,5,1)='-' "
+                    "THEN date(substr(_str,1,4)||'-01-01', "
+                        "'+'||(CAST(substr(_str,6,3) AS INTEGER)-1)||' days') "
+                /* basic ordinal YYYYDDD (7 chars: 4-digit year + 3-digit day) */
+                "WHEN length(_str)=7 AND instr(_str,'-')=0 AND instr(_str,'W')=0 "
+                    "THEN date(substr(_str,1,4)||'-01-01', "
+                        "'+'||(CAST(substr(_str,5,3) AS INTEGER)-1)||' days') "
+                "ELSE _str END) FROM (SELECT (");
             if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, ")");
+            append_sql(ctx, ") AS _str))");
         }
     } else {
         /* date() - current date */
