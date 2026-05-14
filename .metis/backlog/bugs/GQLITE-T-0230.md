@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Phase A: Compile-time literal-type validation pass (~150 scenarios)"
 short_code: "GQLITE-T-0230"
 created_at: 2026-05-14T01:54:01.015759+00:00
-updated_at: 2026-05-14T01:54:01.015759+00:00
+updated_at: 2026-05-14T02:06:21.890442+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -50,6 +50,12 @@ Variables and expressions whose type cannot be statically determined are skipped
 - WithOrderBy 1-3 (~50)
 - Pattern1 (~17)
 - Match1 negative-tests (~24)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
