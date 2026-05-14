@@ -89,8 +89,102 @@ static bool literal_is_non_boolean(const ast_node *e)
     return false;
 }
 
+/* ---- variable-type tracker ------------------------------------------ */
+
+/* A tiny per-query map of variable name → known literal type. Populated
+ * from WITH/UNWIND clauses that bind a variable to a literal expression
+ * (`WITH 123 AS x`, `WITH [1,2] AS xs`, `UNWIND [1,2] AS x` — the unwound
+ * element's type is List elem type which we approximate as Integer/etc).
+ * Only used for negative-test validation; missing entries silently skip. */
+
+typedef enum {
+    VTYPE_UNKNOWN = 0,
+    VTYPE_INTEGER,
+    VTYPE_DECIMAL,
+    VTYPE_STRING,
+    VTYPE_BOOLEAN,
+    VTYPE_NULL,
+    VTYPE_LIST,
+    VTYPE_MAP,
+} var_type;
+
+typedef struct {
+    char *name;
+    var_type type;
+} var_type_binding;
+
+typedef struct {
+    var_type_binding *items;
+    int count;
+    int cap;
+} var_type_ctx;
+
+static void vctx_init(var_type_ctx *v) { v->items = NULL; v->count = 0; v->cap = 0; }
+
+static void vctx_free(var_type_ctx *v) {
+    for (int i = 0; i < v->count; i++) free(v->items[i].name);
+    free(v->items);
+    v->items = NULL; v->count = 0; v->cap = 0;
+}
+
+static void vctx_register(var_type_ctx *v, const char *name, var_type t) {
+    if (!name) return;
+    for (int i = 0; i < v->count; i++) {
+        if (strcmp(v->items[i].name, name) == 0) {
+            v->items[i].type = t;  /* rebind */
+            return;
+        }
+    }
+    if (v->count >= v->cap) {
+        v->cap = v->cap ? v->cap * 2 : 8;
+        v->items = realloc(v->items, v->cap * sizeof(var_type_binding));
+    }
+    v->items[v->count].name = strdup(name);
+    v->items[v->count].type = t;
+    v->count++;
+}
+
+static var_type vctx_lookup(const var_type_ctx *v, const char *name) {
+    if (!name) return VTYPE_UNKNOWN;
+    for (int i = 0; i < v->count; i++) {
+        if (strcmp(v->items[i].name, name) == 0) return v->items[i].type;
+    }
+    return VTYPE_UNKNOWN;
+}
+
+static var_type type_of_literal_expr(const ast_node *e) {
+    if (!e) return VTYPE_UNKNOWN;
+    if (e->type == AST_NODE_LIST) return VTYPE_LIST;
+    if (e->type == AST_NODE_MAP)  return VTYPE_MAP;
+    if (e->type != AST_NODE_LITERAL) return VTYPE_UNKNOWN;
+    const cypher_literal *lit = (const cypher_literal *)e;
+    switch (lit->literal_type) {
+        case LITERAL_INTEGER: return VTYPE_INTEGER;
+        case LITERAL_DECIMAL: return VTYPE_DECIMAL;
+        case LITERAL_STRING:  return VTYPE_STRING;
+        case LITERAL_BOOLEAN: return VTYPE_BOOLEAN;
+        case LITERAL_NULL:    return VTYPE_NULL;
+    }
+    return VTYPE_UNKNOWN;
+}
+
+static const char *var_type_name(var_type t) {
+    switch (t) {
+        case VTYPE_INTEGER: return "Integer";
+        case VTYPE_DECIMAL: return "Float";
+        case VTYPE_STRING:  return "String";
+        case VTYPE_BOOLEAN: return "Boolean";
+        case VTYPE_NULL:    return "Null";
+        case VTYPE_LIST:    return "List";
+        case VTYPE_MAP:     return "Map";
+        case VTYPE_UNKNOWN: return "Unknown";
+    }
+    return "Unknown";
+}
+
 /* ---- recursive AST walk --------------------------------------------- */
 
+static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **error_message);
 static int validate_expr(ast_node *expr, char **error_message);
 
 static int validate_not_expr(cypher_not_expr *not_expr, char **error_message)
@@ -249,40 +343,161 @@ static int validate_expr(ast_node *expr, char **error_message)
     }
 }
 
-static int validate_return_clause(cypher_return *ret, char **error_message)
+static int validate_property_access(cypher_property *prop, const var_type_ctx *vctx,
+                                     char **error_message)
+{
+    if (!prop || !prop->expr) return 0;
+    if (prop->expr->type != AST_NODE_IDENTIFIER) return 0;
+    const cypher_identifier *id = (const cypher_identifier *)prop->expr;
+    var_type t = vctx_lookup(vctx, id->name);
+    /* Only reject when the binding's type is statically known AND it isn't a
+     * Map / Node / Relationship (those allow property access). */
+    if (t == VTYPE_INTEGER || t == VTYPE_DECIMAL || t == VTYPE_STRING ||
+        t == VTYPE_BOOLEAN || t == VTYPE_LIST) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "TypeError: InvalidArgumentType: Cannot access property '%s' on %s",
+                 prop->property_name ? prop->property_name : "?",
+                 var_type_name(t));
+        set_error(error_message, "%s", buf);
+        return -1;
+    }
+    return 0;
+}
+
+static int validate_subscript(cypher_subscript *sub, const var_type_ctx *vctx,
+                              char **error_message)
+{
+    if (!sub || !sub->expr) return 0;
+    if (sub->expr->type != AST_NODE_IDENTIFIER) return 0;
+    const cypher_identifier *id = (const cypher_identifier *)sub->expr;
+    var_type t = vctx_lookup(vctx, id->name);
+    /* Subscript is valid on List, Map, String, Null. Reject Integer / Decimal /
+     * Boolean. */
+    if (t == VTYPE_INTEGER || t == VTYPE_DECIMAL || t == VTYPE_BOOLEAN) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "TypeError: InvalidArgumentType: Cannot subscript value of type %s",
+                 var_type_name(t));
+        set_error(error_message, "%s", buf);
+        return -1;
+    }
+    return 0;
+}
+
+static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **error_message)
+{
+    if (!expr) return 0;
+    if (expr->type == AST_NODE_PROPERTY) {
+        if (validate_property_access((cypher_property *)expr, vctx, error_message) < 0) return -1;
+    }
+    if (expr->type == AST_NODE_SUBSCRIPT) {
+        if (validate_subscript((cypher_subscript *)expr, vctx, error_message) < 0) return -1;
+    }
+    /* Recurse into operands for nested expressions. */
+    switch (expr->type) {
+        case AST_NODE_NOT_EXPR:
+            return validate_expr_typed(((cypher_not_expr *)expr)->expr, vctx, error_message);
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *bop = (cypher_binary_op *)expr;
+            if (validate_expr_typed(bop->left, vctx, error_message) < 0) return -1;
+            if (validate_expr_typed(bop->right, vctx, error_message) < 0) return -1;
+            return 0;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *func = (cypher_function_call *)expr;
+            if (func->args) {
+                for (int i = 0; i < func->args->count; i++) {
+                    if (validate_expr_typed(func->args->items[i], vctx, error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_PROPERTY:
+            return validate_expr_typed(((cypher_property *)expr)->expr, vctx, error_message);
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *sub = (cypher_subscript *)expr;
+            if (validate_expr_typed(sub->expr, vctx, error_message) < 0) return -1;
+            return validate_expr_typed(sub->index, vctx, error_message);
+        }
+        case AST_NODE_NULL_CHECK:
+            return validate_expr_typed(((cypher_null_check *)expr)->expr, vctx, error_message);
+        default:
+            return 0;
+    }
+}
+
+/* Walk a clause's expressions with the given var-type context, also
+ * picking up new var bindings from WITH items along the way. */
+static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
+                                  char **error_message)
 {
     if (!ret || !ret->items) return 0;
     for (int i = 0; i < ret->items->count; i++) {
         cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
         if (item && item->expr) {
             if (validate_expr(item->expr, error_message) < 0) return -1;
+            if (validate_expr_typed(item->expr, vctx, error_message) < 0) return -1;
         }
     }
     return 0;
 }
 
-static int validate_with_clause(cypher_with *with, char **error_message)
+static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
+                                 char **error_message)
 {
     if (!with) return 0;
     if (with->items) {
         for (int i = 0; i < with->items->count; i++) {
             cypher_return_item *item = (cypher_return_item *)with->items->items[i];
-            if (item && item->expr) {
-                if (validate_expr(item->expr, error_message) < 0) return -1;
+            if (!item || !item->expr) continue;
+            if (validate_expr(item->expr, error_message) < 0) return -1;
+            if (validate_expr_typed(item->expr, vctx_out, error_message) < 0) return -1;
+            /* Track the alias's bound type for downstream clauses. */
+            if (item->alias) {
+                vctx_register(vctx_out, item->alias,
+                              type_of_literal_expr(item->expr));
             }
         }
     }
     if (with->where) {
         if (validate_expr(with->where, error_message) < 0) return -1;
+        if (validate_expr_typed(with->where, vctx_out, error_message) < 0) return -1;
     }
     return 0;
 }
 
-static int validate_match_clause(cypher_match *match, char **error_message)
+static int validate_match_clause(cypher_match *match, const var_type_ctx *vctx,
+                                  char **error_message)
 {
     if (!match) return 0;
     if (match->where) {
         if (validate_expr(match->where, error_message) < 0) return -1;
+        if (validate_expr_typed(match->where, vctx, error_message) < 0) return -1;
+    }
+    return 0;
+}
+
+static int validate_unwind_clause(cypher_unwind *uw, var_type_ctx *vctx_out,
+                                   char **error_message)
+{
+    if (!uw) return 0;
+    if (uw->expr && validate_expr(uw->expr, error_message) < 0) return -1;
+    /* UNWIND [1,2,3] AS x — best-effort: if elements are uniform, register
+     * x with that type. Otherwise leave it Unknown. */
+    if (uw->alias && uw->expr && uw->expr->type == AST_NODE_LIST) {
+        cypher_list *lst = (cypher_list *)uw->expr;
+        var_type elem_t = VTYPE_UNKNOWN;
+        if (lst->items && lst->items->count > 0) {
+            elem_t = type_of_literal_expr(lst->items->items[0]);
+            for (int i = 1; i < lst->items->count; i++) {
+                if (type_of_literal_expr(lst->items->items[i]) != elem_t) {
+                    elem_t = VTYPE_UNKNOWN;
+                    break;
+                }
+            }
+        }
+        vctx_register(vctx_out, uw->alias, elem_t);
     }
     return 0;
 }
@@ -290,25 +505,30 @@ static int validate_match_clause(cypher_match *match, char **error_message)
 int transform_validate_query(cypher_query *query, char **error_message)
 {
     if (!query || !query->clauses) return 0;
+    var_type_ctx vctx;
+    vctx_init(&vctx);
+    int rc = 0;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
-        if (!clause) continue;
+        if (!clause) { continue; }
         switch (clause->type) {
             case AST_NODE_RETURN:
-                if (validate_return_clause((cypher_return *)clause, error_message) < 0)
-                    return -1;
+                rc = validate_return_clause((cypher_return *)clause, &vctx, error_message);
                 break;
             case AST_NODE_WITH:
-                if (validate_with_clause((cypher_with *)clause, error_message) < 0)
-                    return -1;
+                rc = validate_with_clause((cypher_with *)clause, &vctx, error_message);
                 break;
             case AST_NODE_MATCH:
-                if (validate_match_clause((cypher_match *)clause, error_message) < 0)
-                    return -1;
+                rc = validate_match_clause((cypher_match *)clause, &vctx, error_message);
+                break;
+            case AST_NODE_UNWIND:
+                rc = validate_unwind_clause((cypher_unwind *)clause, &vctx, error_message);
                 break;
             default:
                 break;
         }
+        if (rc < 0) break;
     }
-    return 0;
+    vctx_free(&vctx);
+    return rc;
 }

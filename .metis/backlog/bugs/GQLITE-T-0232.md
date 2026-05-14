@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Phase C: List/Map function arg validation (~30 scenarios)"
 short_code: "GQLITE-T-0232"
 created_at: 2026-05-14T01:54:03.230856+00:00
-updated_at: 2026-05-14T01:54:03.230856+00:00
+updated_at: 2026-05-14T08:20:34.083533+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -42,6 +42,10 @@ In each function transformer, validate input shape at compile time. Reject `rang
 
 - List1 (~18)
 - Map1-2 (~12)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
