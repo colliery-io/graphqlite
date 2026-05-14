@@ -685,8 +685,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                             alias, alias, alias, alias, alias,
                             alias, alias, alias, alias, alias);
                         } else {
-                            /* This is a node variable - return full node object */
-                            append_sql(ctx, "json_object("
+                            /* This is a node variable - return full node object,
+                             * or NULL when the row came from an OPTIONAL MATCH
+                             * miss (LEFT JOIN with no match → alias.id IS NULL). */
+                            append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_object("
                                 "'id', %s.id, "
                                 "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
                                 "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
@@ -702,7 +704,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id) OR "
                                     "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s.id AND key_id = pk.id)"
                                 "), json('{}'))"
-                            ")",
+                            ") END)",
+                            alias,
                             alias, alias,
                             alias, alias, alias, alias, alias,
                             alias, alias, alias, alias, alias);

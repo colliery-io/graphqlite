@@ -757,10 +757,26 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
                 }
             } else {
-                sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
+                if (optional) {
+                    /* GQLITE-T-0218 follow-up: OPTIONAL MATCH on an empty graph
+                     * must return one row with NULL bindings, not zero rows.
+                     * Anchor the FROM on a synthetic 1-row table so the LEFT
+                     * JOIN to nodes always produces at least one row. */
+                    sql_from(ctx->unified_builder, "(SELECT 1)", "_gql_anchor");
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                             get_graph_table(ctx, "nodes"), alias, "1=1");
+                } else {
+                    sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
+                }
             }
         } else {
-            sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
+            if (optional) {
+                sql_from(ctx->unified_builder, "(SELECT 1)", "_gql_anchor");
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                         get_graph_table(ctx, "nodes"), alias, "1=1");
+            } else {
+                sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
+            }
         }
     } else {
         /* Subsequent tables - use JOIN */
