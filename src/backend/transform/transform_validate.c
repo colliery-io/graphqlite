@@ -439,19 +439,59 @@ static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **
     }
 }
 
+/* SKIP / LIMIT must be a non-negative integer constant or a parameter.
+ * Expressions referencing variables (e.g. `LIMIT n.count`) and negative
+ * literals are rejected at compile time per the openCypher spec. */
+static int validate_skip_limit(ast_node *expr, const char *kw, char **error_message)
+{
+    if (!expr) return 0;
+    if (expr->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)expr;
+        if (lit->literal_type == LITERAL_INTEGER) {
+            if (lit->value.integer < 0) {
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                         "SyntaxError: NegativeIntegerArgument: %s must be non-negative", kw);
+                set_error(error_message, "%s", buf);
+                return -1;
+            }
+            return 0;
+        }
+        /* Non-integer literal — wrong type. */
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "SyntaxError: InvalidArgumentType: %s expects Integer, got %s",
+                 kw, expr_type_name(expr));
+        set_error(error_message, "%s", buf);
+        return -1;
+    }
+    if (expr->type == AST_NODE_PARAMETER) return 0;
+    /* Identifiers, property access, function calls, etc. — non-constant. */
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "SyntaxError: NonConstantExpression: %s must be a constant integer or parameter",
+             kw);
+    set_error(error_message, "%s", buf);
+    return -1;
+}
+
 /* Walk a clause's expressions with the given var-type context, also
  * picking up new var bindings from WITH items along the way. */
 static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
                                   char **error_message)
 {
-    if (!ret || !ret->items) return 0;
-    for (int i = 0; i < ret->items->count; i++) {
-        cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
-        if (item && item->expr) {
-            if (validate_expr(item->expr, error_message) < 0) return -1;
-            if (validate_expr_typed(item->expr, vctx, error_message) < 0) return -1;
+    if (!ret) return 0;
+    if (ret->items) {
+        for (int i = 0; i < ret->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
+            if (item && item->expr) {
+                if (validate_expr(item->expr, error_message) < 0) return -1;
+                if (validate_expr_typed(item->expr, vctx, error_message) < 0) return -1;
+            }
         }
     }
+    if (validate_skip_limit(ret->skip, "SKIP", error_message) < 0) return -1;
+    if (validate_skip_limit(ret->limit, "LIMIT", error_message) < 0) return -1;
     return 0;
 }
 
@@ -476,6 +516,8 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
         if (validate_expr(with->where, error_message) < 0) return -1;
         if (validate_expr_typed(with->where, vctx_out, error_message) < 0) return -1;
     }
+    if (validate_skip_limit(with->skip, "SKIP", error_message) < 0) return -1;
+    if (validate_skip_limit(with->limit, "LIMIT", error_message) < 0) return -1;
     return 0;
 }
 
