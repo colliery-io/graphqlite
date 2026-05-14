@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-14T00:34:58Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-14T13:29:20Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -1493,26 +1493,26 @@
 - pub `ValueParseError` class L50-51 — `(ValueError)`
 - pub `parse_value` function L54-60 — `def parse_value(text: str) -> Any`
 - pub `values_equal` function L63-93 — `def values_equal(a: Any, b: Any) -> bool`
-- pub `__init__` method L123-125 — `def __init__(self, text: str)`
-- pub `eof` method L127-128 — `def eof(self) -> bool`
-- pub `peek` method L130-131 — `def peek(self) -> str`
-- pub `skip_ws` method L133-135 — `def skip_ws(self) -> None`
-- pub `expect` method L137-141 — `def expect(self, ch: str) -> None`
-- pub `parse_top` method L143-145 — `def parse_top(self) -> Any`
--  `_coerce_graph_value` function L96-110 — `def _coerce_graph_value(v: Any) -> Any` — Coerce extension-side dict representations to our dataclasses.
--  `_props_equal` function L113-116 — `def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...])...`
--  `_Parser` class L122-329 — `{ __init__, eof, peek, skip_ws, expect, parse_top }`
--  `_parse_value` method L147-164 — `def _parse_value(self) -> Any`
--  `_parse_node` method L166-179 — `def _parse_node(self) -> Node`
--  `_parse_list_or_rel` method L181-209 — `def _parse_list_or_rel(self) -> Any`
--  `_parse_map` method L211-231 — `def _parse_map(self) -> dict[str, Any]`
--  `_parse_path` method L233-261 — `def _parse_path(self) -> Path`
--  `_parse_rel_segment` method L263-272 — `def _parse_rel_segment(self) -> Relationship`
--  `_parse_string` method L274-290 — `def _parse_string(self) -> str`
--  `_parse_ident` method L292-298 — `def _parse_ident(self) -> str`
--  `_parse_ident_or_string` method L300-303 — `def _parse_ident_or_string(self) -> str`
--  `_parse_atom` method L305-329 — `def _parse_atom(self) -> Any`
--  `_props_from_map` function L332-333 — `def _props_from_map(d: dict[str, Any]) -> tuple[tuple[str, Any], ...]`
+- pub `__init__` method L128-130 — `def __init__(self, text: str)`
+- pub `eof` method L132-133 — `def eof(self) -> bool`
+- pub `peek` method L135-136 — `def peek(self) -> str`
+- pub `skip_ws` method L138-140 — `def skip_ws(self) -> None`
+- pub `expect` method L142-146 — `def expect(self, ch: str) -> None`
+- pub `parse_top` method L148-150 — `def parse_top(self) -> Any`
+-  `_coerce_graph_value` function L96-115 — `def _coerce_graph_value(v: Any) -> Any` — Coerce extension-side dict representations to our dataclasses.
+-  `_props_equal` function L118-121 — `def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...])...`
+-  `_Parser` class L127-334 — `{ __init__, eof, peek, skip_ws, expect, parse_top }`
+-  `_parse_value` method L152-169 — `def _parse_value(self) -> Any`
+-  `_parse_node` method L171-184 — `def _parse_node(self) -> Node`
+-  `_parse_list_or_rel` method L186-214 — `def _parse_list_or_rel(self) -> Any`
+-  `_parse_map` method L216-236 — `def _parse_map(self) -> dict[str, Any]`
+-  `_parse_path` method L238-266 — `def _parse_path(self) -> Path`
+-  `_parse_rel_segment` method L268-277 — `def _parse_rel_segment(self) -> Relationship`
+-  `_parse_string` method L279-295 — `def _parse_string(self) -> str`
+-  `_parse_ident` method L297-303 — `def _parse_ident(self) -> str`
+-  `_parse_ident_or_string` method L305-308 — `def _parse_ident_or_string(self) -> str`
+-  `_parse_atom` method L310-334 — `def _parse_atom(self) -> Any`
+-  `_props_from_map` function L337-338 — `def _props_from_map(d: dict[str, Any]) -> tuple[tuple[str, Any], ...]`
 
 ### tests/tck/backends
 

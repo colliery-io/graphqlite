@@ -230,6 +230,41 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 return -1;
             }
 
+            /* Boolean-producing expressions: wrap so the output is JSON
+             * true/false rather than SQLite integer 0/1. NULL stays NULL
+             * for openCypher three-valued logic. */
+            if (item->expr && (
+                item->expr->type == AST_NODE_NOT_EXPR ||
+                item->expr->type == AST_NODE_NULL_CHECK ||
+                item->expr->type == AST_NODE_LIST_PREDICATE ||
+                item->expr->type == AST_NODE_EXISTS_EXPR ||
+                (item->expr->type == AST_NODE_BINARY_OP && (
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_AND ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_OR  ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_XOR ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_EQ  ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_NEQ ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_LT  ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_GT  ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_LTE ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_GTE ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_IN  ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_STARTS_WITH ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_ENDS_WITH ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_CONTAINS ||
+                    ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_REGEX_MATCH))))
+            {
+                size_t need = strlen(expr_str) * 2 + 96;
+                char *wrapped = malloc(need);
+                if (wrapped) {
+                    snprintf(wrapped, need,
+                             "(CASE WHEN (%s) IS NULL THEN NULL WHEN (%s) THEN 'true' ELSE 'false' END)",
+                             expr_str, expr_str);
+                    free(expr_str);
+                    expr_str = wrapped;
+                }
+            }
+
             /* Determine alias - use explicit alias, or generate one for properties/functions */
             const char *alias = item->alias;
             char auto_alias[256] = "";
@@ -397,6 +432,39 @@ return_star_done:
                         ctx->error_message = strdup("Failed to transform return item expression");
                     }
                     return -1;
+                }
+
+                /* Boolean-producing expressions: emit JSON true/false. */
+                if (item->expr && (
+                    item->expr->type == AST_NODE_NOT_EXPR ||
+                    item->expr->type == AST_NODE_NULL_CHECK ||
+                    item->expr->type == AST_NODE_LIST_PREDICATE ||
+                    item->expr->type == AST_NODE_EXISTS_EXPR ||
+                    (item->expr->type == AST_NODE_BINARY_OP && (
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_AND ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_OR  ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_XOR ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_EQ  ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_NEQ ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_LT  ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_GT  ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_LTE ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_GTE ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_IN  ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_STARTS_WITH ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_ENDS_WITH ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_CONTAINS ||
+                        ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_REGEX_MATCH))))
+                {
+                    size_t need = strlen(expr_str) * 2 + 96;
+                    char *wrapped = malloc(need);
+                    if (wrapped) {
+                        snprintf(wrapped, need,
+                                 "(CASE WHEN (%s) IS NULL THEN NULL WHEN (%s) THEN 'true' ELSE 'false' END)",
+                                 expr_str, expr_str);
+                        free(expr_str);
+                        expr_str = wrapped;
+                    }
                 }
 
                 /* Determine alias - use explicit alias, or generate one for properties/functions */
