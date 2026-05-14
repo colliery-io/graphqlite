@@ -569,8 +569,9 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
             }
             append_sql(ctx, ")");
         } else {
-            /* time(string) */
-            append_sql(ctx, "time(");
+            /* time(string) / localtime(string): preserve verbatim so tz +
+             * sub-second precision survive (SQLite's time() drops both). */
+            append_sql(ctx, "(");
             if (transform_expression(ctx, arg) < 0) return -1;
             append_sql(ctx, ")");
         }
