@@ -419,13 +419,18 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     }
 
     /* Projected variables that are NOT nodes/edges (i.e., scalar/JSON values
-     * from a WITH-expression like `duration.between(...) AS dur`) should use
-     * json_extract — the property tables don't apply to values. We detect
-     * this by: projected, not edge, and alias_is_id is false (which is true
-     * for node/edge projections but false for value projections). */
+     * from a WITH-expression like `duration.between(...) AS dur`, or a
+     * temporal string like `date(...)`) — try json_extract first (works for
+     * JSON objects like durations); fall back to _gql_temporal_field which
+     * parses temporal strings for `.year`/`.hour`/etc. */
     if (is_projected && !is_edge && !alias_is_id) {
+        /* json_extract raises 'malformed JSON' on non-JSON inputs (e.g. a
+         * temporal string like '1984-10-11'), so guard with json_valid. */
         { char *esc_prop = escape_sql_string(prop->property_name);
-          append_sql(ctx, "json_extract(%s, '$.%s')", alias, esc_prop ? esc_prop : prop->property_name);
+          append_sql(ctx, "CASE WHEN json_valid(%s) THEN json_extract(%s, '$.%s')"
+                          " ELSE _gql_temporal_field(%s, '%s') END",
+                     alias, alias, esc_prop ? esc_prop : prop->property_name,
+                     alias, esc_prop ? esc_prop : prop->property_name);
           free(esc_prop); }
         return 0;
     }

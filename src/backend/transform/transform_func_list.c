@@ -908,33 +908,26 @@ int transform_duration_function(cypher_transform_context *ctx, cypher_function_c
 
     ast_node *arg = func_call->args->items[0];
     if (arg->type == AST_NODE_MAP) {
-        /* duration({days: 5, hours: 3}) → JSON representation for later arithmetic */
-        append_sql(ctx, "json_object("
-                   "'years', COALESCE(json_extract(json(");
-        if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "), '$.years'), 0), "
-                   "'months', COALESCE(json_extract(json(");
-        if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "), '$.months'), 0), "
-                   "'days', COALESCE(json_extract(json(");
-        if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "), '$.days'), 0), "
-                   "'hours', COALESCE(json_extract(json(");
-        if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "), '$.hours'), 0), "
-                   "'minutes', COALESCE(json_extract(json(");
-        if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "), '$.minutes'), 0), "
-                   "'seconds', COALESCE(json_extract(json(");
-        if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "), '$.seconds'), 0))");
+        /* duration({years, months, weeks, days, hours, minutes, seconds,
+         *           milliseconds, microseconds, nanoseconds}) — delegate to
+         * the C composer which handles fractional cascade and produces the
+         * canonical Duration JSON with `_iso8601`. */
+        append_sql(ctx, "json(_gql_duration_compose(");
+        const char *keys[] = {"years","months","weeks","days","hours",
+                              "minutes","seconds","milliseconds",
+                              "microseconds","nanoseconds"};
+        for (int i = 0; i < 10; i++) {
+            if (i > 0) append_sql(ctx, ", ");
+            append_sql(ctx, "COALESCE(json_extract(json(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, "), '$.%s'), 0)", keys[i]);
+        }
+        append_sql(ctx, "))");
     } else {
-        /* duration(string) - pass through as-is for now.
-         * ISO 8601 duration parsing would need a custom C function.
-         * Store the string directly. */
-        append_sql(ctx, "(");
+        /* duration('P…') — parse ISO 8601 string. */
+        append_sql(ctx, "json(_gql_duration_parse_iso(");
         if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, ")");
+        append_sql(ctx, "))");
     }
 
     return 0;

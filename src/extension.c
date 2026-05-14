@@ -1289,6 +1289,270 @@ static void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value 
     sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
 }
 
+/* Construct an openCypher Duration JSON from individual map components.
+ * argv: 0=years, 1=months, 2=weeks, 3=days, 4=hours, 5=minutes, 6=seconds,
+ *       7=milliseconds, 8=microseconds, 9=nanoseconds.
+ *
+ * Fractional values cascade into smaller units (e.g., years=12.5 contributes
+ * 6 months). The result is the same Duration JSON used elsewhere with
+ * `_iso8601` plus months/days/seconds/nanosecondsOfSecond accessor fields. */
+static void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 10) { sqlite3_result_null(ctx); return; }
+    double years = sqlite3_value_double(argv[0]);
+    double months = sqlite3_value_double(argv[1]);
+    double weeks = sqlite3_value_double(argv[2]);
+    double days = sqlite3_value_double(argv[3]);
+    double hours = sqlite3_value_double(argv[4]);
+    double minutes = sqlite3_value_double(argv[5]);
+    double seconds = sqlite3_value_double(argv[6]);
+    double ms = sqlite3_value_double(argv[7]);
+    double us = sqlite3_value_double(argv[8]);
+    double ns = sqlite3_value_double(argv[9]);
+
+    /* Cascade fractional from coarsest → finest. Months stays a separate
+     * "calendar" component; fractional years convert to months. Days/hours/
+     * etc. all collapse into a single nanosecond accumulator. */
+    double total_months_d = years * 12.0 + months;
+    int total_months = (int)total_months_d;
+    double frac_months = total_months_d - total_months;
+    /* Convert fractional months into days using 30 days/month (openCypher
+     * convention for fractional inputs). */
+    double total_days_d = weeks * 7.0 + days + frac_months * 30.0;
+
+    long long total_days = (long long)total_days_d;
+    double frac_days = total_days_d - total_days;
+    double total_seconds_d = frac_days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds;
+    long long total_secs = (long long)total_seconds_d;
+    double frac_secs = total_seconds_d - total_secs;
+    long long total_ns_from_secs = (long long)(frac_secs * 1e9 + 0.5);
+    /* Add fractional ns from ms / us / ns components. */
+    long long extra_ns = (long long)(ms * 1e6 + us * 1e3 + ns + 0.5);
+    long long total_ns = total_secs * 1000000000LL + total_ns_from_secs + extra_ns;
+
+    /* total_ns can carry full-day or sub-day values; the formatter will
+     * decompose into HH:MM:SS but keep the day component as `total_days`. */
+    /* Move any overflow from total_ns into days. */
+    long long DAY_NS = 86400LL * 1000000000LL;
+    long long extra_days = total_ns / DAY_NS;
+    long long residue_ns = total_ns - extra_days * DAY_NS;
+    /* If residue_ns is negative, borrow a day. */
+    if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
+    total_days += extra_days;
+
+    char iso[160];
+    format_iso_duration((int)total_months, (int)total_days, residue_ns, iso, sizeof(iso));
+
+    /* Decompose for accessor fields: per openCypher, .days/.seconds/.nanos
+     * are NOT calendar-decomposed — they reflect the stored components. */
+    long long seconds_field, nanos_field;
+    if (residue_ns >= 0) {
+        seconds_field = residue_ns / 1000000000LL;
+        nanos_field = residue_ns - seconds_field * 1000000000LL;
+    } else {
+        seconds_field = -(((-residue_ns) + 999999999LL) / 1000000000LL);
+        nanos_field = residue_ns - seconds_field * 1000000000LL;
+    }
+
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":%d,\"days\":%lld,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
+        iso, total_months, total_days, seconds_field, nanos_field);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
+/* Parse an ISO 8601 duration string 'P[nY][nM][nW][nD][T[nH][nM][n[.f]S]]'.
+ * Returns Duration JSON (same shape as compose). */
+static void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(ctx); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s || *s != 'P') { sqlite3_result_null(ctx); return; }
+    double years = 0, months = 0, weeks = 0, days = 0;
+    double hours = 0, minutes = 0, seconds = 0;
+    bool in_time = false;
+    const char *p = s + 1;
+    while (*p) {
+        if (*p == 'T') { in_time = true; p++; continue; }
+        /* Parse a numeric value (with optional sign + fractional). */
+        char *end;
+        double v = strtod(p, &end);
+        if (end == p) break;
+        char unit = *end;
+        if (!unit) break;
+        if (!in_time) {
+            switch (unit) {
+                case 'Y': years = v; break;
+                case 'M': months = v; break;
+                case 'W': weeks = v; break;
+                case 'D': days = v; break;
+                default: break;
+            }
+        } else {
+            switch (unit) {
+                case 'H': hours = v; break;
+                case 'M': minutes = v; break;
+                case 'S': seconds = v; break;
+                default: break;
+            }
+        }
+        p = end + 1;
+    }
+    /* Reuse the compose path via a synthetic argv. */
+    sqlite3_value *vals[10];
+    for (int i = 0; i < 10; i++) vals[i] = NULL;
+    double inputs[10] = { years, months, weeks, days, hours, minutes, seconds, 0, 0, 0 };
+    /* We need sqlite3_value objects to pass; simpler: inline the compose logic. */
+    double total_months_d = years * 12.0 + months;
+    int total_months = (int)total_months_d;
+    double frac_months = total_months_d - total_months;
+    double total_days_d = weeks * 7.0 + days + frac_months * 30.0;
+    long long total_days = (long long)total_days_d;
+    double frac_days = total_days_d - total_days;
+    double total_seconds_d = frac_days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds;
+    long long total_secs = (long long)total_seconds_d;
+    double frac_secs = total_seconds_d - total_secs;
+    long long total_ns_from_secs = (long long)(frac_secs * 1e9 + 0.5);
+    long long total_ns = total_secs * 1000000000LL + total_ns_from_secs;
+    long long DAY_NS = 86400LL * 1000000000LL;
+    long long extra_days = total_ns / DAY_NS;
+    long long residue_ns = total_ns - extra_days * DAY_NS;
+    if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
+    total_days += extra_days;
+
+    char iso[160];
+    format_iso_duration((int)total_months, (int)total_days, residue_ns, iso, sizeof(iso));
+    long long seconds_field, nanos_field;
+    if (residue_ns >= 0) {
+        seconds_field = residue_ns / 1000000000LL;
+        nanos_field = residue_ns - seconds_field * 1000000000LL;
+    } else {
+        seconds_field = -(((-residue_ns) + 999999999LL) / 1000000000LL);
+        nanos_field = residue_ns - seconds_field * 1000000000LL;
+    }
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":%d,\"days\":%lld,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
+        iso, total_months, total_days, seconds_field, nanos_field);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+    (void)inputs; (void)vals;
+}
+
+/* Property accessor for a temporal/Duration string.
+ * Handles all openCypher accessors:
+ *   date/datetime/localdatetime: year, quarter, month, week, weekYear,
+ *                                 day, ordinalDay, weekDay, dayOfQuarter
+ *   time/datetime: hour, minute, second, millisecond, microsecond,
+ *                  nanosecond, timezone, offset, offsetMinutes, epochSeconds,
+ *                  epochMillis
+ *   duration (Duration JSON): pass through to json_extract on the JSON.
+ *
+ * Returns NULL on parse failure or unknown field.
+ */
+static void gql_temporal_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    const char *field = (const char*)sqlite3_value_text(argv[1]);
+    if (!s || !field) { sqlite3_result_null(ctx); return; }
+
+    /* Duration object: pass through via simple JSON extraction. */
+    if (s[0] == '{') {
+        /* The caller already wraps with COALESCE(json_extract(...), ...) — so
+         * fall through to null on this path; the JSON extract handles it. */
+        sqlite3_result_null(ctx);
+        return;
+    }
+
+    tparts p;
+    if (!parse_temporal_parts(s, &p)) { sqlite3_result_null(ctx); return; }
+
+    /* Date/datetime accessors. */
+    if (p.has_date) {
+        if (strcmp(field, "year") == 0) { sqlite3_result_int(ctx, p.y); return; }
+        if (strcmp(field, "month") == 0) { sqlite3_result_int(ctx, p.mo); return; }
+        if (strcmp(field, "day") == 0) { sqlite3_result_int(ctx, p.d); return; }
+        if (strcmp(field, "quarter") == 0) { sqlite3_result_int(ctx, (p.mo - 1) / 3 + 1); return; }
+        if (strcmp(field, "dayOfQuarter") == 0) {
+            int qstart_mo = ((p.mo - 1) / 3) * 3 + 1;
+            struct tm a, b; memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b));
+            a.tm_year = p.y - 1900; a.tm_mon = qstart_mo - 1; a.tm_mday = 1;
+            b.tm_year = p.y - 1900; b.tm_mon = p.mo - 1; b.tm_mday = p.d;
+            int days = (int)((timegm(&b) - timegm(&a)) / 86400) + 1;
+            sqlite3_result_int(ctx, days);
+            return;
+        }
+        if (strcmp(field, "ordinalDay") == 0) {
+            struct tm a, b; memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b));
+            a.tm_year = p.y - 1900; a.tm_mon = 0; a.tm_mday = 1;
+            b.tm_year = p.y - 1900; b.tm_mon = p.mo - 1; b.tm_mday = p.d;
+            int days = (int)((timegm(&b) - timegm(&a)) / 86400) + 1;
+            sqlite3_result_int(ctx, days);
+            return;
+        }
+        if (strcmp(field, "weekDay") == 0 || strcmp(field, "dayOfWeek") == 0) {
+            struct tm t; memset(&t, 0, sizeof(t));
+            t.tm_year = p.y - 1900; t.tm_mon = p.mo - 1; t.tm_mday = p.d;
+            time_t ts = timegm(&t);
+            struct tm *gt = gmtime(&ts);
+            int wd = (gt->tm_wday + 6) % 7 + 1;  /* Mon=1..Sun=7 */
+            sqlite3_result_int(ctx, wd);
+            return;
+        }
+        if (strcmp(field, "week") == 0 || strcmp(field, "weekYear") == 0) {
+            /* ISO week + week-year: find Thursday of week containing the date. */
+            struct tm t; memset(&t, 0, sizeof(t));
+            t.tm_year = p.y - 1900; t.tm_mon = p.mo - 1; t.tm_mday = p.d;
+            time_t ts = timegm(&t);
+            struct tm *gt = gmtime(&ts);
+            int weekday = gt->tm_wday;  /* 0=Sun..6=Sat */
+            int days_to_thu = 3 - ((weekday + 6) % 7);
+            time_t thu = ts + (time_t)days_to_thu * 86400;
+            struct tm *tt = gmtime(&thu);
+            int wy = tt->tm_year + 1900;
+            if (strcmp(field, "weekYear") == 0) { sqlite3_result_int(ctx, wy); return; }
+            /* Week number = (ordinal_day of Thursday + 6) / 7 with day-of-year. */
+            struct tm jan1; memset(&jan1, 0, sizeof(jan1));
+            jan1.tm_year = tt->tm_year; jan1.tm_mon = 0; jan1.tm_mday = 1;
+            int doy = (int)((thu - timegm(&jan1)) / 86400) + 1;
+            int week = (doy + 6) / 7;
+            sqlite3_result_int(ctx, week);
+            return;
+        }
+    }
+    /* Time accessors. */
+    if (p.has_time) {
+        if (strcmp(field, "hour") == 0) { sqlite3_result_int(ctx, p.h); return; }
+        if (strcmp(field, "minute") == 0) { sqlite3_result_int(ctx, p.mi); return; }
+        if (strcmp(field, "second") == 0) { sqlite3_result_int(ctx, p.sec); return; }
+        if (strcmp(field, "millisecond") == 0) { sqlite3_result_int(ctx, (int)(p.ns / 1000000)); return; }
+        if (strcmp(field, "microsecond") == 0) { sqlite3_result_int(ctx, (int)(p.ns / 1000)); return; }
+        if (strcmp(field, "nanosecond") == 0) { sqlite3_result_int64(ctx, p.ns); return; }
+    }
+    if (p.has_tz) {
+        if (strcmp(field, "offsetMinutes") == 0) { sqlite3_result_int(ctx, p.tz_offset_min); return; }
+        if (strcmp(field, "offset") == 0 || strcmp(field, "timezone") == 0) {
+            char buf[16];
+            int oh = p.tz_offset_min / 60;
+            int om = p.tz_offset_min - oh * 60;
+            if (om < 0) om = -om;
+            snprintf(buf, sizeof(buf), "%+03d:%02d", oh, om);
+            sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+            return;
+        }
+    }
+    /* epochSeconds / epochMillis. */
+    if (p.has_date && p.has_time) {
+        if (strcmp(field, "epochSeconds") == 0 || strcmp(field, "epochMillis") == 0) {
+            struct tm t; memset(&t, 0, sizeof(t));
+            t.tm_year = p.y - 1900; t.tm_mon = p.mo - 1; t.tm_mday = p.d;
+            t.tm_hour = p.h; t.tm_min = p.mi; t.tm_sec = p.sec;
+            time_t ts = timegm(&t) - (time_t)p.tz_offset_min * 60;
+            if (strcmp(field, "epochSeconds") == 0) { sqlite3_result_int64(ctx, (int64_t)ts); return; }
+            sqlite3_result_int64(ctx, (int64_t)ts * 1000 + p.ns / 1000000);
+            return;
+        }
+    }
+    sqlite3_result_null(ctx);
+}
+
 /* Normalize a date string to canonical YYYY-MM-DD. Accepts:
  *   YYYY-MM-DD / YYYYMMDD
  *   YYYY-MM   / YYYYMM            (day defaults to 1)
@@ -1824,6 +2088,18 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "_gql_normalize_datetime", 1, SQLITE_UTF8, 0,
                          gql_normalize_datetime_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_duration_compose", 10, SQLITE_UTF8, 0,
+                         gql_duration_compose_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_duration_parse_iso", 1, SQLITE_UTF8, 0,
+                         gql_duration_parse_iso_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_temporal_field", 2, SQLITE_UTF8, 0,
+                         gql_temporal_field_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
