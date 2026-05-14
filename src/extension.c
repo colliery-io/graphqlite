@@ -525,6 +525,55 @@ static void gql_graph_loaded_func(sqlite3_context *context, int argc, sqlite3_va
     }
 }
 
+/* Extract nanosecond portion from ISO datetime string.
+ * Input forms: 'YYYY-MM-DDTHH:MM:SS.<digits><tz>?', returns digits zero-padded
+ * to 9 places as integer. Returns 0 if no fractional second present. */
+static void gql_extract_ns_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_int64(context, 0); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_int64(context, 0); return; }
+    const char *dot = strchr(s, '.');
+    if (!dot) { sqlite3_result_int64(context, 0); return; }
+    const char *p = dot + 1;
+    char buf[10]; int n = 0;
+    while (*p && n < 9 && *p >= '0' && *p <= '9') buf[n++] = *p++;
+    while (n < 9) buf[n++] = '0';
+    buf[9] = '\0';
+    sqlite3_result_int64(context, atoll(buf));
+}
+
+/* Extract timezone suffix from ISO datetime string.
+ * Returns the substring from the first +/-/Z after the time portion, or ''. */
+static void gql_extract_tz_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_text(context, "", 0, SQLITE_TRANSIENT); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_text(context, "", 0, SQLITE_TRANSIENT); return; }
+    /* For datetime strings ('YYYY-MM-DDT...'), scan after the 'T'.
+     * For time-only strings ('HH:MM:SS...'), scan from the start.
+     * Pure date strings ('YYYY-MM-DD') have no tz; return ''.
+     */
+    const char *t = strchr(s, 'T');
+    const char *start;
+    if (t) {
+        start = t + 1;
+    } else if (strlen(s) >= 8 && s[2] == ':') {
+        start = s;
+    } else {
+        sqlite3_result_text(context, "", 0, SQLITE_TRANSIENT); return;
+    }
+    const char *p = start;
+    while (*p && !(*p == '+' || (*p == '-' && p > start) || *p == 'Z' || *p == '[')) p++;
+    sqlite3_result_text(context, p, -1, SQLITE_TRANSIENT);
+}
+
 /*
  * REGEXP function for SQLite
  * Implements the =~ operator from Cypher
@@ -673,6 +722,14 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
                          regexp_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_extract_ns", 1, SQLITE_UTF8, 0,
+                         gql_extract_ns_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
+                         gql_extract_tz_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,

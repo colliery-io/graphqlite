@@ -167,14 +167,14 @@ static const transform_func_entry dispatch_table[] = {
     /* Temporal truncation */
     {"date.truncate",           transform_date_truncate_function},
     {"dateTruncate",            transform_date_truncate_function},
-    {"datetime.truncate",       transform_date_truncate_function},
-    {"datetimeTruncate",        transform_date_truncate_function},
-    {"localdatetime.truncate",  transform_date_truncate_function},
-    {"localdatetimeTruncate",   transform_date_truncate_function},
-    {"time.truncate",           transform_date_truncate_function},
-    {"timeTruncate",            transform_date_truncate_function},
-    {"localtime.truncate",      transform_date_truncate_function},
-    {"localtimeTruncate",       transform_date_truncate_function},
+    {"datetime.truncate",       transform_datetime_truncate_function},
+    {"datetimeTruncate",        transform_datetime_truncate_function},
+    {"localdatetime.truncate",  transform_localdatetime_truncate_function},
+    {"localdatetimeTruncate",   transform_localdatetime_truncate_function},
+    {"time.truncate",           transform_time_truncate_function},
+    {"timeTruncate",            transform_time_truncate_function},
+    {"localtime.truncate",      transform_localtime_truncate_function},
+    {"localtimeTruncate",       transform_localtime_truncate_function},
 
     /* Duration utility functions */
     {"duration.between",        transform_duration_between_function},
