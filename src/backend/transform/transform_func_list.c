@@ -369,18 +369,84 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
     if (func_call->args && func_call->args->count > 0) {
         ast_node *arg = func_call->args->items[0];
         if (arg->type == AST_NODE_MAP) {
-            /* date({year: 2024, month: 3, day: 15}) →
-             * printf('%04d-%02d-%02d', json_extract(map,'$.year'), ...) via SQLite */
-            append_sql(ctx, "(SELECT printf('%%04d-%%02d-%%02d', "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.year'), strftime('%%Y','now')), "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.month'), 1), "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.day'), 1)))");
+            /* date({...}) — openCypher supports several map shapes:
+             *   {year, month, day}
+             *   {year, month}            (defaults day=1)
+             *   {year}                   (defaults month=1, day=1)
+             *   {year, week, dayOfWeek}  (ISO 8601 week date)
+             *   {year, week}             (defaults dayOfWeek=1)
+             *   {year, ordinalDay}       (day-of-year)
+             *   {year, quarter, dayOfQuarter}
+             *   {year, quarter}          (defaults dayOfQuarter=1)
+             *
+             * We emit one SQL expression that handles all of these by
+             * inspecting which keys are present in the JSON. The expression
+             * is the body of a CASE: precedence is week > ordinalDay >
+             * quarter > month/day (since each precludes the others). */
+            cypher_map *map = (cypher_map *)arg;
+            bool has_week = false, has_ordinal = false, has_quarter = false;
+            if (map->pairs) {
+                for (int i = 0; i < map->pairs->count; i++) {
+                    cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
+                    if (!p || !p->key) continue;
+                    if (strcasecmp(p->key, "week") == 0) has_week = true;
+                    else if (strcasecmp(p->key, "ordinalDay") == 0) has_ordinal = true;
+                    else if (strcasecmp(p->key, "quarter") == 0) has_quarter = true;
+                }
+            }
+
+            if (has_week) {
+                /* ISO week date: anchor on Jan 4 (always in week 1), back up
+                 * to Monday-of-week-1, advance by (week-1)*7 + (dow-1) days. */
+                append_sql(ctx, "(SELECT date("
+                                 "printf('%%04d-01-04', json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year')),"
+                                 "'-' || ((CAST(strftime('%%w', "
+                                     "printf('%%04d-01-04', json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year'))) AS INTEGER) + 6) %% 7) || ' days',"
+                                 "'+' || ((COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.week'), 1) - 1) * 7 + "
+                                     "(COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.dayOfWeek'), 1) - 1)) || ' days'))");
+            } else if (has_ordinal) {
+                /* ordinalDay: day-of-year. date('YYYY-01-01', '+D-1 days'). */
+                append_sql(ctx, "(SELECT date(printf('%%04d-01-01', "
+                                 "json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year')), "
+                                 "'+' || (COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.ordinalDay'), 1) - 1) || ' days'))");
+            } else if (has_quarter) {
+                /* quarter / dayOfQuarter: start_month = (Q-1)*3+1. */
+                append_sql(ctx, "(SELECT date("
+                                 "printf('%%04d-%%02d-01', "
+                                     "json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year'), "
+                                     "(COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.quarter'), 1) - 1) * 3 + 1), "
+                                 "'+' || (COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.dayOfQuarter'), 1) - 1) || ' days'))");
+            } else {
+                /* Plain year/month/day. */
+                append_sql(ctx, "(SELECT printf('%%04d-%%02d-%%02d', "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.year'), strftime('%%Y','now')), "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.month'), 1), "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.day'), 1)))");
+            }
         } else {
             /* date(string) - parse date from string */
             append_sql(ctx, "date(");
