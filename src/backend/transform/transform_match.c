@@ -772,8 +772,30 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
         } else {
             if (optional) {
                 sql_from(ctx->unified_builder, "(SELECT 1)", "_gql_anchor");
-                sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
-                         get_graph_table(ctx, "nodes"), alias, "1=1");
+                /* Inline the label check into the LEFT JOIN's ON condition
+                 * so the anchor row produces NULL bindings when no node
+                 * matches the label. The post-JOIN label JOINs below are
+                 * then skipped (they'd inner-join away the anchor). */
+                if (has_labels(node)) {
+                    dynamic_buffer on_buf;
+                    dbuf_init(&on_buf);
+                    for (int li = 0; li < node->labels->count; li++) {
+                        const char *lbl = get_label_string(node->labels->items[li]);
+                        if (!lbl) continue;
+                        char *esc = escape_sql_string(lbl);
+                        if (li > 0) dbuf_append(&on_buf, " AND ");
+                        dbuf_appendf(&on_buf,
+                                     "EXISTS (SELECT 1 FROM node_labels nl WHERE nl.node_id = %s.id AND nl.label = '%s')",
+                                     alias, esc ? esc : lbl);
+                        free(esc);
+                    }
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                             get_graph_table(ctx, "nodes"), alias, dbuf_get(&on_buf));
+                    dbuf_free(&on_buf);
+                } else {
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                             get_graph_table(ctx, "nodes"), alias, "1=1");
+                }
             } else {
                 sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
             }
@@ -844,8 +866,10 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
         }
     }
 
-    /* Add label JOINs if specified - one JOIN per label for multi-label support */
-    if (has_labels(node)) {
+    /* Add label JOINs if specified - one JOIN per label for multi-label support.
+     * Skip when we already inlined the label check into the LEFT JOIN's ON
+     * condition (OPTIONAL MATCH first-node-no-FROM-no-props path above). */
+    if (has_labels(node) && !(optional && !has_from && !has_prop_pairs)) {
         /* Get proper node id reference (handles projected variables from WITH) */
         const char *node_id = get_node_id_ref(ctx, alias, node->variable);
 
