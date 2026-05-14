@@ -67,7 +67,7 @@
     "tests/tck/backends/rust_binding.py": "33c42cf252b87ce341c73c5b6442a018a66d0359dd698cc1dba553a773417c3e",
     "tests/tck/gherkin.py": "4a61280974a71382d38d469d7a04f490bdc527f39a1d265c00ef19e46e6c220e",
     "tests/tck/report.py": "794cdffd8aa35e8470f769565e01f521ef6ec1ca79b83b8e12a76256de2d117a",
-    "tests/tck/runner.py": "78416a1e4cf42e0e7098a3b12911e72317711042cd92ff8d34beb7eb1cb03dca",
+    "tests/tck/runner.py": "ef89c4efed78e13c7f32fbf3cea9e9df623e1b155817d52fa78cebbfd4c9af45",
     "tests/tck/tests/__init__.py": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
     "tests/tck/tests/test_gherkin.py": "823c54601f616cbb42a52eedf1e93faec54eb5036320fad19680e7d2a863b2d4",
     "tests/tck/tests/test_smoke_extension.py": "9e871c8e21662916f119fdc095c5f441b2056b20b508c600456594419d0b5870",

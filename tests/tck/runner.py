@@ -283,10 +283,18 @@ def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N
         raise _BackendErrorAtThen(result.error, result.error_message or "")
     headers = table[0]
     expected_rows = [[parse_value(c) for c in row] for row in table[1:]]
-    # v1: result.rows is opaque single-column payloads from cypher(); we
-    # cannot align by headers until the result format is decoded. Compare
-    # row count and serialized form best-effort.
+    # Align actual columns to the TCK header order by name. cypher()'s JSON
+    # output preserves user-named columns but not user-declared order; if the
+    # backend reports headers, reorder cells so cell[i] matches header[i].
     actual_rows = result.rows
+    if result.headers and len(result.headers) == len(headers):
+        try:
+            index_map = [result.headers.index(h) for h in headers]
+            actual_rows = [[row[i] for i in index_map] for row in actual_rows]
+        except ValueError:
+            # Header name mismatch — fall through with positional comparison
+            # so the mismatch is surfaced via _Mismatch, not silently masked.
+            pass
     if len(actual_rows) != len(expected_rows):
         raise _Mismatch(
             f"row count: expected {len(expected_rows)} got {len(actual_rows)}",
