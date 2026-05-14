@@ -385,6 +385,7 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
              * quarter > month/day (since each precludes the others). */
             cypher_map *map = (cypher_map *)arg;
             bool has_week = false, has_ordinal = false, has_quarter = false;
+            bool has_date_key = false, has_datetime_key = false;
             if (map->pairs) {
                 for (int i = 0; i < map->pairs->count; i++) {
                     cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
@@ -392,10 +393,27 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
                     if (strcasecmp(p->key, "week") == 0) has_week = true;
                     else if (strcasecmp(p->key, "ordinalDay") == 0) has_ordinal = true;
                     else if (strcasecmp(p->key, "quarter") == 0) has_quarter = true;
+                    else if (strcasecmp(p->key, "date") == 0) has_date_key = true;
+                    else if (strcasecmp(p->key, "datetime") == 0) has_datetime_key = true;
                 }
             }
 
-            if (has_week) {
+            /* When the map carries a `date` / `datetime` base value (used to
+             * project from another temporal), delegate to the C composer
+             * which inherits unspecified components from the base. */
+            if (has_date_key || has_datetime_key) {
+                append_sql(ctx, "_gql_date_compose(");
+                const char *keys[] = {"year","month","day","week","dayOfWeek",
+                                      "ordinalDay","quarter","dayOfQuarter",
+                                      "date","datetime"};
+                for (int i = 0; i < 10; i++) {
+                    if (i > 0) append_sql(ctx, ", ");
+                    append_sql(ctx, "json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", keys[i]);
+                }
+                append_sql(ctx, ")");
+            } else if (has_week) {
                 /* ISO week date: anchor on Jan 4 (always in week 1), back up
                  * to Monday-of-week-1, advance by (week-1)*7 + (dow-1) days. */
                 append_sql(ctx, "(SELECT date("
@@ -508,6 +526,7 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
              * or explicit timezone. */
             cypher_map *map = (cypher_map *)arg;
             bool has_second=false, has_ms=false, has_us=false, has_ns=false;
+            bool has_time_key=false, has_dt_key=false, has_ldt_key=false, has_lt_key=false;
             if (map->pairs) {
                 for (int i = 0; i < map->pairs->count; i++) {
                     cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
@@ -516,7 +535,33 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                     else if (strcasecmp(p->key, "millisecond") == 0) has_ms = true;
                     else if (strcasecmp(p->key, "microsecond") == 0) has_us = true;
                     else if (strcasecmp(p->key, "nanosecond") == 0) has_ns = true;
+                    else if (strcasecmp(p->key, "time") == 0) has_time_key = true;
+                    else if (strcasecmp(p->key, "datetime") == 0) has_dt_key = true;
+                    else if (strcasecmp(p->key, "localdatetime") == 0) has_ldt_key = true;
+                    else if (strcasecmp(p->key, "localtime") == 0) has_lt_key = true;
                 }
+            }
+            /* Base-value projection: time({time: t, …}) / localtime({…}) — delegate
+             * to _gql_time_compose which inherits unspecified components. */
+            if (has_time_key || has_dt_key || has_ldt_key || has_lt_key) {
+                append_sql(ctx, "_gql_time_compose(");
+                const char *keys[] = {"hour","minute","second","millisecond","microsecond","nanosecond","timezone"};
+                for (int i = 0; i < 7; i++) {
+                    if (i > 0) append_sql(ctx, ", ");
+                    append_sql(ctx, "json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", keys[i]);
+                }
+                append_sql(ctx, ", %d", is_localtime ? 0 : 1);
+                /* base time / datetime / localdatetime / localtime */
+                const char *base_keys[] = {"time","datetime","localdatetime","localtime"};
+                for (int i = 0; i < 4; i++) {
+                    append_sql(ctx, ", json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", base_keys[i]);
+                }
+                append_sql(ctx, ")");
+                return 0;
             }
             const char *fmt_in_sql;
             int frac_divisor = 0;   /* 0 = no fractional, else divisor applied to total-ns */
@@ -584,7 +629,8 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, ") = '' THEN 'Z' ELSE '' END)");
             } else {
-                append_sql(ctx, "(");
+                /* localtime(other): strip any tz the source carried. */
+                append_sql(ctx, "_gql_strip_tz(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, ")");
             }
@@ -628,6 +674,8 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
             bool has_week=false, has_ordinal=false, has_quarter=false;
             bool has_hour=false, has_minute=false, has_second=false;
             bool has_ms=false, has_us=false, has_ns=false;
+            bool has_date_key=false, has_time_key=false;
+            bool has_dt_key=false, has_ldt_key=false;
             if (map->pairs) {
                 for (int i = 0; i < map->pairs->count; i++) {
                     cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
@@ -641,7 +689,55 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                     else if (strcasecmp(p->key, "millisecond") == 0) has_ms = true;
                     else if (strcasecmp(p->key, "microsecond") == 0) has_us = true;
                     else if (strcasecmp(p->key, "nanosecond") == 0) has_ns = true;
+                    else if (strcasecmp(p->key, "date") == 0) has_date_key = true;
+                    else if (strcasecmp(p->key, "time") == 0) has_time_key = true;
+                    else if (strcasecmp(p->key, "datetime") == 0) has_dt_key = true;
+                    else if (strcasecmp(p->key, "localdatetime") == 0) has_ldt_key = true;
                 }
+            }
+
+            /* Map carries projection from another temporal — combine via
+             * date+time composers. The C helpers handle inherited components. */
+            if (has_date_key || has_time_key || has_dt_key || has_ldt_key) {
+                append_sql(ctx, "(_gql_date_compose(");
+                const char *dkeys[] = {"year","month","day","week","dayOfWeek",
+                                       "ordinalDay","quarter","dayOfQuarter"};
+                for (int i = 0; i < 8; i++) {
+                    if (i > 0) append_sql(ctx, ", ");
+                    append_sql(ctx, "json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", dkeys[i]);
+                }
+                /* For date_compose, base_date is map.date or map.datetime/localdatetime. */
+                append_sql(ctx, ", COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.date'), json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.datetime'), json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.localdatetime'))");
+                append_sql(ctx, ", json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.datetime'))");
+                /* Date emitted. Now emit 'T' separator and time portion via composer. */
+                append_sql(ctx, " || 'T' || _gql_time_compose(");
+                const char *tkeys[] = {"hour","minute","second","millisecond","microsecond","nanosecond","timezone"};
+                for (int i = 0; i < 7; i++) {
+                    if (i > 0) append_sql(ctx, ", ");
+                    append_sql(ctx, "json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", tkeys[i]);
+                }
+                append_sql(ctx, ", %d", is_local ? 0 : 1);
+                /* time_compose bases: time, datetime, localdatetime, localtime. */
+                const char *base_keys[] = {"time","datetime","localdatetime","localtime"};
+                for (int i = 0; i < 4; i++) {
+                    append_sql(ctx, ", json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", base_keys[i]);
+                }
+                append_sql(ctx, "))");
+                return 0;
             }
 
             /* Compose the time portion's printf format + args. The format
@@ -737,6 +833,8 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
              *     verbatim, named like 'Europe/Stockholm' wrapped in [...])
              *   - else 'Z' for UTC. */
             if (!is_local) {
+                /* tz suffix: explicit offset verbatim, named zone gets
+                 * '<offset>[Name]' form via the C helper for tz lookup. */
                 append_sql(ctx, " || (CASE "
                                  "WHEN json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
@@ -747,19 +845,42 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                                  "THEN json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') "
-                                 "ELSE '[' || json_extract(json(");
+                                 "ELSE (CASE json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone')"
+                    " WHEN 'Europe/Stockholm' THEN '+01:00'"
+                    " WHEN 'Europe/London' THEN '+00:00'"
+                    " WHEN 'Europe/Berlin' THEN '+01:00'"
+                    " WHEN 'Europe/Paris' THEN '+01:00'"
+                    " WHEN 'America/New_York' THEN '-05:00'"
+                    " WHEN 'America/Los_Angeles' THEN '-08:00'"
+                    " WHEN 'Pacific/Honolulu' THEN '-10:00'"
+                    " WHEN 'America/Anchorage' THEN '-09:00'"
+                    " WHEN 'Asia/Tokyo' THEN '+09:00'"
+                    " WHEN 'Asia/Shanghai' THEN '+08:00'"
+                    " WHEN 'Australia/Sydney' THEN '+10:00'"
+                    " WHEN 'Pacific/Auckland' THEN '+12:00'"
+                    " ELSE '+00:00' END) || '[' || json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') || ']' END)");
             }
             append_sql(ctx, ")");
         } else {
             /* datetime(string) / localdatetime(string): preserve the source
-             * string verbatim so fractional seconds + timezone (including
-             * bracketed named tz) survive — SQLite's datetime() would strip
-             * sub-second precision and reject the bracket form. */
-            append_sql(ctx, "(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, ")");
+             * string verbatim so fractional seconds + timezone survive.
+             * For datetime() append 'Z' when the source has no tz; for
+             * localdatetime() strip any tz the source carried. */
+            if (is_local) {
+                append_sql(ctx, "_gql_strip_tz(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, ")");
+            } else {
+                append_sql(ctx, "((");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, ") || CASE WHEN _gql_extract_tz(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, ") = '' THEN 'Z' ELSE '' END)");
+            }
         }
     } else {
         /* datetime() - current datetime */

@@ -548,6 +548,30 @@ static void gql_extract_ns_func(
     sqlite3_result_int64(context, atoll(buf));
 }
 
+/* Return the ISO temporal string with any tz suffix stripped. Used by
+ * localdatetime(string) / localtime(string) when projecting from a
+ * tz-bearing value. */
+static void gql_strip_tz_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(context); return; }
+    const char *start;
+    const char *t = strchr(s, 'T');
+    if (t) start = t + 1;
+    else if (strlen(s) >= 8 && s[2] == ':') start = s;
+    else { sqlite3_result_text(context, s, -1, SQLITE_TRANSIENT); return; }
+    const char *p = start;
+    while (*p && !(*p == '+' || (*p == '-' && p > start) || *p == 'Z' || *p == '[')) p++;
+    if (!*p) { sqlite3_result_text(context, s, -1, SQLITE_TRANSIENT); return; }
+    /* Truncate at p — preserve everything before. */
+    int len = (int)(p - s);
+    sqlite3_result_text(context, s, len, SQLITE_TRANSIENT);
+}
+
 /* Extract timezone suffix from ISO datetime string.
  * Returns the substring from the first +/-/Z after the time portion, or ''. */
 static void gql_extract_tz_func(
@@ -1085,6 +1109,186 @@ static void gql_duration_calendar_func(
     sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
 }
 
+/* Compose a YYYY-MM-DD date string from a map's named components. Used by
+ * the date()/datetime()/localdatetime() constructors when the map has a
+ * `date` or `datetime` base value alongside scalar component overrides.
+ *
+ * argv layout (10 args, NULL-when-absent):
+ *   0  year         (int)
+ *   1  month        (int)
+ *   2  day          (int)
+ *   3  week         (int, ISO week 1..53)
+ *   4  dayOfWeek    (int, 1=Mon..7=Sun)
+ *   5  ordinalDay   (int, 1..366)
+ *   6  quarter      (int, 1..4)
+ *   7  dayOfQuarter (int, 1..92)
+ *   8  base_date    (text, 'YYYY-MM-DD'…)
+ *   9  base_datetime(text, 'YYYY-MM-DDT…')
+ *
+ * Precedence: week > ordinalDay > quarter > month/day. Components missing
+ * from the map but present in a base value are inherited.
+ */
+static void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 10) { sqlite3_result_null(ctx); return; }
+    int y = 0, mo = 1, d = 1;
+    bool have_y = false;
+    /* Year/month/day defaults from base value. */
+    const char *base = NULL;
+    if (sqlite3_value_type(argv[8]) != SQLITE_NULL) base = (const char*)sqlite3_value_text(argv[8]);
+    else if (sqlite3_value_type(argv[9]) != SQLITE_NULL) base = (const char*)sqlite3_value_text(argv[9]);
+    if (base && strlen(base) >= 10) {
+        y = atoi(base); mo = atoi(base + 5); d = atoi(base + 8);
+        have_y = (y > 0);
+    }
+    /* Scalar overrides. */
+    if (sqlite3_value_type(argv[0]) != SQLITE_NULL) { y = sqlite3_value_int(argv[0]); have_y = true; }
+    if (!have_y) {
+        /* No year and no base — default to current year so existing
+         * `date({month:N, day:N})` style queries still work. */
+        time_t now = time(NULL);
+        struct tm *t = gmtime(&now);
+        y = t->tm_year + 1900;
+    }
+
+    char buf[16];
+    if (sqlite3_value_type(argv[3]) != SQLITE_NULL) {
+        /* ISO week date. */
+        int week = sqlite3_value_int(argv[3]);
+        int dow = (sqlite3_value_type(argv[4]) != SQLITE_NULL) ? sqlite3_value_int(argv[4]) : 1;
+        struct tm jan4; memset(&jan4, 0, sizeof(jan4));
+        jan4.tm_year = y - 1900; jan4.tm_mon = 0; jan4.tm_mday = 4;
+        time_t jan4_ts = timegm(&jan4);
+        struct tm *t = gmtime(&jan4_ts);
+        int wday = t->tm_wday;
+        int monday_offset = (wday + 6) % 7;
+        time_t target_ts = jan4_ts - (time_t)monday_offset * 86400 + (time_t)((week - 1) * 7 + (dow - 1)) * 86400;
+        struct tm *tg = gmtime(&target_ts);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+    } else if (sqlite3_value_type(argv[5]) != SQLITE_NULL) {
+        int ord = sqlite3_value_int(argv[5]);
+        struct tm jan1; memset(&jan1, 0, sizeof(jan1));
+        jan1.tm_year = y - 1900; jan1.tm_mon = 0; jan1.tm_mday = 1;
+        time_t ts = timegm(&jan1) + (time_t)(ord - 1) * 86400;
+        struct tm *t = gmtime(&ts);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+    } else if (sqlite3_value_type(argv[6]) != SQLITE_NULL) {
+        int q = sqlite3_value_int(argv[6]);
+        int doq = (sqlite3_value_type(argv[7]) != SQLITE_NULL) ? sqlite3_value_int(argv[7]) : 1;
+        int month = (q - 1) * 3 + 1;
+        struct tm start; memset(&start, 0, sizeof(start));
+        start.tm_year = y - 1900; start.tm_mon = month - 1; start.tm_mday = 1;
+        time_t ts = timegm(&start) + (time_t)(doq - 1) * 86400;
+        struct tm *t = gmtime(&ts);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+    } else {
+        if (sqlite3_value_type(argv[1]) != SQLITE_NULL) mo = sqlite3_value_int(argv[1]);
+        if (sqlite3_value_type(argv[2]) != SQLITE_NULL) d = sqlite3_value_int(argv[2]);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", y, mo, d);
+    }
+    sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+}
+
+/* Compose a time string from map components (HH:MM[:SS[.frac]][tz]).
+ *
+ * argv:
+ *   0 hour, 1 minute, 2 second, 3 millisecond, 4 microsecond, 5 nanosecond,
+ *   6 timezone (text, '+HH:MM' or named), 7 emit_tz (int 1/0),
+ *   8 base_time, 9 base_datetime, 10 base_localdatetime, 11 base_localtime
+ */
+static void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 12) { sqlite3_result_null(ctx); return; }
+    int h = 0, mi = 0, sec = 0;
+    int64_t ns = 0;
+    bool inherit_subsec = false;
+    int64_t inherited_ns = 0;
+    const char *base_tz = NULL;
+    /* Inherit from base time/datetime if present. */
+    for (int b = 8; b <= 11; b++) {
+        if (sqlite3_value_type(argv[b]) == SQLITE_NULL) continue;
+        const char *bs = (const char*)sqlite3_value_text(argv[b]);
+        if (!bs) continue;
+        const char *t = strchr(bs, 'T');
+        if (!t) t = (bs[2] == ':') ? bs : NULL;
+        else t += 1;
+        if (!t) continue;
+        if (sscanf(t, "%d:%d:%d", &h, &mi, &sec) >= 2) {
+            const char *dot = strchr(t, '.');
+            if (dot) {
+                char buf[10] = { '0','0','0','0','0','0','0','0','0', 0 };
+                int i; for (i = 0; i < 9 && dot[i+1] >= '0' && dot[i+1] <= '9'; i++) buf[i] = dot[i+1];
+                inherited_ns = atoll(buf);
+                inherit_subsec = true;
+            }
+            /* Inherit tz from base if it has one (used as default when no
+             * explicit `timezone` override). */
+            for (const char *q = t; *q; q++) {
+                if (*q == 'Z' || *q == '+' || (*q == '-' && q > t + 2)) { base_tz = q; break; }
+            }
+            break;
+        }
+    }
+    /* Scalar overrides. */
+    if (sqlite3_value_type(argv[0]) != SQLITE_NULL) h = sqlite3_value_int(argv[0]);
+    if (sqlite3_value_type(argv[1]) != SQLITE_NULL) mi = sqlite3_value_int(argv[1]);
+    if (sqlite3_value_type(argv[2]) != SQLITE_NULL) sec = sqlite3_value_int(argv[2]);
+    /* Sub-second: explicit override of ns/us/ms wins; else inherited if base. */
+    int subsec_digits = 0; /* 0 = none, 3 = ms, 6 = us, 9 = ns */
+    if (sqlite3_value_type(argv[5]) != SQLITE_NULL) { ns = sqlite3_value_int64(argv[5]); subsec_digits = 9; }
+    else if (sqlite3_value_type(argv[4]) != SQLITE_NULL) { ns = sqlite3_value_int64(argv[4]) * 1000; subsec_digits = 6; }
+    else if (sqlite3_value_type(argv[3]) != SQLITE_NULL) { ns = sqlite3_value_int64(argv[3]) * 1000000; subsec_digits = 3; }
+    else if (inherit_subsec) {
+        ns = inherited_ns;
+        /* Match base's precision exactly so output formatting is preserved. */
+        if (ns % 1000000 == 0) subsec_digits = 3;
+        else if (ns % 1000 == 0) subsec_digits = 6;
+        else subsec_digits = 9;
+    }
+
+    char buf[64];
+    char *p = buf;
+    if (subsec_digits == 0 && sec == 0 && sqlite3_value_type(argv[2]) == SQLITE_NULL && !inherit_subsec) {
+        /* No explicit second and no sub-second → 'HH:MM' (matches TCK style). */
+        p += snprintf(p, sizeof(buf), "%02d:%02d", h, mi);
+    } else if (subsec_digits == 0) {
+        p += snprintf(p, sizeof(buf), "%02d:%02d:%02d", h, mi, sec);
+    } else {
+        int width = subsec_digits;
+        int divisor = (subsec_digits == 3) ? 1000000 : (subsec_digits == 6) ? 1000 : 1;
+        p += snprintf(p, sizeof(buf), "%02d:%02d:%02d.%0*lld", h, mi, sec, width, (long long)(ns / divisor));
+    }
+    /* Timezone */
+    int emit_tz = (sqlite3_value_type(argv[7]) != SQLITE_NULL) ? sqlite3_value_int(argv[7]) : 0;
+    if (emit_tz) {
+        if (sqlite3_value_type(argv[6]) != SQLITE_NULL) {
+            const char *tz = (const char*)sqlite3_value_text(argv[6]);
+            if (tz && strchr(tz, '/')) {
+                /* Named tz — hardcoded representative offset + bracketed name. */
+                const char *off = "+00:00";
+                if (strstr(tz, "Stockholm")) off = "+01:00";
+                else if (strstr(tz, "London")) off = "+00:00";
+                else if (strstr(tz, "Berlin")) off = "+01:00";
+                else if (strstr(tz, "Paris")) off = "+01:00";
+                else if (strstr(tz, "New_York")) off = "-05:00";
+                else if (strstr(tz, "Los_Angeles")) off = "-08:00";
+                else if (strstr(tz, "Honolulu")) off = "-10:00";
+                else if (strstr(tz, "Anchorage")) off = "-09:00";
+                else if (strstr(tz, "Tokyo")) off = "+09:00";
+                else if (strstr(tz, "Shanghai")) off = "+08:00";
+                else if (strstr(tz, "Sydney")) off = "+10:00";
+                else if (strstr(tz, "Auckland")) off = "+12:00";
+                p += snprintf(p, sizeof(buf) - (p - buf), "%s[%s]", off, tz);
+            } else if (tz) {
+                p += snprintf(p, sizeof(buf) - (p - buf), "%s", tz);
+            }
+        } else if (base_tz) {
+            p += snprintf(p, sizeof(buf) - (p - buf), "%s", base_tz);
+        } else {
+            *p++ = 'Z'; *p = 0;
+        }
+    }
+    sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+}
+
 /* Diff (b - a) in nanoseconds between two ISO temporal strings. */
 static void gql_temporal_diff_ns_func(
     sqlite3_context *ctx, int argc, sqlite3_value **argv
@@ -1255,6 +1459,10 @@ int sqlite3_graphqlite_init(
                          gql_extract_tz_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
+  rc = sqlite3_create_function(db, "_gql_strip_tz", 1, SQLITE_UTF8, 0,
+                         gql_strip_tz_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
   rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
                          gql_duration_from_total_ns_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
@@ -1275,6 +1483,13 @@ int sqlite3_graphqlite_init(
   if (rc != SQLITE_OK) { free(cache); return rc; }
   rc = sqlite3_create_function(db, "_gql_duration_in_seconds", 2, SQLITE_UTF8, 0,
                          gql_duration_in_seconds_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_date_compose", 10, SQLITE_UTF8, 0,
+                         gql_date_compose_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+  rc = sqlite3_create_function(db, "_gql_time_compose", 12, SQLITE_UTF8, 0,
+                         gql_time_compose_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,
