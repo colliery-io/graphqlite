@@ -532,6 +532,117 @@ static int validate_match_clause(cypher_match *match, const var_type_ctx *vctx,
     return 0;
 }
 
+/* Track names bound by MATCH patterns so CREATE can detect re-binding. */
+typedef struct {
+    const char **names;
+    int count;
+    int cap;
+} name_set;
+
+static void nset_init(name_set *s) { s->names = NULL; s->count = 0; s->cap = 0; }
+static void nset_free(name_set *s) { free(s->names); s->names = NULL; s->count = 0; s->cap = 0; }
+static bool nset_contains(const name_set *s, const char *name) {
+    if (!name) return false;
+    for (int i = 0; i < s->count; i++) {
+        if (s->names[i] && strcmp(s->names[i], name) == 0) return true;
+    }
+    return false;
+}
+static void nset_add(name_set *s, const char *name) {
+    if (!name || nset_contains(s, name)) return;
+    if (s->count >= s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 8;
+        s->names = realloc(s->names, s->cap * sizeof(const char *));
+    }
+    s->names[s->count++] = name;
+}
+
+/* Helper: walk a list of paths (a CREATE/MATCH pattern list) and append all
+ * named node/rel/path variables into `out`. */
+static void collect_pattern_names(ast_list *patterns, name_set *out)
+{
+    if (!patterns) return;
+    for (int i = 0; i < patterns->count; i++) {
+        ast_node *node = patterns->items[i];
+        if (!node) continue;
+        if (node->type == AST_NODE_PATH) {
+            cypher_path *p = (cypher_path *)node;
+            if (p->var_name) nset_add(out, p->var_name);
+            if (!p->elements) continue;
+            for (int j = 0; j < p->elements->count; j++) {
+                ast_node *el = p->elements->items[j];
+                if (!el) continue;
+                if (el->type == AST_NODE_NODE_PATTERN) {
+                    cypher_node_pattern *np = (cypher_node_pattern *)el;
+                    if (np->variable) nset_add(out, np->variable);
+                } else if (el->type == AST_NODE_REL_PATTERN) {
+                    cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+                    if (rp->variable) nset_add(out, rp->variable);
+                }
+            }
+        }
+    }
+}
+
+/* For each NODE_PATTERN / REL_PATTERN in `patterns`, if its variable is
+ * already in `bound`, emit a "VariableAlreadyBound" error.
+ *
+ * Re-binding rules per openCypher:
+ *  - `CREATE (a)` (single-node path) where `a` is already bound → error.
+ *  - `CREATE (a {prop:1})` or `CREATE (a:Label)` where `a` is bound → error.
+ *  - `CREATE (a)-[:R]->(b)` where `a`/`b` are already bound → OK (reference).
+ *  - `CREATE (a)-[r:T]->(b)` where `r` was already bound to a relationship
+ *    variable → error.
+ */
+static int check_create_rebinds(ast_list *patterns, const name_set *bound,
+                                 char **error_message)
+{
+    if (!patterns) return 0;
+    for (int i = 0; i < patterns->count; i++) {
+        ast_node *node = patterns->items[i];
+        if (!node || node->type != AST_NODE_PATH) continue;
+        cypher_path *p = (cypher_path *)node;
+        if (!p->elements) continue;
+
+        /* A path with a single NODE_PATTERN element is a "create this node"
+         * statement — re-binding the only var is always an error. */
+        bool single_node = (p->elements->count == 1 &&
+                            p->elements->items[0] &&
+                            p->elements->items[0]->type == AST_NODE_NODE_PATTERN);
+
+        for (int j = 0; j < p->elements->count; j++) {
+            ast_node *el = p->elements->items[j];
+            if (!el) continue;
+            char *var = NULL;
+            bool has_labels = false, has_props = false;
+            bool is_rel = false;
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *np = (cypher_node_pattern *)el;
+                var = np->variable;
+                has_labels = (np->labels && np->labels->count > 0);
+                has_props  = (np->properties != NULL);
+            } else if (el->type == AST_NODE_REL_PATTERN) {
+                cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+                var = rp->variable;
+                has_labels = (rp->type != NULL || (rp->types && rp->types->count > 0));
+                has_props  = (rp->properties != NULL);
+                is_rel = true;
+            }
+            if (!var || !nset_contains(bound, var)) continue;
+            /* A relationship variable in CREATE always means "create this
+             * relationship" — re-binding is an error. */
+            if (is_rel || single_node || has_labels || has_props) {
+                char buf[200];
+                snprintf(buf, sizeof(buf),
+                         "SyntaxError: VariableAlreadyBound: %s is already bound", var);
+                set_error(error_message, "%s", buf);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int validate_unwind_clause(cypher_unwind *uw, var_type_ctx *vctx_out,
                                    char **error_message)
 {
@@ -561,6 +672,7 @@ int transform_validate_query(cypher_query *query, char **error_message)
     if (!query || !query->clauses) return 0;
     var_type_ctx vctx;
     vctx_init(&vctx);
+    name_set bound; nset_init(&bound);
     int rc = 0;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
@@ -572,17 +684,30 @@ int transform_validate_query(cypher_query *query, char **error_message)
             case AST_NODE_WITH:
                 rc = validate_with_clause((cypher_with *)clause, &vctx, error_message);
                 break;
-            case AST_NODE_MATCH:
-                rc = validate_match_clause((cypher_match *)clause, &vctx, error_message);
+            case AST_NODE_MATCH: {
+                cypher_match *m = (cypher_match *)clause;
+                rc = validate_match_clause(m, &vctx, error_message);
+                collect_pattern_names(m->pattern, &bound);
                 break;
-            case AST_NODE_UNWIND:
-                rc = validate_unwind_clause((cypher_unwind *)clause, &vctx, error_message);
+            }
+            case AST_NODE_UNWIND: {
+                cypher_unwind *u = (cypher_unwind *)clause;
+                rc = validate_unwind_clause(u, &vctx, error_message);
+                if (u->alias) nset_add(&bound, u->alias);
                 break;
+            }
+            case AST_NODE_CREATE: {
+                cypher_create *c = (cypher_create *)clause;
+                rc = check_create_rebinds(c->pattern, &bound, error_message);
+                if (rc == 0) collect_pattern_names(c->pattern, &bound);
+                break;
+            }
             default:
                 break;
         }
         if (rc < 0) break;
     }
+    nset_free(&bound);
     vctx_free(&vctx);
     return rc;
 }
