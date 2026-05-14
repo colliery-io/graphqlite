@@ -132,6 +132,7 @@ TRANSFORM_SRCS = \
 	$(TRANSFORM_DIR)/transform_with.c \
 	$(TRANSFORM_DIR)/transform_unwind.c \
 	$(TRANSFORM_DIR)/transform_expr_ops.c \
+	$(TRANSFORM_DIR)/transform_validate.c \
 	$(TRANSFORM_DIR)/sql_builder.c
 
 # Executor sources

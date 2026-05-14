@@ -16,6 +16,7 @@
 #include "executor/query_patterns.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_validate.h"
 
 /* SQLite custom function: REVERSE(string) - reverses a string */
 static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_value **argv)
@@ -166,7 +167,22 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
             {
                 cypher_query *query = (cypher_query*)ast;
                 CYPHER_DEBUG("Found query node with %d clauses", query->clauses ? query->clauses->count : 0);
-                
+
+                /* GQLITE-T-0230: compile-time argument-type validation.
+                 * Rejects openCypher type violations that the grammar accepts
+                 * (e.g. `RETURN NOT 1`, `RETURN 'a' AND true`) before they
+                 * reach the transform layer. */
+                {
+                    char *validate_err = NULL;
+                    if (transform_validate_query(query, &validate_err) < 0) {
+                        set_result_error(result,
+                                         validate_err ? validate_err
+                                                       : "Validation failed");
+                        if (validate_err) free(validate_err);
+                        return result;
+                    }
+                }
+
                 if (query->clauses) {
                     /* Handle EXPLAIN - return generated SQL and pattern info */
                     if (query->explain) {
