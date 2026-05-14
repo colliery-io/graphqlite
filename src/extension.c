@@ -1371,11 +1371,15 @@ static void gql_normalize_date_func(sqlite3_context *ctx, int argc, sqlite3_valu
     sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
 }
 
-/* Normalize a time string to canonical 'HH:MM[:SS[.fff]][tz]'. */
+/* Normalize a time string to canonical 'HH:MM[:SS[.fff]][tz]'.
+ * Accepts an optional leading 'YYYY-MM-DDT' (datetime input — we extract
+ * just the time portion). */
 static void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc != 1) { sqlite3_result_null(ctx); return; }
     const char *s = (const char*)sqlite3_value_text(argv[0]);
     if (!s) { sqlite3_result_null(ctx); return; }
+    const char *T = strchr(s, 'T');
+    if (T) s = T + 1;
 
     /* Split tz suffix off. */
     const char *p = s;
