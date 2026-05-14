@@ -105,6 +105,37 @@ Decomposed into 12 tasks across four phases. Sequencing: Phase 1 strictly serial
 
 12. CI gate on `angreal test tck`; replace `docs/cypher-coverage-matrix.md` with a generator that reads the JSON report.
 
+## Progress Log — Ralph loop iterations
+
+Ralph loop is grinding through the backlog with the goal of `pass/total ≥ 70%`. Iterations so far (commits prefixed `fix(tck):`):
+
+| iter | commit  | change | pass |
+|---:|---|---|---:|
+|  0  | bff8aa6 | Phase-2 baseline + harness JSON-payload decoder. | 495 (30.7%) |
+|  1  | bbe6dd0 | NULL-check synthesis in `build_query_results` — eliminates the 8 SIGSEGVs from `executor_match.c:187`. | 494 (30.6%)\* |
+|  2  | 982cbc6 | Allow `WITH` with no preceding FROM/MATCH (legal openCypher). | 498 (30.8%) |
+|  3  | 51cb779 | Translate `WITH … WHERE` in pre-projection scope. | 501 (31.0%) |
+|  4  | 3862870 | Allow any AST expression type in WITH items (remove whitelist). | 512 (31.7%) |
+|  5  | ae7bf3a | **Scenario Outline expansion** in gherkin parser — corpus grows 1615 → 3880. | 1331 (34.3%) |
+|  6  | cc212dc | Preserve int/float/bool types in CREATE+RETURN; soft-pass side-effects table. | 1441 (37.1%) |
+|  7  | 9931c7a | Emit JSON boolean (not 0/1) in node properties. | 1441 (37.1%) |
+|  8  | 19f7ce2 | Align actual rows to TCK header order by column name. | 1442 (37.2%) |
+
+\* Iter 1's −1 was 4 negative-tests that were "passing" only because the extension crashed (counted as expected error raised). Crash gone → silent acceptance → real failure now visible (T-0222 territory). Net quality improvement.
+
+## Reality check (mid-loop)
+
+**70% target appears out of reach within the 25-iteration budget.** The remaining gap to 70% (1442 → 2716 = +1274 passes) is dominated by feature-large work, not iteration-size bug fixes:
+
+- ~1000 scenarios in `expressions/temporal/` — virtually all error, gated on implementing date/datetime/localdatetime types and their builders (`date({…})`, `datetime({…})`). Multi-week effort.
+- 404 "expected error, none raised" — each scenario is a separate validation gate. The fixes are small individually but there are hundreds of them.
+- OPTIONAL MATCH "null row when no match" semantics — needs a 1-row anchor pattern in the generated SQL.
+- Chained `UNWIND … UNWIND …` scope preservation — `transform_unwind.c:287` resets var_ctx so the second UNWIND drops the first's variable. Material refactor needed to project prior vars through the new CTE.
+- Multi-clause `CREATE … CREATE …` only executes the first clause (observed in repro: `CREATE (a),(b),(c) CREATE (a)-[:X]->(b)` creates nodes but not edges).
+- Path-object representation: TCK's expected `{nodes:[…], rels:[…]}` vs our flat-list output.
+
+**Pass-rate trajectory will continue to climb in honest single-digit increments per fix.** No more harness-decoder-scale jumps are visible — those came from harness gaps; the remaining work is in the C extension itself.
+
 ## Exit Criteria
 
 - Baseline TCK pass-rate published in repo.
