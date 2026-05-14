@@ -209,19 +209,76 @@ int transform_range_function(cypher_transform_context *ctx, cypher_function_call
         return -1;
     }
 
-    /* Use a recursive CTE to generate the range */
-    /* (WITH RECURSIVE r(x) AS (SELECT start UNION ALL SELECT x+step FROM r WHERE x < end) SELECT json_group_array(x) FROM r) */
-    append_sql(ctx, "(WITH RECURSIVE _range(x) AS (SELECT ");
+    /* Use a recursive CTE to generate the inclusive openCypher range.
+     *
+     * openCypher's range is INCLUSIVE on both ends; the iteration direction
+     * follows the sign of step (default +1). `range(1, 0)` produces []
+     * because there are no valid values; `range(5, 1, -1)` produces
+     * [5,4,3,2,1]. We bake the step constant into the SQL twice (once for
+     * initial guard, once for recursion bound) so the result is correct for
+     * forward and backward ranges. */
+    append_sql(ctx, "(WITH RECURSIVE _range(x) AS ("
+                    "SELECT ");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, " UNION ALL SELECT x + ");
+    append_sql(ctx, " WHERE ((");
+    /* step > 0 AND start <= end */
     if (func_call->args->count == 3) {
         if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
     } else {
         append_sql(ctx, "1");
     }
-    append_sql(ctx, " FROM _range WHERE x < ");
+    append_sql(ctx, ") > 0 AND ");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, " <= ");
     if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-    append_sql(ctx, ") SELECT json_group_array(x) FROM _range)");
+    append_sql(ctx, ") OR ((");
+    /* step < 0 AND start >= end */
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "1");
+    }
+    append_sql(ctx, ") < 0 AND ");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, " >= ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ")"
+                    " UNION ALL SELECT x + (");
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "1");
+    }
+    append_sql(ctx, ") FROM _range WHERE ((");
+    /* recursion guard: (step > 0 AND x+step <= end) OR (step < 0 AND x+step >= end) */
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "1");
+    }
+    append_sql(ctx, ") > 0 AND x + (");
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "1");
+    }
+    append_sql(ctx, ") <= ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") OR ((");
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "1");
+    }
+    append_sql(ctx, ") < 0 AND x + (");
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "1");
+    }
+    append_sql(ctx, ") >= ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ")) SELECT COALESCE(json_group_array(x), json('[]')) FROM _range)");
 
     return 0;
 }
