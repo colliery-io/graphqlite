@@ -466,12 +466,13 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
                 append_sql(ctx, "), '$.day'), 1)))");
             }
         } else {
-            /* date(string) - parse the openCypher date string formats:
-             *   'YYYY-MM-DD' / 'YYYYMMDD'  / 'YYYY-MM' / 'YYYYMM' / 'YYYY'
-             *   ordinal: 'YYYY-DDD' / 'YYYYDDD' (year + day-of-year)
-             *   week: 'YYYY-Www-d' / 'YYYYWwwd' / 'YYYY-Www' / 'YYYYWww'
-             * Normalise to a canonical YYYY-MM-DD via CASE on length/shape
-             * and let SQLite's date() compute. */
+            /* date(value): normalize via the C helper which handles all
+             * ISO date forms (week date, ordinal day, basic/extended). */
+            append_sql(ctx, "_gql_normalize_date(");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, ")");
+        }
+        if (false) {
             append_sql(ctx, "(SELECT date(CASE "
                 /* basic ISO date YYYYMMDD (8 chars, no dash, no W) */
                 "WHEN length(_str)=8 AND substr(_str,5,1) BETWEEN '0' AND '9' "
@@ -493,7 +494,7 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
                     "THEN date(substr(_str,1,4)||'-01-01', "
                         "'+'||(CAST(substr(_str,5,3) AS INTEGER)-1)||' days') "
                 "ELSE _str END) FROM (SELECT (");
-            if (transform_expression(ctx, arg) < 0) return -1;
+            (void)0;
             append_sql(ctx, ") AS _str))");
         }
     } else {
@@ -620,19 +621,17 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
              * source string has no tz suffix, append 'Z' (UTC default) so
              * downstream temporal-diff code applies tz consistently. */
             if (!is_localtime) {
-                /* Append 'Z' if no tz indicator (+/-/Z) appears after the
-                 * leading 'HH:' portion. Use _gql_extract_tz which returns
-                 * '' when no tz is present. */
-                append_sql(ctx, "((");
+                /* Normalize to canonical form and append 'Z' if no tz. */
+                append_sql(ctx, "((_gql_normalize_time(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, ") || CASE WHEN _gql_extract_tz(");
+                append_sql(ctx, ")) || CASE WHEN _gql_extract_tz(_gql_normalize_time(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, ") = '' THEN 'Z' ELSE '' END)");
+                append_sql(ctx, ")) = '' THEN 'Z' ELSE '' END)");
             } else {
-                /* localtime(other): strip any tz the source carried. */
-                append_sql(ctx, "_gql_strip_tz(");
+                /* localtime(other): normalize then strip any tz. */
+                append_sql(ctx, "_gql_strip_tz(_gql_normalize_time(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, ")");
+                append_sql(ctx, "))");
             }
         }
     } else {
@@ -866,20 +865,20 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
             }
             append_sql(ctx, ")");
         } else {
-            /* datetime(string) / localdatetime(string): preserve the source
-             * string verbatim so fractional seconds + timezone survive.
-             * For datetime() append 'Z' when the source has no tz; for
-             * localdatetime() strip any tz the source carried. */
+            /* datetime/localdatetime(string|value): normalize via the C helper
+             * which canonicalizes date and time portions (week date, ordinal,
+             * basic vs extended). Then for datetime() add 'Z' if no tz; for
+             * localdatetime() strip any tz. */
             if (is_local) {
-                append_sql(ctx, "_gql_strip_tz(");
+                append_sql(ctx, "_gql_strip_tz(_gql_normalize_datetime(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, ")");
+                append_sql(ctx, "))");
             } else {
-                append_sql(ctx, "((");
+                append_sql(ctx, "((_gql_normalize_datetime(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, ") || CASE WHEN _gql_extract_tz(");
+                append_sql(ctx, ")) || CASE WHEN _gql_extract_tz(_gql_normalize_datetime(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, ") = '' THEN 'Z' ELSE '' END)");
+                append_sql(ctx, ")) = '' THEN 'Z' ELSE '' END)");
             }
         }
     } else {

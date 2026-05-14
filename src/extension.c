@@ -1289,6 +1289,353 @@ static void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value 
     sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
 }
 
+/* Normalize a date string to canonical YYYY-MM-DD. Accepts:
+ *   YYYY-MM-DD / YYYYMMDD
+ *   YYYY-MM   / YYYYMM            (day defaults to 1)
+ *   YYYY                          (month, day default to 1)
+ *   YYYY-Www-D / YYYYWwwD         (ISO week date, full)
+ *   YYYY-Www   / YYYYWww          (ISO week, dayOfWeek defaults to 1)
+ *   YYYY-DDD  / YYYYDDD           (ordinal day)
+ * Returns NULL on parse failure. */
+static void gql_normalize_date_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(ctx); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(ctx); return; }
+    int len = (int)strlen(s);
+    bool has_W = strchr(s, 'W') != NULL;
+    bool has_dash = strchr(s, '-') != NULL;
+    int y = 0, mo = 1, d = 1;
+    int week = 0, dow = 1, ord = 0;
+    bool from_week = false, from_ord = false;
+
+    if (has_W) {
+        from_week = true;
+        if (has_dash) {
+            int n = sscanf(s, "%d-W%d-%d", &y, &week, &dow);
+            if (n < 2) { sqlite3_result_null(ctx); return; }
+        } else {
+            if (len < 7) { sqlite3_result_null(ctx); return; }
+            char yb[5] = {0}; memcpy(yb, s, 4); y = atoi(yb);
+            char wb[3] = {0}; memcpy(wb, s + 5, 2); week = atoi(wb);
+            if (len >= 8) dow = s[7] - '0';
+        }
+    } else if (has_dash) {
+        if (len == 10 && sscanf(s, "%d-%d-%d", &y, &mo, &d) == 3) { /* ok */ }
+        else if (len == 8) {
+            /* YYYY-DDD ordinal */
+            from_ord = true;
+            if (sscanf(s, "%d-%d", &y, &ord) < 2) { sqlite3_result_null(ctx); return; }
+        } else if (len == 7) {
+            if (sscanf(s, "%d-%d", &y, &mo) < 2) { sqlite3_result_null(ctx); return; }
+            d = 1;
+        } else { sqlite3_result_null(ctx); return; }
+    } else {
+        if (len == 8) {
+            char yb[5]={0}, mob[3]={0}, db[3]={0};
+            memcpy(yb, s, 4); memcpy(mob, s + 4, 2); memcpy(db, s + 6, 2);
+            y = atoi(yb); mo = atoi(mob); d = atoi(db);
+        } else if (len == 7) {
+            /* YYYYDDD ordinal */
+            from_ord = true;
+            char yb[5]={0}, ob[4]={0};
+            memcpy(yb, s, 4); memcpy(ob, s + 4, 3);
+            y = atoi(yb); ord = atoi(ob);
+        } else if (len == 6) {
+            char yb[5]={0}, mob[3]={0};
+            memcpy(yb, s, 4); memcpy(mob, s + 4, 2);
+            y = atoi(yb); mo = atoi(mob); d = 1;
+        } else if (len == 4) {
+            y = atoi(s);
+        } else { sqlite3_result_null(ctx); return; }
+    }
+
+    char buf[16];
+    if (from_week) {
+        struct tm jan4; memset(&jan4, 0, sizeof(jan4));
+        jan4.tm_year = y - 1900; jan4.tm_mon = 0; jan4.tm_mday = 4;
+        time_t jan4_ts = timegm(&jan4);
+        struct tm *t = gmtime(&jan4_ts);
+        int monday_offset = (t->tm_wday + 6) % 7;
+        time_t target = jan4_ts - (time_t)monday_offset * 86400 + (time_t)((week - 1) * 7 + (dow - 1)) * 86400;
+        struct tm *tg = gmtime(&target);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+    } else if (from_ord) {
+        struct tm jan1; memset(&jan1, 0, sizeof(jan1));
+        jan1.tm_year = y - 1900; jan1.tm_mon = 0; jan1.tm_mday = 1;
+        time_t target = timegm(&jan1) + (time_t)(ord - 1) * 86400;
+        struct tm *tg = gmtime(&target);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+    } else {
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", y, mo, d);
+    }
+    sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+}
+
+/* Normalize a time string to canonical 'HH:MM[:SS[.fff]][tz]'. */
+static void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(ctx); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(ctx); return; }
+
+    /* Split tz suffix off. */
+    const char *p = s;
+    const char *tz = NULL;
+    while (*p && !(*p == 'Z' || (*p == '+' && p > s) || (*p == '-' && p > s + 2) || *p == '[')) p++;
+    if (*p) tz = p;
+    int main_len = (int)(p - s);
+
+    /* Parse time portion. */
+    int h = 0, mi = 0, sec = 0;
+    int64_t ns = 0;
+    int subsec_digits = 0;
+    char timepart[32];
+    int copy_len = main_len < 31 ? main_len : 31;
+    memcpy(timepart, s, copy_len);
+    timepart[copy_len] = 0;
+
+    char *dot = strchr(timepart, '.');
+    if (dot) {
+        *dot = 0;
+        const char *frac = dot + 1;
+        int i; char buf[10] = "000000000";
+        for (i = 0; i < 9 && frac[i] >= '0' && frac[i] <= '9'; i++) buf[i] = frac[i];
+        ns = atoll(buf);
+        subsec_digits = i;
+        main_len = (int)(dot - timepart);
+    }
+
+    bool has_colon = strchr(timepart, ':') != NULL;
+    if (has_colon) {
+        int n = sscanf(timepart, "%d:%d:%d", &h, &mi, &sec);
+        if (n < 2) { sqlite3_result_null(ctx); return; }
+    } else {
+        /* Basic form HH, HHMM, HHMMSS. */
+        if (main_len == 2) sscanf(timepart, "%2d", &h);
+        else if (main_len == 4) sscanf(timepart, "%2d%2d", &h, &mi);
+        else if (main_len == 6) sscanf(timepart, "%2d%2d%2d", &h, &mi, &sec);
+        else { sqlite3_result_null(ctx); return; }
+    }
+
+    /* Normalize tz. */
+    char tz_out[64] = "";
+    if (tz) {
+        if (*tz == 'Z') {
+            strcpy(tz_out, "Z");
+        } else if (*tz == '+' || *tz == '-') {
+            /* Possible '+HHMM', '+HH:MM', '+HH', followed by optional '[Name]'. */
+            const char *bracket = strchr(tz, '[');
+            int tz_main_len = bracket ? (int)(bracket - tz) : (int)strlen(tz);
+            char tz_main[16] = {0};
+            int cl = tz_main_len < 15 ? tz_main_len : 15;
+            memcpy(tz_main, tz, cl);
+            tz_main[cl] = 0;
+
+            int oh = 0, om = 0;
+            if (strchr(tz_main + 1, ':')) {
+                sscanf(tz_main + 1, "%d:%d", &oh, &om);
+            } else {
+                if (strlen(tz_main + 1) >= 4) sscanf(tz_main + 1, "%2d%2d", &oh, &om);
+                else sscanf(tz_main + 1, "%d", &oh);
+            }
+            snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d%s", tz_main[0], oh, om, bracket ? bracket : "");
+        } else if (*tz == '[') {
+            snprintf(tz_out, sizeof(tz_out), "%s", tz);
+        }
+    }
+
+    /* Compose output. Drop seconds + sub-second when zero & not in source. */
+    char out[80];
+    char *o = out;
+    if (subsec_digits > 0) {
+        int width = subsec_digits;
+        int64_t shown = ns;
+        /* ns is already padded to 9 digits in the parser; reduce to width. */
+        int divisor = 1;
+        for (int i = width; i < 9; i++) divisor *= 10;
+        shown = ns / divisor;
+        o += snprintf(o, sizeof(out), "%02d:%02d:%02d.%0*lld", h, mi, sec, width, (long long)shown);
+    } else if (has_colon ? (sscanf(s, "%*d:%*d:%d", &sec) == 1) : (main_len == 6)) {
+        o += snprintf(o, sizeof(out), "%02d:%02d:%02d", h, mi, sec);
+    } else {
+        o += snprintf(o, sizeof(out), "%02d:%02d", h, mi);
+    }
+    o += snprintf(o, sizeof(out) - (o - out), "%s", tz_out);
+    sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+}
+
+/* Normalize a datetime string: date portion + 'T' + time portion. */
+static void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(ctx); return; }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(ctx); return; }
+    const char *t = strchr(s, 'T');
+    if (!t) {
+        /* No time portion — defer to date normalize and append T00:00. */
+        sqlite3_value *one[1] = { (sqlite3_value*)argv[0] };
+        gql_normalize_date_func(ctx, 1, one);
+        return;
+    }
+    int date_len = (int)(t - s);
+    char date_part[16] = {0};
+    int cl = date_len < 15 ? date_len : 15;
+    memcpy(date_part, s, cl);
+    date_part[cl] = 0;
+    /* Normalize date portion via the date helper (one-arg). */
+    sqlite3_value *one[1];
+    one[0] = sqlite3_value_dup(argv[0]);
+    /* Manually invoke the date normalizer with the substring. */
+    char normalized_date[16] = {0};
+    {
+        /* Re-implement the date normalize logic inline for the substring. */
+        const char *ds = date_part;
+        int len = (int)strlen(ds);
+        bool has_W = strchr(ds, 'W') != NULL;
+        bool has_dash = strchr(ds, '-') != NULL;
+        int y = 0, mo = 1, d = 1, week = 0, dow = 1, ord = 0;
+        bool from_week = false, from_ord = false;
+        if (has_W) {
+            from_week = true;
+            if (has_dash) {
+                int n = sscanf(ds, "%d-W%d-%d", &y, &week, &dow);
+                if (n < 2) goto bad;
+            } else {
+                if (len < 7) goto bad;
+                char yb[5] = {0}; memcpy(yb, ds, 4); y = atoi(yb);
+                char wb[3] = {0}; memcpy(wb, ds + 5, 2); week = atoi(wb);
+                if (len >= 8) dow = ds[7] - '0';
+            }
+        } else if (has_dash) {
+            if (len == 10 && sscanf(ds, "%d-%d-%d", &y, &mo, &d) == 3) { /* ok */ }
+            else if (len == 8) { from_ord = true; sscanf(ds, "%d-%d", &y, &ord); }
+            else if (len == 7) sscanf(ds, "%d-%d", &y, &mo);
+            else goto bad;
+        } else {
+            if (len == 8) {
+                char yb[5]={0}, mob[3]={0}, db[3]={0};
+                memcpy(yb, ds, 4); memcpy(mob, ds + 4, 2); memcpy(db, ds + 6, 2);
+                y = atoi(yb); mo = atoi(mob); d = atoi(db);
+            } else if (len == 7) {
+                from_ord = true;
+                char yb[5]={0}, ob[4]={0};
+                memcpy(yb, ds, 4); memcpy(ob, ds + 4, 3);
+                y = atoi(yb); ord = atoi(ob);
+            } else if (len == 6) {
+                char yb[5]={0}, mob[3]={0};
+                memcpy(yb, ds, 4); memcpy(mob, ds + 4, 2);
+                y = atoi(yb); mo = atoi(mob);
+            } else if (len == 4) {
+                y = atoi(ds);
+            } else goto bad;
+        }
+        if (from_week) {
+            struct tm jan4; memset(&jan4, 0, sizeof(jan4));
+            jan4.tm_year = y - 1900; jan4.tm_mon = 0; jan4.tm_mday = 4;
+            time_t ts = timegm(&jan4);
+            struct tm *tt = gmtime(&ts);
+            int monday_off = (tt->tm_wday + 6) % 7;
+            time_t target = ts - (time_t)monday_off * 86400 + (time_t)((week - 1) * 7 + (dow - 1)) * 86400;
+            struct tm *tg = gmtime(&target);
+            snprintf(normalized_date, sizeof(normalized_date), "%04d-%02d-%02d",
+                     tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+        } else if (from_ord) {
+            struct tm jan1; memset(&jan1, 0, sizeof(jan1));
+            jan1.tm_year = y - 1900; jan1.tm_mon = 0; jan1.tm_mday = 1;
+            time_t target = timegm(&jan1) + (time_t)(ord - 1) * 86400;
+            struct tm *tg = gmtime(&target);
+            snprintf(normalized_date, sizeof(normalized_date), "%04d-%02d-%02d",
+                     tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+        } else {
+            snprintf(normalized_date, sizeof(normalized_date), "%04d-%02d-%02d", y, mo, d);
+        }
+        goto ok;
+    bad:
+        sqlite3_value_free(one[0]);
+        sqlite3_result_null(ctx);
+        return;
+    ok: ;
+    }
+    sqlite3_value_free(one[0]);
+
+    /* Normalize time portion: rebuild argv with just the time portion. */
+    sqlite3_value *tv = sqlite3_value_dup(argv[0]);
+    sqlite3_value_free(tv);
+    /* Just call our time normalizer inline by allocating a value. */
+    /* Simpler: manually do the time normalize here. */
+    const char *time_str = t + 1;
+    /* Re-use same logic: find tz, parse h/mi/sec/ns, compose. */
+    {
+        const char *p = time_str;
+        const char *tz_start = NULL;
+        while (*p && !(*p == 'Z' || (*p == '+' && p > time_str) || (*p == '-' && p > time_str + 2) || *p == '[')) p++;
+        if (*p) tz_start = p;
+        int main_len = (int)(p - time_str);
+
+        int h = 0, mi = 0, sec = 0;
+        int64_t ns = 0;
+        int subsec_digits = 0;
+        bool has_seconds = false;
+        char timepart[32] = {0};
+        int cl2 = main_len < 31 ? main_len : 31;
+        memcpy(timepart, time_str, cl2);
+
+        char *dot2 = strchr(timepart, '.');
+        if (dot2) {
+            *dot2 = 0;
+            const char *frac = dot2 + 1;
+            int i; char buf[10] = "000000000";
+            for (i = 0; i < 9 && frac[i] >= '0' && frac[i] <= '9'; i++) buf[i] = frac[i];
+            ns = atoll(buf);
+            subsec_digits = i;
+            main_len = (int)(dot2 - timepart);
+        }
+
+        bool has_colon = strchr(timepart, ':') != NULL;
+        if (has_colon) {
+            int n = sscanf(timepart, "%d:%d:%d", &h, &mi, &sec);
+            has_seconds = (n >= 3);
+        } else {
+            if (main_len == 2) sscanf(timepart, "%2d", &h);
+            else if (main_len == 4) sscanf(timepart, "%2d%2d", &h, &mi);
+            else if (main_len == 6) { sscanf(timepart, "%2d%2d%2d", &h, &mi, &sec); has_seconds = true; }
+            else { sqlite3_result_null(ctx); return; }
+        }
+
+        char tz_out[64] = "";
+        if (tz_start) {
+            if (*tz_start == 'Z') strcpy(tz_out, "Z");
+            else if (*tz_start == '+' || *tz_start == '-') {
+                const char *bracket = strchr(tz_start, '[');
+                int tz_main_len = bracket ? (int)(bracket - tz_start) : (int)strlen(tz_start);
+                char tz_main[16] = {0};
+                int xl = tz_main_len < 15 ? tz_main_len : 15;
+                memcpy(tz_main, tz_start, xl);
+                int oh = 0, om = 0;
+                if (strchr(tz_main + 1, ':')) sscanf(tz_main + 1, "%d:%d", &oh, &om);
+                else if (strlen(tz_main + 1) >= 4) sscanf(tz_main + 1, "%2d%2d", &oh, &om);
+                else sscanf(tz_main + 1, "%d", &oh);
+                snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d%s", tz_main[0], oh, om, bracket ? bracket : "");
+            } else if (*tz_start == '[') snprintf(tz_out, sizeof(tz_out), "%s", tz_start);
+        }
+
+        char out[96];
+        char *o = out;
+        o += snprintf(o, sizeof(out), "%sT", normalized_date);
+        if (subsec_digits > 0) {
+            int width = subsec_digits;
+            int divisor = 1;
+            for (int i = width; i < 9; i++) divisor *= 10;
+            o += snprintf(o, sizeof(out) - (o - out), "%02d:%02d:%02d.%0*lld",
+                          h, mi, sec, width, (long long)(ns / divisor));
+        } else if (has_seconds) {
+            o += snprintf(o, sizeof(out) - (o - out), "%02d:%02d:%02d", h, mi, sec);
+        } else {
+            o += snprintf(o, sizeof(out) - (o - out), "%02d:%02d", h, mi);
+        }
+        o += snprintf(o, sizeof(out) - (o - out), "%s", tz_out);
+        sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+    }
+}
+
 /* Diff (b - a) in nanoseconds between two ISO temporal strings. */
 static void gql_temporal_diff_ns_func(
     sqlite3_context *ctx, int argc, sqlite3_value **argv
@@ -1461,6 +1808,18 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "_gql_strip_tz", 1, SQLITE_UTF8, 0,
                          gql_strip_tz_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_normalize_date", 1, SQLITE_UTF8, 0,
+                         gql_normalize_date_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_normalize_time", 1, SQLITE_UTF8, 0,
+                         gql_normalize_time_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_normalize_datetime", 1, SQLITE_UTF8, 0,
+                         gql_normalize_datetime_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
