@@ -557,6 +557,12 @@ agtype_value* create_property_agtype_value(const char* value)
         }
     }
     
+    /* JSON list/map values get parsed so RETURN of a list-typed property
+     * emits as a JSON array, not as a quoted string. */
+    if (value[0] == '[' || value[0] == '{') {
+        return agtype_value_create_json(value);
+    }
+
     /* Default to string */
     return agtype_value_create_string(value);
 }
