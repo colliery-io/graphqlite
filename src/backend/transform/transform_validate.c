@@ -72,10 +72,13 @@ static const char *literal_type_name(const ast_node *e)
 
 /* A literal is "definitely not boolean" if it's a non-NULL literal of any
  * other type. NULL is acceptable because openCypher's three-valued logic
- * allows it everywhere. */
+ * allows it everywhere. List/map literals are also rejected. */
 static bool literal_is_non_boolean(const ast_node *e)
 {
-    if (!e || e->type != AST_NODE_LITERAL) return false;
+    if (!e) return false;
+    /* Composite literals — definitely not boolean. */
+    if (e->type == AST_NODE_LIST || e->type == AST_NODE_MAP) return true;
+    if (e->type != AST_NODE_LITERAL) return false;
     const cypher_literal *lit = (const cypher_literal *)e;
     switch (lit->literal_type) {
         case LITERAL_BOOLEAN:
@@ -87,6 +90,15 @@ static bool literal_is_non_boolean(const ast_node *e)
             return true;
     }
     return false;
+}
+
+/* Type name for a literal-or-composite node (returns "Integer", "List", etc.) */
+static const char *expr_type_name(const ast_node *e)
+{
+    if (!e) return "expression";
+    if (e->type == AST_NODE_LIST) return "List";
+    if (e->type == AST_NODE_MAP)  return "Map";
+    return literal_type_name(e);
 }
 
 /* ---- variable-type tracker ------------------------------------------ */
@@ -201,7 +213,7 @@ static int validate_not_expr(cypher_not_expr *not_expr, char **error_message)
         char buf[256];
         snprintf(buf, sizeof(buf),
                  "SyntaxError: InvalidArgumentType: Type mismatch: expected Boolean but was %s",
-                 literal_type_name(not_expr->expr));
+                 expr_type_name(not_expr->expr));
         *error_message = strdup(buf);
         return -1;
     }
@@ -222,7 +234,7 @@ static int validate_binary_op(cypher_binary_op *bop, char **error_message)
             char buf[256];
             snprintf(buf, sizeof(buf),
                      "SyntaxError: InvalidArgumentType: Type mismatch: expected Boolean but was %s",
-                     literal_type_name(bop->left));
+                     expr_type_name(bop->left));
             set_error(error_message, "%s", buf);
             return -1;
         }
@@ -230,7 +242,7 @@ static int validate_binary_op(cypher_binary_op *bop, char **error_message)
             char buf[256];
             snprintf(buf, sizeof(buf),
                      "SyntaxError: InvalidArgumentType: Type mismatch: expected Boolean but was %s",
-                     literal_type_name(bop->right));
+                     expr_type_name(bop->right));
             set_error(error_message, "%s", buf);
             return -1;
         }

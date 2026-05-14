@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Phase D: Pattern quantifier semantic validation (~20 scenarios)"
 short_code: "GQLITE-T-0233"
 created_at: 2026-05-14T01:54:04.578348+00:00
-updated_at: 2026-05-14T01:54:04.578348+00:00
+updated_at: 2026-05-14T09:18:33.596604+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -41,6 +41,10 @@ Extend the validation pass from Phase A to also check quantifier predicates' lis
 ## Affected scenarios (clusters)
 
 - expressions/quantifier/* (~20)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
