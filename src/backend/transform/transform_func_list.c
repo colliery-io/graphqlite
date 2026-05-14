@@ -560,6 +560,12 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
 {
     CYPHER_DEBUG("Transforming datetime() function");
 
+    /* datetime() emits a `Z` (UTC) suffix or explicit timezone; localdatetime()
+     * never does. We pick the right behavior based on the original function
+     * name. */
+    bool is_local = (func_call->function_name &&
+                     strcasecmp(func_call->function_name, "localdatetime") == 0);
+
     if (func_call->args && func_call->args->count > 0) {
         ast_node *arg = func_call->args->items[0];
         if (arg->type == AST_NODE_MAP) {
@@ -671,7 +677,27 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '%s'), 0)", frac_arg);
             }
-            append_sql(ctx, "))");
+            append_sql(ctx, ")");
+            /* datetime() (not localdatetime) appends a timezone suffix:
+             *   - the explicit '$.timezone' if provided (offset like '+01:00'
+             *     verbatim, named like 'Europe/Stockholm' wrapped in [...])
+             *   - else 'Z' for UTC. */
+            if (!is_local) {
+                append_sql(ctx, " || (CASE "
+                                 "WHEN json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone') IS NULL THEN 'Z' "
+                                 "WHEN substr(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone'),1,1) IN ('+','-') "
+                                 "THEN json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone') "
+                                 "ELSE '[' || json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone') || ']' END)");
+            }
+            append_sql(ctx, ")");
         } else {
             /* datetime(string) */
             append_sql(ctx, "datetime(");
