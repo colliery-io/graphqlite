@@ -53,16 +53,41 @@ Variables and expressions whose type cannot be statically determined are skipped
 
 ## Acceptance Criteria
 
-## Acceptance Criteria
+- [x] Validation logic implemented in `src/backend/transform/transform_validate.{c,h}` + wiring in `src/backend/executor/cypher_executor.c` and `Makefile`.
+- [x] Emits `SyntaxError: InvalidArgumentType: Type mismatch: expected Boolean but was <Type>` per TCK convention.
+- [x] No regression on existing passing scenarios (fail count dropped by exactly the same as pass increase; error/skipped unchanged).
+- [x] Baseline JSON regenerated; pass count 1466 → 1507 (+41); pass rate 37.8% → 38.8%.
 
-## Acceptance Criteria
+## Resolution — 2026-05-14
 
-## Acceptance Criteria
+Landed as commit `c60146e` (close-out in `b9f6f25`).
 
-- [ ] Validation logic implemented in `src/backend/transform/` (likely a new file `transform_validate.c` plus wiring).
-- [ ] Validation emits the openCypher-expected error class (`SyntaxError` or `TypeError`) with `InvalidArgumentType` / `InvalidArgumentValue` codes per TCK convention.
-- [ ] No regression on existing passing scenarios.
-- [ ] Baseline JSON regenerated and pass-count delta recorded in the closeout note.
+**Files:**
+- `src/include/transform/transform_validate.h` — public interface (`transform_validate_query`).
+- `src/backend/transform/transform_validate.c` — recursive AST walker for compile-time type checks.
+- `src/backend/executor/cypher_executor.c` — wired the call into the query execution path before transform/SQL.
+- `Makefile` — added the new translation unit.
+
+**What's validated:**
+- `NOT <e>` where `<e>` is a non-boolean, non-null literal.
+- `<e> AND/OR/XOR <e>` where either operand is a non-boolean, non-null literal.
+- Recursive walk through function call args, list elements, IS NULL operands.
+- Walked from every RETURN/WITH/MATCH-WHERE clause.
+
+**What's NOT validated (deferred):**
+- Comparison operators (`=`, `<>`, `<`, etc.) on heterogeneous literal types — saved for a more careful pass once the simpler rejections are in.
+- Variables and expressions whose type isn't statically obvious. By design — avoids false positives. Means `WITH 1 AS x RETURN NOT x` does NOT error (we don't know x's type). TCK's negative tests use literals precisely so this is captured for the in-scope cases.
+
+**Verification** — 3880-scenario baseline, prior `19f7ce2` → this commit:
+
+| metric | before | after | delta |
+| --- | ---: | ---: | ---: |
+| pass    | 1466 | **1507** | **+41** |
+| fail    | 1432 | 1391 | -41 |
+| error   |  905 |  905 |  0 |
+| skipped |   77 |   77 |  0 |
+
+41 of the projected ~150 unlocked — the rest are scenarios where the operand is a *variable* or *expression* (not a literal), so the pass skipped them by design. Those will get caught when Phase B (function arg validation) and Phase C (list/map function validation) land; some require runtime type checks rather than compile-time.
 
 ## Parent
 Backlog item filed under initiative [[GQLITE-I-0037]] (openCypher TCK Conformance Audit).
