@@ -1274,13 +1274,13 @@ int transform_duration_between_function(cypher_transform_context *ctx, cypher_fu
         return -1;
     }
 
-    /* Build openCypher Duration JSON: ISO 8601 + month/day/second/ns components.
-     * The C helper handles signed decomposition and ISO formatting. */
-    append_sql(ctx, "json(_gql_duration_from_total_ns(_gql_temporal_diff_ns(");
+    /* Calendar-aware Duration: years/months from date diff with borrowing,
+     * days/time from sub-month diff, ISO 8601 formatted by C helper. */
+    append_sql(ctx, "json(_gql_duration_calendar(");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
     append_sql(ctx, ", ");
     if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-    append_sql(ctx, ")))");
+    append_sql(ctx, "))");
 
     return 0;
 }
@@ -1299,16 +1299,22 @@ int transform_duration_in_function(cypher_transform_context *ctx, cypher_functio
         return -1;
     }
 
-    /* All variants produce an openCypher Duration JSON object. The variant
-     * affects which fields are populated (months, days, or seconds-only).
-     * We always emit a JSON with `_iso8601` so the comparator can compare
-     * against the canonical 'PT…S' / 'PnD' / 'PnYnM' form. */
+    /* All variants delegate to a dedicated C helper that knows the
+     * mixed-type rules (e.g. inDays of a localtime returns PT0S). */
     bool in_seconds = strcasecmp(func_call->function_name, "duration.inSeconds") == 0 ||
                       strcasecmp(func_call->function_name, "durationInSeconds") == 0;
     bool in_days    = strcasecmp(func_call->function_name, "duration.inDays") == 0 ||
                       strcasecmp(func_call->function_name, "durationInDays") == 0;
-    /* inMonths handled in the ELSE below. */
-
+    const char *helper = in_seconds ? "_gql_duration_in_seconds"
+                       : in_days    ? "_gql_duration_in_days"
+                                    : "_gql_duration_in_months";
+    append_sql(ctx, "json(%s(", helper);
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, "))");
+    return 0;
+    /* Dead code below — old SQL-based variant kept for reference. */
     if (in_seconds) {
         /* Total elapsed nanoseconds as a PT-form Duration. The C helper
          * formats hours/minutes/seconds and populates accessor fields. */

@@ -713,6 +713,370 @@ static void gql_duration_from_total_ns_func(
     sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
 }
 
+/* Decomposed parse of an ISO temporal string. */
+typedef struct {
+    bool has_date;
+    bool has_time;
+    int y, mo, d;
+    int h, mi, sec;
+    int64_t ns;
+    int tz_offset_min;
+} tparts;
+
+static bool parse_temporal_parts(const char *s, tparts *p) {
+    memset(p, 0, sizeof(*p));
+    if (!s) return false;
+    p->mo = 1; p->d = 1;
+    const char *time_start = NULL;
+    if (strlen(s) >= 10 && s[4] == '-' &&
+        sscanf(s, "%d-%d-%d", &p->y, &p->mo, &p->d) == 3) {
+        p->has_date = true;
+        if (s[10] == 'T' || s[10] == ' ') time_start = s + 11;
+    } else if (strlen(s) >= 5 && s[2] == ':') {
+        time_start = s;
+    } else {
+        return false;
+    }
+    if (time_start) {
+        int r = sscanf(time_start, "%d:%d:%d", &p->h, &p->mi, &p->sec);
+        if (r >= 2) p->has_time = true;
+        if (r < 3) p->sec = 0;
+        const char *dot = strchr(time_start, '.');
+        if (dot) {
+            char buf[10] = { '0','0','0','0','0','0','0','0','0', 0 };
+            int i;
+            for (i = 0; i < 9 && dot[i + 1] >= '0' && dot[i + 1] <= '9'; i++)
+                buf[i] = dot[i + 1];
+            p->ns = atoll(buf);
+        }
+        /* parse tz */
+        const char *tz = NULL;
+        for (const char *q = (dot ? dot + 1 : time_start); *q; q++) {
+            if (*q == 'Z' || *q == '+' || (*q == '-' && q > time_start + 2)) {
+                tz = q; break;
+            }
+        }
+        if (tz) {
+            if (*tz == 'Z') p->tz_offset_min = 0;
+            else {
+                int sign = (*tz == '+') ? 1 : -1;
+                int oh = 0, om = 0;
+                if (sscanf(tz + 1, "%d:%d", &oh, &om) >= 1)
+                    p->tz_offset_min = sign * (oh * 60 + om);
+            }
+        }
+    }
+    return true;
+}
+
+static int days_in_month_c(int year, int month) {
+    static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    if (month == 2) {
+        bool leap = (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0);
+        return leap ? 29 : 28;
+    }
+    if (month < 1 || month > 12) return 30;
+    return dim[month - 1];
+}
+
+/* Compute openCypher Duration components between two temporals.
+ * Date-bearing inputs use calendar arithmetic (years, months, days with
+ * borrowing). Time-bearing inputs contribute a time delta. When one side
+ * is missing a date or time component, the result borrows zero for that
+ * component. Components share sign per-section (date and time may have
+ * opposite signs to match TCK examples like 'P-27DT-21H-40M-32.142S'). */
+static int64_t time_ns_of(const tparts *p) {
+    if (!p->has_time) return 0;
+    int64_t NS = 1000000000LL;
+    int64_t t = (int64_t)p->h * 3600LL * NS + (int64_t)p->mi * 60LL * NS +
+                (int64_t)p->sec * NS + p->ns;
+    return t;
+}
+
+/* Time-of-day in nanoseconds, with timezone adjusted to UTC. Used only when
+ * both inputs are datetimes and we want true elapsed UTC time (e.g., DST
+ * transitions like Europe/Stockholm 23:00+02 → 04:00+01 = 6h, not 5h). */
+static int64_t time_ns_of_utc(const tparts *p) {
+    int64_t NS = 1000000000LL;
+    int64_t t = time_ns_of(p);
+    if (p->has_time && p->has_date) t -= (int64_t)p->tz_offset_min * 60LL * NS;
+    return t;
+}
+
+/* Strict ordering of temporals — by date if both have one, else by
+ * time-of-day (date-less inputs sort as if at 1970-01-01). */
+static int compare_temporal(const tparts *a, const tparts *b) {
+    if (a->has_date && b->has_date) {
+        if (a->y != b->y) return a->y - b->y;
+        if (a->mo != b->mo) return a->mo - b->mo;
+        if (a->d != b->d) return a->d - b->d;
+    } else if (a->has_date != b->has_date) {
+        /* Mixed (date-only vs time-only): order by time-of-day only. */
+    }
+    int64_t ta = time_ns_of(a), tb = time_ns_of(b);
+    if (ta < tb) return -1;
+    if (ta > tb) return 1;
+    return 0;
+}
+
+static void compute_calendar_duration(const tparts *a, const tparts *b,
+                                      int *out_months, int *out_days,
+                                      int64_t *out_time_ns) {
+    /* Pick (lo, hi) so the diff is non-negative; negate at the end if we
+     * swapped. This matches Java Period.between semantics where date and
+     * time components share sign per-section. */
+    int cmp = compare_temporal(a, b);
+    bool forward = (cmp <= 0);
+    const tparts *lo = forward ? a : b;
+    const tparts *hi = forward ? b : a;
+
+    int y = 0, m = 0, d = 0;
+    int64_t time_ns = 0;
+    int64_t NS = 1000000000LL;
+
+    if (lo->has_date && hi->has_date) {
+        y = hi->y - lo->y; m = hi->mo - lo->mo; d = hi->d - lo->d;
+        if (d < 0) {
+            int pm = hi->mo - 1, py = hi->y;
+            if (pm == 0) { pm = 12; py -= 1; }
+            d += days_in_month_c(py, pm);
+            m -= 1;
+        }
+        if (m < 0) { m += 12; y -= 1; }
+    }
+
+    /* Apply tz normalization only when BOTH sides have a time portion. When
+     * only one side has a time (e.g. date vs datetime), the diff is computed
+     * using the local clock face — that matches TCK expectations like
+     * 'P30Y9M10DT21H40M32.142S' for date('…') → datetime('…+0100'). */
+    if (lo->has_time && hi->has_time) {
+        time_ns = time_ns_of_utc(hi) - time_ns_of_utc(lo);
+    } else {
+        time_ns = time_ns_of(hi) - time_ns_of(lo);
+    }
+    /* Borrow a day into the time portion when time is negative but the
+     * calendar diff has at least one day — keeps components same-signed
+     * within a (lo, hi) forward pair. */
+    if (time_ns < 0 && d > 0) {
+        d -= 1;
+        time_ns += 86400LL * NS;
+    }
+    /* Borrow a month → ~30 days; only triggers when m > 0 and d == 0 and
+     * time_ns < 0 (rare, mostly defensive). */
+    if (time_ns < 0 && d == 0 && m > 0) {
+        /* Borrow from month — use prev-month length of hi. */
+        int pm = hi->mo - 1, py = hi->y;
+        if (pm == 0) { pm = 12; py -= 1; }
+        int dim = days_in_month_c(py, pm);
+        m -= 1;
+        d = dim - 1;
+        time_ns += 86400LL * NS;
+    }
+
+    if (!forward) { y = -y; m = -m; d = -d; time_ns = -time_ns; }
+
+    *out_months = y * 12 + m;
+    *out_days = d;
+    *out_time_ns = time_ns;
+}
+
+/* Format ISO 8601 Duration `PnYnMnDTnHnMnS` with per-component signs.
+ * Each non-zero component appears; if every component is zero, output PT0S. */
+static void format_iso_duration(int total_months, int days,
+                                 int64_t time_ns, char *out, size_t cap) {
+    int years = total_months / 12;
+    int months = total_months - years * 12;
+    /* Time components (truncate toward zero so signs align). */
+    int64_t rem = time_ns;
+    int64_t hours = rem / (3600LL * 1000000000LL);
+    rem -= hours * 3600LL * 1000000000LL;
+    int64_t mins = rem / (60LL * 1000000000LL);
+    rem -= mins * 60LL * 1000000000LL;
+    int64_t isec = rem / 1000000000LL;
+    int64_t subns = rem - isec * 1000000000LL;
+
+    char *p = out;
+    char *end = out + cap;
+    *p++ = 'P';
+    bool any = false;
+    if (years)  { p += snprintf(p, end - p, "%dY", years); any = true; }
+    if (months) { p += snprintf(p, end - p, "%dM", months); any = true; }
+    if (days)   { p += snprintf(p, end - p, "%dD", days); any = true; }
+    bool any_time = hours || mins || isec || subns;
+    if (any_time) {
+        *p++ = 'T';
+        if (hours) { p += snprintf(p, end - p, "%lldH", (long long)hours); }
+        if (mins)  { p += snprintf(p, end - p, "%lldM", (long long)mins); }
+        if (isec || subns) {
+            if (subns) {
+                char frac[12];
+                int64_t abs_sub = subns < 0 ? -subns : subns;
+                snprintf(frac, sizeof(frac), "%09lld", (long long)abs_sub);
+                int flen = 9;
+                while (flen > 0 && frac[flen - 1] == '0') flen--;
+                frac[flen] = 0;
+                bool neg = (isec < 0) || (isec == 0 && subns < 0);
+                int64_t abs_isec = isec < 0 ? -isec : isec;
+                p += snprintf(p, end - p, "%s%lld.%sS", neg ? "-" : "",
+                              (long long)abs_isec, frac);
+            } else {
+                p += snprintf(p, end - p, "%lldS", (long long)isec);
+            }
+        }
+        any = true;
+    }
+    if (!any) { *p++ = 'T'; *p++ = '0'; *p++ = 'S'; }
+    *p = 0;
+}
+
+/* duration.inDays — total whole days between two temporals.
+ * Returns 0 (i.e., PT0S Duration) when either side lacks a date. */
+static void gql_duration_in_days_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    const char *sa = (const char*)sqlite3_value_text(argv[0]);
+    const char *sb = (const char*)sqlite3_value_text(argv[1]);
+    tparts a, b;
+    if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) { sqlite3_result_null(ctx); return; }
+    int64_t days = 0;
+    if (a.has_date && b.has_date) {
+        struct tm ta, tb;
+        memset(&ta, 0, sizeof(ta)); memset(&tb, 0, sizeof(tb));
+        ta.tm_year = a.y - 1900; ta.tm_mon = a.mo - 1; ta.tm_mday = a.d;
+        tb.tm_year = b.y - 1900; tb.tm_mon = b.mo - 1; tb.tm_mday = b.d;
+        time_t epa = timegm(&ta), epb = timegm(&tb);
+        days = (epb - epa) / 86400;
+    }
+    char iso[64];
+    if (days == 0) snprintf(iso, sizeof(iso), "PT0S");
+    else snprintf(iso, sizeof(iso), "P%lldD", (long long)days);
+    char json[200];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":0,\"days\":%lld,\"seconds\":0,\"nanosecondsOfSecond\":0}",
+        iso, (long long)days);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
+/* duration.inMonths — calendar months between two date-bearing temporals.
+ * Returns PT0S when either side lacks a date. */
+static void gql_duration_in_months_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    const char *sa = (const char*)sqlite3_value_text(argv[0]);
+    const char *sb = (const char*)sqlite3_value_text(argv[1]);
+    tparts a, b;
+    if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) { sqlite3_result_null(ctx); return; }
+    int total_months = 0;
+    if (a.has_date && b.has_date) {
+        int cmp = compare_temporal(&a, &b);
+        bool forward = (cmp <= 0);
+        const tparts *lo = forward ? &a : &b;
+        const tparts *hi = forward ? &b : &a;
+        int y = hi->y - lo->y, m = hi->mo - lo->mo, dd = hi->d - lo->d;
+        if (dd < 0) m -= 1;
+        if (m < 0) { m += 12; y -= 1; }
+        total_months = y * 12 + m;
+        if (!forward) total_months = -total_months;
+    }
+    int years = total_months / 12, months = total_months - years * 12;
+    char iso[64];
+    if (total_months == 0) snprintf(iso, sizeof(iso), "PT0S");
+    else {
+        char *p = iso; *p++ = 'P';
+        if (years) p += snprintf(p, sizeof(iso) - (p - iso), "%dY", years);
+        if (months) p += snprintf(p, sizeof(iso) - (p - iso), "%dM", months);
+        *p = 0;
+    }
+    char json[200];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":%d,\"days\":0,\"seconds\":0,\"nanosecondsOfSecond\":0}",
+        iso, total_months);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
+/* duration.inSeconds — total elapsed seconds, PT-form. */
+static void gql_duration_in_seconds_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    const char *sa = (const char*)sqlite3_value_text(argv[0]);
+    const char *sb = (const char*)sqlite3_value_text(argv[1]);
+    tparts a, b;
+    if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) { sqlite3_result_null(ctx); return; }
+
+    /* If at least one side has a date, contribute the calendar day-diff via
+     * timegm; otherwise diff time-of-day only. Times use local clock when
+     * one side lacks a time component (matches duration.between rules). */
+    int64_t total_ns = 0;
+    int64_t NS = 1000000000LL;
+    if (a.has_date && b.has_date) {
+        struct tm ta, tb;
+        memset(&ta, 0, sizeof(ta)); memset(&tb, 0, sizeof(tb));
+        ta.tm_year = a.y - 1900; ta.tm_mon = a.mo - 1; ta.tm_mday = a.d;
+        tb.tm_year = b.y - 1900; tb.tm_mon = b.mo - 1; tb.tm_mday = b.d;
+        int64_t epa = (int64_t)timegm(&ta) * NS;
+        int64_t epb = (int64_t)timegm(&tb) * NS;
+        total_ns = (epb - epa);
+        if (a.has_time && b.has_time) {
+            total_ns += time_ns_of_utc(&b) - time_ns_of_utc(&a);
+        } else {
+            total_ns += time_ns_of(&b) - time_ns_of(&a);
+        }
+    } else if (a.has_time && b.has_time) {
+        total_ns = time_ns_of(&b) - time_ns_of(&a);
+    } else {
+        total_ns = 0;
+    }
+
+    /* Build duration ISO 8601 PT-form. */
+    int64_t seconds, nanos;
+    if (total_ns >= 0) {
+        seconds = total_ns / NS;
+        nanos = total_ns - seconds * NS;
+    } else {
+        seconds = -((-total_ns + NS - 1) / NS);
+        nanos = total_ns - seconds * NS;
+    }
+    char iso[160];
+    format_iso_duration(0, 0, total_ns, iso, sizeof(iso));
+    char json[400];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":0,\"days\":0,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
+        iso, (long long)seconds, (long long)nanos);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
+static void gql_duration_calendar_func(
+    sqlite3_context *ctx, int argc, sqlite3_value **argv
+) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    const char *sa = (const char*)sqlite3_value_text(argv[0]);
+    const char *sb = (const char*)sqlite3_value_text(argv[1]);
+    tparts a, b;
+    if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) {
+        sqlite3_result_null(ctx); return;
+    }
+    int total_months = 0, days = 0;
+    int64_t time_ns = 0;
+    compute_calendar_duration(&a, &b, &total_months, &days, &time_ns);
+
+    /* Decompose time_ns into seconds + sub-second nanos (Java Duration-style
+     * floorDiv so nanos in [0, 1e9)). */
+    int64_t seconds, nanos;
+    if (time_ns >= 0) {
+        seconds = time_ns / 1000000000LL;
+        nanos = time_ns - seconds * 1000000000LL;
+    } else {
+        seconds = -((-time_ns + 999999999LL) / 1000000000LL);
+        nanos = time_ns - seconds * 1000000000LL;
+    }
+
+    char iso[256];
+    format_iso_duration(total_months, days, time_ns, iso, sizeof(iso));
+
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":%d,\"days\":%d,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
+        iso, total_months, days, (long long)seconds, (long long)nanos);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
 /* Diff (b - a) in nanoseconds between two ISO temporal strings. */
 static void gql_temporal_diff_ns_func(
     sqlite3_context *ctx, int argc, sqlite3_value **argv
@@ -889,6 +1253,20 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "_gql_temporal_diff_ns", 2, SQLITE_UTF8, 0,
                          gql_temporal_diff_ns_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_duration_calendar", 2, SQLITE_UTF8, 0,
+                         gql_duration_calendar_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_duration_in_days", 2, SQLITE_UTF8, 0,
+                         gql_duration_in_days_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+  rc = sqlite3_create_function(db, "_gql_duration_in_months", 2, SQLITE_UTF8, 0,
+                         gql_duration_in_months_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+  rc = sqlite3_create_function(db, "_gql_duration_in_seconds", 2, SQLITE_UTF8, 0,
+                         gql_duration_in_seconds_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,
