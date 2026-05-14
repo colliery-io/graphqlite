@@ -472,17 +472,47 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
     if (func_call->args && func_call->args->count > 0) {
         ast_node *arg = func_call->args->items[0];
         if (arg->type == AST_NODE_MAP) {
-            /* time({hour: 14, minute: 30, second: 0}) */
-            append_sql(ctx, "(SELECT printf('%%02d:%%02d:%%02d', "
-                       "COALESCE(json_extract(json(");
+            /* localtime/time({hour, minute, second?, [ns/us/ms]}) → emit the
+             * right-precision format string. Same precision-detection as
+             * the datetime constructor. */
+            cypher_map *map = (cypher_map *)arg;
+            bool has_second=false, has_ms=false, has_us=false, has_ns=false;
+            if (map->pairs) {
+                for (int i = 0; i < map->pairs->count; i++) {
+                    cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
+                    if (!p || !p->key) continue;
+                    if (strcasecmp(p->key, "second") == 0) has_second = true;
+                    else if (strcasecmp(p->key, "millisecond") == 0) has_ms = true;
+                    else if (strcasecmp(p->key, "microsecond") == 0) has_us = true;
+                    else if (strcasecmp(p->key, "nanosecond") == 0) has_ns = true;
+                }
+            }
+            const char *fmt_in_sql;
+            const char *frac_arg = NULL;
+            if (has_ns)        { fmt_in_sql = "'%02d:%02d:%02d.%09d'"; frac_arg = "$.nanosecond"; }
+            else if (has_us)   { fmt_in_sql = "'%02d:%02d:%02d.%06d'"; frac_arg = "$.microsecond"; }
+            else if (has_ms)   { fmt_in_sql = "'%02d:%02d:%02d.%03d'"; frac_arg = "$.millisecond"; }
+            else if (has_second) fmt_in_sql = "'%02d:%02d:%02d'";
+            else                 fmt_in_sql = "'%02d:%02d'";
+
+            append_sql(ctx, "(SELECT printf(%s, "
+                              "COALESCE(json_extract(json(", fmt_in_sql);
             if (transform_expression(ctx, arg) < 0) return -1;
             append_sql(ctx, "), '$.hour'), 0), "
-                       "COALESCE(json_extract(json(");
+                              "COALESCE(json_extract(json(");
             if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.minute'), 0), "
-                       "COALESCE(json_extract(json(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, "), '$.second'), 0)))");
+            append_sql(ctx, "), '$.minute'), 0)");
+            if (has_second || frac_arg) {
+                append_sql(ctx, ", COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.second'), 0)");
+            }
+            if (frac_arg) {
+                append_sql(ctx, ", COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '%s'), 0)", frac_arg);
+            }
+            append_sql(ctx, "))");
         } else {
             /* time(string) */
             append_sql(ctx, "time(");
