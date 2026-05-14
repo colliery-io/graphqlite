@@ -570,10 +570,24 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
             append_sql(ctx, ")");
         } else {
             /* time(string) / localtime(string): preserve verbatim so tz +
-             * sub-second precision survive (SQLite's time() drops both). */
-            append_sql(ctx, "(");
-            if (transform_expression(ctx, arg) < 0) return -1;
-            append_sql(ctx, ")");
+             * sub-second precision survive (SQLite's time() drops both).
+             * For time() (not localtime), the value is tz-aware — if the
+             * source string has no tz suffix, append 'Z' (UTC default) so
+             * downstream temporal-diff code applies tz consistently. */
+            if (!is_localtime) {
+                /* Append 'Z' if no tz indicator (+/-/Z) appears after the
+                 * leading 'HH:' portion. Use _gql_extract_tz which returns
+                 * '' when no tz is present. */
+                append_sql(ctx, "((");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, ") || CASE WHEN _gql_extract_tz(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, ") = '' THEN 'Z' ELSE '' END)");
+            } else {
+                append_sql(ctx, "(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, ")");
+            }
         }
     } else {
         /* time() - current time */

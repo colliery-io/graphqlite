@@ -584,12 +584,18 @@ static void gql_extract_tz_func(
  * Where [tz] is one of:  Z | (+|-)HH:MM | (+|-)HH:MM[Region/Name]
  * Returns 0 on parse failure.
  */
+/* Forward-declare parse_temporal_parts (impl below). parse_temporal_ns
+ * delegates to it for the simple int64-epoch-ns return shape used by
+ * `_gql_temporal_diff_ns`. */
+typedef struct tparts tparts_fwd;
+static bool parse_temporal_parts_impl(const char *s, void *p);
 static int64_t parse_temporal_ns(const char *s) {
+    /* Inline minimal parse that mirrors parse_temporal_parts's epoch-ns
+     * computation without needing the full struct (impl is far below). */
     if (!s) return 0;
     int y = 1970, mo = 1, d = 1, h = 0, mi = 0, sec = 0;
     int64_t ns = 0;
     int tz_offset_min = 0;
-
     const char *time_start = NULL;
     if (strlen(s) >= 10 && s[4] == '-') {
         if (sscanf(s, "%d-%d-%d", &y, &mo, &d) < 3) return 0;
@@ -599,40 +605,32 @@ static int64_t parse_temporal_ns(const char *s) {
     } else {
         return 0;
     }
-
     if (time_start) {
-        if (sscanf(time_start, "%d:%d:%d", &h, &mi, &sec) < 2) { /* allow H:M only */ }
+        sscanf(time_start, "%d:%d:%d", &h, &mi, &sec);
         const char *dot = strchr(time_start, '.');
-        const char *tz_search_from;
         if (dot) {
             char buf[10] = { '0','0','0','0','0','0','0','0','0', 0 };
             int i;
             for (i = 0; i < 9 && dot[i + 1] >= '0' && dot[i + 1] <= '9'; i++)
                 buf[i] = dot[i + 1];
             ns = atoll(buf);
-            tz_search_from = dot + 1 + i;
-        } else {
-            tz_search_from = time_start;
         }
+        const char *tz_from = dot ? dot + 1 : time_start;
         const char *tz = NULL;
-        for (const char *p = tz_search_from; *p; p++) {
-            if (*p == 'Z' || *p == '+' || (*p == '-' && p > time_start + 2)) {
-                tz = p; break;
-            }
+        for (const char *q = tz_from; *q; q++) {
+            if (*q == 'Z' || *q == '+' || (*q == '-' && q > time_start + 2)) { tz = q; break; }
         }
         if (tz) {
-            if (*tz == 'Z') {
-                tz_offset_min = 0;
-            } else {
+            if (*tz == 'Z') tz_offset_min = 0;
+            else {
                 int sign = (*tz == '+') ? 1 : -1;
                 int oh = 0, om = 0;
-                if (sscanf(tz + 1, "%d:%d", &oh, &om) >= 1) {
+                if (sscanf(tz + 1, "%d:%d", &oh, &om) >= 1 ||
+                    sscanf(tz + 1, "%2d%2d", &oh, &om) >= 1)
                     tz_offset_min = sign * (oh * 60 + om);
-                }
             }
         }
     }
-
     struct tm t;
     memset(&t, 0, sizeof(t));
     t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d;
@@ -717,6 +715,7 @@ static void gql_duration_from_total_ns_func(
 typedef struct {
     bool has_date;
     bool has_time;
+    bool has_tz;
     int y, mo, d;
     int h, mi, sec;
     int64_t ns;
@@ -757,12 +756,18 @@ static bool parse_temporal_parts(const char *s, tparts *p) {
             }
         }
         if (tz) {
+            p->has_tz = true;
             if (*tz == 'Z') p->tz_offset_min = 0;
             else {
                 int sign = (*tz == '+') ? 1 : -1;
                 int oh = 0, om = 0;
-                if (sscanf(tz + 1, "%d:%d", &oh, &om) >= 1)
-                    p->tz_offset_min = sign * (oh * 60 + om);
+                /* Two forms: '+HH:MM' (with colon) and '+HHMM' (compact). */
+                if (strchr(tz + 1, ':')) {
+                    sscanf(tz + 1, "%d:%d", &oh, &om);
+                } else {
+                    sscanf(tz + 1, "%2d%2d", &oh, &om);
+                }
+                p->tz_offset_min = sign * (oh * 60 + om);
             }
         }
     }
@@ -793,13 +798,12 @@ static int64_t time_ns_of(const tparts *p) {
     return t;
 }
 
-/* Time-of-day in nanoseconds, with timezone adjusted to UTC. Used only when
- * both inputs are datetimes and we want true elapsed UTC time (e.g., DST
- * transitions like Europe/Stockholm 23:00+02 → 04:00+01 = 6h, not 5h). */
+/* Time-of-day in nanoseconds, with timezone adjusted to UTC. Apply tz when
+ * the parsed input carries a tz indicator (Z, +, -, or named bracketed). */
 static int64_t time_ns_of_utc(const tparts *p) {
     int64_t NS = 1000000000LL;
     int64_t t = time_ns_of(p);
-    if (p->has_time && p->has_date) t -= (int64_t)p->tz_offset_min * 60LL * NS;
+    if (p->has_tz) t -= (int64_t)p->tz_offset_min * 60LL * NS;
     return t;
 }
 
@@ -845,11 +849,10 @@ static void compute_calendar_duration(const tparts *a, const tparts *b,
         if (m < 0) { m += 12; y -= 1; }
     }
 
-    /* Apply tz normalization only when BOTH sides have a time portion. When
-     * only one side has a time (e.g. date vs datetime), the diff is computed
-     * using the local clock face — that matches TCK expectations like
-     * 'P30Y9M10DT21H40M32.142S' for date('…') → datetime('…+0100'). */
-    if (lo->has_time && hi->has_time) {
+    /* Apply tz normalization when BOTH sides carry tz info (the datetime/time
+     * families). Mixed pairings involving localtime/localdatetime — which are
+     * tz-naive — use the local clock face directly. */
+    if (lo->has_tz && hi->has_tz) {
         time_ns = time_ns_of_utc(hi) - time_ns_of_utc(lo);
     } else {
         time_ns = time_ns_of(hi) - time_ns_of(lo);
@@ -971,7 +974,10 @@ static void gql_duration_in_months_func(sqlite3_context *ctx, int argc, sqlite3_
         const tparts *lo = forward ? &a : &b;
         const tparts *hi = forward ? &b : &a;
         int y = hi->y - lo->y, m = hi->mo - lo->mo, dd = hi->d - lo->d;
-        if (dd < 0) m -= 1;
+        /* When days equal, also account for time-of-day: a full month is
+         * only reached when hi.time >= lo.time. */
+        int64_t lo_t = time_ns_of(lo), hi_t = time_ns_of(hi);
+        if (dd < 0 || (dd == 0 && hi_t < lo_t)) m -= 1;
         if (m < 0) { m += 12; y -= 1; }
         total_months = y * 12 + m;
         if (!forward) total_months = -total_months;
@@ -1000,11 +1006,12 @@ static void gql_duration_in_seconds_func(sqlite3_context *ctx, int argc, sqlite3
     tparts a, b;
     if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) { sqlite3_result_null(ctx); return; }
 
-    /* If at least one side has a date, contribute the calendar day-diff via
-     * timegm; otherwise diff time-of-day only. Times use local clock when
-     * one side lacks a time component (matches duration.between rules). */
+    /* Calendar day diff (when both have a date) + time-of-day diff.
+     * Time-of-day uses local clock unless BOTH inputs are full datetimes
+     * (date+time), in which case tz offsets are applied for true UTC diff. */
     int64_t total_ns = 0;
     int64_t NS = 1000000000LL;
+    bool both_tz = (a.has_tz && b.has_tz);
     if (a.has_date && b.has_date) {
         struct tm ta, tb;
         memset(&ta, 0, sizeof(ta)); memset(&tb, 0, sizeof(tb));
@@ -1013,13 +1020,14 @@ static void gql_duration_in_seconds_func(sqlite3_context *ctx, int argc, sqlite3
         int64_t epa = (int64_t)timegm(&ta) * NS;
         int64_t epb = (int64_t)timegm(&tb) * NS;
         total_ns = (epb - epa);
-        if (a.has_time && b.has_time) {
-            total_ns += time_ns_of_utc(&b) - time_ns_of_utc(&a);
-        } else {
-            total_ns += time_ns_of(&b) - time_ns_of(&a);
-        }
-    } else if (a.has_time && b.has_time) {
-        total_ns = time_ns_of(&b) - time_ns_of(&a);
+        if (both_tz) total_ns += time_ns_of_utc(&b) - time_ns_of_utc(&a);
+        else         total_ns += time_ns_of(&b) - time_ns_of(&a);
+    } else if (a.has_time || b.has_time) {
+        /* At least one side has time. Mixed (date + time-only) → use the
+         * time-bearing side's clock as the diff; e.g. date → localtime('16:30')
+         * = 'PT16H30M'. When both sides have tz, normalize to UTC. */
+        if (both_tz) total_ns = time_ns_of_utc(&b) - time_ns_of_utc(&a);
+        else         total_ns = time_ns_of(&b) - time_ns_of(&a);
     } else {
         total_ns = 0;
     }
