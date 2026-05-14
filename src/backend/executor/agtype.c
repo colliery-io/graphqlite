@@ -1058,22 +1058,29 @@ char* agtype_value_to_string(agtype_value *val)
         }
         
         case AGTV_PATH: {
-            /* Path as JSON array of alternating vertices and edges */
+            /* Path as openCypher-shaped JSON: {nodes: [...], rels: [...]}.
+             * Elements alternate vertex/edge/vertex/edge/.../vertex. */
             strbuf sb;
             strbuf_init(&sb, 256);
-            strbuf_append(&sb, "[");
-
-            for (int i = 0; i < val->val.array.num_elems; i++) {
-                if (i > 0) strbuf_append(&sb, ", ");
-
+            strbuf_append(&sb, "{\"nodes\": [");
+            bool first_node = true;
+            for (int i = 0; i < val->val.array.num_elems; i += 2) {
+                if (!first_node) strbuf_append(&sb, ", ");
+                first_node = false;
                 char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
-                if (elem_str) {
-                    strbuf_append(&sb, elem_str);
-                    free(elem_str);
-                }
+                if (elem_str) { strbuf_append(&sb, elem_str); free(elem_str); }
+                else strbuf_append(&sb, "null");
             }
-
-            strbuf_append(&sb, "]");
+            strbuf_append(&sb, "], \"rels\": [");
+            bool first_rel = true;
+            for (int i = 1; i < val->val.array.num_elems; i += 2) {
+                if (!first_rel) strbuf_append(&sb, ", ");
+                first_rel = false;
+                char *elem_str = agtype_value_to_string(&val->val.array.elems[i]);
+                if (elem_str) { strbuf_append(&sb, elem_str); free(elem_str); }
+                else strbuf_append(&sb, "null");
+            }
+            strbuf_append(&sb, "]}");
             result = strbuf_take(&sb);
             break;
         }

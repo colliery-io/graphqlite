@@ -98,6 +98,7 @@ def _coerce_graph_value(v: Any) -> Any:
 
     Node:         {"id": ..., "labels": [...], "properties": {...}}
     Relationship: {"id": ..., "type": "...", "properties": {...}, ...}
+    Path:         {"nodes": [Node,...], "rels": [Relationship,...]}
     """
     if isinstance(v, dict):
         if "labels" in v and "properties" in v and isinstance(v["labels"], list):
@@ -107,6 +108,10 @@ def _coerce_graph_value(v: Any) -> Any:
         if "type" in v and "properties" in v and isinstance(v["type"], str):
             props = tuple(sorted((k, v["properties"][k]) for k in v["properties"]))
             return Relationship(type=v["type"], properties=props)
+        if "nodes" in v and "rels" in v and isinstance(v["nodes"], list) and isinstance(v["rels"], list):
+            nodes = tuple(_coerce_graph_value(n) for n in v["nodes"])
+            rels = tuple((_coerce_graph_value(r), ">") for r in v["rels"])  # direction defaulted
+            return Path(nodes=nodes, rels=rels)
     return v
 
 
