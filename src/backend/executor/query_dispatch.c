@@ -1935,17 +1935,24 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
     (void)flags;
-    cypher_create *create = find_create_clause(query);
     cypher_return *ret = find_return_clause(query);
 
     CYPHER_DEBUG("Executing CREATE+RETURN via pattern dispatch");
 
-    /* Execute CREATE and keep the variable map */
+    /* Execute every CREATE clause in document order, accumulating bindings,
+     * before fetching the RETURN data. Previously only the first CREATE ran. */
     variable_map *var_map = NULL;
-    int rc = execute_create_clause_with_varmap(executor, create, result, &var_map);
-    if (rc < 0) {
-        if (var_map) free_variable_map(var_map);
-        return -1;
+    int rc = 0;
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (clause->type != AST_NODE_CREATE) continue;
+        rc = execute_create_clause_with_varmap(executor,
+                                                (cypher_create *)clause,
+                                                result, &var_map);
+        if (rc < 0) {
+            if (var_map) free_variable_map(var_map);
+            return -1;
+        }
     }
 
     if (!var_map || var_map->count == 0 || !ret || !ret->items) {
