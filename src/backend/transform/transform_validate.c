@@ -147,6 +147,67 @@ static int validate_binary_op(cypher_binary_op *bop, char **error_message)
     return 0;
 }
 
+/* Returns true if `e` is a literal whose type is incompatible with the
+ * destination kind (used by conversion-function validation). */
+static bool literal_incompatible_with(const ast_node *e, const char *fname)
+{
+    if (!e || e->type != AST_NODE_LITERAL) return false;
+    const cypher_literal *lit = (const cypher_literal *)e;
+    /* Nulls are always acceptable (openCypher 3VL). */
+    if (lit->literal_type == LITERAL_NULL) return false;
+    if (strcasecmp(fname, "toBoolean") == 0) {
+        /* toBoolean accepts Boolean, String, Null. Rejects Integer, Float. */
+        return lit->literal_type == LITERAL_INTEGER ||
+               lit->literal_type == LITERAL_DECIMAL;
+    }
+    if (strcasecmp(fname, "toFloat") == 0 ||
+        strcasecmp(fname, "toInteger") == 0) {
+        /* toFloat/toInteger accept Integer, Float, String, Null. Reject Boolean. */
+        return lit->literal_type == LITERAL_BOOLEAN;
+    }
+    /* toString accepts all primitives; nothing to reject at literal level. */
+    return false;
+}
+
+/* Returns true if `e` is a non-primitive composite literal (list/map). */
+static bool is_composite_literal(const ast_node *e)
+{
+    if (!e) return false;
+    return e->type == AST_NODE_LIST || e->type == AST_NODE_MAP;
+}
+
+static int validate_conversion_call(cypher_function_call *func, char **error_message)
+{
+    if (!func || !func->function_name || !func->args || func->args->count == 0) return 0;
+    const char *fname = func->function_name;
+    /* Only the toX conversion functions are validated here. */
+    if (strcasecmp(fname, "toBoolean") != 0 &&
+        strcasecmp(fname, "toInteger") != 0 &&
+        strcasecmp(fname, "toFloat") != 0 &&
+        strcasecmp(fname, "toString") != 0) return 0;
+
+    ast_node *arg = func->args->items[0];
+    /* List/map literal arguments fail across all the toX functions. */
+    if (is_composite_literal(arg)) {
+        char buf[256];
+        const char *kind = arg->type == AST_NODE_LIST ? "List" : "Map";
+        snprintf(buf, sizeof(buf),
+                 "TypeError: InvalidArgumentValue: %s() does not accept argument of type %s",
+                 fname, kind);
+        set_error(error_message, "%s", buf);
+        return -1;
+    }
+    if (literal_incompatible_with(arg, fname)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "TypeError: InvalidArgumentValue: %s() does not accept argument of type %s",
+                 fname, literal_type_name(arg));
+        set_error(error_message, "%s", buf);
+        return -1;
+    }
+    return 0;
+}
+
 static int validate_expr(ast_node *expr, char **error_message)
 {
     if (!expr) return 0;
@@ -158,6 +219,7 @@ static int validate_expr(ast_node *expr, char **error_message)
             return validate_binary_op((cypher_binary_op *)expr, error_message);
         case AST_NODE_FUNCTION_CALL: {
             cypher_function_call *func = (cypher_function_call *)expr;
+            if (validate_conversion_call(func, error_message) < 0) return -1;
             if (func->args) {
                 for (int i = 0; i < func->args->count; i++) {
                     if (validate_expr(func->args->items[i], error_message) < 0)

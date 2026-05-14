@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Phase B: Type-conversion function arg validation (~22 scenarios)"
 short_code: "GQLITE-T-0231"
 created_at: 2026-05-14T01:54:01.879521+00:00
-updated_at: 2026-05-14T01:54:01.879521+00:00
+updated_at: 2026-05-14T02:09:00.368063+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -42,6 +42,10 @@ In the function-dispatch layer (`transform_func_*`), validate operand types at c
 
 - typeConversion 1-4 (~22)
 - spillover from List1 (~18 of 56)
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
