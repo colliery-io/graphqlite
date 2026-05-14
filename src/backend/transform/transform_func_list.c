@@ -738,8 +738,11 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
             }
             append_sql(ctx, ")");
         } else {
-            /* datetime(string) */
-            append_sql(ctx, "datetime(");
+            /* datetime(string) / localdatetime(string): preserve the source
+             * string verbatim so fractional seconds + timezone (including
+             * bracketed named tz) survive — SQLite's datetime() would strip
+             * sub-second precision and reject the bracket form. */
+            append_sql(ctx, "(");
             if (transform_expression(ctx, arg) < 0) return -1;
             append_sql(ctx, ")");
         }
@@ -1271,17 +1274,13 @@ int transform_duration_between_function(cypher_transform_context *ctx, cypher_fu
         return -1;
     }
 
-    /* Return difference in days as a JSON duration object */
-    append_sql(ctx, "json_object('days', CAST(julianday(");
-    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-    append_sql(ctx, ") - julianday(");
+    /* Build openCypher Duration JSON: ISO 8601 + month/day/second/ns components.
+     * The C helper handles signed decomposition and ISO formatting. */
+    append_sql(ctx, "json(_gql_duration_from_total_ns(_gql_temporal_diff_ns(");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, ") AS INTEGER), 'hours', 0, 'minutes', 0, 'seconds', "
-               "CAST(((julianday(");
+    append_sql(ctx, ", ");
     if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-    append_sql(ctx, ") - julianday(");
-    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, ")) * 86400) %% 86400 AS INTEGER))");
+    append_sql(ctx, ")))");
 
     return 0;
 }
@@ -1300,29 +1299,80 @@ int transform_duration_in_function(cypher_transform_context *ctx, cypher_functio
         return -1;
     }
 
-    if (strcasecmp(func_call->function_name, "duration.inSeconds") == 0 ||
-        strcasecmp(func_call->function_name, "durationInSeconds") == 0) {
-        /* Difference in seconds */
-        append_sql(ctx, "CAST((julianday(");
-        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-        append_sql(ctx, ") - julianday(");
+    /* All variants produce an openCypher Duration JSON object. The variant
+     * affects which fields are populated (months, days, or seconds-only).
+     * We always emit a JSON with `_iso8601` so the comparator can compare
+     * against the canonical 'PT…S' / 'PnD' / 'PnYnM' form. */
+    bool in_seconds = strcasecmp(func_call->function_name, "duration.inSeconds") == 0 ||
+                      strcasecmp(func_call->function_name, "durationInSeconds") == 0;
+    bool in_days    = strcasecmp(func_call->function_name, "duration.inDays") == 0 ||
+                      strcasecmp(func_call->function_name, "durationInDays") == 0;
+    /* inMonths handled in the ELSE below. */
+
+    if (in_seconds) {
+        /* Total elapsed nanoseconds as a PT-form Duration. The C helper
+         * formats hours/minutes/seconds and populates accessor fields. */
+        append_sql(ctx, "json(_gql_duration_from_total_ns(_gql_temporal_diff_ns(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ")) * 86400 AS INTEGER)");
-    } else if (strcasecmp(func_call->function_name, "duration.inDays") == 0 ||
-               strcasecmp(func_call->function_name, "durationInDays") == 0) {
-        /* Difference in days */
-        append_sql(ctx, "CAST(julianday(");
+        append_sql(ctx, ", ");
         if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-        append_sql(ctx, ") - julianday(");
+        append_sql(ctx, ")))");
+    } else if (in_days) {
+        /* Days-only duration. Compute integer days from ns diff, then build a
+         * P<n>D ISO string. We keep months=0, seconds=0, nanos=0. */
+        append_sql(ctx, "json_object('_iso8601', "
+            "(CASE WHEN (_gql_temporal_diff_ns(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ") AS INTEGER)");
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000) = 0 THEN 'PT0S' ELSE printf('P%%dD', "
+            "_gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000) END), "
+            "'months', 0, 'days', _gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000, 'seconds', 0, 'nanosecondsOfSecond', 0)");
     } else {
-        /* duration.inMonths - approximate using 30.44 days/month */
-        append_sql(ctx, "CAST((julianday(");
-        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
-        append_sql(ctx, ") - julianday(");
+        /* duration.inMonths — approximate: total_days / 30.44. Renders as
+         * PnYnM (or 'PT0S' when zero months). */
+        append_sql(ctx, "json_object('_iso8601', "
+            "(CASE WHEN CAST(_gql_temporal_diff_ns(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ")) / 30.44 AS INTEGER)");
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000.0 / 30.44 AS INTEGER) = 0 THEN 'PT0S' "
+            "ELSE ('P' || "
+            "CASE WHEN CAST(_gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000.0 / 30.44 AS INTEGER) / 12 != 0 THEN "
+            "(CAST(_gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000.0 / 30.44 AS INTEGER) / 12) || 'Y' "
+            "ELSE '' END || "
+            "CASE WHEN CAST(_gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000.0 / 30.44 AS INTEGER) %% 12 != 0 THEN "
+            "(CAST(_gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000.0 / 30.44 AS INTEGER) %% 12) || 'M' "
+            "ELSE '' END) END), 'months', CAST(_gql_temporal_diff_ns(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+        append_sql(ctx, ") / 86400000000000.0 / 30.44 AS INTEGER), "
+            "'days', 0, 'seconds', 0, 'nanosecondsOfSecond', 0)");
     }
 
     return 0;

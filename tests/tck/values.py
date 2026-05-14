@@ -112,6 +112,10 @@ def _coerce_graph_value(v: Any) -> Any:
             nodes = tuple(_coerce_graph_value(n) for n in v["nodes"])
             rels = tuple((_coerce_graph_value(r), ">") for r in v["rels"])  # direction defaulted
             return Path(nodes=nodes, rels=rels)
+        # Duration objects carry an `_iso8601` rendering — collapse to that
+        # string so TCK comparisons against the canonical 'PT22H' form work.
+        if "_iso8601" in v and isinstance(v["_iso8601"], str):
+            return v["_iso8601"]
     return v
 
 

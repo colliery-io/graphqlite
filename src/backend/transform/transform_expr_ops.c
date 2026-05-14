@@ -418,6 +418,18 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return 0;
     }
 
+    /* Projected variables that are NOT nodes/edges (i.e., scalar/JSON values
+     * from a WITH-expression like `duration.between(...) AS dur`) should use
+     * json_extract — the property tables don't apply to values. We detect
+     * this by: projected, not edge, and alias_is_id is false (which is true
+     * for node/edge projections but false for value projections). */
+    if (is_projected && !is_edge && !alias_is_id) {
+        { char *esc_prop = escape_sql_string(prop->property_name);
+          append_sql(ctx, "json_extract(%s, '$.%s')", alias, esc_prop ? esc_prop : prop->property_name);
+          free(esc_prop); }
+        return 0;
+    }
+
     /* Multi-graph support: get graph prefix for property table references */
     const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
     const char *gprefix = "";

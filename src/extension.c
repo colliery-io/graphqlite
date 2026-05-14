@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <regex.h>
+#include <time.h>
+#include <stdbool.h>
 #include "executor/cypher_schema.h"
 #include "executor/cypher_executor.h"
 #include "executor/agtype.h"
@@ -574,6 +576,155 @@ static void gql_extract_tz_func(
     sqlite3_result_text(context, p, -1, SQLITE_TRANSIENT);
 }
 
+/* Parse an ISO temporal string into UTC epoch nanoseconds (int64).
+ * Supports:
+ *   YYYY-MM-DDTHH:MM:SS[.frac][tz]
+ *   YYYY-MM-DD
+ *   HH:MM:SS[.frac][tz]            (treated as 1970-01-01 with the time)
+ * Where [tz] is one of:  Z | (+|-)HH:MM | (+|-)HH:MM[Region/Name]
+ * Returns 0 on parse failure.
+ */
+static int64_t parse_temporal_ns(const char *s) {
+    if (!s) return 0;
+    int y = 1970, mo = 1, d = 1, h = 0, mi = 0, sec = 0;
+    int64_t ns = 0;
+    int tz_offset_min = 0;
+
+    const char *time_start = NULL;
+    if (strlen(s) >= 10 && s[4] == '-') {
+        if (sscanf(s, "%d-%d-%d", &y, &mo, &d) < 3) return 0;
+        if (s[10] == 'T' || s[10] == ' ') time_start = s + 11;
+    } else if (strlen(s) >= 5 && s[2] == ':') {
+        time_start = s;
+    } else {
+        return 0;
+    }
+
+    if (time_start) {
+        if (sscanf(time_start, "%d:%d:%d", &h, &mi, &sec) < 2) { /* allow H:M only */ }
+        const char *dot = strchr(time_start, '.');
+        const char *tz_search_from;
+        if (dot) {
+            char buf[10] = { '0','0','0','0','0','0','0','0','0', 0 };
+            int i;
+            for (i = 0; i < 9 && dot[i + 1] >= '0' && dot[i + 1] <= '9'; i++)
+                buf[i] = dot[i + 1];
+            ns = atoll(buf);
+            tz_search_from = dot + 1 + i;
+        } else {
+            tz_search_from = time_start;
+        }
+        const char *tz = NULL;
+        for (const char *p = tz_search_from; *p; p++) {
+            if (*p == 'Z' || *p == '+' || (*p == '-' && p > time_start + 2)) {
+                tz = p; break;
+            }
+        }
+        if (tz) {
+            if (*tz == 'Z') {
+                tz_offset_min = 0;
+            } else {
+                int sign = (*tz == '+') ? 1 : -1;
+                int oh = 0, om = 0;
+                if (sscanf(tz + 1, "%d:%d", &oh, &om) >= 1) {
+                    tz_offset_min = sign * (oh * 60 + om);
+                }
+            }
+        }
+    }
+
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d;
+    t.tm_hour = h; t.tm_min = mi; t.tm_sec = sec;
+    time_t epoch = timegm(&t);
+    epoch -= tz_offset_min * 60;
+    return (int64_t)epoch * 1000000000LL + ns;
+}
+
+/* Build openCypher Duration JSON object from a signed total-nanoseconds value.
+ * Returns: {"_iso8601": "...", "months": 0, "days": D, "seconds": S, "nanosecondsOfSecond": N}
+ *
+ * Decomposition rules (matches openCypher TCK):
+ *   days        = total_ns / 86_400_000_000_000          (truncate toward zero)
+ *   residue_ns  = total_ns - days * 86_400_000_000_000
+ *   seconds     = floorDiv(residue_ns, 1_000_000_000)
+ *   nanos       = residue_ns - seconds * 1_000_000_000   (always in [0, 1e9))
+ *
+ * ISO format truncates each (H, M, S) toward zero so signs are per-component.
+ */
+static void gql_duration_from_total_ns_func(
+    sqlite3_context *ctx, int argc, sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_null(ctx); return; }
+    int64_t total_ns = sqlite3_value_int64(argv[0]);
+
+    int64_t DAY_NS = 86400LL * 1000000000LL;
+    int64_t days = total_ns / DAY_NS;
+    int64_t residue = total_ns - days * DAY_NS;
+    int64_t seconds, nanos;
+    if (residue >= 0) {
+        seconds = residue / 1000000000LL;
+        nanos = residue - seconds * 1000000000LL;
+    } else {
+        /* floor division: round toward -infinity */
+        seconds = -(((-residue) + 999999999LL) / 1000000000LL);
+        nanos = residue - seconds * 1000000000LL;
+    }
+
+    /* ISO 8601 PT-form. Build hours/minutes/seconds via trunc-toward-zero. */
+    int64_t rem = total_ns;
+    int64_t hours = rem / (3600LL * 1000000000LL);
+    rem -= hours * 3600LL * 1000000000LL;
+    int64_t mins = rem / (60LL * 1000000000LL);
+    rem -= mins * 60LL * 1000000000LL;
+    int64_t isec = rem / 1000000000LL;
+    int64_t subns = rem - isec * 1000000000LL;
+
+    char iso[160];
+    char *p = iso;
+    *p++ = 'P'; *p++ = 'T';
+    bool wrote = false;
+    if (hours != 0) { p += snprintf(p, 24, "%lldH", (long long)hours); wrote = true; }
+    if (mins != 0)  { p += snprintf(p, 24, "%lldM", (long long)mins); wrote = true; }
+    if (isec != 0 || subns != 0) {
+        if (subns != 0) {
+            char frac[12];
+            int64_t abs_subns = subns < 0 ? -subns : subns;
+            snprintf(frac, sizeof(frac), "%09lld", (long long)abs_subns);
+            int flen = 9;
+            while (flen > 0 && frac[flen - 1] == '0') flen--;
+            frac[flen] = 0;
+            bool neg = (isec < 0) || (isec == 0 && subns < 0);
+            int64_t abs_isec = isec < 0 ? -isec : isec;
+            p += snprintf(p, 40, "%s%lld.%sS", neg ? "-" : "", (long long)abs_isec, frac);
+        } else {
+            p += snprintf(p, 24, "%lldS", (long long)isec);
+        }
+        wrote = true;
+    }
+    if (!wrote) { *p++ = '0'; *p++ = 'S'; }
+    *p = 0;
+
+    char json[400];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":0,\"days\":%lld,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
+        iso, (long long)days, (long long)seconds, (long long)nanos);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
+/* Diff (b - a) in nanoseconds between two ISO temporal strings. */
+static void gql_temporal_diff_ns_func(
+    sqlite3_context *ctx, int argc, sqlite3_value **argv
+) {
+    if (argc != 2) { sqlite3_result_int64(ctx, 0); return; }
+    const char *a = (const char*)sqlite3_value_text(argv[0]);
+    const char *b = (const char*)sqlite3_value_text(argv[1]);
+    int64_t ta = parse_temporal_ns(a);
+    int64_t tb = parse_temporal_ns(b);
+    sqlite3_result_int64(ctx, tb - ta);
+}
+
 /*
  * REGEXP function for SQLite
  * Implements the =~ operator from Cypher
@@ -730,6 +881,14 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
                          gql_extract_tz_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
+                         gql_duration_from_total_ns_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_temporal_diff_ns", 2, SQLITE_UTF8, 0,
+                         gql_temporal_diff_ns_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,
