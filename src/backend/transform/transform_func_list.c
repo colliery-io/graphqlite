@@ -494,12 +494,18 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
 {
     CYPHER_DEBUG("Transforming time() function");
 
+    bool is_localtime = (func_call->function_name &&
+                         strcasecmp(func_call->function_name, "localtime") == 0);
+
     if (func_call->args && func_call->args->count > 0) {
         ast_node *arg = func_call->args->items[0];
         if (arg->type == AST_NODE_MAP) {
             /* localtime/time({hour, minute, second?, [ns/us/ms]}) → emit the
-             * right-precision format string. Same precision-detection as
-             * the datetime constructor. */
+             * right-precision format string. The fractional value is the
+             * TOTAL nanosecond count summed across millisecond + microsecond
+             * + nanosecond fields, then truncated to the highest precision
+             * the input declared. time() (not localtime) appends a Z suffix
+             * or explicit timezone. */
             cypher_map *map = (cypher_map *)arg;
             bool has_second=false, has_ms=false, has_us=false, has_ns=false;
             if (map->pairs) {
@@ -513,10 +519,10 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                 }
             }
             const char *fmt_in_sql;
-            const char *frac_arg = NULL;
-            if (has_ns)        { fmt_in_sql = "'%02d:%02d:%02d.%09d'"; frac_arg = "$.nanosecond"; }
-            else if (has_us)   { fmt_in_sql = "'%02d:%02d:%02d.%06d'"; frac_arg = "$.microsecond"; }
-            else if (has_ms)   { fmt_in_sql = "'%02d:%02d:%02d.%03d'"; frac_arg = "$.millisecond"; }
+            int frac_divisor = 0;   /* 0 = no fractional, else divisor applied to total-ns */
+            if (has_ns)        { fmt_in_sql = "'%02d:%02d:%02d.%09d'"; frac_divisor = 1; }
+            else if (has_us)   { fmt_in_sql = "'%02d:%02d:%02d.%06d'"; frac_divisor = 1000; }
+            else if (has_ms)   { fmt_in_sql = "'%02d:%02d:%02d.%03d'"; frac_divisor = 1000000; }
             else if (has_second) fmt_in_sql = "'%02d:%02d:%02d'";
             else                 fmt_in_sql = "'%02d:%02d'";
 
@@ -527,17 +533,41 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                               "COALESCE(json_extract(json(");
             if (transform_expression(ctx, arg) < 0) return -1;
             append_sql(ctx, "), '$.minute'), 0)");
-            if (has_second || frac_arg) {
+            if (has_second || frac_divisor) {
                 append_sql(ctx, ", COALESCE(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.second'), 0)");
             }
-            if (frac_arg) {
-                append_sql(ctx, ", COALESCE(json_extract(json(");
+            if (frac_divisor) {
+                append_sql(ctx, ", (COALESCE(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, "), '%s'), 0)", frac_arg);
+                append_sql(ctx, "), '$.nanosecond'), 0) + "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.microsecond'), 0) * 1000 + "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.millisecond'), 0) * 1000000) / %d",
+                           frac_divisor);
             }
-            append_sql(ctx, "))");
+            append_sql(ctx, ")");
+            if (!is_localtime) {
+                /* time() with no timezone → 'Z'; else verbatim or [Name]. */
+                append_sql(ctx, " || (CASE "
+                                 "WHEN json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone') IS NULL THEN 'Z' "
+                                 "WHEN substr(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone'),1,1) IN ('+','-') "
+                                 "THEN json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone') "
+                                 "ELSE '[' || json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.timezone') || ']' END)");
+            }
+            append_sql(ctx, ")");
         } else {
             /* time(string) */
             append_sql(ctx, "time(");
@@ -604,13 +634,15 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
              * pass, where `%%` reduces to `%` and SQLite sees the right
              * format. */
             const char *time_fmt_in_sql;
-            const char *frac_arg = NULL;  /* JSON key for the sub-second value */
+            int frac_divisor = 0;
             /* These are inserted into the SQL via append_sql's `%s` arg, so
              * the `%`s here are taken literally and end up in the SQL where
-             * SQLite's `printf()` will interpret them. */
-            if (has_ns)        { time_fmt_in_sql = "'T%02d:%02d:%02d.%09d'"; frac_arg = "$.nanosecond"; }
-            else if (has_us)   { time_fmt_in_sql = "'T%02d:%02d:%02d.%06d'"; frac_arg = "$.microsecond"; }
-            else if (has_ms)   { time_fmt_in_sql = "'T%02d:%02d:%02d.%03d'"; frac_arg = "$.millisecond"; }
+             * SQLite's `printf()` will interpret them. The fractional value
+             * is the total nanosecond count across ns/us/ms, then divided
+             * to the chosen precision. */
+            if (has_ns)        { time_fmt_in_sql = "'T%02d:%02d:%02d.%09d'"; frac_divisor = 1; }
+            else if (has_us)   { time_fmt_in_sql = "'T%02d:%02d:%02d.%06d'"; frac_divisor = 1000; }
+            else if (has_ms)   { time_fmt_in_sql = "'T%02d:%02d:%02d.%03d'"; frac_divisor = 1000000; }
             else if (has_second) time_fmt_in_sql = "'T%02d:%02d:%02d'";
             else                 time_fmt_in_sql = "'T%02d:%02d'";  /* hour/minute/none all use HH:MM */
 
@@ -667,15 +699,22 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                               "COALESCE(json_extract(json(");
             if (transform_expression(ctx, arg) < 0) return -1;
             append_sql(ctx, "), '$.minute'), 0)");
-            if (has_second || frac_arg) {
+            if (has_second || frac_divisor) {
                 append_sql(ctx, ", COALESCE(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.second'), 0)");
             }
-            if (frac_arg) {
-                append_sql(ctx, ", COALESCE(json_extract(json(");
+            if (frac_divisor) {
+                append_sql(ctx, ", (COALESCE(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, "), '%s'), 0)", frac_arg);
+                append_sql(ctx, "), '$.nanosecond'), 0) + "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.microsecond'), 0) * 1000 + "
+                                 "COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.millisecond'), 0) * 1000000) / %d",
+                           frac_divisor);
             }
             append_sql(ctx, ")");
             /* datetime() (not localdatetime) appends a timezone suffix:
