@@ -841,18 +841,77 @@ int transform_date_truncate_function(cypher_transform_context *ctx, cypher_funct
 {
     CYPHER_DEBUG("Transforming date.truncate function");
 
-    if (!func_call->args || func_call->args->count != 2) {
+    if (!func_call->args || (func_call->args->count != 2 && func_call->args->count != 3)) {
         ctx->has_error = true;
-        ctx->error_message = strdup("date.truncate() requires two arguments: unit and temporal value");
+        ctx->error_message = strdup("date.truncate() requires 2 or 3 arguments: unit, temporal[, map]");
         return -1;
     }
 
-    /* date.truncate('month', datetime) → date(datetime, 'start of month') */
-    append_sql(ctx, "date(");
+    /* Build a CASE expression dispatching on the unit string, with an
+     * optional day/dayOfWeek override extracted from the third map arg.
+     * append_sql is printf-style — every literal % must be doubled. */
+    append_sql(ctx, "(CASE ");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    /* millennium */
+    append_sql(ctx, " WHEN 'millennium' THEN printf('%%04d-01-%%02d', (CAST(strftime('%%Y', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") AS INTEGER)/1000)*1000, COALESCE(json_extract(");
+    if (func_call->args->count == 3) {
+        if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1;
+    } else {
+        append_sql(ctx, "'{}'");
+    }
+    append_sql(ctx, ", '$.day'), 1))");
+    /* century */
+    append_sql(ctx, " WHEN 'century' THEN printf('%%04d-01-%%02d', (CAST(strftime('%%Y', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") AS INTEGER)/100)*100, COALESCE(json_extract(");
+    if (func_call->args->count == 3) { if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1; } else append_sql(ctx, "'{}'");
+    append_sql(ctx, ", '$.day'), 1))");
+    /* decade */
+    append_sql(ctx, " WHEN 'decade' THEN printf('%%04d-01-%%02d', (CAST(strftime('%%Y', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") AS INTEGER)/10)*10, COALESCE(json_extract(");
+    if (func_call->args->count == 3) { if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1; } else append_sql(ctx, "'{}'");
+    append_sql(ctx, ", '$.day'), 1))");
+    /* year */
+    append_sql(ctx, " WHEN 'year' THEN strftime('%%Y', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") || printf('-01-%%02d', COALESCE(json_extract(");
+    if (func_call->args->count == 3) { if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1; } else append_sql(ctx, "'{}'");
+    append_sql(ctx, ", '$.day'), 1))");
+    /* quarter */
+    append_sql(ctx, " WHEN 'quarter' THEN strftime('%%Y', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") || printf('-%%02d-%%02d', ((CAST(strftime('%%m', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") AS INTEGER)-1)/3)*3+1, COALESCE(json_extract(");
+    if (func_call->args->count == 3) { if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1; } else append_sql(ctx, "'{}'");
+    append_sql(ctx, ", '$.day'), 1))");
+    /* month */
+    append_sql(ctx, " WHEN 'month' THEN strftime('%%Y-%%m', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") || printf('-%%02d', COALESCE(json_extract(");
+    if (func_call->args->count == 3) { if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1; } else append_sql(ctx, "'{}'");
+    append_sql(ctx, ", '$.day'), 1))");
+    /* week: Monday of the week, plus dayOfWeek offset (1=Mon) */
+    append_sql(ctx, " WHEN 'week' THEN date(date(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ", '-' || ((CAST(strftime('%%w', ");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ") AS INTEGER) + 6) %% 7) || ' days'), '+' || (COALESCE(json_extract(");
+    if (func_call->args->count == 3) { if (transform_expression(ctx, func_call->args->items[2]) < 0) return -1; } else append_sql(ctx, "'{}'");
+    append_sql(ctx, ", '$.dayOfWeek'), 1) - 1) || ' days')");
+    /* day */
+    append_sql(ctx, " WHEN 'day' THEN date(");
+    if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+    append_sql(ctx, ")");
+    /* fallback: SQLite native */
+    append_sql(ctx, " ELSE date(");
     if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
     append_sql(ctx, ", 'start of ' || ");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, ")");
+    append_sql(ctx, ") END)");
 
     return 0;
 }

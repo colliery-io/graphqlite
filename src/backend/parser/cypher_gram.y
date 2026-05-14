@@ -38,7 +38,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * parser can't immediately distinguish a node pattern from a parenthesized
  * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 9
+%expect 13
 %expect-rr 3  /* One for IDENTIFIER, one for BQIDENT, one for END_P in variable_opt */
 
 %union {
@@ -1164,7 +1164,31 @@ literal_expr:
     ;
 
 function_call:
-    IDENTIFIER '(' ')'
+    /* Qualified function names (e.g. `date.truncate(...)`, `datetime.fromEpoch(...)`)
+     * are concatenated into a single function name so the dispatch table
+     * can look them up. */
+    IDENTIFIER '.' IDENTIFIER '(' argument_list ')'
+        {
+            size_t len = strlen($1) + 1 + strlen($3) + 1;
+            char *qname = malloc(len);
+            if (qname) snprintf(qname, len, "%s.%s", $1, $3);
+            $$ = (ast_node*)make_function_call(qname ? qname : $1, $5, false, @1.first_line);
+            free($1);
+            free($3);
+            if (qname) free(qname);
+        }
+    | IDENTIFIER '.' IDENTIFIER '(' ')'
+        {
+            size_t len = strlen($1) + 1 + strlen($3) + 1;
+            char *qname = malloc(len);
+            if (qname) snprintf(qname, len, "%s.%s", $1, $3);
+            ast_list *args = ast_list_create();
+            $$ = (ast_node*)make_function_call(qname ? qname : $1, args, false, @1.first_line);
+            free($1);
+            free($3);
+            if (qname) free(qname);
+        }
+    | IDENTIFIER '(' ')'
         {
             /* Check if this is EXISTS function call */
             if (strcasecmp($1, "exists") == 0) {
