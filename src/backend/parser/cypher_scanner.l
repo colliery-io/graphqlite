@@ -71,7 +71,7 @@ whitespace  [ \t\r\n]+
 /* Numbers */
 integer     {digit}+
 hexint      0[xX]{hexdigit}+
-decimal     {digit}+\.{digit}+([eE][+-]?{digit}+)?
+decimal     ({digit}+\.{digit}+|{digit}+\.|\.{digit}+)([eE][+-]?{digit}+)?|{digit}+[eE][+-]?{digit}+
 
 /* Identifiers */
 identifier  {letter}{alnum}*
