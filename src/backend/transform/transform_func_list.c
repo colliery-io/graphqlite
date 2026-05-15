@@ -58,11 +58,17 @@ int transform_tostring_function(cypher_transform_context *ctx, cypher_function_c
         return -1;
     }
 
-    append_sql(ctx, "CAST(");
-    if (transform_expression(ctx, func_call->args->items[0]) < 0) {
-        return -1;
-    }
-    append_sql(ctx, " AS TEXT)");
+    /* For Duration JSON objects, render as the canonical ISO 8601 form (the
+     * '_iso8601' field). Other values fall through to plain CAST AS TEXT. */
+    append_sql(ctx, "(CASE WHEN json_valid(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ") AND json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$._iso8601') IS NOT NULL THEN json_extract(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, ", '$._iso8601') ELSE CAST(");
+    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    append_sql(ctx, " AS TEXT) END)");
 
     return 0;
 }

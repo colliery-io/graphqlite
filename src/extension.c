@@ -1246,7 +1246,17 @@ static void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value 
         /* ISO week date — use pure-arithmetic day math so old years like
          * 1817 work (timegm wraps before 1970). */
         int week = sqlite3_value_int(argv[3]);
-        int dow = (sqlite3_value_type(argv[4]) != SQLITE_NULL) ? sqlite3_value_int(argv[4]) : 1;
+        int dow;
+        if (sqlite3_value_type(argv[4]) != SQLITE_NULL) {
+            dow = sqlite3_value_int(argv[4]);
+        } else if (year_from_base) {
+            /* Inherit dayOfWeek from base — '{date: other, week: N}' should
+             * resolve to the same dayOfWeek as the base date in the new week. */
+            int base_dow = weekday_of(y, mo, d);
+            dow = (base_dow + 6) % 7 + 1;  /* Mon=1..Sun=7 */
+        } else {
+            dow = 1;
+        }
         int jan4_wd = weekday_of(y, 1, 4);
         int monday_offset = (jan4_wd + 6) % 7;
         long jan4_days = days_from_civil(y, 1, 4);
