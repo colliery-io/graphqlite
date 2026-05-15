@@ -85,8 +85,20 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
             append_sql(ctx, ")");
             return 0;
         }
-        /* Not a list - use LENGTH for strings */
-        sql_func = "LENGTH";
+        /* Unknown statically — emit a polymorphic CASE: JSON array →
+         * json_array_length, otherwise LENGTH (treats string-shaped values
+         * by character count). Guard with json_valid + json_type check so
+         * scalar JSON ('1', '"text"') falls through to LENGTH. */
+        append_sql(ctx, "(CASE WHEN json_valid(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") AND json_type(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") = 'array' THEN json_array_length(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") ELSE LENGTH(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ") END)");
+        return 0;
     } else if (strcasecmp(func_call->function_name, "reverse") == 0) {
         sql_func = "REVERSE";
     } else {
