@@ -39,7 +39,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * expression until it sees more context (e.g., a following rel_pattern).
  */
 %expect 13
-%expect-rr 3  /* One for IDENTIFIER, one for BQIDENT, one for END_P in variable_opt */
+%expect-rr 3  /* IDENTIFIER, BQIDENT, END_P in variable_opt */
 
 %union {
     int64_t integer;
