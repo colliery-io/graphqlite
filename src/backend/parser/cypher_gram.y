@@ -139,7 +139,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <list> map_pair_list
 
 %type <list> label_opt label_list
-%type <string> variable_opt from_graph_opt
+%type <string> variable_opt from_graph_opt non_reserved_kw
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list rel_type_list
 %type <node> skip_opt limit_opt where_opt
@@ -900,7 +900,21 @@ label_list:
             ast_list_append($$, (ast_node*)label);
             free($2);
         }
+    | ':' non_reserved_kw
+        {
+            $$ = ast_list_create();
+            cypher_literal *label = make_string_literal($2, @2.first_line);
+            ast_list_append($$, (ast_node*)label);
+            free($2);
+        }
     | label_list ':' IDENTIFIER
+        {
+            $$ = $1;
+            cypher_literal *label = make_string_literal($3, @3.first_line);
+            ast_list_append($$, (ast_node*)label);
+            free($3);
+        }
+    | label_list ':' non_reserved_kw
         {
             $$ = $1;
             cypher_literal *label = make_string_literal($3, @3.first_line);
@@ -1115,6 +1129,11 @@ expr:
             free($3);
         }
     | expr '.' BQIDENT
+        {
+            $$ = (ast_node*)make_property($1, $3, @3.first_line);
+            free($3);
+        }
+    | expr '.' non_reserved_kw
         {
             $$ = (ast_node*)make_property($1, $3, @3.first_line);
             free($3);
@@ -1560,6 +1579,25 @@ identifier:
         }
     ;
 
+/* Keywords that may serve as identifiers/labels/property-keys outside their
+ * reserved contexts. Returns the string form (caller frees). */
+non_reserved_kw:
+      SINGLE        { $$ = strdup("Single"); }
+    | ANY           { $$ = strdup("Any"); }
+    | NONE          { $$ = strdup("None"); }
+    | ALL           { $$ = strdup("All"); }
+    | EXISTS        { $$ = strdup("exists"); }
+    | CONTAINS      { $$ = strdup("contains"); }
+    | STARTS        { $$ = strdup("starts"); }
+    | ENDS          { $$ = strdup("ends"); }
+    | REDUCE        { $$ = strdup("reduce"); }
+    | END_P         { $$ = strdup("End"); }
+    | ON            { $$ = strdup("On"); }
+    | PATTERN       { $$ = strdup("Pattern"); }
+    | CSV           { $$ = strdup("Csv"); }
+    | LOAD          { $$ = strdup("Load"); }
+    ;
+
 parameter:
     PARAMETER
         {
@@ -1601,6 +1639,10 @@ map_pair:
             $$ = make_map_pair($1, $3, @1.first_line);
         }
     | STRING ':' expr
+        {
+            $$ = make_map_pair($1, $3, @1.first_line);
+        }
+    | non_reserved_kw ':' expr
         {
             $$ = make_map_pair($1, $3, @1.first_line);
         }
