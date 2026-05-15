@@ -215,6 +215,15 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             goto return_star_done;
         }
 
+        /* Defer registration of explicit aliases until after all items are
+         * transformed so an alias name like `RETURN n.num AS n, count(n)`
+         * doesn't shadow the original binding of `n` mid-projection. */
+        const char **deferred_aliases = NULL;
+        int deferred_count = 0;
+        if (ret->items->count > 0) {
+            deferred_aliases = calloc(ret->items->count, sizeof(*deferred_aliases));
+        }
+
         /* Add SELECT columns to unified builder */
         for (int i = 0; i < ret->items->count; i++) {
             cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
@@ -329,11 +338,16 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             sql_select(ctx->unified_builder, expr_str, alias);
             free(expr_str);
 
-            /* Register alias for ORDER BY reference */
-            if (item->alias) {
-                transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
+            /* Defer alias registration so subsequent return items can still
+             * resolve identifiers using their original bindings. */
+            if (item->alias && deferred_aliases) {
+                deferred_aliases[deferred_count++] = item->alias;
             }
         }
+        for (int i = 0; i < deferred_count; i++) {
+            transform_var_register_projected(ctx->var_ctx, deferred_aliases[i], deferred_aliases[i]);
+        }
+        free(deferred_aliases);
 
 return_star_done:
         /* Add ORDER BY */
