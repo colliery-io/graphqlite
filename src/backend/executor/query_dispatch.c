@@ -835,7 +835,28 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
     if (flags & CLAUSE_RETURN) {
         cypher_return *ret = find_return_clause(query);
         if (ret) {
-            rc = execute_match_return_query(executor, match, ret, result);
+            /* For RETURN after MERGE, the merged variables (r, etc.) must
+             * be visible. Construct a synthetic MATCH whose pattern is the
+             * union of the original MATCH and MERGE patterns, then re-query.
+             * The MERGE has already created/matched whatever was needed; the
+             * combined MATCH simply observes the resulting state. */
+            ast_list *combined_pattern = ast_list_create();
+            if (match->pattern) {
+                for (int i = 0; i < match->pattern->count; i++) {
+                    ast_list_append(combined_pattern, match->pattern->items[i]);
+                }
+            }
+            if (merge->pattern) {
+                for (int i = 0; i < merge->pattern->count; i++) {
+                    ast_list_append(combined_pattern, merge->pattern->items[i]);
+                }
+            }
+            cypher_match *synth_match = make_cypher_match(combined_pattern,
+                                                          match->where, false, NULL);
+            rc = execute_match_return_query(executor, synth_match, ret, result);
+            free(synth_match);
+            free(combined_pattern->items);
+            free(combined_pattern);
         }
     }
     return rc;
