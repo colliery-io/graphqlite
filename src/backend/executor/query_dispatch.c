@@ -1982,6 +1982,21 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
         return 0;
     }
 
+    /* Honor LIMIT 0 / SKIP for CREATE+RETURN: side effects are already
+     * committed; LIMIT just clips the result set. */
+    int64_t limit_val = -1;
+    int64_t skip_val = 0;
+    if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal *)ret->limit;
+        if (l->literal_type == LITERAL_INTEGER) limit_val = l->value.integer;
+    }
+    if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal *)ret->skip;
+        if (l->literal_type == LITERAL_INTEGER) skip_val = l->value.integer;
+    }
+    int produced_rows = (skip_val > 0) ? 0 : 1;
+    if (limit_val == 0) produced_rows = 0;
+
     /* Build a SQL query to fetch the RETURN data from created nodes.
      * For each return item like p.name, generate:
      *   SELECT value FROM node_props_text WHERE node_id = ? AND key_id = (
@@ -1990,7 +2005,21 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
     int col_count = ret->items->count;
     result->column_count = col_count;
     result->column_names = malloc(col_count * sizeof(char*));
-    result->row_count = 1;
+    result->row_count = produced_rows;
+    if (produced_rows == 0) {
+        /* Set column names so the harness sees the schema, then return. */
+        for (int i = 0; i < col_count; i++) {
+            cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+            result->column_names[i] = strdup(item->alias ? item->alias : "?column?");
+        }
+        result->data = NULL;
+        result->data_types = NULL;
+        result->success = true;
+        free_variable_map(var_map);
+        return 0;
+    }
+    int orig_row_count = 1;
+    (void)orig_row_count;
     result->data = malloc(sizeof(char**));
     result->data[0] = malloc(col_count * sizeof(char*));
     /* GQLITE-T-0227: track per-cell SQLite types so the JSON formatter can
