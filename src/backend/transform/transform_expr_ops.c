@@ -198,6 +198,31 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     /* Add left parenthesis for precedence */
     append_sql(ctx, "(");
     
+    /* ADD/SUB: Cypher's `+` and `-` are polymorphic over numbers, strings,
+     * lists, durations, and temporal+duration. We can't distinguish these
+     * statically, so emit a runtime helper `_gql_dyn_add` / `_gql_dyn_sub`
+     * that dispatches on operand types. Fall through to native SQL for
+     * the obvious integer-literal-on-both-sides case (avoids overhead for
+     * `1 + 2`). */
+    if (binary_op->op_type == BINARY_OP_ADD || binary_op->op_type == BINARY_OP_SUB) {
+        bool both_int_lit = false;
+        if (binary_op->left->type == AST_NODE_LITERAL && binary_op->right->type == AST_NODE_LITERAL) {
+            cypher_literal *ll = (cypher_literal *)binary_op->left;
+            cypher_literal *rl = (cypher_literal *)binary_op->right;
+            if (ll->literal_type == LITERAL_INTEGER && rl->literal_type == LITERAL_INTEGER)
+                both_int_lit = true;
+        }
+        if (!both_int_lit) {
+            append_sql(ctx, binary_op->op_type == BINARY_OP_ADD ? "_gql_dyn_add(" : "_gql_dyn_sub(");
+            if (transform_expression(ctx, binary_op->left) < 0) return -1;
+            append_sql(ctx, ", ");
+            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            append_sql(ctx, "))");  /* closes the helper + the outer paren */
+            ctx->in_comparison = was_in_comparison;
+            return 0;
+        }
+    }
+
     /* Transform left expression */
     CYPHER_DEBUG("Transforming left operand");
     if (transform_expression(ctx, binary_op->left) < 0) {
@@ -205,7 +230,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return -1;
     }
     CYPHER_DEBUG("Left operand done, SQL so far: %s", ctx->sql_buffer);
-    
+
     /* Add operator */
     switch (binary_op->op_type) {
         case BINARY_OP_AND:

@@ -1184,6 +1184,245 @@ static int weekday_of(int y, int m, int d) {
     return (dow + 7) % 7;
 }
 
+/* Extract a numeric field from a Duration JSON string. */
+static long long dur_field_ll(const char *s, const char *key) {
+    if (!s || !key) return 0;
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\":", key);
+    const char *p = strstr(s, needle);
+    if (!p) return 0;
+    p += strlen(needle);
+    while (*p == ' ') p++;
+    return strtoll(p, NULL, 10);
+}
+
+/* Build a Duration JSON object from months/days/total_ns. */
+static void emit_duration_json(sqlite3_context *ctx, long long total_months,
+                                long long total_days, long long total_ns) {
+    /* Move full-day overflow into days, preserving signs per section. */
+    long long DAY_NS = 86400LL * 1000000000LL;
+    long long extra_days = total_ns / DAY_NS;
+    long long residue_ns = total_ns - extra_days * DAY_NS;
+    total_days += extra_days;
+
+    char iso[160];
+    format_iso_duration((int)total_months, (int)total_days, residue_ns, iso, sizeof(iso));
+
+    long long seconds_field, nanos_field;
+    if (residue_ns >= 0) {
+        seconds_field = residue_ns / 1000000000LL;
+        nanos_field = residue_ns - seconds_field * 1000000000LL;
+    } else {
+        seconds_field = -(((-residue_ns) + 999999999LL) / 1000000000LL);
+        nanos_field = residue_ns - seconds_field * 1000000000LL;
+    }
+
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"_iso8601\":\"%s\",\"months\":%lld,\"days\":%lld,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
+        iso, total_months, total_days, seconds_field, nanos_field);
+    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+}
+
+/* Detect Duration JSON value (object with _iso8601 field). */
+static bool is_duration_value(sqlite3_value *v, const char **out_text) {
+    if (sqlite3_value_type(v) != SQLITE_TEXT) return false;
+    const char *s = (const char*)sqlite3_value_text(v);
+    if (!s || s[0] != '{') return false;
+    if (!strstr(s, "\"_iso8601\"")) return false;
+    if (out_text) *out_text = s;
+    return true;
+}
+
+/* Apply a duration to a temporal string. `sign` is +1 (add) or -1 (sub). */
+static void apply_duration_to_temporal(sqlite3_context *ctx, const char *temporal,
+                                        const char *duration_json, int sign) {
+    tparts p;
+    if (!parse_temporal_parts(temporal, &p)) { sqlite3_result_text(ctx, temporal, -1, SQLITE_TRANSIENT); return; }
+    long long add_months = dur_field_ll(duration_json, "months") * sign;
+    long long add_days = dur_field_ll(duration_json, "days") * sign;
+    long long add_seconds = dur_field_ll(duration_json, "seconds") * sign;
+    long long add_ns_field = dur_field_ll(duration_json, "nanosecondsOfSecond") * sign;
+    long long add_total_ns = add_seconds * 1000000000LL + add_ns_field;
+
+    if (p.has_date) {
+        /* Add months / years first. */
+        long long total_months = (long long)(p.y) * 12 + (p.mo - 1) + add_months;
+        int new_year = (int)(total_months / 12);
+        int new_month = (int)(total_months - (long long)new_year * 12) + 1;
+        if (new_month < 1) { new_month += 12; new_year -= 1; }
+        int new_day = p.d;
+        /* Clamp day to last day of month. */
+        int dim = days_in_month_c(new_year, new_month);
+        if (new_day > dim) new_day = dim;
+        /* Add days. */
+        long base_days = days_from_civil(new_year, new_month, new_day) + (long)add_days;
+        /* Time-of-day contribution: only applies when the input itself has a
+         * time component (datetime/localdatetime). Pure date inputs ignore
+         * the duration's hours/minutes/seconds/ns (openCypher rule). */
+        long long time_ns = 0;
+        long long residue_ns = 0;
+        if (p.has_time) {
+            time_ns = (long long)p.h * 3600LL * 1000000000LL
+                    + (long long)p.mi * 60LL * 1000000000LL
+                    + (long long)p.sec * 1000000000LL + p.ns;
+            time_ns += add_total_ns;
+            long long DAY_NS = 86400LL * 1000000000LL;
+            long long extra_days = time_ns / DAY_NS;
+            residue_ns = time_ns - extra_days * DAY_NS;
+            if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
+            base_days += extra_days;
+        }
+        int oy, om, od;
+        civil_from_days(base_days, &oy, &om, &od);
+
+        if (p.has_time) {
+            /* datetime/localdatetime: emit full datetime. */
+            int new_h = (int)(residue_ns / (3600LL * 1000000000LL));
+            int new_mi = (int)((residue_ns / (60LL * 1000000000LL)) % 60);
+            int new_sec = (int)((residue_ns / 1000000000LL) % 60);
+            int64_t new_ns = residue_ns % 1000000000LL;
+            char buf[80];
+            if (new_ns) {
+                int width = 9;
+                long long sub = new_ns;
+                while (width > 0 && sub % 10 == 0) { sub /= 10; width--; }
+                snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%0*lld",
+                         oy, om, od, new_h, new_mi, new_sec, width, sub);
+            } else if (new_sec) {
+                snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d",
+                         oy, om, od, new_h, new_mi, new_sec);
+            } else {
+                snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d",
+                         oy, om, od, new_h, new_mi);
+            }
+            /* Re-attach the tz suffix if the source had one. */
+            if (p.has_tz) {
+                char tz_buf[16];
+                int oh = p.tz_offset_min / 60;
+                int om2 = p.tz_offset_min - oh * 60;
+                if (om2 < 0) om2 = -om2;
+                snprintf(tz_buf, sizeof(tz_buf), "%+03d:%02d", oh, om2);
+                size_t l = strlen(buf);
+                snprintf(buf + l, sizeof(buf) - l, "%s", tz_buf);
+            }
+            sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        } else {
+            /* date-only output. */
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, om, od);
+            sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        }
+        return;
+    }
+    if (p.has_time) {
+        /* time / localtime: apply time-portion of duration, wrap modulo 24h. */
+        long long time_ns = (long long)p.h * 3600LL * 1000000000LL
+                          + (long long)p.mi * 60LL * 1000000000LL
+                          + (long long)p.sec * 1000000000LL + p.ns;
+        time_ns += add_total_ns;
+        long long DAY_NS = 86400LL * 1000000000LL;
+        time_ns = ((time_ns % DAY_NS) + DAY_NS) % DAY_NS;
+        int new_h = (int)(time_ns / (3600LL * 1000000000LL));
+        int new_mi = (int)((time_ns / (60LL * 1000000000LL)) % 60);
+        int new_sec = (int)((time_ns / 1000000000LL) % 60);
+        int64_t new_ns = time_ns % 1000000000LL;
+        char buf[80];
+        if (new_ns) {
+            int width = 9;
+            long long sub = new_ns;
+            while (width > 0 && sub % 10 == 0) { sub /= 10; width--; }
+            snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%0*lld",
+                     new_h, new_mi, new_sec, width, sub);
+        } else if (new_sec) {
+            snprintf(buf, sizeof(buf), "%02d:%02d:%02d", new_h, new_mi, new_sec);
+        } else {
+            snprintf(buf, sizeof(buf), "%02d:%02d", new_h, new_mi);
+        }
+        if (p.has_tz) {
+            char tz_buf[16];
+            int oh = p.tz_offset_min / 60;
+            int om2 = p.tz_offset_min - oh * 60;
+            if (om2 < 0) om2 = -om2;
+            snprintf(tz_buf, sizeof(tz_buf), "%+03d:%02d", oh, om2);
+            size_t l = strlen(buf);
+            snprintf(buf + l, sizeof(buf) - l, "%s", tz_buf);
+        }
+        sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        return;
+    }
+    sqlite3_result_text(ctx, temporal, -1, SQLITE_TRANSIENT);
+}
+
+/* Polymorphic `+` / `-` handling Duration JSON + numeric + string concat. */
+static void gql_dyn_addsub_func(sqlite3_context *ctx, int argc, sqlite3_value **argv,
+                                 int sign) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    const char *lhs_text = (sqlite3_value_type(argv[0]) == SQLITE_TEXT)
+                            ? (const char*)sqlite3_value_text(argv[0]) : NULL;
+    const char *rhs_text = (sqlite3_value_type(argv[1]) == SQLITE_TEXT)
+                            ? (const char*)sqlite3_value_text(argv[1]) : NULL;
+    bool lhs_dur = is_duration_value(argv[0], NULL);
+    bool rhs_dur = is_duration_value(argv[1], NULL);
+
+    if (lhs_dur && rhs_dur) {
+        long long m = dur_field_ll(lhs_text, "months") + sign * dur_field_ll(rhs_text, "months");
+        long long da = dur_field_ll(lhs_text, "days") + sign * dur_field_ll(rhs_text, "days");
+        long long s = dur_field_ll(lhs_text, "seconds") + sign * dur_field_ll(rhs_text, "seconds");
+        long long ns = dur_field_ll(lhs_text, "nanosecondsOfSecond") + sign * dur_field_ll(rhs_text, "nanosecondsOfSecond");
+        emit_duration_json(ctx, m, da, s * 1000000000LL + ns);
+        return;
+    }
+    if (lhs_dur || rhs_dur) {
+        const char *temp_v = lhs_dur ? (rhs_text ? rhs_text : (const char*)sqlite3_value_text(argv[1])) : lhs_text;
+        const char *dur_v = lhs_dur ? lhs_text : rhs_text;
+        /* duration + temporal = temporal + duration (commutes for + only). */
+        if (lhs_dur && sign > 0) {
+            apply_duration_to_temporal(ctx, (const char*)sqlite3_value_text(argv[1]), dur_v, +1);
+        } else if (lhs_dur && sign < 0) {
+            /* duration - temporal is not a defined operation; return NULL. */
+            sqlite3_result_null(ctx);
+        } else {
+            apply_duration_to_temporal(ctx, temp_v, dur_v, sign);
+        }
+        return;
+    }
+
+    /* Fall through to native arithmetic / string concat. */
+    int t0 = sqlite3_value_type(argv[0]);
+    int t1 = sqlite3_value_type(argv[1]);
+    if (t0 == SQLITE_NULL || t1 == SQLITE_NULL) { sqlite3_result_null(ctx); return; }
+    /* String concat for + when either side is text (Cypher semantics). */
+    if (sign > 0 && (t0 == SQLITE_TEXT || t1 == SQLITE_TEXT)) {
+        const char *l = (const char*)sqlite3_value_text(argv[0]);
+        const char *r = (const char*)sqlite3_value_text(argv[1]);
+        if (!l) l = ""; if (!r) r = "";
+        size_t cap = strlen(l) + strlen(r) + 1;
+        char *buf = malloc(cap);
+        if (!buf) { sqlite3_result_error_nomem(ctx); return; }
+        snprintf(buf, cap, "%s%s", l, r);
+        sqlite3_result_text(ctx, buf, -1, free);
+        return;
+    }
+    /* Numeric. */
+    if (t0 == SQLITE_FLOAT || t1 == SQLITE_FLOAT) {
+        double a = sqlite3_value_double(argv[0]);
+        double b = sqlite3_value_double(argv[1]);
+        sqlite3_result_double(ctx, sign > 0 ? a + b : a - b);
+    } else {
+        long long a = sqlite3_value_int64(argv[0]);
+        long long b = sqlite3_value_int64(argv[1]);
+        sqlite3_result_int64(ctx, sign > 0 ? a + b : a - b);
+    }
+}
+
+static void gql_dyn_add_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    gql_dyn_addsub_func(ctx, argc, argv, +1);
+}
+static void gql_dyn_sub_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    gql_dyn_addsub_func(ctx, argc, argv, -1);
+}
+
 /* Compose a YYYY-MM-DD date string from a map's named components. Used by
  * the date()/datetime()/localdatetime() constructors when the map has a
  * `date` or `datetime` base value alongside scalar component overrides.
@@ -2260,6 +2499,13 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "_gql_tz_offset_for", 2, SQLITE_UTF8, 0,
                          gql_tz_offset_for_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_dyn_add", 2, SQLITE_UTF8, 0,
+                         gql_dyn_add_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+  rc = sqlite3_create_function(db, "_gql_dyn_sub", 2, SQLITE_UTF8, 0,
+                         gql_dyn_sub_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
