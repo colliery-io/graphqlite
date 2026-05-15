@@ -71,7 +71,7 @@ whitespace  [ \t\r\n]+
 /* Numbers */
 integer     {digit}+
 hexint      0[xX]{hexdigit}+
-decimal     ({digit}+\.{digit}+|{digit}+\.|\.{digit}+)([eE][+-]?{digit}+)?|{digit}+[eE][+-]?{digit}+
+decimal     {digit}+\.{digit}+([eE][+-]?{digit}+)?|\.{digit}+([eE][+-]?{digit}+)?|{digit}+[eE][+-]?{digit}+
 
 /* Identifiers */
 identifier  {letter}{alnum}*
@@ -148,6 +148,14 @@ operator    [+*/%^=!&|~]+
 {hexint}        { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
 {integer}       { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
 {decimal}       { prepare_decimal_token(yyextra, yytext); return CYPHER_TOKEN_DECIMAL; }
+{digit}+\./[^.] {
+    /* '5.' as a decimal when NOT immediately followed by another dot
+     * (flex trailing context: `/[^.]`). Prevents '1..2' from tokenizing
+     * as DECIMAL('1.') + DECIMAL('.2'). The non-dot trailing char is
+     * already excluded from yyleng under flex's trailing-context rule. */
+    prepare_decimal_token(yyextra, yytext);
+    return CYPHER_TOKEN_DECIMAL;
+}
 
 {string}        {
                     /* Remove quotes and handle escapes */
