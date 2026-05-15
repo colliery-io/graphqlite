@@ -832,8 +832,11 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
              *     verbatim, named like 'Europe/Stockholm' wrapped in [...])
              *   - else 'Z' for UTC. */
             if (!is_local) {
-                /* tz suffix: explicit offset verbatim, named zone gets
-                 * '<offset>[Name]' form via the C helper for tz lookup. */
+                /* tz suffix: explicit offset verbatim; named zone gets
+                 * '<offset>[Name]' with DST-aware offset via C helper. The
+                 * date passed to _gql_tz_offset_for is composed from the
+                 * full map so ordinalDay/week/quarter inputs resolve to
+                 * the right calendar month before DST lookup. */
                 append_sql(ctx, " || (CASE "
                                  "WHEN json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
@@ -844,22 +847,19 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                                  "THEN json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') "
-                                 "ELSE (CASE json_extract(json(");
+                                 "ELSE _gql_tz_offset_for(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, "), '$.timezone')"
-                    " WHEN 'Europe/Stockholm' THEN '+01:00'"
-                    " WHEN 'Europe/London' THEN '+00:00'"
-                    " WHEN 'Europe/Berlin' THEN '+01:00'"
-                    " WHEN 'Europe/Paris' THEN '+01:00'"
-                    " WHEN 'America/New_York' THEN '-05:00'"
-                    " WHEN 'America/Los_Angeles' THEN '-08:00'"
-                    " WHEN 'Pacific/Honolulu' THEN '-10:00'"
-                    " WHEN 'America/Anchorage' THEN '-09:00'"
-                    " WHEN 'Asia/Tokyo' THEN '+09:00'"
-                    " WHEN 'Asia/Shanghai' THEN '+08:00'"
-                    " WHEN 'Australia/Sydney' THEN '+10:00'"
-                    " WHEN 'Pacific/Auckland' THEN '+12:00'"
-                    " ELSE '+00:00' END) || '[' || json_extract(json(");
+                append_sql(ctx, "), '$.timezone'), _gql_date_compose(");
+                const char *dkeys2[] = {"year","month","day","week","dayOfWeek",
+                                        "ordinalDay","quarter","dayOfQuarter"};
+                for (int i = 0; i < 8; i++) {
+                    if (i > 0) append_sql(ctx, ", ");
+                    append_sql(ctx, "json_extract(json(");
+                    if (transform_expression(ctx, arg) < 0) return -1;
+                    append_sql(ctx, "), '$.%s')", dkeys2[i]);
+                }
+                /* base_date / base_datetime — null here for the legacy path. */
+                append_sql(ctx, ", NULL, NULL)) || '[' || json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') || ']' END)");
             }
