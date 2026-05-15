@@ -1196,14 +1196,12 @@ static long long dur_field_ll(const char *s, const char *key) {
     return strtoll(p, NULL, 10);
 }
 
-/* Build a Duration JSON object from months/days/total_ns. */
+/* Build a Duration JSON object from months/days/total_ns. Does NOT normalize
+ * overflow between fields — duration arithmetic preserves the components as
+ * specified ('28D + 32H' stays as such instead of becoming '29DT8H'). */
 static void emit_duration_json(sqlite3_context *ctx, long long total_months,
                                 long long total_days, long long total_ns) {
-    /* Move full-day overflow into days, preserving signs per section. */
-    long long DAY_NS = 86400LL * 1000000000LL;
-    long long extra_days = total_ns / DAY_NS;
-    long long residue_ns = total_ns - extra_days * DAY_NS;
-    total_days += extra_days;
+    long long residue_ns = total_ns;
 
     char iso[160];
     format_iso_duration((int)total_months, (int)total_days, residue_ns, iso, sizeof(iso));
