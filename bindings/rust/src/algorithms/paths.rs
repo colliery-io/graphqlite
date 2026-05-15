@@ -1,10 +1,10 @@
 //! Path finding algorithm implementations.
 
+use super::parsing::extract_float;
+use super::{AStarResult, ApspResult, ShortestPathResult};
 use crate::graph::Graph;
 use crate::utils::escape_string;
 use crate::{Result, Value};
-use super::{ShortestPathResult, AStarResult, ApspResult};
-use super::parsing::extract_float;
 
 impl Graph {
     /// Find the shortest path between two nodes using Dijkstra's algorithm.
@@ -26,7 +26,9 @@ impl Graph {
         let query = match weight_property {
             Some(wp) => format!(
                 "RETURN dijkstra(\"{}\", \"{}\", \"{}\")",
-                esc_source, esc_target, escape_string(wp)
+                esc_source,
+                esc_target,
+                escape_string(wp)
             ),
             None => format!("RETURN dijkstra(\"{}\", \"{}\")", esc_source, esc_target),
         };
@@ -45,7 +47,8 @@ impl Graph {
 
         // Handle nested column_0 structure
         if let Some(Value::Object(data)) = row.get_value("column_0") {
-            let path = data.get("path")
+            let path = data
+                .get("path")
                 .and_then(|v| match v {
                     Value::Array(arr) => Some(
                         arr.iter()
@@ -53,7 +56,7 @@ impl Graph {
                                 Value::String(s) => Some(s.clone()),
                                 _ => None,
                             })
-                            .collect()
+                            .collect(),
                     ),
                     _ => None,
                 })
@@ -65,18 +68,24 @@ impl Graph {
                 _ => None,
             });
 
-            let found = data.get("found")
+            let found = data
+                .get("found")
                 .and_then(|v| match v {
                     Value::Bool(b) => Some(*b),
                     _ => None,
                 })
                 .unwrap_or(false);
 
-            return Ok(ShortestPathResult { path, distance, found });
+            return Ok(ShortestPathResult {
+                path,
+                distance,
+                found,
+            });
         }
 
         // Direct access
-        let path = row.get_value("path")
+        let path = row
+            .get_value("path")
             .and_then(|v| match v {
                 Value::Array(arr) => Some(
                     arr.iter()
@@ -84,7 +93,7 @@ impl Graph {
                             Value::String(s) => Some(s.clone()),
                             _ => None,
                         })
-                        .collect()
+                        .collect(),
                 ),
                 _ => None,
             })
@@ -96,14 +105,19 @@ impl Graph {
             _ => None,
         });
 
-        let found = row.get_value("found")
+        let found = row
+            .get_value("found")
             .and_then(|v| match v {
                 Value::Bool(b) => Some(*b),
                 _ => None,
             })
             .unwrap_or(false);
 
-        Ok(ShortestPathResult { path, distance, found })
+        Ok(ShortestPathResult {
+            path,
+            distance,
+            found,
+        })
     }
 
     /// Find shortest path using A* algorithm with heuristic guidance.
@@ -145,7 +159,8 @@ impl Graph {
 
         let row = &result[0];
 
-        let path = row.get_value("path")
+        let path = row
+            .get_value("path")
             .and_then(|v| match v {
                 Value::Array(arr) => Some(
                     arr.iter()
@@ -153,7 +168,7 @@ impl Graph {
                             Value::String(s) => Some(s.clone()),
                             _ => None,
                         })
-                        .collect()
+                        .collect(),
                 ),
                 _ => None,
             })
@@ -165,21 +180,28 @@ impl Graph {
             _ => None,
         });
 
-        let found = row.get_value("found")
+        let found = row
+            .get_value("found")
             .and_then(|v| match v {
                 Value::Bool(b) => Some(*b),
                 _ => None,
             })
             .unwrap_or(false);
 
-        let nodes_explored = row.get_value("nodes_explored")
+        let nodes_explored = row
+            .get_value("nodes_explored")
             .map(|v| match v {
                 Value::Integer(i) => *i,
                 _ => 0,
             })
             .unwrap_or(0);
 
-        Ok(AStarResult { path, distance, found, nodes_explored })
+        Ok(AStarResult {
+            path,
+            distance,
+            found,
+            nodes_explored,
+        })
     }
 
     /// Compute shortest paths between all pairs of nodes.

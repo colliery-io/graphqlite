@@ -80,12 +80,12 @@ impl Value {
                 }
             }
             JsonValue::String(s) => Value::String(s),
-            JsonValue::Array(arr) => {
-                Value::Array(arr.into_iter().map(Value::from_json).collect())
-            }
-            JsonValue::Object(obj) => {
-                Value::Object(obj.into_iter().map(|(k, v)| (k, Value::from_json(v))).collect())
-            }
+            JsonValue::Array(arr) => Value::Array(arr.into_iter().map(Value::from_json).collect()),
+            JsonValue::Object(obj) => Value::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (k, Value::from_json(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -190,7 +190,8 @@ impl std::ops::Index<&str> for Value {
     ///
     /// Panics if this is not an Object or the key doesn't exist.
     fn index(&self, key: &str) -> &Self::Output {
-        self.get(key).unwrap_or_else(|| panic!("Value is not an Object or key '{}' not found", key))
+        self.get(key)
+            .unwrap_or_else(|| panic!("Value is not an Object or key '{}' not found", key))
     }
 }
 
@@ -230,7 +231,10 @@ impl Row {
     /// Used internally to convert array elements from graph algorithm results.
     pub(crate) fn from_map(map: HashMap<String, Value>) -> Self {
         let columns: Vec<String> = map.keys().cloned().collect();
-        Row { columns, values: map }
+        Row {
+            columns,
+            values: map,
+        }
     }
 
     /// Get a raw [`Value`] by column name.
@@ -259,9 +263,10 @@ impl Row {
     /// Returns [`Error::ColumnNotFound`] if the column doesn't exist,
     /// or [`Error::TypeError`] if the value can't be converted.
     pub fn get<T: FromValue>(&self, column: &str) -> crate::Result<T> {
-        let value = self.values.get(column).ok_or_else(|| {
-            Error::ColumnNotFound(column.to_string())
-        })?;
+        let value = self
+            .values
+            .get(column)
+            .ok_or_else(|| Error::ColumnNotFound(column.to_string()))?;
         T::from_value(value)
     }
 

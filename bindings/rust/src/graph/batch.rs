@@ -3,9 +3,9 @@
 //! These methods provide convenient batch upsert operations using Cypher MERGE semantics.
 //! For high-performance atomic batch inserts, use the bulk insert methods instead.
 
+use super::Graph;
 use crate::utils::PropertyValue;
 use crate::Result;
-use super::Graph;
 
 impl Graph {
     /// Batch upsert multiple nodes.

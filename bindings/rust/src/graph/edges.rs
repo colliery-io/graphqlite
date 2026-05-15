@@ -6,13 +6,19 @@ use crate::{CypherResult, Result, Value};
 
 impl Graph {
     /// Check if a directed edge exists from source to target.
-    pub fn has_edge(&self, source_id: &str, target_id: &str, rel_type: Option<&str>) -> Result<bool> {
+    pub fn has_edge(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: Option<&str>,
+    ) -> Result<bool> {
         let rel_pattern = rel_type_pattern(rel_type);
         let query = format!(
             "MATCH (a {{id: $src}})-[r{}]->(b {{id: $tgt}}) RETURN count(r) AS cnt",
             rel_pattern
         );
-        let result = self.connection()
+        let result = self
+            .connection()
             .cypher_builder(&query)
             .param("src", source_id)
             .param("tgt", target_id)
@@ -25,13 +31,19 @@ impl Graph {
     }
 
     /// Get edge properties between two nodes.
-    pub fn get_edge(&self, source_id: &str, target_id: &str, rel_type: Option<&str>) -> Result<Option<Value>> {
+    pub fn get_edge(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: Option<&str>,
+    ) -> Result<Option<Value>> {
         let rel_pattern = rel_type_pattern(rel_type);
         let query = format!(
             "MATCH (a {{id: $src}})-[r{}]->(b {{id: $tgt}}) RETURN r",
             rel_pattern
         );
-        let result = self.connection()
+        let result = self
+            .connection()
             .cypher_builder(&query)
             .param("src", source_id)
             .param("tgt", target_id)
@@ -97,7 +109,12 @@ impl Graph {
     }
 
     /// Delete the directed edge between two nodes.
-    pub fn delete_edge(&self, source_id: &str, target_id: &str, rel_type: Option<&str>) -> Result<()> {
+    pub fn delete_edge(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: Option<&str>,
+    ) -> Result<()> {
         let rel_pattern = rel_type_pattern(rel_type);
         let query = format!(
             "MATCH (a {{id: $src}})-[r{}]->(b {{id: $tgt}}) DELETE r",

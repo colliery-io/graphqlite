@@ -1,11 +1,11 @@
 //! Connected components algorithm implementations.
 
+use super::{
+    parsing::{extract_algo_array, extract_int, extract_node_id, extract_user_id},
+    ComponentResult,
+};
 use crate::graph::Graph;
 use crate::Result;
-use super::{
-    ComponentResult,
-    parsing::{extract_algo_array, extract_node_id, extract_user_id, extract_int},
-};
 
 impl Graph {
     /// Find weakly connected components in the graph.

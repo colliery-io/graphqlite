@@ -1,13 +1,14 @@
 //! Query operations for Graph.
 
+use super::{Graph, GraphStats};
 use crate::utils::rel_type_pattern;
 use crate::{CypherResult, Result, Value};
-use super::{Graph, GraphStats};
 
 impl Graph {
     /// Get the degree (number of connections) of a node.
     pub fn node_degree(&self, node_id: &str) -> Result<i64> {
-        let result = self.connection()
+        let result = self
+            .connection()
             .cypher_builder("MATCH (n {id: $id})-[r]-() RETURN count(r) AS degree")
             .param("id", node_id)
             .run()?;
@@ -19,7 +20,8 @@ impl Graph {
 
     /// Get all neighboring nodes (connected via any edge direction).
     pub fn get_neighbors(&self, node_id: &str) -> Result<Vec<Value>> {
-        let result = self.connection()
+        let result = self
+            .connection()
             .cypher_builder("MATCH (n {id: $id})-[]-(m) RETURN DISTINCT m")
             .param("id", node_id)
             .run()?;
@@ -34,8 +36,12 @@ impl Graph {
 
     /// Get graph statistics (node and edge counts).
     pub fn stats(&self) -> Result<GraphStats> {
-        let nodes_result = self.connection().cypher("MATCH (n) RETURN count(n) AS cnt")?;
-        let edges_result = self.connection().cypher("MATCH ()-[r]->() RETURN count(r) AS cnt")?;
+        let nodes_result = self
+            .connection()
+            .cypher("MATCH (n) RETURN count(n) AS cnt")?;
+        let edges_result = self
+            .connection()
+            .cypher("MATCH ()-[r]->() RETURN count(r) AS cnt")?;
 
         let nodes = if nodes_result.is_empty() {
             0
@@ -49,7 +55,10 @@ impl Graph {
             edges_result[0].get("cnt").unwrap_or(0)
         };
 
-        Ok(GraphStats { node_count: nodes, edge_count: edges })
+        Ok(GraphStats {
+            node_count: nodes,
+            edge_count: edges,
+        })
     }
 
     /// Get all outgoing edges from a node.

@@ -207,6 +207,16 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
      * that dispatches on operand types. Fall through to native SQL for
      * the obvious integer-literal-on-both-sides case (avoids overhead for
      * `1 + 2`). */
+    /* POW: emit as function call since SQLite lacks the ** operator. */
+    if (binary_op->op_type == BINARY_OP_POW) {
+        append_sql(ctx, "power(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, "))");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
     if (binary_op->op_type == BINARY_OP_ADD || binary_op->op_type == BINARY_OP_SUB) {
         bool both_int_lit = false;
         if (binary_op->left->type == AST_NODE_LITERAL && binary_op->right->type == AST_NODE_LITERAL) {
@@ -310,6 +320,9 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             break;
         case BINARY_OP_MOD:
             append_sql(ctx, " %% ");
+            break;
+        case BINARY_OP_POW:
+            /* Handled above via early return — should never reach here. */
             break;
         default:
             CYPHER_DEBUG("Unknown binary operator: %d", binary_op->op_type);

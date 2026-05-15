@@ -10,8 +10,8 @@ mod queries;
 
 pub use bulk::BulkInsertResult;
 
-use crate::{Connection, CypherResult, Result};
 use crate::query_builder::CypherQuery;
+use crate::{Connection, CypherResult, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -88,7 +88,11 @@ impl Graph {
     /// * `cypher` - Cypher query string with `$param` placeholders
     /// * `params` - Parameter values as a `serde_json::Value` (must be an object)
     #[deprecated(since = "0.4.0", note = "Use query_builder() instead")]
-    pub fn query_with_params(&self, cypher: &str, params: &serde_json::Value) -> Result<CypherResult> {
+    pub fn query_with_params(
+        &self,
+        cypher: &str,
+        params: &serde_json::Value,
+    ) -> Result<CypherResult> {
         self.conn.execute_cypher_with_params(cypher, params)
     }
 
@@ -166,8 +170,10 @@ impl Graph {
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
     pub fn load_graph(&self) -> Result<CacheStatus> {
-        let json: String = self.conn.sqlite_connection()
-            .query_row("SELECT gql_load_graph()", [], |row| row.get(0))?;
+        let json: String =
+            self.conn
+                .sqlite_connection()
+                .query_row("SELECT gql_load_graph()", [], |row| row.get(0))?;
         let status: CacheStatus = serde_json::from_str(&json)?;
         Ok(status)
     }
@@ -190,8 +196,10 @@ impl Graph {
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
     pub fn unload_graph(&self) -> Result<CacheStatus> {
-        let json: String = self.conn.sqlite_connection()
-            .query_row("SELECT gql_unload_graph()", [], |row| row.get(0))?;
+        let json: String =
+            self.conn
+                .sqlite_connection()
+                .query_row("SELECT gql_unload_graph()", [], |row| row.get(0))?;
         let status: CacheStatus = serde_json::from_str(&json)?;
         Ok(status)
     }
@@ -214,8 +222,10 @@ impl Graph {
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
     pub fn reload_graph(&self) -> Result<CacheStatus> {
-        let json: String = self.conn.sqlite_connection()
-            .query_row("SELECT gql_reload_graph()", [], |row| row.get(0))?;
+        let json: String =
+            self.conn
+                .sqlite_connection()
+                .query_row("SELECT gql_reload_graph()", [], |row| row.get(0))?;
         let status: CacheStatus = serde_json::from_str(&json)?;
         Ok(status)
     }
@@ -238,8 +248,10 @@ impl Graph {
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
     pub fn graph_loaded(&self) -> Result<bool> {
-        let json: String = self.conn.sqlite_connection()
-            .query_row("SELECT gql_graph_loaded()", [], |row| row.get(0))?;
+        let json: String =
+            self.conn
+                .sqlite_connection()
+                .query_row("SELECT gql_graph_loaded()", [], |row| row.get(0))?;
         let status: CacheLoadedStatus = serde_json::from_str(&json)?;
         Ok(status.loaded)
     }

@@ -1,13 +1,14 @@
 //! Node operations for Graph.
 
+use super::Graph;
 use crate::utils::{escape_string, PropertyValue};
 use crate::{Result, Value};
-use super::Graph;
 
 impl Graph {
     /// Check if a node with the given ID exists.
     pub fn has_node(&self, node_id: &str) -> Result<bool> {
-        let result = self.connection()
+        let result = self
+            .connection()
             .cypher_builder("MATCH (n {id: $id}) RETURN count(n) AS cnt")
             .param("id", node_id)
             .run()?;
@@ -22,7 +23,8 @@ impl Graph {
     ///
     /// Returns the node as a [`Value`], or `None` if not found.
     pub fn get_node(&self, node_id: &str) -> Result<Option<Value>> {
-        let result = self.connection()
+        let result = self
+            .connection()
             .cypher_builder("MATCH (n {id: $id}) RETURN n")
             .param("id", node_id)
             .run()?;

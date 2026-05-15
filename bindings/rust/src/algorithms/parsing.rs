@@ -20,19 +20,31 @@ pub(crate) fn extract_algo_array(result: &[&Row]) -> Vec<Row> {
     let row = result[0];
 
     // Try common column names for wrapped array results
-    for col_name in ["column_0", "wcc()", "scc()", "pagerank()", "degree_centrality()",
-                     "betweenness_centrality()", "closeness_centrality()", "eigenvector_centrality()",
-                     "labelPropagation()", "louvain()"] {
+    for col_name in [
+        "column_0",
+        "wcc()",
+        "scc()",
+        "pagerank()",
+        "degree_centrality()",
+        "betweenness_centrality()",
+        "closeness_centrality()",
+        "eigenvector_centrality()",
+        "labelPropagation()",
+        "louvain()",
+    ] {
         if let Some(Value::Array(arr)) = row.get_value(col_name) {
             // Convert array of objects to Vec<Row>
-            return arr.iter().filter_map(|v| {
-                if let Value::Object(obj) = v {
-                    // Convert HashMap<String, Value> to Row
-                    Some(Row::from_map(obj.clone()))
-                } else {
-                    None
-                }
-            }).collect();
+            return arr
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Object(obj) = v {
+                        // Convert HashMap<String, Value> to Row
+                        Some(Row::from_map(obj.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         }
     }
 

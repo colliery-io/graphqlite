@@ -1,10 +1,10 @@
 //! Graph traversal algorithm implementations.
 
+use super::parsing::{extract_int, extract_string};
+use super::TraversalResult;
 use crate::graph::Graph;
 use crate::utils::escape_string;
 use crate::Result;
-use super::TraversalResult;
-use super::parsing::{extract_int, extract_string};
 
 impl Graph {
     /// Perform breadth-first search traversal from a starting node.

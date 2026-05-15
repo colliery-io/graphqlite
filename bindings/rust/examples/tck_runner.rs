@@ -36,7 +36,11 @@ fn main() {
     let mut conn = match Connection::open_in_memory() {
         Ok(c) => c,
         Err(e) => {
-            let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("init: {e}")}));
+            let _ = writeln!(
+                out,
+                "{}",
+                json!({"ok": false, "error": format!("init: {e}")})
+            );
             std::process::exit(1);
         }
     };
@@ -45,7 +49,11 @@ fn main() {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("stdin: {e}")}));
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    json!({"ok": false, "error": format!("stdin: {e}")})
+                );
                 continue;
             }
         };
@@ -56,7 +64,11 @@ fn main() {
         let req: Request = match serde_json::from_str(trimmed) {
             Ok(r) => r,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("parse: {e}")}));
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    json!({"ok": false, "error": format!("parse: {e}")})
+                );
                 let _ = out.flush();
                 continue;
             }
@@ -79,7 +91,10 @@ fn main() {
                             let mut obj = serde_json::Map::new();
                             for c in &cols {
                                 if let Some(v) = row.get_value(c) {
-                                    obj.insert(c.clone(), serde_json::to_value(v).unwrap_or(Value::Null));
+                                    obj.insert(
+                                        c.clone(),
+                                        serde_json::to_value(v).unwrap_or(Value::Null),
+                                    );
                                 } else {
                                     obj.insert(c.clone(), Value::Null);
                                 }

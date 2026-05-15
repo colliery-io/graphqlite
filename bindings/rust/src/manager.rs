@@ -217,7 +217,9 @@ impl GraphManager {
         // Detach from coordinator if attached
         if let Some(ref conn) = self.coordinator {
             // Ignore errors if not attached
-            let _ = conn.sqlite_connection().execute(&format!("DETACH DATABASE {}", name), []);
+            let _ = conn
+                .sqlite_connection()
+                .execute(&format!("DETACH DATABASE {}", name), []);
         }
 
         // Delete file
@@ -258,11 +260,7 @@ impl GraphManager {
         let coord = self.coordinator.as_ref().unwrap().sqlite_connection();
 
         for (name, path) in &graph_paths {
-            let attach_sql = format!(
-                "ATTACH DATABASE '{}' AS {}",
-                path.display(),
-                name
-            );
+            let attach_sql = format!("ATTACH DATABASE '{}' AS {}", path.display(), name);
             if let Err(e) = coord.execute(&attach_sql, []) {
                 let err_str = e.to_string().to_lowercase();
                 if !err_str.contains("already in use") {
@@ -272,11 +270,8 @@ impl GraphManager {
         }
 
         // Execute query
-        let result: Option<String> = coord.query_row(
-            "SELECT cypher(?1)",
-            [cypher],
-            |row| row.get(0),
-        )?;
+        let result: Option<String> =
+            coord.query_row("SELECT cypher(?1)", [cypher], |row| row.get(0))?;
 
         match result {
             Some(json_str) => {
@@ -303,7 +298,11 @@ impl GraphManager {
     ///
     /// * `sql` - SQL query with graph-prefixed table names
     /// * `graph_names` - List of graph names to attach
-    pub fn query_sql(&mut self, sql: &str, graph_names: &[&str]) -> Result<Vec<Vec<rusqlite::types::Value>>> {
+    pub fn query_sql(
+        &mut self,
+        sql: &str,
+        graph_names: &[&str],
+    ) -> Result<Vec<Vec<rusqlite::types::Value>>> {
         // Collect graph paths first (before borrowing coordinator)
         let mut graph_paths: Vec<(String, PathBuf)> = Vec::new();
         for name in graph_names {
@@ -323,11 +322,7 @@ impl GraphManager {
         let coord = self.coordinator.as_ref().unwrap().sqlite_connection();
 
         for (name, path) in &graph_paths {
-            let attach_sql = format!(
-                "ATTACH DATABASE '{}' AS {}",
-                path.display(),
-                name
-            );
+            let attach_sql = format!("ATTACH DATABASE '{}' AS {}", path.display(), name);
             if let Err(e) = coord.execute(&attach_sql, []) {
                 let err_str = e.to_string().to_lowercase();
                 if !err_str.contains("already in use") {

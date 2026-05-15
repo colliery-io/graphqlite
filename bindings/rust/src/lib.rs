@@ -61,16 +61,16 @@ mod result;
 mod utils;
 
 pub use connection::Connection;
-pub use query_builder::CypherQuery;
 pub use error::Error;
 pub use graph::{graph, BulkInsertResult, CacheStatus, Graph, GraphStats};
 pub use manager::{graphs, GraphManager};
+pub use query_builder::CypherQuery;
 pub use result::{CypherResult, Row, Value};
 pub use utils::{escape_string, format_value, sanitize_rel_type, PropertyValue, CYPHER_RESERVED};
 
 // Algorithm result types
 pub use algorithms::{
-    ApspResult, AStarResult, BetweennessCentralityResult, ClosenessCentralityResult,
+    AStarResult, ApspResult, BetweennessCentralityResult, ClosenessCentralityResult,
     CommunityResult, ComponentResult, DegreeCentralityResult, EigenvectorCentralityResult,
     KnnResult, NodeSimilarityResult, PageRankResult, ShortestPathResult, TraversalResult,
     TriangleCountResult,

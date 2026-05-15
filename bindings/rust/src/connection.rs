@@ -1,11 +1,11 @@
 //! GraphQLite connection wrapper.
 
-use crate::{CypherResult, Error, Result};
 use crate::query_builder::CypherQuery;
+use crate::{CypherResult, Error, Result};
 
+use std::path::Path;
 #[cfg(not(feature = "bundled-extension"))]
 use std::path::PathBuf;
-use std::path::Path;
 
 /// A GraphQLite database connection.
 ///
@@ -157,17 +157,27 @@ impl Connection {
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
     #[deprecated(since = "0.4.0", note = "Use cypher_builder() instead")]
-    pub fn cypher_with_params(&self, query: &str, params: &serde_json::Value) -> Result<CypherResult> {
+    pub fn cypher_with_params(
+        &self,
+        query: &str,
+        params: &serde_json::Value,
+    ) -> Result<CypherResult> {
         self.execute_cypher_with_params(query, params)
     }
 
     /// Internal: execute a parameterized Cypher query.
-    pub(crate) fn execute_cypher_with_params(&self, query: &str, params: &serde_json::Value) -> Result<CypherResult> {
+    pub(crate) fn execute_cypher_with_params(
+        &self,
+        query: &str,
+        params: &serde_json::Value,
+    ) -> Result<CypherResult> {
         let params_json = serde_json::to_string(params)
             .map_err(|e| Error::Cypher(format!("Failed to serialize params: {}", e)))?;
-        let result: Option<String> = self
-            .conn
-            .query_row("SELECT cypher(?1, ?2)", rusqlite::params![query, params_json], |row| row.get(0))?;
+        let result: Option<String> = self.conn.query_row(
+            "SELECT cypher(?1, ?2)",
+            rusqlite::params![query, params_json],
+            |row| row.get(0),
+        )?;
 
         match result {
             Some(json_str) => {

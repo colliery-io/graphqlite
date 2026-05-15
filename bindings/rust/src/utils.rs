@@ -5,18 +5,72 @@ use std::collections::HashSet;
 /// Cypher reserved keywords that can't be used as relationship types.
 pub static CYPHER_RESERVED: &[&str] = &[
     // Clauses
-    "CREATE", "MATCH", "RETURN", "WHERE", "DELETE", "SET", "REMOVE",
-    "ORDER", "BY", "SKIP", "LIMIT", "WITH", "UNWIND", "AS", "AND", "OR",
-    "NOT", "IN", "IS", "NULL", "TRUE", "FALSE", "MERGE", "ON", "CALL",
-    "YIELD", "DETACH", "OPTIONAL", "UNION", "ALL", "CASE", "WHEN", "THEN",
-    "ELSE", "END", "EXISTS", "FOREACH",
+    "CREATE",
+    "MATCH",
+    "RETURN",
+    "WHERE",
+    "DELETE",
+    "SET",
+    "REMOVE",
+    "ORDER",
+    "BY",
+    "SKIP",
+    "LIMIT",
+    "WITH",
+    "UNWIND",
+    "AS",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "IS",
+    "NULL",
+    "TRUE",
+    "FALSE",
+    "MERGE",
+    "ON",
+    "CALL",
+    "YIELD",
+    "DETACH",
+    "OPTIONAL",
+    "UNION",
+    "ALL",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
+    "EXISTS",
+    "FOREACH",
     // Aggregate functions
-    "COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT",
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "COLLECT",
     // List functions
-    "REDUCE", "FILTER", "EXTRACT", "ANY", "NONE", "SINGLE",
+    "REDUCE",
+    "FILTER",
+    "EXTRACT",
+    "ANY",
+    "NONE",
+    "SINGLE",
     // Other reserved
-    "STARTS", "ENDS", "CONTAINS", "XOR", "DISTINCT", "LOAD", "CSV",
-    "USING", "PERIODIC", "COMMIT", "CONSTRAINT", "INDEX", "DROP", "ASSERT",
+    "STARTS",
+    "ENDS",
+    "CONTAINS",
+    "XOR",
+    "DISTINCT",
+    "LOAD",
+    "CSV",
+    "USING",
+    "PERIODIC",
+    "COMMIT",
+    "CONSTRAINT",
+    "INDEX",
+    "DROP",
+    "ASSERT",
 ];
 
 /// Escape a string for use in Cypher queries.
@@ -35,7 +89,13 @@ pub fn escape_string(s: &str) -> String {
 pub fn sanitize_rel_type(rel_type: &str) -> String {
     let safe: String = rel_type
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     let safe = if safe.is_empty() || safe.chars().next().is_some_and(|c| c.is_numeric()) {
@@ -137,7 +197,11 @@ impl PropertyValue {
             PropertyValue::Float(v) => {
                 let s = v.to_string();
                 // Ensure floats always have a decimal point for Cypher
-                if s.contains('.') { s } else { format!("{}.0", s) }
+                if s.contains('.') {
+                    s
+                } else {
+                    format!("{}.0", s)
+                }
             }
             PropertyValue::Bool(v) => v.to_string(),
         }

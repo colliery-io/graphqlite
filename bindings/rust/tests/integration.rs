@@ -1,6 +1,8 @@
 //! Integration tests for GraphQLite Rust bindings.
 
-use graphqlite::{escape_string, graphs, sanitize_rel_type, Connection, Error, Graph, GraphManager};
+use graphqlite::{
+    escape_string, graphs, sanitize_rel_type, Connection, Error, Graph, GraphManager,
+};
 use serde_json::json;
 
 /// Create a test connection.
@@ -117,11 +119,16 @@ fn test_multiple_rows() {
     conn.cypher("CREATE (n:Num {val: 2})").unwrap();
     conn.cypher("CREATE (n:Num {val: 3})").unwrap();
 
-    let results = conn.cypher("MATCH (n:Num) RETURN n.val ORDER BY n.val").unwrap();
+    let results = conn
+        .cypher("MATCH (n:Num) RETURN n.val ORDER BY n.val")
+        .unwrap();
 
     assert_eq!(results.len(), 3);
     // Results use the actual column name from the query
-    let values: Vec<i64> = results.iter().map(|r| r.get::<i64>("n.val").unwrap()).collect();
+    let values: Vec<i64> = results
+        .iter()
+        .map(|r| r.get::<i64>("n.val").unwrap())
+        .collect();
     assert_eq!(values, vec![1, 2, 3]);
 }
 
@@ -208,10 +215,7 @@ fn test_optional_values() {
         results[0].get::<Option<String>>("n.name").unwrap(),
         Some("test".to_string())
     );
-    assert_eq!(
-        results[0].get::<Option<String>>("n.missing").unwrap(),
-        None
-    );
+    assert_eq!(results[0].get::<Option<String>>("n.missing").unwrap(), None);
 }
 
 #[test]
@@ -363,8 +367,10 @@ fn test_upsert_edge_multiple_types() {
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
     // Create two different relation types between same nodes
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
-    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH").unwrap();
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+        .unwrap();
+    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH")
+        .unwrap();
 
     // Both should exist — verify via get_all_edges count
     let edges = g.get_all_edges().unwrap();
@@ -378,8 +384,10 @@ fn test_get_edge_by_type() {
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
-    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH").unwrap();
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+        .unwrap();
+    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH")
+        .unwrap();
 
     // Should be able to fetch the KNOWS edge specifically
     let edge = g.get_edge("a", "b", Some("KNOWS")).unwrap().unwrap();
@@ -415,8 +423,10 @@ fn test_delete_edge_by_type() {
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
-    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH").unwrap();
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+        .unwrap();
+    g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH")
+        .unwrap();
     assert_eq!(g.get_all_edges().unwrap().len(), 2);
 
     // Deleting KNOWS should leave WORKS_WITH intact
@@ -432,7 +442,8 @@ fn test_has_edge_by_type() {
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+        .unwrap();
 
     assert!(g.has_edge("a", "b", Some("KNOWS")).unwrap());
     assert!(!g.has_edge("a", "b", Some("WORKS_WITH")).unwrap());
@@ -500,9 +511,7 @@ fn test_graph_query() {
     g.upsert_node("test", [("name", "Test"), ("value", "42")], "Data")
         .unwrap();
 
-    let result = g
-        .query("MATCH (n:Data) RETURN n.name, n.value")
-        .unwrap();
+    let result = g.query("MATCH (n:Data) RETURN n.name, n.value").unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].get::<String>("n.name").unwrap(), "Test");
 }
@@ -588,9 +597,18 @@ fn test_graph_degree_centrality() {
     assert_eq!(degrees.len(), 3);
 
     // Find each node's result
-    let dc1 = degrees.iter().find(|d| d.user_id.as_deref() == Some("dc1")).unwrap();
-    let dc2 = degrees.iter().find(|d| d.user_id.as_deref() == Some("dc2")).unwrap();
-    let dc3 = degrees.iter().find(|d| d.user_id.as_deref() == Some("dc3")).unwrap();
+    let dc1 = degrees
+        .iter()
+        .find(|d| d.user_id.as_deref() == Some("dc1"))
+        .unwrap();
+    let dc2 = degrees
+        .iter()
+        .find(|d| d.user_id.as_deref() == Some("dc2"))
+        .unwrap();
+    let dc3 = degrees
+        .iter()
+        .find(|d| d.user_id.as_deref() == Some("dc3"))
+        .unwrap();
 
     // dc1: out=2, in=0
     assert_eq!(dc1.out_degree, 2);
@@ -630,7 +648,8 @@ fn test_graph_wcc() {
     assert_eq!(components.len(), 5);
 
     // Group by component
-    let mut by_component: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    let mut by_component: std::collections::HashMap<i64, Vec<String>> =
+        std::collections::HashMap::new();
     for c in &components {
         by_component
             .entry(c.component)
@@ -807,9 +826,14 @@ fn test_remove_label() {
     // After removing RemoveLabelMgr, this should not find any nodes
     // Either empty or just a success message without actual data
     let has_bob = results.iter().any(|row| {
-        row.get::<String>("n.name").map(|n| n == "Bob").unwrap_or(false)
+        row.get::<String>("n.name")
+            .map(|n| n == "Bob")
+            .unwrap_or(false)
     });
-    assert!(!has_bob, "Should not find Bob with RemoveLabelMgr after removal");
+    assert!(
+        !has_bob,
+        "Should not find Bob with RemoveLabelMgr after removal"
+    );
 
     // Verify the node still exists with remaining labels
     let results = conn
@@ -875,18 +899,21 @@ fn test_remove_with_where() {
 
     // Alice: status should be null
     assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alice");
-    assert!(results[0].get::<Option<String>>("n.status").unwrap().is_none());
+    assert!(results[0]
+        .get::<Option<String>>("n.status")
+        .unwrap()
+        .is_none());
 
     // Bob: status should still exist
     assert_eq!(results[1].get::<String>("n.name").unwrap(), "Bob");
-    assert_eq!(
-        results[1].get::<String>("n.status").unwrap(),
-        "active"
-    );
+    assert_eq!(results[1].get::<String>("n.status").unwrap(), "active");
 
     // Charlie: status should be null
     assert_eq!(results[2].get::<String>("n.name").unwrap(), "Charlie");
-    assert!(results[2].get::<Option<String>>("n.status").unwrap().is_none());
+    assert!(results[2]
+        .get::<Option<String>>("n.status")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -948,9 +975,12 @@ fn test_in_literal_list_no_match() {
 fn test_in_with_where_clause() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:InTest {name: 'Alice', status: 'active'})").unwrap();
-    conn.cypher("CREATE (n:InTest {name: 'Bob', status: 'pending'})").unwrap();
-    conn.cypher("CREATE (n:InTest {name: 'Charlie', status: 'inactive'})").unwrap();
+    conn.cypher("CREATE (n:InTest {name: 'Alice', status: 'active'})")
+        .unwrap();
+    conn.cypher("CREATE (n:InTest {name: 'Bob', status: 'pending'})")
+        .unwrap();
+    conn.cypher("CREATE (n:InTest {name: 'Charlie', status: 'inactive'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:InTest) WHERE n.status IN ['active', 'pending'] RETURN n.name ORDER BY n.name")
@@ -964,9 +994,12 @@ fn test_in_with_where_clause() {
 fn test_in_with_integers() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:InIntTest {name: 'A', priority: 1})").unwrap();
-    conn.cypher("CREATE (n:InIntTest {name: 'B', priority: 2})").unwrap();
-    conn.cypher("CREATE (n:InIntTest {name: 'C', priority: 3})").unwrap();
+    conn.cypher("CREATE (n:InIntTest {name: 'A', priority: 1})")
+        .unwrap();
+    conn.cypher("CREATE (n:InIntTest {name: 'B', priority: 2})")
+        .unwrap();
+    conn.cypher("CREATE (n:InIntTest {name: 'C', priority: 3})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:InIntTest) WHERE n.priority IN [1, 3] RETURN n.name ORDER BY n.name")
@@ -980,7 +1013,8 @@ fn test_in_with_integers() {
 fn test_in_empty_result() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:InEmptyTest {name: 'Test', status: 'archived'})").unwrap();
+    conn.cypher("CREATE (n:InEmptyTest {name: 'Test', status: 'archived'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:InEmptyTest) WHERE n.status IN ['active', 'pending'] RETURN n.name")
@@ -1009,7 +1043,9 @@ fn test_utility_functions() {
 fn test_starts_with_match() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN 'hello world' STARTS WITH 'hello'").unwrap();
+    let results = conn
+        .cypher("RETURN 'hello world' STARTS WITH 'hello'")
+        .unwrap();
     assert_eq!(results.len(), 1);
     // Result should be truthy (1 or true)
     let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
@@ -1020,7 +1056,9 @@ fn test_starts_with_match() {
 fn test_starts_with_no_match() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN 'hello world' STARTS WITH 'world'").unwrap();
+    let results = conn
+        .cypher("RETURN 'hello world' STARTS WITH 'world'")
+        .unwrap();
     assert_eq!(results.len(), 1);
     let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
     assert_eq!(val, 0);
@@ -1030,7 +1068,9 @@ fn test_starts_with_no_match() {
 fn test_ends_with_match() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN 'hello world' ENDS WITH 'world'").unwrap();
+    let results = conn
+        .cypher("RETURN 'hello world' ENDS WITH 'world'")
+        .unwrap();
     assert_eq!(results.len(), 1);
     let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
     assert_eq!(val, 1);
@@ -1040,7 +1080,9 @@ fn test_ends_with_match() {
 fn test_ends_with_no_match() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN 'hello world' ENDS WITH 'hello'").unwrap();
+    let results = conn
+        .cypher("RETURN 'hello world' ENDS WITH 'hello'")
+        .unwrap();
     assert_eq!(results.len(), 1);
     let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
     assert_eq!(val, 0);
@@ -1050,7 +1092,9 @@ fn test_ends_with_no_match() {
 fn test_contains_match() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN 'hello world' CONTAINS 'lo wo'").unwrap();
+    let results = conn
+        .cypher("RETURN 'hello world' CONTAINS 'lo wo'")
+        .unwrap();
     assert_eq!(results.len(), 1);
     let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
     assert_eq!(val, 1);
@@ -1070,9 +1114,12 @@ fn test_contains_no_match() {
 fn test_string_operators_in_where() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:StringTest {name: 'John Smith', email: 'john@example.com'})").unwrap();
-    conn.cypher("CREATE (n:StringTest {name: 'Jane Doe', email: 'jane@test.org'})").unwrap();
-    conn.cypher("CREATE (n:StringTest {name: 'Bob Johnson', email: 'bob@example.com'})").unwrap();
+    conn.cypher("CREATE (n:StringTest {name: 'John Smith', email: 'john@example.com'})")
+        .unwrap();
+    conn.cypher("CREATE (n:StringTest {name: 'Jane Doe', email: 'jane@test.org'})")
+        .unwrap();
+    conn.cypher("CREATE (n:StringTest {name: 'Bob Johnson', email: 'bob@example.com'})")
+        .unwrap();
 
     // Test STARTS WITH
     let results = conn
@@ -1107,7 +1154,9 @@ fn test_string_operators_in_where() {
 fn test_string_to_upper() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN toUpper('hello world') AS result").unwrap();
+    let results = conn
+        .cypher("RETURN toUpper('hello world') AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "HELLO WORLD");
 }
@@ -1116,7 +1165,9 @@ fn test_string_to_upper() {
 fn test_string_to_lower() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN toLower('HELLO WORLD') AS result").unwrap();
+    let results = conn
+        .cypher("RETURN toLower('HELLO WORLD') AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "hello world");
 }
@@ -1153,12 +1204,16 @@ fn test_string_substring() {
     let conn = test_connection();
 
     // With start only
-    let results = conn.cypher("RETURN substring('hello world', 6) AS result").unwrap();
+    let results = conn
+        .cypher("RETURN substring('hello world', 6) AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "world");
 
     // With start and length
-    let results = conn.cypher("RETURN substring('hello world', 0, 5) AS result").unwrap();
+    let results = conn
+        .cypher("RETURN substring('hello world', 0, 5) AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "hello");
 }
@@ -1167,7 +1222,9 @@ fn test_string_substring() {
 fn test_string_replace() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN replace('hello world', 'world', 'rust') AS result").unwrap();
+    let results = conn
+        .cypher("RETURN replace('hello world', 'world', 'rust') AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "hello rust");
 }
@@ -1185,7 +1242,9 @@ fn test_string_reverse() {
 fn test_string_left() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN left('hello world', 5) AS result").unwrap();
+    let results = conn
+        .cypher("RETURN left('hello world', 5) AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "hello");
 }
@@ -1194,7 +1253,9 @@ fn test_string_left() {
 fn test_string_right() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN right('hello world', 5) AS result").unwrap();
+    let results = conn
+        .cypher("RETURN right('hello world', 5) AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("result").unwrap(), "world");
 }
@@ -1218,7 +1279,8 @@ fn test_string_split() {
 fn test_string_functions_with_properties() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:StringFuncTest {name: '  John Doe  ', email: 'JOHN@EMAIL.COM'})").unwrap();
+    conn.cypher("CREATE (n:StringFuncTest {name: '  John Doe  ', email: 'JOHN@EMAIL.COM'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:StringFuncTest) RETURN trim(n.name) AS name, toLower(n.email) AS email")
@@ -1305,7 +1367,9 @@ fn test_math_sqrt() {
 fn test_math_sign() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN sign(-10) AS neg, sign(0) AS zero, sign(10) AS pos").unwrap();
+    let results = conn
+        .cypher("RETURN sign(-10) AS neg, sign(0) AS zero, sign(10) AS pos")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<i64>("neg").unwrap(), -1);
     assert_eq!(results[0].get::<i64>("zero").unwrap(), 0);
@@ -1348,7 +1412,9 @@ fn test_math_functions_with_properties() {
 fn test_list_size() {
     let conn = test_connection();
 
-    let results = conn.cypher("RETURN size([1, 2, 3, 4, 5]) AS result").unwrap();
+    let results = conn
+        .cypher("RETURN size([1, 2, 3, 4, 5]) AS result")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<i64>("result").unwrap(), 5);
 }
@@ -1428,7 +1494,9 @@ fn test_union_basic() {
     conn.cypher("CREATE (n:UnionB {name: 'Bob'})").unwrap();
 
     let results = conn
-        .cypher("MATCH (n:UnionA) RETURN n.name AS name UNION MATCH (m:UnionB) RETURN m.name AS name")
+        .cypher(
+            "MATCH (n:UnionA) RETURN n.name AS name UNION MATCH (m:UnionB) RETURN m.name AS name",
+        )
         .unwrap();
     assert_eq!(results.len(), 2);
 }
@@ -1466,9 +1534,12 @@ fn test_union_removes_duplicates() {
 fn test_with_basic() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:WithTest {name: 'Alice', age: 30})").unwrap();
-    conn.cypher("CREATE (n:WithTest {name: 'Bob', age: 25})").unwrap();
-    conn.cypher("CREATE (n:WithTest {name: 'Charlie', age: 35})").unwrap();
+    conn.cypher("CREATE (n:WithTest {name: 'Alice', age: 30})")
+        .unwrap();
+    conn.cypher("CREATE (n:WithTest {name: 'Bob', age: 25})")
+        .unwrap();
+    conn.cypher("CREATE (n:WithTest {name: 'Charlie', age: 35})")
+        .unwrap();
 
     // Use WITH to project properties directly (WHERE before WITH, project name in WITH)
     let results = conn
@@ -1483,9 +1554,12 @@ fn test_with_basic() {
 fn test_with_aggregation() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:WithAggTest {city: 'NYC', age: 30})").unwrap();
-    conn.cypher("CREATE (n:WithAggTest {city: 'NYC', age: 25})").unwrap();
-    conn.cypher("CREATE (n:WithAggTest {city: 'LA', age: 35})").unwrap();
+    conn.cypher("CREATE (n:WithAggTest {city: 'NYC', age: 30})")
+        .unwrap();
+    conn.cypher("CREATE (n:WithAggTest {city: 'NYC', age: 25})")
+        .unwrap();
+    conn.cypher("CREATE (n:WithAggTest {city: 'LA', age: 35})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:WithAggTest) WITH n.city AS city, count(n) AS cnt RETURN city, cnt ORDER BY city")
@@ -1522,9 +1596,12 @@ fn test_with_order_by_limit() {
 fn test_case_simple() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:CaseTest {status: 'active'})").unwrap();
-    conn.cypher("CREATE (n:CaseTest {status: 'pending'})").unwrap();
-    conn.cypher("CREATE (n:CaseTest {status: 'closed'})").unwrap();
+    conn.cypher("CREATE (n:CaseTest {status: 'active'})")
+        .unwrap();
+    conn.cypher("CREATE (n:CaseTest {status: 'pending'})")
+        .unwrap();
+    conn.cypher("CREATE (n:CaseTest {status: 'closed'})")
+        .unwrap();
 
     // Note: GraphQLite only supports searched CASE syntax (CASE WHEN ...), not simple CASE (CASE expr WHEN ...)
     let results = conn
@@ -1561,8 +1638,10 @@ fn test_case_generic() {
 fn test_coalesce() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:CoalesceTest {name: 'Alice'})").unwrap();
-    conn.cypher("CREATE (n:CoalesceTest {nickname: 'Bobby'})").unwrap();
+    conn.cypher("CREATE (n:CoalesceTest {name: 'Alice'})")
+        .unwrap();
+    conn.cypher("CREATE (n:CoalesceTest {nickname: 'Bobby'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:CoalesceTest) RETURN coalesce(n.nickname, n.name, 'Unknown') AS display ORDER BY display")
@@ -1576,7 +1655,8 @@ fn test_coalesce() {
 fn test_is_null() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:NullTest {name: 'Alice', email: 'alice@test.com'})").unwrap();
+    conn.cypher("CREATE (n:NullTest {name: 'Alice', email: 'alice@test.com'})")
+        .unwrap();
     conn.cypher("CREATE (n:NullTest {name: 'Bob'})").unwrap();
 
     let results = conn
@@ -1590,7 +1670,8 @@ fn test_is_null() {
 fn test_is_not_null() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:NotNullTest {name: 'Alice', email: 'alice@test.com'})").unwrap();
+    conn.cypher("CREATE (n:NotNullTest {name: 'Alice', email: 'alice@test.com'})")
+        .unwrap();
     conn.cypher("CREATE (n:NotNullTest {name: 'Bob'})").unwrap();
 
     let results = conn
@@ -1671,7 +1752,8 @@ fn test_to_boolean() {
 fn test_exists_property() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:ExistsTest {name: 'Alice', email: 'alice@test.com'})").unwrap();
+    conn.cypher("CREATE (n:ExistsTest {name: 'Alice', email: 'alice@test.com'})")
+        .unwrap();
     conn.cypher("CREATE (n:ExistsTest {name: 'Bob'})").unwrap();
 
     let results = conn
@@ -1689,7 +1771,8 @@ fn test_exists_property() {
 fn test_create_multiple_labels() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:MultiLabel1:MultiLabel2:MultiLabel3 {name: 'Test'})").unwrap();
+    conn.cypher("CREATE (n:MultiLabel1:MultiLabel2:MultiLabel3 {name: 'Test'})")
+        .unwrap();
 
     // Can match by any label
     let results = conn.cypher("MATCH (n:MultiLabel1) RETURN n.name").unwrap();
@@ -1707,9 +1790,12 @@ fn test_create_multiple_labels() {
 fn test_match_multiple_labels() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:MatchMultiA:MatchMultiB {name: 'Both'})").unwrap();
-    conn.cypher("CREATE (n:MatchMultiA {name: 'OnlyA'})").unwrap();
-    conn.cypher("CREATE (n:MatchMultiB {name: 'OnlyB'})").unwrap();
+    conn.cypher("CREATE (n:MatchMultiA:MatchMultiB {name: 'Both'})")
+        .unwrap();
+    conn.cypher("CREATE (n:MatchMultiA {name: 'OnlyA'})")
+        .unwrap();
+    conn.cypher("CREATE (n:MatchMultiB {name: 'OnlyB'})")
+        .unwrap();
 
     // Match nodes that have both labels
     let results = conn
@@ -1724,17 +1810,32 @@ fn test_return_node_all_labels() {
     // Issue #21: RETURN n should include all labels, not just the first
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:Alpha:Beta:Gamma {name: 'multilabel'})").unwrap();
+    conn.cypher("CREATE (n:Alpha:Beta:Gamma {name: 'multilabel'})")
+        .unwrap();
 
-    let results = conn.cypher("MATCH (n:Alpha {name: 'multilabel'}) RETURN n").unwrap();
+    let results = conn
+        .cypher("MATCH (n:Alpha {name: 'multilabel'}) RETURN n")
+        .unwrap();
     assert_eq!(results.len(), 1);
 
     // The returned vertex should contain all three labels
     let node = results[0].get_value("n").expect("missing column n");
     let node_str = format!("{:?}", node);
-    assert!(node_str.contains("Alpha"), "Missing label Alpha in: {}", node_str);
-    assert!(node_str.contains("Beta"), "Missing label Beta in: {}", node_str);
-    assert!(node_str.contains("Gamma"), "Missing label Gamma in: {}", node_str);
+    assert!(
+        node_str.contains("Alpha"),
+        "Missing label Alpha in: {}",
+        node_str
+    );
+    assert!(
+        node_str.contains("Beta"),
+        "Missing label Beta in: {}",
+        node_str
+    );
+    assert!(
+        node_str.contains("Gamma"),
+        "Missing label Gamma in: {}",
+        node_str
+    );
 }
 
 // =============================================================================
@@ -1745,7 +1846,8 @@ fn test_return_node_all_labels() {
 fn test_optional_match_with_results() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (a:OptMatchA {name: 'Alice'})-[:KNOWS]->(b:OptMatchB {name: 'Bob'})").unwrap();
+    conn.cypher("CREATE (a:OptMatchA {name: 'Alice'})-[:KNOWS]->(b:OptMatchB {name: 'Bob'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (a:OptMatchA) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name")
@@ -1759,7 +1861,8 @@ fn test_optional_match_with_results() {
 fn test_optional_match_no_results() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (a:OptMatchNoRes {name: 'Lonely'})").unwrap();
+    conn.cypher("CREATE (a:OptMatchNoRes {name: 'Lonely'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (a:OptMatchNoRes) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name")
@@ -1767,7 +1870,10 @@ fn test_optional_match_no_results() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("a.name").unwrap(), "Lonely");
     // b.name should be null
-    assert!(results[0].get::<Option<String>>("b.name").unwrap().is_none());
+    assert!(results[0]
+        .get::<Option<String>>("b.name")
+        .unwrap()
+        .is_none());
 }
 
 // =============================================================================
@@ -1778,9 +1884,7 @@ fn test_optional_match_no_results() {
 fn test_unwind_basic() {
     let conn = test_connection();
 
-    let results = conn
-        .cypher("UNWIND [1, 2, 3] AS x RETURN x")
-        .unwrap();
+    let results = conn.cypher("UNWIND [1, 2, 3] AS x RETURN x").unwrap();
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].get::<i64>("x").unwrap(), 1);
     assert_eq!(results[1].get::<i64>("x").unwrap(), 2);
@@ -1791,7 +1895,8 @@ fn test_unwind_basic() {
 fn test_unwind_with_create() {
     let conn = test_connection();
 
-    conn.cypher("UNWIND ['A', 'B', 'C'] AS name CREATE (n:UnwindCreate {name: name})").unwrap();
+    conn.cypher("UNWIND ['A', 'B', 'C'] AS name CREATE (n:UnwindCreate {name: name})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n:UnwindCreate) RETURN n.name ORDER BY n.name")
@@ -1808,9 +1913,7 @@ fn test_unwind_with_list_literal() {
 
     // UNWIND requires a list literal, property access, or variable
     // (function calls like range() are not directly supported)
-    let results = conn
-        .cypher("UNWIND [1, 2, 3, 4, 5] AS n RETURN n")
-        .unwrap();
+    let results = conn.cypher("UNWIND [1, 2, 3, 4, 5] AS n RETURN n").unwrap();
     assert_eq!(results.len(), 5);
     assert_eq!(results[0].get::<i64>("n").unwrap(), 1);
     assert_eq!(results[4].get::<i64>("n").unwrap(), 5);
@@ -1842,7 +1945,9 @@ fn test_manager_create_graph() {
     // Create graph and use it in a scope
     {
         let graph = gm.create("social").unwrap();
-        graph.upsert_node("alice", [("name", "Alice")], "Person").unwrap();
+        graph
+            .upsert_node("alice", [("name", "Alice")], "Person")
+            .unwrap();
         let stats = graph.stats().unwrap();
         assert_eq!(stats.node_count, 1);
     }
@@ -1889,7 +1994,9 @@ fn test_manager_open_or_create() {
     // Should create new, use it in a scope
     {
         let graph = gm.open_or_create("cache").unwrap();
-        graph.upsert_node("item", [("value", "test")], "Cache").unwrap();
+        graph
+            .upsert_node("item", [("value", "test")], "Cache")
+            .unwrap();
     }
 
     assert!(gm.exists("cache"));
@@ -1957,13 +2064,17 @@ fn test_manager_graph_isolation() {
     // Create first graph
     {
         let social = gm.create("social").unwrap();
-        social.upsert_node("alice", [("name", "Alice")], "Person").unwrap();
+        social
+            .upsert_node("alice", [("name", "Alice")], "Person")
+            .unwrap();
     }
 
     // Create second graph
     {
         let products = gm.create("products").unwrap();
-        products.upsert_node("phone", [("name", "Phone")], "Product").unwrap();
+        products
+            .upsert_node("phone", [("name", "Phone")], "Product")
+            .unwrap();
     }
 
     // Verify isolation - reopen and check each graph
@@ -1995,15 +2106,21 @@ fn test_manager_cross_graph_query() {
     // Create and populate a graph in a scope
     {
         let social = gm.create("social").unwrap();
-        social.upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person").unwrap();
-        social.upsert_node("bob", [("name", "Bob"), ("age", "25")], "Person").unwrap();
+        social
+            .upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person")
+            .unwrap();
+        social
+            .upsert_node("bob", [("name", "Bob"), ("age", "25")], "Person")
+            .unwrap();
     }
 
     // Cross-graph query with FROM clause
-    let result = gm.query(
-        "MATCH (n:Person) FROM social RETURN n.name ORDER BY n.name",
-        &["social"]
-    ).unwrap();
+    let result = gm
+        .query(
+            "MATCH (n:Person) FROM social RETURN n.name ORDER BY n.name",
+            &["social"],
+        )
+        .unwrap();
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].get::<String>("n.name").unwrap(), "Alice");
@@ -2014,10 +2131,7 @@ fn test_manager_cross_graph_query() {
 fn test_manager_query_missing_graph_fails() {
     let (mut gm, _tmpdir) = test_graph_manager();
 
-    let result = gm.query(
-        "MATCH (n) FROM missing RETURN n",
-        &["missing"]
-    );
+    let result = gm.query("MATCH (n) FROM missing RETURN n", &["missing"]);
     assert!(result.is_err());
 }
 
@@ -2028,13 +2142,14 @@ fn test_manager_query_sql() {
     // Create and populate graph in a scope
     {
         let social = gm.create("social").unwrap();
-        social.upsert_node("alice", [("name", "Alice")], "Person").unwrap();
+        social
+            .upsert_node("alice", [("name", "Alice")], "Person")
+            .unwrap();
     }
 
-    let result = gm.query_sql(
-        "SELECT COUNT(*) FROM social.nodes",
-        &["social"]
-    ).unwrap();
+    let result = gm
+        .query_sql("SELECT COUNT(*) FROM social.nodes", &["social"])
+        .unwrap();
 
     // The result is a Vec<Vec<rusqlite::types::Value>>
     assert_eq!(result.len(), 1);
@@ -2071,9 +2186,12 @@ fn test_regression_gqlite_t_0092_detach_delete_property_filter() {
     let g = test_graph();
 
     // Insert 3 nodes
-    g.upsert_node("node_a", [("name", "A")], "Test").expect("insert a");
-    g.upsert_node("node_b", [("name", "B")], "Test").expect("insert b");
-    g.upsert_node("node_c", [("name", "C")], "Test").expect("insert c");
+    g.upsert_node("node_a", [("name", "A")], "Test")
+        .expect("insert a");
+    g.upsert_node("node_b", [("name", "B")], "Test")
+        .expect("insert b");
+    g.upsert_node("node_c", [("name", "C")], "Test")
+        .expect("insert c");
 
     let stats = g.stats().expect("stats");
     assert_eq!(stats.node_count, 3, "Should have 3 nodes after insert");
@@ -2089,10 +2207,22 @@ fn test_regression_gqlite_t_0092_detach_delete_property_filter() {
     let stats = g.stats().expect("stats");
     // EXPECTED: 2 nodes remain
     // ACTUAL (bug): 0 nodes remain - all deleted due to AST mutation
-    assert_eq!(stats.node_count, 2, "Should have 2 nodes after deleting node_a");
-    assert!(!g.has_node("node_a").expect("has a"), "node_a should NOT exist");
-    assert!(g.has_node("node_b").expect("has b"), "node_b should still exist");
-    assert!(g.has_node("node_c").expect("has c"), "node_c should still exist");
+    assert_eq!(
+        stats.node_count, 2,
+        "Should have 2 nodes after deleting node_a"
+    );
+    assert!(
+        !g.has_node("node_a").expect("has a"),
+        "node_a should NOT exist"
+    );
+    assert!(
+        g.has_node("node_b").expect("has b"),
+        "node_b should still exist"
+    );
+    assert!(
+        g.has_node("node_c").expect("has c"),
+        "node_c should still exist"
+    );
 }
 
 // =============================================================================
@@ -2242,7 +2372,11 @@ fn test_bulk_insert_nodes() {
         .insert_nodes_bulk([
             ("alice", vec![("name", "Alice"), ("age", "30")], "Person"),
             ("bob", vec![("name", "Bob"), ("age", "25")], "Person"),
-            ("charlie", vec![("name", "Charlie"), ("age", "35")], "Person"),
+            (
+                "charlie",
+                vec![("name", "Charlie"), ("age", "35")],
+                "Person",
+            ),
         ])
         .unwrap();
 
@@ -2256,7 +2390,9 @@ fn test_bulk_insert_nodes() {
     assert_eq!(stats.node_count, 3);
 
     // Verify nodes via Cypher query
-    let result = g.query("MATCH (n:Person) RETURN n.id ORDER BY n.id").unwrap();
+    let result = g
+        .query("MATCH (n:Person) RETURN n.id ORDER BY n.id")
+        .unwrap();
     assert_eq!(result.len(), 3);
     assert_eq!(result[0].get::<String>("n.id").unwrap(), "alice");
     assert_eq!(result[1].get::<String>("n.id").unwrap(), "bob");
@@ -2268,7 +2404,9 @@ fn test_bulk_insert_nodes_empty() {
     let g = test_graph();
 
     let id_map = g
-        .insert_nodes_bulk::<std::vec::IntoIter<(&str, BulkProps, &str)>, _, _, _, _, _>(vec![].into_iter())
+        .insert_nodes_bulk::<std::vec::IntoIter<(&str, BulkProps, &str)>, _, _, _, _, _>(
+            vec![].into_iter(),
+        )
         .unwrap();
 
     assert!(id_map.is_empty());
@@ -2305,9 +2443,14 @@ fn test_bulk_insert_edges() {
     assert_eq!(stats.edge_count, 3);
 
     // Verify edges via query
-    let result = g.query("MATCH ()-[r:CONNECTS]->() RETURN r.weight ORDER BY r.weight").unwrap();
+    let result = g
+        .query("MATCH ()-[r:CONNECTS]->() RETURN r.weight ORDER BY r.weight")
+        .unwrap();
     assert_eq!(result.len(), 3);
-    let weights: Vec<f64> = result.iter().map(|r| r.get::<f64>("r.weight").unwrap()).collect();
+    let weights: Vec<f64> = result
+        .iter()
+        .map(|r| r.get::<f64>("r.weight").unwrap())
+        .collect();
     assert!((weights[0] - 1.5).abs() < 0.01);
     assert!((weights[1] - 2.5).abs() < 0.01);
     assert!((weights[2] - 3.5).abs() < 0.01);
@@ -2337,8 +2480,10 @@ fn test_bulk_insert_edges_fallback_lookup() {
     let g = test_graph();
 
     // Create nodes via regular upsert
-    g.upsert_node("existing1", [("name", "Existing1")], "Node").unwrap();
-    g.upsert_node("existing2", [("name", "Existing2")], "Node").unwrap();
+    g.upsert_node("existing1", [("name", "Existing1")], "Node")
+        .unwrap();
+    g.upsert_node("existing2", [("name", "Existing2")], "Node")
+        .unwrap();
 
     // Insert edges using empty id_map - should fall back to database lookup
     let empty_map = std::collections::HashMap::new();
@@ -2386,9 +2531,11 @@ fn test_resolve_node_ids() {
     let g = test_graph();
 
     // Insert some nodes via upsert
-    g.upsert_node("alice", [("name", "Alice")], "Person").unwrap();
+    g.upsert_node("alice", [("name", "Alice")], "Person")
+        .unwrap();
     g.upsert_node("bob", [("name", "Bob")], "Person").unwrap();
-    g.upsert_node("charlie", [("name", "Charlie")], "Person").unwrap();
+    g.upsert_node("charlie", [("name", "Charlie")], "Person")
+        .unwrap();
 
     let resolved = g.resolve_node_ids(["alice", "bob", "unknown"]).unwrap();
 
@@ -2403,7 +2550,9 @@ fn test_resolve_node_ids() {
 fn test_resolve_node_ids_empty() {
     let g = test_graph();
 
-    let resolved = g.resolve_node_ids::<std::vec::IntoIter<&str>, _>(vec![].into_iter()).unwrap();
+    let resolved = g
+        .resolve_node_ids::<std::vec::IntoIter<&str>, _>(vec![].into_iter())
+        .unwrap();
     assert!(resolved.is_empty());
 }
 
@@ -2412,7 +2561,8 @@ fn test_bulk_insert_mixed_sources() {
     let g = test_graph();
 
     // Insert some nodes via Cypher/upsert
-    g.upsert_node("existing", [("name", "Existing")], "Person").unwrap();
+    g.upsert_node("existing", [("name", "Existing")], "Person")
+        .unwrap();
 
     // Insert new nodes via bulk
     let id_map = g
@@ -2450,8 +2600,16 @@ fn test_bulk_insert_with_typed_properties() {
     // Insert nodes with different property types
     let id_map = g
         .insert_nodes_bulk([
-            ("node1", vec![("name", "Node1"), ("count", "42"), ("active", "true")], "TypedNode"),
-            ("node2", vec![("name", "Node2"), ("score", "3.14"), ("active", "false")], "TypedNode"),
+            (
+                "node1",
+                vec![("name", "Node1"), ("count", "42"), ("active", "true")],
+                "TypedNode",
+            ),
+            (
+                "node2",
+                vec![("name", "Node2"), ("score", "3.14"), ("active", "false")],
+                "TypedNode",
+            ),
         ])
         .unwrap();
 
@@ -2518,8 +2676,10 @@ fn test_bulk_insert_verifies_with_graph_api() {
 #[test]
 fn test_builder_string_match() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
-    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")
+        .unwrap();
+    let results = conn
+        .cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
         .param("name", "Alice")
         .run()
         .unwrap();
@@ -2530,9 +2690,12 @@ fn test_builder_string_match() {
 #[test]
 fn test_builder_integer_filter() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
-    conn.cypher("CREATE (n:Person {name: 'Bob', age: 20})").unwrap();
-    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.age > $min RETURN n.name")
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")
+        .unwrap();
+    conn.cypher("CREATE (n:Person {name: 'Bob', age: 20})")
+        .unwrap();
+    let results = conn
+        .cypher_builder("MATCH (n:Person) WHERE n.age > $min RETURN n.name")
         .param("min", 25)
         .run()
         .unwrap();
@@ -2548,7 +2711,9 @@ fn test_builder_in_create() {
         .param("age", 40)
         .run()
         .unwrap();
-    let results = conn.cypher("MATCH (n:Person {name: 'Charlie'}) RETURN n.name, n.age").unwrap();
+    let results = conn
+        .cypher("MATCH (n:Person {name: 'Charlie'}) RETURN n.name, n.age")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("n.name").unwrap(), "Charlie");
     assert_eq!(results[0].get::<i64>("n.age").unwrap(), 40);
@@ -2557,8 +2722,10 @@ fn test_builder_in_create() {
 #[test]
 fn test_builder_bulk_params() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
-    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")
+        .unwrap();
+    let results = conn
+        .cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
         .params(&json!({"name": "Alice"}))
         .run()
         .unwrap();
@@ -2569,9 +2736,12 @@ fn test_builder_bulk_params() {
 #[test]
 fn test_builder_mixed_param_and_params() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})").unwrap();
-    conn.cypher("CREATE (n:Person {name: 'Bob', age: 20})").unwrap();
-    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name AND n.age > $min RETURN n.name")
+    conn.cypher("CREATE (n:Person {name: 'Alice', age: 30})")
+        .unwrap();
+    conn.cypher("CREATE (n:Person {name: 'Bob', age: 20})")
+        .unwrap();
+    let results = conn
+        .cypher_builder("MATCH (n:Person) WHERE n.name = $name AND n.age > $min RETURN n.name")
         .param("name", "Alice")
         .params(&json!({"min": 25}))
         .run()
@@ -2584,7 +2754,8 @@ fn test_builder_mixed_param_and_params() {
 fn test_builder_run_no_params() {
     let conn = test_connection();
     conn.cypher("CREATE (n:Person {name: 'Alice'})").unwrap();
-    let results = conn.cypher_builder("MATCH (n:Person) RETURN n.name")
+    let results = conn
+        .cypher_builder("MATCH (n:Person) RETURN n.name")
         .run()
         .unwrap();
     assert_eq!(results.len(), 1);
@@ -2595,7 +2766,8 @@ fn test_builder_run_no_params() {
 fn test_builder_injection_safe() {
     let conn = test_connection();
     conn.cypher("CREATE (n:Person {name: 'Alice'})").unwrap();
-    let results = conn.cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+    let results = conn
+        .cypher_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
         .param("name", "Alice'; DROP TABLE nodes; --")
         .run()
         .unwrap();
@@ -2616,7 +2788,8 @@ fn test_builder_backward_compat() {
 fn test_graph_query_builder() {
     let g = test_graph();
     g.query("CREATE (n:Person {name: 'Alice'})").unwrap();
-    let results = g.query_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
+    let results = g
+        .query_builder("MATCH (n:Person) WHERE n.name = $name RETURN n.name")
         .param("name", "Alice")
         .run()
         .unwrap();
@@ -2767,8 +2940,10 @@ fn test_bulk_set_edge() {
     let conn = test_connection();
     conn.cypher("CREATE (a:Node {name: 'A'}), (b:Node {name: 'B'})")
         .unwrap();
-    conn.cypher("MATCH (a:Node {name: 'A'}), (b:Node {name: 'B'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)")
-        .unwrap();
+    conn.cypher(
+        "MATCH (a:Node {name: 'A'}), (b:Node {name: 'B'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)",
+    )
+    .unwrap();
     conn.cypher("MATCH (a)-[r:KNOWS]->(b) SET r = {since: 2021, strong: true}")
         .unwrap();
     let results = conn
@@ -2816,7 +2991,9 @@ fn test_bulk_set_with_builder_params() {
     conn.cypher("CREATE (n:ParamSet {name: 'Alice', age: 30})")
         .unwrap();
     let results = conn
-        .cypher_builder("MATCH (n:ParamSet) WHERE n.name = $name SET n += {score: 100} RETURN n.score")
+        .cypher_builder(
+            "MATCH (n:ParamSet) WHERE n.name = $name SET n += {score: 100} RETURN n.score",
+        )
         .param("name", "Alice")
         .run()
         .unwrap();
@@ -2845,10 +3022,7 @@ fn test_set_bulk_replace_return() {
         .cypher("MATCH (n:SetRetTest2 {name: 'Carol'}) SET n = {name: 'Carol', updated: true} RETURN n.name, n.updated, n.age")
         .unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(
-        results[0].get::<String>("n.name").unwrap(),
-        "Carol"
-    );
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Carol");
     // age should be NULL after replace
     let age = results[0].get::<Option<i64>>("n.age").unwrap();
     assert!(age.is_none());
@@ -2874,9 +3048,7 @@ fn test_set_to_upper_function() {
     conn.cypher("CREATE (n:UpperTest {name: 'raw'})").unwrap();
     conn.cypher("MATCH (n:UpperTest {name: 'raw'}) SET n.name = toUpper('alice')")
         .unwrap();
-    let results = conn
-        .cypher("MATCH (n:UpperTest) RETURN n.name")
-        .unwrap();
+    let results = conn.cypher("MATCH (n:UpperTest) RETURN n.name").unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("n.name").unwrap(), "ALICE");
 }
@@ -2951,7 +3123,8 @@ fn test_bulk_set_parameter_nested_json() {
 #[test]
 fn test_set_to_float_function() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:FloatFuncRs {name: 'ftest'})").unwrap();
+    conn.cypher("CREATE (n:FloatFuncRs {name: 'ftest'})")
+        .unwrap();
     conn.cypher("MATCH (n:FloatFuncRs {name: 'ftest'}) SET n.score = toFloat('3.14')")
         .unwrap();
     let results = conn
@@ -3089,7 +3262,9 @@ fn test_merge_on_match_set_function() {
 fn test_merge_with_set_return() {
     let conn = test_connection();
     let results = conn
-        .cypher("MERGE (n:MergeWithRs {id: 'mwr1'}) WITH n SET n.updated = true RETURN n.id, n.updated")
+        .cypher(
+            "MERGE (n:MergeWithRs {id: 'mwr1'}) WITH n SET n.updated = true RETURN n.id, n.updated",
+        )
         .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("n.id").unwrap(), "mwr1");
@@ -3127,10 +3302,7 @@ fn test_remove_property_return() {
         .cypher("MATCH (n:RemRetTest {name: 'Dave'}) REMOVE n.temp RETURN n.name, n.temp")
         .unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(
-        results[0].get::<String>("n.name").unwrap(),
-        "Dave"
-    );
+    assert_eq!(results[0].get::<String>("n.name").unwrap(), "Dave");
     let temp = results[0].get::<Option<String>>("n.temp").unwrap();
     assert!(temp.is_none());
 }
@@ -3142,8 +3314,10 @@ fn test_remove_property_return() {
 #[test]
 fn test_return_star() {
     let g = test_graph();
-    g.query("CREATE (a:RetStar {id: 'rs1', name: 'Alice'})").unwrap();
-    g.query("CREATE (b:RetStar {id: 'rs2', name: 'Bob'})").unwrap();
+    g.query("CREATE (a:RetStar {id: 'rs1', name: 'Alice'})")
+        .unwrap();
+    g.query("CREATE (b:RetStar {id: 'rs2', name: 'Bob'})")
+        .unwrap();
     let results = g.query("MATCH (n:RetStar) RETURN *").unwrap();
     assert_eq!(results.len(), 2);
     assert!(results.columns().len() > 0);
@@ -3152,8 +3326,11 @@ fn test_return_star() {
 #[test]
 fn test_return_star_with_relationship() {
     let g = test_graph();
-    g.query("CREATE (a:RStar2 {id: 'r1'})-[:KNOWS]->(b:RStar2 {id: 'r2'})").unwrap();
-    let results = g.query("MATCH (a:RStar2)-[r]->(b:RStar2) RETURN *").unwrap();
+    g.query("CREATE (a:RStar2 {id: 'r1'})-[:KNOWS]->(b:RStar2 {id: 'r2'})")
+        .unwrap();
+    let results = g
+        .query("MATCH (a:RStar2)-[r]->(b:RStar2) RETURN *")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert!(results.columns().len() >= 3); // a, r, b
 }
@@ -3213,7 +3390,9 @@ fn test_to_boolean_or_null() {
 fn test_element_id() {
     let g = test_graph();
     g.query("CREATE (n:EidTest {id: 'eid1'})").unwrap();
-    let r = g.query("MATCH (n:EidTest) RETURN elementId(n) AS eid").unwrap();
+    let r = g
+        .query("MATCH (n:EidTest) RETURN elementId(n) AS eid")
+        .unwrap();
     assert!(r[0].get::<i64>("eid").unwrap() > 0);
 }
 
@@ -3247,7 +3426,9 @@ fn test_char_length() {
     let r = conn.cypher("RETURN char_length('hello') AS r").unwrap();
     assert_eq!(r[0].get::<i64>("r").unwrap(), 5);
 
-    let r = conn.cypher("RETURN character_length('world!') AS r").unwrap();
+    let r = conn
+        .cypher("RETURN character_length('world!') AS r")
+        .unwrap();
     assert_eq!(r[0].get::<i64>("r").unwrap(), 6);
 }
 
@@ -3324,7 +3505,9 @@ fn test_trig_functions() {
     let val: f64 = r[0].get("r").unwrap();
     assert!((val - 0.7854).abs() < 0.001);
 
-    let r = conn.cypher("RETURN degrees(3.141592653589793) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN degrees(3.141592653589793) AS r")
+        .unwrap();
     let val: f64 = r[0].get("r").unwrap();
     assert!((val - 180.0).abs() < 0.01);
 
@@ -3378,28 +3561,36 @@ fn test_isnan() {
 #[test]
 fn test_date_map_construction() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN date({year: 2024, month: 3, day: 15}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN date({year: 2024, month: 3, day: 15}) AS r")
+        .unwrap();
     assert_eq!(r[0].get::<String>("r").unwrap(), "2024-03-15");
 }
 
 #[test]
 fn test_time_map_construction() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN time({hour: 14, minute: 30, second: 0}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN time({hour: 14, minute: 30, second: 0}) AS r")
+        .unwrap();
     assert_eq!(r[0].get::<String>("r").unwrap(), "14:30:00");
 }
 
 #[test]
 fn test_datetime_map_construction() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN datetime({year: 2024, month: 6, day: 15, hour: 10, minute: 30}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN datetime({year: 2024, month: 6, day: 15, hour: 10, minute: 30}) AS r")
+        .unwrap();
     assert_eq!(r[0].get::<String>("r").unwrap(), "2024-06-15T10:30:00");
 }
 
 #[test]
 fn test_duration_map() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN duration({days: 5, hours: 3}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN duration({days: 5, hours: 3}) AS r")
+        .unwrap();
     let val = r[0].get_value("r").unwrap();
     let s = format!("{:?}", val);
     assert!(s.contains("5")); // days: 5
@@ -3415,21 +3606,27 @@ fn test_datetime_from_epoch() {
 #[test]
 fn test_duration_in_days() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN durationInDays('2024-01-01', '2024-03-15') AS r").unwrap();
+    let r = conn
+        .cypher("RETURN durationInDays('2024-01-01', '2024-03-15') AS r")
+        .unwrap();
     assert_eq!(r[0].get::<i64>("r").unwrap(), 74);
 }
 
 #[test]
 fn test_duration_in_seconds() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN durationInSeconds('2024-01-01 00:00:00', '2024-01-01 01:30:00') AS r").unwrap();
+    let r = conn
+        .cypher("RETURN durationInSeconds('2024-01-01 00:00:00', '2024-01-01 01:30:00') AS r")
+        .unwrap();
     assert_eq!(r[0].get::<i64>("r").unwrap(), 5400);
 }
 
 #[test]
 fn test_date_add() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN dateAdd('2024-01-15', {days: 30}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN dateAdd('2024-01-15', {days: 30}) AS r")
+        .unwrap();
     let val = r[0].get::<String>("r").unwrap();
     assert!(val.contains("2024-02-14"));
 }
@@ -3437,7 +3634,9 @@ fn test_date_add() {
 #[test]
 fn test_date_sub() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN dateSub('2024-06-15', {months: 3}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN dateSub('2024-06-15', {months: 3}) AS r")
+        .unwrap();
     let val = r[0].get::<String>("r").unwrap();
     assert!(val.contains("2024-03-15"));
 }
@@ -3445,7 +3644,9 @@ fn test_date_sub() {
 #[test]
 fn test_date_truncate() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN dateTruncate('month', '2024-03-15') AS r").unwrap();
+    let r = conn
+        .cypher("RETURN dateTruncate('month', '2024-03-15') AS r")
+        .unwrap();
     assert_eq!(r[0].get::<String>("r").unwrap(), "2024-03-01");
 }
 
@@ -3463,7 +3664,9 @@ fn test_point_cartesian() {
 #[test]
 fn test_point_geographic() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN point({latitude: 40.7128, longitude: -74.006}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN point({latitude: 40.7128, longitude: -74.006}) AS r")
+        .unwrap();
     let val = r[0].get_value("r").unwrap();
     let s = format!("{:?}", val);
     assert!(s.contains("4326") || s.contains("srid"));
@@ -3519,7 +3722,9 @@ fn test_distance_same_point() {
 #[test]
 fn test_date_add_cross_year() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN dateAdd('2024-11-15', {months: 3}) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN dateAdd('2024-11-15', {months: 3}) AS r")
+        .unwrap();
     let val = r[0].get::<String>("r").unwrap();
     assert!(val.contains("2025-02-15"));
 }
@@ -3527,7 +3732,9 @@ fn test_date_add_cross_year() {
 #[test]
 fn test_negative_epoch() {
     let conn = test_connection();
-    let r = conn.cypher("RETURN datetimeFromEpoch(-86400) AS r").unwrap();
+    let r = conn
+        .cypher("RETURN datetimeFromEpoch(-86400) AS r")
+        .unwrap();
     let val = r[0].get::<String>("r").unwrap();
     assert!(val.contains("1969-12-31"));
 }
@@ -3543,10 +3750,14 @@ fn test_negative_epoch() {
 fn test_clotho_bug1_count_aggregate_with_where_filter() {
     // Reported: count() returns column headers but no rows
     let conn = test_connection();
-    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D1'})").unwrap();
-    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D2'})").unwrap();
-    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D3'})").unwrap();
-    conn.cypher("CREATE (:Other {entity_type: 'Other', title: 'O1'})").unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D1'})")
+        .unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D2'})")
+        .unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', title: 'D3'})")
+        .unwrap();
+    conn.cypher("CREATE (:Other {entity_type: 'Other', title: 'O1'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n) WHERE n.entity_type = 'Decision' RETURN count(n) AS total")
@@ -3559,8 +3770,10 @@ fn test_clotho_bug1_count_aggregate_with_where_filter() {
 fn test_clotho_bug2_property_match_syntax() {
     // Reported: {key: 'value'} causes "syntax error, unexpected ':'"
     let conn = test_connection();
-    conn.cypher("CREATE (:Decision {entity_type: 'Decision', id: 'd1', title: 'First'})").unwrap();
-    conn.cypher("CREATE (:Decision {entity_type: 'Decision', id: 'd2', title: 'Second'})").unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', id: 'd1', title: 'First'})")
+        .unwrap();
+    conn.cypher("CREATE (:Decision {entity_type: 'Decision', id: 'd2', title: 'Second'})")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n {entity_type: 'Decision'}) RETURN n.id, n.title")
@@ -3572,15 +3785,22 @@ fn test_clotho_bug2_property_match_syntax() {
 fn test_clotho_bug3_optional_match_with_where_filter() {
     // Reported: OPTIONAL MATCH produces no results at all
     let conn = test_connection();
-    conn.cypher("CREATE (:ClothoDecision {entity_type: 'Decision', title: 'Connected'})").unwrap();
-    conn.cypher("CREATE (:ClothoDecision {entity_type: 'Decision', title: 'Orphan'})").unwrap();
-    conn.cypher("CREATE (:ClothoProgram {entity_type: 'Program', title: 'Alpha'})").unwrap();
+    conn.cypher("CREATE (:ClothoDecision {entity_type: 'Decision', title: 'Connected'})")
+        .unwrap();
+    conn.cypher("CREATE (:ClothoDecision {entity_type: 'Decision', title: 'Orphan'})")
+        .unwrap();
+    conn.cypher("CREATE (:ClothoProgram {entity_type: 'Program', title: 'Alpha'})")
+        .unwrap();
     conn.cypher("MATCH (d:ClothoDecision {title: 'Connected'}), (p:ClothoProgram {title: 'Alpha'}) CREATE (d)-[:BELONGS_TO]->(p)").unwrap();
 
     let results = conn
         .cypher("MATCH (d) WHERE d.entity_type = 'Decision' OPTIONAL MATCH (d)-[:BELONGS_TO]->(p) RETURN d.title, p.title AS program")
         .unwrap();
-    assert_eq!(results.len(), 2, "OPTIONAL MATCH should return all decisions, including unmatched");
+    assert_eq!(
+        results.len(),
+        2,
+        "OPTIONAL MATCH should return all decisions, including unmatched"
+    );
 
     // Find the connected and orphan rows
     let mut found_connected = false;
@@ -3596,7 +3816,10 @@ fn test_clotho_bug3_optional_match_with_where_filter() {
         }
     }
     assert!(found_connected, "Should find the connected decision");
-    assert!(found_orphan, "Should find the orphan decision with null program");
+    assert!(
+        found_orphan,
+        "Should find the orphan decision with null program"
+    );
 }
 
 #[test]
@@ -3605,7 +3828,8 @@ fn test_clotho_bug5_undirected_match_bare() {
     let conn = test_connection();
     conn.cypher("CREATE (:UndirA {name: 'Alice'})").unwrap();
     conn.cypher("CREATE (:UndirB {name: 'Bob'})").unwrap();
-    conn.cypher("MATCH (a:UndirA), (b:UndirB) CREATE (a)-[:KNOWS]->(b)").unwrap();
+    conn.cypher("MATCH (a:UndirA), (b:UndirB) CREATE (a)-[:KNOWS]->(b)")
+        .unwrap();
 
     // Bare -- syntax
     let results = conn
@@ -3627,10 +3851,13 @@ fn test_clotho_pattern_predicate_in_where() {
     // The original trigger for this investigation:
     // MATCH (n {entity_type: 'Note'}) WHERE NOT (n)-[:BELONGS_TO]->() RETURN n.id, n.title
     let conn = test_connection();
-    conn.cypher("CREATE (:Note {entity_type: 'Note', id: 'n1', title: 'Orphan'})").unwrap();
-    conn.cypher("CREATE (:Note {entity_type: 'Note', id: 'n2', title: 'Connected'})").unwrap();
+    conn.cypher("CREATE (:Note {entity_type: 'Note', id: 'n1', title: 'Orphan'})")
+        .unwrap();
+    conn.cypher("CREATE (:Note {entity_type: 'Note', id: 'n2', title: 'Connected'})")
+        .unwrap();
     conn.cypher("CREATE (:Group {id: 'g1'})").unwrap();
-    conn.cypher("MATCH (n:Note {id: 'n2'}), (g:Group {id: 'g1'}) CREATE (n)-[:BELONGS_TO]->(g)").unwrap();
+    conn.cypher("MATCH (n:Note {id: 'n2'}), (g:Group {id: 'g1'}) CREATE (n)-[:BELONGS_TO]->(g)")
+        .unwrap();
 
     let results = conn
         .cypher("MATCH (n {entity_type: 'Note'}) WHERE NOT (n)-[:BELONGS_TO]->() AND NOT (n)-[:RELATES_TO]->() RETURN n.id, n.title")
@@ -3693,12 +3920,16 @@ fn test_call_subquery_union() {
 #[test]
 fn test_issue_49_unwind_param_create_set() {
     let conn = test_connection();
-    let params = serde_json::json!({"items": [{"id": "a", "name": "Alpha"}, {"id": "b", "name": "Beta"}]});
+    let params =
+        serde_json::json!({"items": [{"id": "a", "name": "Alpha"}, {"id": "b", "name": "Beta"}]});
     conn.cypher_with_params(
         "UNWIND $items AS item CREATE (n:Uw49Rs) SET n.id = item.id, n.name = item.name",
         &params,
-    ).unwrap();
-    let results = conn.cypher("MATCH (n:Uw49Rs) RETURN n.id, n.name ORDER BY n.id").unwrap();
+    )
+    .unwrap();
+    let results = conn
+        .cypher("MATCH (n:Uw49Rs) RETURN n.id, n.name ORDER BY n.id")
+        .unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].get::<String>("n.id").unwrap(), "a");
     assert_eq!(results[0].get::<String>("n.name").unwrap(), "Alpha");
@@ -3713,8 +3944,11 @@ fn test_issue_49_unwind_param_merge() {
     conn.cypher_with_params(
         "UNWIND $items AS item MERGE (n:Uw49MgRs {id: item.id})",
         &params,
-    ).unwrap();
-    let results = conn.cypher("MATCH (n:Uw49MgRs) RETURN n.id ORDER BY n.id").unwrap();
+    )
+    .unwrap();
+    let results = conn
+        .cypher("MATCH (n:Uw49MgRs) RETURN n.id ORDER BY n.id")
+        .unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].get::<String>("n.id").unwrap(), "x");
     assert_eq!(results[1].get::<String>("n.id").unwrap(), "y");
@@ -3723,8 +3957,11 @@ fn test_issue_49_unwind_param_merge() {
 #[test]
 fn test_issue_49_unwind_literal_set() {
     let conn = test_connection();
-    conn.cypher("UNWIND ['a', 'b'] AS item CREATE (n:Uw49LRs) SET n.id = item").unwrap();
-    let results = conn.cypher("MATCH (n:Uw49LRs) RETURN n.id ORDER BY n.id").unwrap();
+    conn.cypher("UNWIND ['a', 'b'] AS item CREATE (n:Uw49LRs) SET n.id = item")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:Uw49LRs) RETURN n.id ORDER BY n.id")
+        .unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].get::<String>("n.id").unwrap(), "a");
     assert_eq!(results[1].get::<String>("n.id").unwrap(), "b");
@@ -3733,7 +3970,8 @@ fn test_issue_49_unwind_literal_set() {
 #[test]
 fn test_issue_50_startnode_endnode_same_return() {
     let conn = test_connection();
-    conn.cypher("CREATE (a:Sn50Rs {name: 'Alice'})-[:K50Rs]->(b:Sn50Rs {name: 'Bob'})").unwrap();
+    conn.cypher("CREATE (a:Sn50Rs {name: 'Alice'})-[:K50Rs]->(b:Sn50Rs {name: 'Bob'})")
+        .unwrap();
     let results = conn
         .cypher("MATCH ()-[r:K50Rs]->() RETURN startNode(r).name, endNode(r).name")
         .unwrap();
@@ -3766,15 +4004,25 @@ fn test_issue_51_call_merge_scoping() {
 fn test_issue_34b_optional_match_where_null() {
     let conn = test_connection();
     conn.cypher("CREATE (a:P34bRs {id: 'alice'})").unwrap();
-    conn.cypher("CREATE (r:Pet34bRs {id: 'rex', name: 'Rex'})").unwrap();
-    conn.cypher("MATCH (a:P34bRs {id: 'alice'}), (r:Pet34bRs {id: 'rex'}) CREATE (a)-[:OWNS34bRs]->(r)").unwrap();
+    conn.cypher("CREATE (r:Pet34bRs {id: 'rex', name: 'Rex'})")
+        .unwrap();
+    conn.cypher(
+        "MATCH (a:P34bRs {id: 'alice'}), (r:Pet34bRs {id: 'rex'}) CREATE (a)-[:OWNS34bRs]->(r)",
+    )
+    .unwrap();
     let results = conn
         .cypher("MATCH (a:P34bRs {id: 'alice'}) OPTIONAL MATCH (a)-[:OWNS34bRs]->(r:Pet34bRs) WHERE r.name = 'nonexistent' RETURN a.id, r.id")
         .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("a.id").unwrap(), "alice");
     // r.id should be null
-    assert!(results[0].get::<String>("r.id").is_err() || results[0].get::<String>("r.id").unwrap_or_default().is_empty());
+    assert!(
+        results[0].get::<String>("r.id").is_err()
+            || results[0]
+                .get::<String>("r.id")
+                .unwrap_or_default()
+                .is_empty()
+    );
 }
 
 #[test]
@@ -3782,7 +4030,10 @@ fn test_with_match_merge() {
     let conn = test_connection();
     conn.cypher("CREATE (a:WmmRs {id: 'src'})").unwrap();
     conn.cypher("CREATE (b:WmmRs {id: 'tgt'})").unwrap();
-    conn.cypher("MATCH (a:WmmRs {id: 'src'}) WITH a MATCH (b:WmmRs {id: 'tgt'}) MERGE (a)-[:LinkRs]->(b)").unwrap();
+    conn.cypher(
+        "MATCH (a:WmmRs {id: 'src'}) WITH a MATCH (b:WmmRs {id: 'tgt'}) MERGE (a)-[:LinkRs]->(b)",
+    )
+    .unwrap();
     let results = conn
         .cypher("MATCH (a)-[:LinkRs]->(b) RETURN a.id, b.id")
         .unwrap();
@@ -3794,11 +4045,16 @@ fn test_with_match_merge() {
 #[test]
 fn test_functions_in_set() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:FnSetRs {name: '  Hello World  '})").unwrap();
-    conn.cypher("MATCH (n:FnSetRs) SET n.trimmed = trim(n.name)").unwrap();
+    conn.cypher("CREATE (n:FnSetRs {name: '  Hello World  '})")
+        .unwrap();
+    conn.cypher("MATCH (n:FnSetRs) SET n.trimmed = trim(n.name)")
+        .unwrap();
     let results = conn.cypher("MATCH (n:FnSetRs) RETURN n.trimmed").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].get::<String>("n.trimmed").unwrap(), "Hello World");
+    assert_eq!(
+        results[0].get::<String>("n.trimmed").unwrap(),
+        "Hello World"
+    );
 }
 
 #[test]
@@ -3808,8 +4064,11 @@ fn test_unwind_merge_on_create_set() {
     conn.cypher_with_params(
         "UNWIND $items AS item MERGE (n:BatchRs {id: item.id}) ON CREATE SET n.name = item.name",
         &params,
-    ).unwrap();
-    let results = conn.cypher("MATCH (n:BatchRs) RETURN n.id, n.name ORDER BY n.id").unwrap();
+    )
+    .unwrap();
+    let results = conn
+        .cypher("MATCH (n:BatchRs) RETURN n.id, n.name ORDER BY n.id")
+        .unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].get::<String>("n.id").unwrap(), "b1");
     assert_eq!(results[0].get::<String>("n.name").unwrap(), "First");
@@ -3826,7 +4085,8 @@ fn test_count_skips_nulls_from_optional_match() {
     let conn = test_connection();
     conn.cypher("CREATE (a:CntNullRs {id: 'x'})").unwrap();
     conn.cypher("CREATE (p:CntPetRs {id: 'p'})").unwrap();
-    conn.cypher("MATCH (a:CntNullRs), (p:CntPetRs) CREATE (a)-[:OWNS_RS]->(p)").unwrap();
+    conn.cypher("MATCH (a:CntNullRs), (p:CntPetRs) CREATE (a)-[:OWNS_RS]->(p)")
+        .unwrap();
     let results = conn.cypher("MATCH (a:CntNullRs) OPTIONAL MATCH (a)-->(r:GhostRs) RETURN a.id AS aid, COUNT(r) AS cnt").unwrap();
     assert_eq!(results.len(), 1);
     // COUNT in grouped aggregation returns "0" (string) due to pre-existing
@@ -3837,8 +4097,13 @@ fn test_count_skips_nulls_from_optional_match() {
 #[test]
 fn test_edge_variable_through_with() {
     let conn = test_connection();
-    conn.cypher("CREATE (:EWARs {id: 'a'})-[:ERELRs {weight: 7}]->(:EWBRs {id: 'b'})").unwrap();
-    let results = conn.cypher("MATCH (a:EWARs)-[r:ERELRs]->(b:EWBRs) WITH a, b, r RETURN type(r) AS t, r.weight AS w").unwrap();
+    conn.cypher("CREATE (:EWARs {id: 'a'})-[:ERELRs {weight: 7}]->(:EWBRs {id: 'b'})")
+        .unwrap();
+    let results = conn
+        .cypher(
+            "MATCH (a:EWARs)-[r:ERELRs]->(b:EWBRs) WITH a, b, r RETURN type(r) AS t, r.weight AS w",
+        )
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("t").unwrap(), "ERELRs");
     assert_eq!(results[0].get::<i64>("w").unwrap(), 7);
@@ -3847,8 +4112,11 @@ fn test_edge_variable_through_with() {
 #[test]
 fn test_function_call_in_create_property_map() {
     let conn = test_connection();
-    conn.cypher("CREATE (n:FnCreateRs {upper: toUpper('hello'), lower: toLower('WORLD')})").unwrap();
-    let results = conn.cypher("MATCH (n:FnCreateRs) RETURN n.upper, n.lower").unwrap();
+    conn.cypher("CREATE (n:FnCreateRs {upper: toUpper('hello'), lower: toLower('WORLD')})")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (n:FnCreateRs) RETURN n.upper, n.lower")
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].get::<String>("n.upper").unwrap(), "HELLO");
     assert_eq!(results[0].get::<String>("n.lower").unwrap(), "world");
@@ -3871,8 +4139,10 @@ fn test_call_subquery_processes_all_inner_match_rows() {
     conn.cypher("CREATE (:CallDepRs {id: 'd1'})").unwrap();
     conn.cypher("CREATE (:CallDepRs {id: 'd2'})").unwrap();
     conn.cypher("CREATE (:CallDepRs {id: 'd3'})").unwrap();
-    conn.cypher("MATCH (c:CallCoRs) CALL { WITH c MATCH (d:CallDepRs) MERGE (c)-[:CHASRs]->(d) }").unwrap();
-    let results = conn.cypher("MATCH (:CallCoRs)-[:CHASRs]->(d:CallDepRs) RETURN d.id ORDER BY d.id").unwrap();
+    conn.cypher("MATCH (c:CallCoRs) CALL { WITH c MATCH (d:CallDepRs) MERGE (c)-[:CHASRs]->(d) }")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH (:CallCoRs)-[:CHASRs]->(d:CallDepRs) RETURN d.id ORDER BY d.id")
+        .unwrap();
     assert_eq!(results.len(), 3);
 }
-

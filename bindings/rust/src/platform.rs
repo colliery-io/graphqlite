@@ -47,9 +47,9 @@ static EXTENSION_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// On first call, extracts the embedded binary to a temp directory.
 /// Subsequent calls return the cached path.
 pub fn get_extension_path() -> Result<PathBuf> {
-    let mut cached = EXTENSION_PATH.lock().map_err(|e| {
-        Error::ExtensionNotFound(format!("Failed to acquire lock: {}", e))
-    })?;
+    let mut cached = EXTENSION_PATH
+        .lock()
+        .map_err(|e| Error::ExtensionNotFound(format!("Failed to acquire lock: {}", e)))?;
 
     if let Some(ref path) = *cached {
         return Ok(path.clone());
@@ -81,10 +81,7 @@ fn extract_extension() -> Result<PathBuf> {
     }
 
     // Try primary location (system temp dir), fall back to ~/.cache/graphqlite/
-    let dirs_to_try = [
-        std::env::temp_dir().join("graphqlite"),
-        dirs_fallback(),
-    ];
+    let dirs_to_try = [std::env::temp_dir().join("graphqlite"), dirs_fallback()];
 
     for dir in &dirs_to_try {
         if let Ok(path) = try_extract_to(dir, &filename) {
@@ -137,9 +134,8 @@ fn try_extract_to(dir: &PathBuf, filename: &str) -> Result<PathBuf> {
         // Atomic write: write to .tmp then rename
         let tmp_path = extension_path.with_extension("tmp");
 
-        let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
-            Error::ExtensionNotFound(format!("Failed to create temp file: {}", e))
-        })?;
+        let mut file = std::fs::File::create(&tmp_path)
+            .map_err(|e| Error::ExtensionNotFound(format!("Failed to create temp file: {}", e)))?;
 
         file.write_all(EXTENSION_BYTES).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
@@ -153,8 +149,9 @@ fn try_extract_to(dir: &PathBuf, filename: &str) -> Result<PathBuf> {
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o755);
-            std::fs::set_permissions(&tmp_path, perms)
-                .map_err(|e| Error::ExtensionNotFound(format!("Failed to set permissions: {}", e)))?;
+            std::fs::set_permissions(&tmp_path, perms).map_err(|e| {
+                Error::ExtensionNotFound(format!("Failed to set permissions: {}", e))
+            })?;
         }
 
         // Atomic rename into place
@@ -174,7 +171,10 @@ fn cleanup_old_versions(dir: &PathBuf, current_filename: &str) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(prefix) && name_str != current_filename && !name_str.ends_with(".tmp") {
+            if name_str.starts_with(prefix)
+                && name_str != current_filename
+                && !name_str.ends_with(".tmp")
+            {
                 let _ = std::fs::remove_file(entry.path());
             }
         }

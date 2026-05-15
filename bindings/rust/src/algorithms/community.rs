@@ -1,11 +1,11 @@
 //! Community detection algorithm implementations.
 
+use super::{
+    parsing::{extract_algo_array, extract_int, extract_node_id, extract_user_id},
+    CommunityResult,
+};
 use crate::graph::Graph;
 use crate::Result;
-use super::{
-    CommunityResult,
-    parsing::{extract_algo_array, extract_node_id, extract_user_id, extract_int},
-};
 
 impl Graph {
     /// Run community detection using label propagation.

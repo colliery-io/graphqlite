@@ -102,8 +102,8 @@ impl Graph {
 
         // Prepare statements
         let mut insert_node_stmt = conn.prepare_cached("INSERT INTO nodes DEFAULT VALUES")?;
-        let mut insert_label_stmt =
-            conn.prepare_cached("INSERT OR IGNORE INTO node_labels (node_id, label) VALUES (?, ?)")?;
+        let mut insert_label_stmt = conn
+            .prepare_cached("INSERT OR IGNORE INTO node_labels (node_id, label) VALUES (?, ?)")?;
         let mut insert_text_prop_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO node_props_text (node_id, key_id, value) VALUES (?, ?, ?)",
         )?;
@@ -231,9 +231,8 @@ impl Graph {
         conn.execute("BEGIN IMMEDIATE", [])?;
 
         // Prepare statements
-        let mut insert_edge_stmt = conn.prepare_cached(
-            "INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)",
-        )?;
+        let mut insert_edge_stmt =
+            conn.prepare_cached("INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)")?;
         let mut insert_text_prop_stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO edge_props_text (edge_id, key_id, value) VALUES (?, ?, ?)",
         )?;
@@ -391,11 +390,9 @@ impl Graph {
 
         // Get the 'id' property key
         let id_key_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM property_keys WHERE key = 'id'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM property_keys WHERE key = 'id'", [], |row| {
+                row.get(0)
+            })
             .ok();
 
         let id_key_id = match id_key_id {
@@ -443,11 +440,10 @@ impl Graph {
     // Helper: Look up a node's internal ID by external ID
     fn lookup_node_id(&self, conn: &rusqlite::Connection, external_id: &str) -> Result<i64> {
         // Get the 'id' property key
-        let id_key_id: i64 = conn.query_row(
-            "SELECT id FROM property_keys WHERE key = 'id'",
-            [],
-            |row| row.get(0),
-        )?;
+        let id_key_id: i64 =
+            conn.query_row("SELECT id FROM property_keys WHERE key = 'id'", [], |row| {
+                row.get(0)
+            })?;
 
         // Look up the node
         let node_id: i64 = conn
@@ -456,9 +452,7 @@ impl Graph {
                 params![id_key_id, external_id],
                 |row| row.get(0),
             )
-            .map_err(|_| {
-                Error::Cypher(format!("Node with id '{}' not found", external_id))
-            })?;
+            .map_err(|_| Error::Cypher(format!("Node with id '{}' not found", external_id)))?;
 
         Ok(node_id)
     }
@@ -491,7 +485,9 @@ mod tests {
         assert!(id_map.contains_key("bob"));
 
         // Verify nodes exist via Cypher
-        let result = g.query("MATCH (n:Person) RETURN n.id ORDER BY n.id").unwrap();
+        let result = g
+            .query("MATCH (n:Person) RETURN n.id ORDER BY n.id")
+            .unwrap();
         assert_eq!(result.len(), 2);
     }
 
@@ -548,8 +544,10 @@ mod tests {
         let g = Graph::open_in_memory().unwrap();
 
         // Insert some nodes via Cypher
-        g.query("CREATE (:Person {id: 'alice', name: 'Alice'})").unwrap();
-        g.query("CREATE (:Person {id: 'bob', name: 'Bob'})").unwrap();
+        g.query("CREATE (:Person {id: 'alice', name: 'Alice'})")
+            .unwrap();
+        g.query("CREATE (:Person {id: 'bob', name: 'Bob'})")
+            .unwrap();
 
         let resolved = g.resolve_node_ids(["alice", "bob", "unknown"]).unwrap();
 
@@ -564,7 +562,8 @@ mod tests {
         let g = Graph::open_in_memory().unwrap();
 
         // Insert some nodes via Cypher
-        g.query("CREATE (:Person {id: 'existing', name: 'Existing'})").unwrap();
+        g.query("CREATE (:Person {id: 'existing', name: 'Existing'})")
+            .unwrap();
 
         // Insert new nodes via bulk
         let id_map = g
@@ -650,16 +649,26 @@ mod tests {
 
         // Print performance stats (visible with cargo test -- --nocapture)
         println!("\n=== Bulk Insert Performance ===");
-        println!("Nodes: {} in {:?} ({:.0} nodes/sec)",
-            node_count, node_time,
-            node_count as f64 / node_time.as_secs_f64());
-        println!("Edges: {} in {:?} ({:.0} edges/sec)",
-            edge_count, edge_time,
-            edge_count as f64 / edge_time.as_secs_f64());
+        println!(
+            "Nodes: {} in {:?} ({:.0} nodes/sec)",
+            node_count,
+            node_time,
+            node_count as f64 / node_time.as_secs_f64()
+        );
+        println!(
+            "Edges: {} in {:?} ({:.0} edges/sec)",
+            edge_count,
+            edge_time,
+            edge_count as f64 / edge_time.as_secs_f64()
+        );
         println!("Total: {:?}", total_time);
         println!("===============================\n");
 
         // Sanity check: bulk insert should be fast (< 1 second for this size)
-        assert!(total_time.as_secs() < 5, "Bulk insert took too long: {:?}", total_time);
+        assert!(
+            total_time.as_secs() < 5,
+            "Bulk insert took too long: {:?}",
+            total_time
+        );
     }
 }

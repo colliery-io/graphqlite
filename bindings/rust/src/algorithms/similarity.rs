@@ -1,10 +1,12 @@
 //! Similarity algorithm implementations.
 
+use super::parsing::{
+    extract_float, extract_int, extract_node_id, extract_string, extract_user_id,
+};
+use super::{KnnResult, NodeSimilarityResult, TriangleCountResult};
 use crate::graph::Graph;
 use crate::utils::escape_string;
 use crate::Result;
-use super::{NodeSimilarityResult, KnnResult, TriangleCountResult};
-use super::parsing::{extract_node_id, extract_user_id, extract_float, extract_int, extract_string};
 
 impl Graph {
     /// Compute node similarity using Jaccard coefficient.

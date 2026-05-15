@@ -96,7 +96,8 @@ impl<'a> CypherQuery<'a> {
             self.conn.cypher(self.query)
         } else {
             let params_value = serde_json::Value::Object(self.params);
-            self.conn.execute_cypher_with_params(self.query, &params_value)
+            self.conn
+                .execute_cypher_with_params(self.query, &params_value)
         }
     }
 }

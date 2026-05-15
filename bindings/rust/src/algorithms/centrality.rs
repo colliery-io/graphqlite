@@ -1,12 +1,12 @@
 //! Centrality algorithm implementations.
 
+use super::{
+    parsing::{extract_algo_array, extract_float, extract_int, extract_node_id, extract_user_id},
+    BetweennessCentralityResult, ClosenessCentralityResult, DegreeCentralityResult,
+    EigenvectorCentralityResult, PageRankResult,
+};
 use crate::graph::Graph;
 use crate::Result;
-use super::{
-    PageRankResult, DegreeCentralityResult, BetweennessCentralityResult,
-    ClosenessCentralityResult, EigenvectorCentralityResult,
-    parsing::{extract_algo_array, extract_node_id, extract_user_id, extract_float, extract_int},
-};
 
 impl Graph {
     /// Run PageRank algorithm.
@@ -94,7 +94,10 @@ impl Graph {
     /// # Arguments
     ///
     /// * `iterations` - Maximum iterations for power iteration (default 100)
-    pub fn eigenvector_centrality(&self, iterations: i32) -> Result<Vec<EigenvectorCentralityResult>> {
+    pub fn eigenvector_centrality(
+        &self,
+        iterations: i32,
+    ) -> Result<Vec<EigenvectorCentralityResult>> {
         let query = format!("RETURN eigenvectorCentrality({})", iterations);
         let result = self.connection().cypher(&query)?;
         let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
