@@ -877,6 +877,8 @@ varlen_range_opt:
         { $$ = make_varlen_range($2, -1); }  /* min bounded: *2.. */
     | '*' DOT_DOT INTEGER
         { $$ = make_varlen_range(1, $3); }   /* max bounded: *..3 */
+    | '*' DOT_DOT
+        { $$ = make_varlen_range(1, -1); }   /* unbounded with explicit range: *.. */
     ;
 
 label_opt:

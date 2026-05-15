@@ -1112,6 +1112,76 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     }
     /* Add edges table - use LEFT JOIN for optional relationships */
     else {
+        /* Check if rel variable is bound from a prior WITH (alias_is_id means
+         * its "alias" is actually a column expression like _with_0.r, not a
+         * table alias). When bound, we must NOT add a new edges JOIN with that
+         * column as alias — instead, constrain endpoints to match the bound
+         * edge's source/target via subqueries. */
+        bool rel_is_bound = rel->variable &&
+                            transform_var_alias_is_id(ctx->var_ctx, rel->variable);
+
+        if (rel_is_bound) {
+            /* Bound relationship: the edge expression edge_alias is the id of
+             * an already-selected edge. Skip the edges JOIN. Constrain source
+             * and target node aliases to that edge's endpoints. */
+            const char *graph = ctx->current_graph ? ctx->current_graph : "";
+            char src_subq[256], tgt_subq[256];
+            snprintf(src_subq, sizeof(src_subq),
+                     "(SELECT source_id FROM %sedges WHERE id = %s)", graph, edge_alias);
+            snprintf(tgt_subq, sizeof(tgt_subq),
+                     "(SELECT target_id FROM %sedges WHERE id = %s)", graph, edge_alias);
+
+            /* Check if source/target nodes are already bound */
+            const char *from_str_pre = dbuf_get(&ctx->unified_builder->from);
+            const char *joins_str_pre = dbuf_get(&ctx->unified_builder->joins);
+            bool source_added = (from_str_pre && strstr(from_str_pre, source_alias)) ||
+                                (joins_str_pre && strstr(joins_str_pre, source_alias));
+            bool target_added = (from_str_pre && strstr(from_str_pre, target_alias)) ||
+                                (joins_str_pre && strstr(joins_str_pre, target_alias));
+
+            if (optional) {
+                if (!source_added) {
+                    char cond[256];
+                    snprintf(cond, sizeof(cond), "%s.id = %s", source_alias, src_subq);
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), source_alias, cond);
+                } else {
+                    char cond[512];
+                    snprintf(cond, sizeof(cond), "%s.id = %s", source_alias, src_subq);
+                    sql_where(ctx->unified_builder, cond);
+                }
+                if (!target_added) {
+                    char cond[256];
+                    snprintf(cond, sizeof(cond), "%s.id = %s", target_alias, tgt_subq);
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), target_alias, cond);
+                } else {
+                    char cond[512];
+                    snprintf(cond, sizeof(cond), "%s.id = %s", target_alias, tgt_subq);
+                    sql_where(ctx->unified_builder, cond);
+                }
+            } else {
+                /* Required MATCH with bound rel: constrain via WHERE */
+                if (!source_added) {
+                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), source_alias, NULL);
+                }
+                if (!target_added) {
+                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
+                }
+                char cond[512];
+                snprintf(cond, sizeof(cond), "%s.id = %s", source_alias, src_subq);
+                sql_where(ctx->unified_builder, cond);
+                snprintf(cond, sizeof(cond), "%s.id = %s", target_alias, tgt_subq);
+                sql_where(ctx->unified_builder, cond);
+            }
+
+            /* Skip the rest of the relationship join handling */
+            if (rel->variable) {
+                /* Already registered - no-op for re-bind */
+            }
+            CYPHER_DEBUG("Generated bound-rel match: %s as %s connects %s to %s",
+                         rel->variable, edge_alias, source_alias, target_alias);
+            return 0;
+        }
+
         if (optional) {
             /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
             /* This ensures we get NULLs for unmatched patterns, not cartesian products */
@@ -1119,10 +1189,25 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             /* Get proper source id reference (handles projected variables from WITH) */
             const char *source_id = get_node_id_ref(ctx, source_alias, source_node->variable);
 
+            /* Check if target node is already added (was bound by a prior MATCH).
+             * When it is, fold target_id = bound_target.id into the edge JOIN's
+             * ON clause so the OPTIONAL pattern actually constrains on the
+             * bound endpoint. Without this, the edge can match ANY target. */
+            bool target_already_added = false;
+            const char *from_str_pre = dbuf_get(&ctx->unified_builder->from);
+            const char *joins_str_pre = dbuf_get(&ctx->unified_builder->joins);
+            if (from_str_pre && strstr(from_str_pre, target_alias)) target_already_added = true;
+            if (!target_already_added && joins_str_pre && strstr(joins_str_pre, target_alias))
+                target_already_added = true;
+
             /* Build the edge JOIN condition */
             dynamic_buffer edge_cond;
             dbuf_init(&edge_cond);
             dbuf_appendf(&edge_cond, "%s.source_id = %s", edge_alias, source_id);
+            if (target_already_added) {
+                const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
+                dbuf_appendf(&edge_cond, " AND %s.target_id = %s", edge_alias, target_id);
+            }
 
             /* Add relationship type constraint to edge JOIN */
             if (rel->type) {
@@ -1147,18 +1232,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
             sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "edges"), edge_alias, dbuf_get(&edge_cond));
             dbuf_free(&edge_cond);
-
-            /* Then, LEFT JOIN target node through the edge's target_id */
-            /* Check if target node is already added to avoid duplicates */
-            bool target_already_added = false;
-            const char *from_str = dbuf_get(&ctx->unified_builder->from);
-            const char *joins_str = dbuf_get(&ctx->unified_builder->joins);
-            if (from_str && strstr(from_str, target_alias)) {
-                target_already_added = true;
-            }
-            if (!target_already_added && joins_str && strstr(joins_str, target_alias)) {
-                target_already_added = true;
-            }
+            /* target_already_added still applies to the block below. */
 
             if (!target_already_added) {
                 /* For OPTIONAL MATCH with labels on the target, fold the label
