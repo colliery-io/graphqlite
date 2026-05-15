@@ -1432,45 +1432,71 @@ static void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value 
  * `_iso8601` plus months/days/seconds/nanosecondsOfSecond accessor fields. */
 static void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc != 10) { sqlite3_result_null(ctx); return; }
-    double years = sqlite3_value_double(argv[0]);
-    double months = sqlite3_value_double(argv[1]);
-    double weeks = sqlite3_value_double(argv[2]);
-    double days = sqlite3_value_double(argv[3]);
-    double hours = sqlite3_value_double(argv[4]);
-    double minutes = sqlite3_value_double(argv[5]);
-    double seconds = sqlite3_value_double(argv[6]);
-    double ms = sqlite3_value_double(argv[7]);
-    double us = sqlite3_value_double(argv[8]);
-    double ns = sqlite3_value_double(argv[9]);
+    /* Check whether each input is fractional to choose integer vs double
+     * math (integer math avoids floating-point drift in the common case). */
+    bool has_frac = false;
+    for (int i = 0; i < 10; i++) {
+        if (sqlite3_value_type(argv[i]) == SQLITE_FLOAT) { has_frac = true; break; }
+    }
 
-    /* Cascade fractional from coarsest → finest. Months stays a separate
-     * "calendar" component; fractional years convert to months. Days/hours/
-     * etc. all collapse into a single nanosecond accumulator. */
-    double total_months_d = years * 12.0 + months;
-    int total_months = (int)total_months_d;
-    double frac_months = total_months_d - total_months;
-    /* Convert fractional months into days using 30 days/month (openCypher
-     * convention for fractional inputs). */
-    double total_days_d = weeks * 7.0 + days + frac_months * 30.0;
+    long long total_months;
+    long long total_days;
+    long long total_ns;  /* sub-day residue in nanoseconds (signed) */
 
-    long long total_days = (long long)total_days_d;
-    double frac_days = total_days_d - total_days;
-    double total_seconds_d = frac_days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds;
-    long long total_secs = (long long)total_seconds_d;
-    double frac_secs = total_seconds_d - total_secs;
-    long long total_ns_from_secs = (long long)(frac_secs * 1e9 + 0.5);
-    /* Add fractional ns from ms / us / ns components. */
-    long long extra_ns = (long long)(ms * 1e6 + us * 1e3 + ns + 0.5);
-    long long total_ns = total_secs * 1000000000LL + total_ns_from_secs + extra_ns;
+    if (!has_frac) {
+        /* Pure-integer path — exact arithmetic. */
+        long long years = sqlite3_value_int64(argv[0]);
+        long long months = sqlite3_value_int64(argv[1]);
+        long long weeks = sqlite3_value_int64(argv[2]);
+        long long days = sqlite3_value_int64(argv[3]);
+        long long hours = sqlite3_value_int64(argv[4]);
+        long long minutes = sqlite3_value_int64(argv[5]);
+        long long seconds = sqlite3_value_int64(argv[6]);
+        long long ms = sqlite3_value_int64(argv[7]);
+        long long us = sqlite3_value_int64(argv[8]);
+        long long ns = sqlite3_value_int64(argv[9]);
+        total_months = years * 12 + months;
+        total_days = weeks * 7 + days;
+        total_ns = hours * 3600LL * 1000000000LL
+                 + minutes * 60LL * 1000000000LL
+                 + seconds * 1000000000LL
+                 + ms * 1000000LL + us * 1000LL + ns;
+    } else {
+        /* Fractional path — cascade via double, watching for tiny drift.
+         * Fractional months convert to days at 30 days/month (openCypher
+         * convention). */
+        double years = sqlite3_value_double(argv[0]);
+        double months = sqlite3_value_double(argv[1]);
+        double weeks = sqlite3_value_double(argv[2]);
+        double days = sqlite3_value_double(argv[3]);
+        double hours = sqlite3_value_double(argv[4]);
+        double minutes = sqlite3_value_double(argv[5]);
+        double seconds = sqlite3_value_double(argv[6]);
+        double ms = sqlite3_value_double(argv[7]);
+        double us = sqlite3_value_double(argv[8]);
+        double ns = sqlite3_value_double(argv[9]);
+        double total_months_d = years * 12.0 + months;
+        total_months = (long long)total_months_d;
+        double frac_months = total_months_d - total_months;
+        double total_days_d = weeks * 7.0 + days + frac_months * 30.0;
+        total_days = (long long)total_days_d;
+        double frac_days = total_days_d - total_days;
+        double total_seconds_d = frac_days * 86400.0 + hours * 3600.0
+                               + minutes * 60.0 + seconds;
+        long long total_secs = (long long)total_seconds_d;
+        double frac_secs = total_seconds_d - total_secs;
+        long long total_ns_from_secs = (long long)(frac_secs * 1e9 + 0.5);
+        long long extra_ns = (long long)(ms * 1e6 + us * 1e3 + ns + 0.5);
+        total_ns = total_secs * 1000000000LL + total_ns_from_secs + extra_ns;
+    }
 
-    /* total_ns can carry full-day or sub-day values; the formatter will
-     * decompose into HH:MM:SS but keep the day component as `total_days`. */
-    /* Move any overflow from total_ns into days. */
+    /* Move full-day overflow from total_ns into total_days using
+     * trunc-toward-zero division — preserves the sign of total_ns so
+     * inputs like {days:1, milliseconds:-1} keep the day and time signs
+     * separate ('P1DT-0.001S' rather than 'PT23H59M59.999S'). */
     long long DAY_NS = 86400LL * 1000000000LL;
     long long extra_days = total_ns / DAY_NS;
     long long residue_ns = total_ns - extra_days * DAY_NS;
-    /* If residue_ns is negative, borrow a day. */
-    if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
     total_days += extra_days;
 
     char iso[160];
