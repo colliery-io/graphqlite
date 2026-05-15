@@ -71,6 +71,7 @@ whitespace  [ \t\r\n]+
 /* Numbers */
 integer     {digit}+
 hexint      0[xX]{hexdigit}+
+octint      0[oO][0-7]+
 decimal     {digit}+\.{digit}+([eE][+-]?{digit}+)?|\.{digit}+([eE][+-]?{digit}+)?|{digit}+[eE][+-]?{digit}+
 
 /* Identifiers */
@@ -146,6 +147,7 @@ operator    [+*/%^=!&|~]+
 {regex_match}   { RETURN_TOKEN(CYPHER_TOKEN_REGEX_MATCH); }
 
 {hexint}        { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
+{octint}        { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
 {integer}       { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
 {decimal}       { prepare_decimal_token(yyextra, yytext); return CYPHER_TOKEN_DECIMAL; }
 {digit}+\./[^.] {
@@ -296,8 +298,11 @@ static void prepare_integer_token(CypherScannerState *state, const char *text)
     if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
         /* Hexadecimal */
         state->current_token.value.integer = strtoll(text, NULL, 16);
+    } else if (text[0] == '0' && (text[1] == 'o' || text[1] == 'O')) {
+        /* openCypher octal: '0o…' — skip the 0o prefix before octal parse. */
+        state->current_token.value.integer = strtoll(text + 2, NULL, 8);
     } else if (text[0] == '0' && strlen(text) > 1) {
-        /* Octal */
+        /* Legacy C-style octal: '0…' */
         state->current_token.value.integer = strtoll(text, NULL, 8);
     } else {
         /* Decimal */
