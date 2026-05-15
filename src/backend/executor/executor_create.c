@@ -574,7 +574,10 @@ int execute_create_clause_with_varmap(cypher_executor *executor, cypher_create *
 
     CYPHER_DEBUG("Executing CREATE clause (with varmap) with %d patterns", create->pattern->count);
 
-    variable_map *var_map = create_variable_map();
+    /* Reuse an incoming map so consecutive CREATE clauses can share variable
+     * bindings (`CREATE (a),(b) CREATE (a)-[:X]->(b)`). Caller passes NULL
+     * for a fresh map, or a populated map to inherit bindings. */
+    variable_map *var_map = *out_var_map ? *out_var_map : create_variable_map();
     if (!var_map) {
         set_result_error(result, "Failed to create variable map");
         return -1;

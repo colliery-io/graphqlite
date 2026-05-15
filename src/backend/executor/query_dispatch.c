@@ -933,20 +933,26 @@ static int handle_create(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Executing CREATE via pattern dispatch");
 
-    /* No trailing SET: run every CREATE clause in document order.
-     * `CREATE (a),(b),(c) CREATE (a)-[:X]->(b)` is valid Cypher and must
-     * execute both CREATEs — find_create_clause used to return only the
-     * first one, silently dropping the second. */
+    /* No trailing SET: run every CREATE clause in document order, sharing
+     * one variable_map so a later CREATE can reference variables bound by
+     * an earlier one (e.g. `CREATE (a),(b) CREATE (a)-[:X]->(b)`). */
     if (!set) {
         int rc = 0;
         bool any = false;
+        variable_map *shared_vars = NULL;
         for (int i = 0; query->clauses && i < query->clauses->count; i++) {
             ast_node *clause = query->clauses->items[i];
             if (clause->type != AST_NODE_CREATE) continue;
-            rc = execute_create_clause(executor, (cypher_create *)clause, result);
-            if (rc < 0) return rc;
+            rc = execute_create_clause_with_varmap(executor,
+                                                    (cypher_create *)clause,
+                                                    result, &shared_vars);
+            if (rc < 0) {
+                if (shared_vars) free_variable_map(shared_vars);
+                return rc;
+            }
             any = true;
         }
+        if (shared_vars) free_variable_map(shared_vars);
         if (any) result->success = true;
         return rc;
     }
