@@ -50,13 +50,16 @@ int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not
 {
     CYPHER_DEBUG("Transforming NOT expression");
 
-    append_sql(ctx, "NOT (");
+    /* Wrap outer parens too — SQLite gives `>=` higher precedence than NOT,
+     * so 'NOT (0) >= 0' parses as 'NOT ((0) >= 0)'. Outer parens force the
+     * NOT to bind to its single operand. */
+    append_sql(ctx, "(NOT (");
 
     if (transform_expression(ctx, not_expr->expr) < 0) {
         return -1;
     }
 
-    append_sql(ctx, ")");
+    append_sql(ctx, "))");
 
     return 0;
 }

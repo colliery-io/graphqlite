@@ -288,25 +288,22 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     /* Register in unified system as projected */
     transform_var_register_projected(ctx->var_ctx, pred->variable, "json_each.value");
 
-    /* For 'all' predicate, we need to capture the list expression to compare count */
+    /* `all(x IN list WHERE pred)` — returns false if any element makes the
+     * predicate false; true otherwise. Per openCypher's 3VL semantics that
+     * the TCK assumes, null predicate evaluations do not cause `all` to be
+     * false (so all([true, null]) → true). */
     if (pred->pred_type == LIST_PRED_ALL) {
-        /* Build: (SELECT COUNT(*) = json_array_length(list) FROM json_each(list) WHERE pred) */
-        append_sql(ctx, "(SELECT COUNT(*) = json_array_length(");
+        append_sql(ctx, "(NOT EXISTS (SELECT 1 FROM json_each(");
         if (transform_expression(ctx, pred->list_expr) < 0) {
             if (saved_alias) free(saved_alias);
             return -1;
         }
-        append_sql(ctx, ") FROM json_each(");
-        if (transform_expression(ctx, pred->list_expr) < 0) {
-            if (saved_alias) free(saved_alias);
-            return -1;
-        }
-        append_sql(ctx, ") WHERE ");
+        append_sql(ctx, ") WHERE NOT (");
         if (transform_expression(ctx, pred->predicate) < 0) {
             if (saved_alias) free(saved_alias);
             return -1;
         }
-        append_sql(ctx, ")");
+        append_sql(ctx, ")))");
     } else {
         /* Build: (SELECT COUNT(*) <op> <n> FROM json_each(list) WHERE pred) */
         append_sql(ctx, "(SELECT COUNT(*) ");
