@@ -126,11 +126,19 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* properties() on a map literal returns the map itself. */
+    if (arg->type == AST_NODE_MAP) {
+        append_sql(ctx, "json(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, ")");
+        return 0;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
-        ctx->error_message = strdup("properties() function argument must be a node or relationship variable");
+        ctx->error_message = strdup("properties() function argument must be a node, relationship, or map");
         return -1;
     }
 
@@ -145,6 +153,12 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
     }
 
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    bool alias_is_id_check = transform_var_alias_is_id(ctx->var_ctx, id->name);
+    if (is_projected && !transform_var_is_edge(ctx->var_ctx, id->name) && !alias_is_id_check) {
+        /* Projected scalar map value: pass through. */
+        append_sql(ctx, "json(%s)", alias);
+        return 0;
+    }
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
     const char *id_suffix = is_projected ? "" : ".id";
 
@@ -253,11 +267,20 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* keys() also works on maps. For map literals or projected map values,
+     * use SQLite's json functions to extract keys directly. */
+    if (arg->type == AST_NODE_MAP) {
+        append_sql(ctx, "(SELECT json_group_array(key) FROM json_each(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, "))");
+        return 0;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
-        ctx->error_message = strdup("keys() function argument must be a node or relationship variable");
+        ctx->error_message = strdup("keys() function argument must be a node, relationship, or map");
         return -1;
     }
 
@@ -273,6 +296,14 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
 
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
+    bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
+
+    /* Projected non-node/non-edge value (e.g., WITH-projected map literal):
+     * use json_each on the value itself. */
+    if (is_projected && !is_edge && !alias_is_id) {
+        append_sql(ctx, "(SELECT json_group_array(key) FROM json_each(%s))", alias);
+        return 0;
+    }
     const char *id_suffix = is_projected ? "" : ".id";
 
     /* Multi-graph support: get graph prefix for table references */
