@@ -35,22 +35,20 @@ def main() -> int:
     ext_path = Path(os.environ.get("GQLITE_TCK_EXT", str(DEFAULT_EXT)))
     debug_log = os.environ.get("GQLITE_TCK_DEBUG_LOG")
 
+    # Always redirect fds 1 and 2 away from the protocol channel: the
+    # GRAPHQLITE_DEBUG-compiled extension prints to stdout via CYPHER_DEBUG
+    # and to stderr from various places. If we left fd 1 inherited, that
+    # debug noise would corrupt the JSON protocol the parent reads.
     if debug_log:
-        # Redirect fds 1 and 2 to the debug log for the entire worker lifetime
-        # — we re-open fd 1 for protocol writes below.
         Path(debug_log).parent.mkdir(parents=True, exist_ok=True)
         log_fd = os.open(debug_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-        # Save real stdout/stderr so we can use them for protocol traffic.
-        protocol_out = os.dup(1)
-        os.dup2(log_fd, 2)
-        # Note: we do NOT redirect fd 1 — protocol writes use it. The
-        # extension prints to stdout though, which is a problem. Solution:
-        # swap fd 1 to log too, and write protocol via the saved dup.
-        os.dup2(log_fd, 1)
-        os.close(log_fd)
-        proto = os.fdopen(protocol_out, "w", buffering=1)
     else:
-        proto = sys.stdout
+        log_fd = os.open(os.devnull, os.O_WRONLY)
+    protocol_out = os.dup(1)
+    os.dup2(log_fd, 1)
+    os.dup2(log_fd, 2)
+    os.close(log_fd)
+    proto = os.fdopen(protocol_out, "w", buffering=1)
 
     conn = _new_conn(ext_path)
 

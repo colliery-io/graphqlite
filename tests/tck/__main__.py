@@ -83,13 +83,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _select_backends(name: str, debug: bool):
+    # Only opt into a debug log when --debug is passed. Default runs send
+    # worker stdout/stderr to /dev/null — the GRAPHQLITE_DEBUG-compiled
+    # extension emits dozens of lines per query and was producing hundreds
+    # of GB of debug output across a full TCK run.
+    debug_log = Path("build/tck-debug.log") if debug else None
     out = []
     if name in ("extension", "all"):
-        out.append(ExtensionBackend(debug_log=Path("build/tck-debug.log"), keep_debug=debug))
+        out.append(ExtensionBackend(debug_log=debug_log, keep_debug=debug))
     if name in ("python", "all"):
         try:
             from .backends.python_binding import PythonBindingBackend
-            out.append(PythonBindingBackend(debug_log=Path("build/tck-debug.log"), keep_debug=debug))
+            out.append(PythonBindingBackend(debug_log=debug_log, keep_debug=debug))
         except Exception as e:
             print(f"backend not implemented: python ({e})", file=sys.stderr)
             if name == "python":
@@ -97,7 +102,7 @@ def _select_backends(name: str, debug: bool):
     if name in ("rust", "all"):
         try:
             from .backends.rust_binding import RustBindingBackend
-            out.append(RustBindingBackend(debug_log=Path("build/tck-debug.log")))
+            out.append(RustBindingBackend(debug_log=debug_log))
         except Exception as e:
             print(f"backend not implemented: rust ({e})", file=sys.stderr)
             if name == "rust":

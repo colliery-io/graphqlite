@@ -48,9 +48,18 @@ ifdef RELEASE
 CFLAGS = -Wall -Wextra -O2 -I$(VENDOR_SQLITE_DIR) -I./src/include $(EXTRA_INCLUDES)
 EXTENSION_CFLAGS_BASE = -Wall -Wextra -O2 -I$(VENDOR_SQLITE_DIR) -I./src/include
 else
+# Opt into the noisy CYPHER_DEBUG printf trace by setting DEBUG_LOGS=1 at
+# build time. Without it, debug builds still have -g symbols but the
+# extension stays silent (a full TCK run otherwise produced hundreds of
+# GB of CYPHER_DEBUG output).
+ifdef DEBUG_LOGS
+DEBUG_DEFINES = -DGRAPHQLITE_DEBUG
+else
+DEBUG_DEFINES =
+endif
 # Add -DGRAPHQLITE_PERF_TIMING for detailed query timing instrumentation
-CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG $(EXTRA_INCLUDES)
-EXTENSION_CFLAGS_BASE = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include -DGRAPHQLITE_DEBUG
+CFLAGS = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include $(DEBUG_DEFINES) $(EXTRA_INCLUDES)
+EXTENSION_CFLAGS_BASE = -Wall -Wextra -g -I$(VENDOR_SQLITE_DIR) -I./src/include $(DEBUG_DEFINES)
 endif
 LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3 -lm
 
