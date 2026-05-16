@@ -9,7 +9,64 @@
 
 #include "executor/executor_internal.h"
 #include "executor/cypher_executor.h"
+#include "transform/cypher_transform.h"
 #include "parser/cypher_debug.h"
+
+/* Check if a list/map AST contains any function call (recursively).
+ * Used to decide whether to fall back from pure AST-to-JSON serialization
+ * (which can't evaluate functions) to SQL-based evaluation. */
+static bool ast_contains_function_call(ast_node *expr)
+{
+    if (!expr) return false;
+    if (expr->type == AST_NODE_FUNCTION_CALL) return true;
+    if (expr->type == AST_NODE_LIST) {
+        cypher_list *l = (cypher_list*)expr;
+        if (l->items) {
+            for (int i = 0; i < l->items->count; i++) {
+                if (ast_contains_function_call(l->items->items[i])) return true;
+            }
+        }
+    }
+    if (expr->type == AST_NODE_MAP) {
+        cypher_map *m = (cypher_map*)expr;
+        if (m->pairs) {
+            for (int i = 0; i < m->pairs->count; i++) {
+                cypher_map_pair *p = (cypher_map_pair*)m->pairs->items[i];
+                if (ast_contains_function_call(p->value)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Evaluate a list/map AST expression via SQL transform pipeline, returning
+ * a JSON-text string the caller must free. Used for list/map literals that
+ * embed function calls (date(), datetime(), etc.) which AST-only
+ * serialization can't evaluate. */
+static char* evaluate_expr_to_json(cypher_executor *executor, ast_node *expr)
+{
+    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    if (!ctx) return NULL;
+
+    append_sql(ctx, "SELECT ");
+    if (transform_expression(ctx, expr) < 0) {
+        cypher_transform_free_context(ctx);
+        return NULL;
+    }
+
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    cypher_transform_free_context(ctx);
+    if (rc != SQLITE_OK) return NULL;
+
+    char *result = NULL;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *val = (const char*)sqlite3_column_text(stmt, 0);
+        if (val) result = strdup(val);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
 
 /* Helper function to execute a single path pattern with variable tracking */
 int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *path,
@@ -101,8 +158,13 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             continue;
                                     }
                                 } else if (pair->value->type == AST_NODE_MAP || pair->value->type == AST_NODE_LIST) {
-                                    /* Map or list literal - serialize to JSON and store as JSON type */
-                                    char *json_str = serialize_ast_to_json(pair->value);
+                                    /* Map or list literal - if it embeds function calls
+                                     * (e.g. [date(...), date(...)]), evaluate via SQL so
+                                     * temporals get their string forms; otherwise the pure
+                                     * AST-to-JSON path handles literals. */
+                                    char *json_str = ast_contains_function_call(pair->value)
+                                        ? evaluate_expr_to_json(executor, pair->value)
+                                        : serialize_ast_to_json(pair->value);
                                     if (json_str) {
                                         if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, PROP_TYPE_JSON, json_str) == 0) {
                                             result->properties_set++;
@@ -305,8 +367,13 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             continue;
                                     }
                                 } else if (pair->value->type == AST_NODE_MAP || pair->value->type == AST_NODE_LIST) {
-                                    /* Map or list literal - serialize to JSON and store as JSON type */
-                                    char *json_str = serialize_ast_to_json(pair->value);
+                                    /* Map or list literal - if it embeds function calls
+                                     * (e.g. [date(...), date(...)]), evaluate via SQL so
+                                     * temporals get their string forms; otherwise the pure
+                                     * AST-to-JSON path handles literals. */
+                                    char *json_str = ast_contains_function_call(pair->value)
+                                        ? evaluate_expr_to_json(executor, pair->value)
+                                        : serialize_ast_to_json(pair->value);
                                     if (json_str) {
                                         if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, PROP_TYPE_JSON, json_str) == 0) {
                                             result->properties_set++;
