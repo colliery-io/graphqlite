@@ -10,6 +10,7 @@
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
+#include "transform/transform_helpers.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
@@ -230,7 +231,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             bool skip_id = var->alias_is_id || is_projected;
             const char *id_suffix = skip_id ? "" : ".id";
 
-            dbuf_appendf(&col_buf, "%s%s AS %s", var->table_alias, id_suffix, var->name);
+            { char idbuf[128];
+              dbuf_appendf(&col_buf, "%s%s AS %s", var->table_alias, id_suffix,
+                           sql_ident(idbuf, sizeof(idbuf), var->name)); }
             dbuf_appendf(&group_buf, "%s%s", var->table_alias, id_suffix);
             group_count++;
             added++;
@@ -256,7 +259,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
                 bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
                 const char *id_suffix = (is_projected || alias_is_id) ? "" : ".id";
-                dbuf_appendf(&col_buf, "%s%s AS %s", alias, id_suffix, col_name);
+                { char idbuf[128];
+                  dbuf_appendf(&col_buf, "%s%s AS %s", alias, id_suffix,
+                               sql_ident(idbuf, sizeof(idbuf), col_name)); }
                 /* Add to GROUP BY */
                 if (group_count > 0) {
                     dbuf_append(&group_buf, ", ");
@@ -289,7 +294,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                         alias, id_suffix, prop->property_name,
                         alias, id_suffix, prop->property_name,
                         alias, id_suffix, prop->property_name,
-                        col_name);
+                        ({ static char _idbuf[128]; sql_ident(_idbuf, sizeof(_idbuf), col_name); }));
                     /* Add the projected column name to GROUP BY (not node id) */
                     if (group_count > 0) {
                         dbuf_append(&group_buf, ", ");
@@ -327,7 +332,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             }
 
             /* Append to column buffer */
-            dbuf_appendf(&col_buf, "%s AS %s", ctx->sql_buffer, col_name);
+            { char _idbuf[128];
+              dbuf_appendf(&col_buf, "%s AS %s", ctx->sql_buffer,
+                           sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
 
             /* Restore sql_buffer */
             ctx->sql_size = saved_size;
@@ -381,7 +388,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             }
 
             /* Append to column buffer */
-            dbuf_appendf(&col_buf, "(%s) AS %s", ctx->sql_buffer, col_name);
+            { char _idbuf[128];
+              dbuf_appendf(&col_buf, "(%s) AS %s", ctx->sql_buffer,
+                           sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
 
             /* Restore sql_buffer */
             ctx->sql_size = saved_size;
@@ -509,7 +518,9 @@ with_star_columns_done:
         /* WITH * - re-register all saved variables pointing at the CTE */
         for (int i = 0; i < saved_var_count; i++) {
             char select_expr[256];
-            snprintf(select_expr, sizeof(select_expr), "%s.%s", cte_name, saved_var_names[i]);
+            { char _idbuf[128];
+              snprintf(select_expr, sizeof(select_expr), "%s.%s", cte_name,
+                       sql_ident(_idbuf, sizeof(_idbuf), saved_var_names[i])); }
 
             var_kind kind = saved_var_kinds[i];
             if (kind == VAR_KIND_NODE) {
@@ -544,7 +555,9 @@ with_star_columns_done:
 
             if (col_name) {
                 char select_expr[256];
-                snprintf(select_expr, sizeof(select_expr), "%s.%s", cte_name, col_name);
+                { char _idbuf[128];
+                  snprintf(select_expr, sizeof(select_expr), "%s.%s", cte_name,
+                           sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
 
                 var_kind kind = source_kinds ? source_kinds[i] : VAR_KIND_PROJECTED;
                 if (kind == VAR_KIND_NODE) {

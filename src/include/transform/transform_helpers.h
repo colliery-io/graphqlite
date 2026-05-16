@@ -9,6 +9,8 @@
 #ifndef TRANSFORM_HELPERS_H
 #define TRANSFORM_HELPERS_H
 
+#include <stddef.h>
+
 #include "parser/cypher_ast.h"
 
 /*
@@ -23,5 +25,9 @@ const char *get_label_string(ast_node *label_node);
  * Returns true if the node has a non-empty labels list.
  */
 bool has_labels(cypher_node_pattern *node);
+
+/* Quote `name` as a SQL identifier when it conflicts with a reserved
+ * keyword. Returns `buf`. Always populates `buf` (raw name or "name"). */
+const char *sql_ident(char *buf, size_t buflen, const char *name);
 
 #endif /* TRANSFORM_HELPERS_H */

@@ -10,6 +10,7 @@
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_internal.h"
+#include "transform/transform_helpers.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
@@ -129,7 +130,10 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
              * we just need the column name when sourcing from _prev. */
             const char *col = strrchr(carry_aliases[i], '.');
             col = col ? col + 1 : carry_aliases[i];
-            dbuf_appendf(&carry_cols, ", _prev.%s AS %s", col, carry_names[i]);
+            { char _ib1[128], _ib2[128];
+              dbuf_appendf(&carry_cols, ", _prev.%s AS %s",
+                           sql_ident(_ib1, sizeof(_ib1), col),
+                           sql_ident(_ib2, sizeof(_ib2), carry_names[i])); }
         }
     }
 
@@ -274,7 +278,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         if (has_carry && alias) {
             const char *col = strrchr(alias, '.');
             if (col) {
-                snprintf(prev_arg, sizeof(prev_arg), "_prev.%s", col + 1);
+                char _ib[128];
+                snprintf(prev_arg, sizeof(prev_arg), "_prev.%s",
+                         sql_ident(_ib, sizeof(_ib), col + 1));
                 json_each_arg = prev_arg;
             }
         }
@@ -385,8 +391,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
      * at the new UNWIND CTE's columns (which we projected through above). */
     for (int i = 0; i < carry_count; i++) {
         if (has_carry) {
-            char src[256];
-            snprintf(src, sizeof(src), "%s.%s", cte_name, carry_names[i]);
+            char src[256], _ib[128];
+            snprintf(src, sizeof(src), "%s.%s", cte_name,
+                     sql_ident(_ib, sizeof(_ib), carry_names[i]));
             transform_var_register_projected(ctx->var_ctx, carry_names[i], src);
         }
         free(carry_names[i]);
