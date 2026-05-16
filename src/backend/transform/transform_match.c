@@ -159,7 +159,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 } else {
                     /* Anonymous node - use legacy approach for now */
                     char temp_alias[32];
-                    snprintf(temp_alias, sizeof(temp_alias), "n_%d", j);
+                    snprintf(temp_alias, sizeof(temp_alias), "n_%d", ctx->anon_node_base + j);
                     alias = temp_alias;
                 }
                 
@@ -359,7 +359,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     if (!source_alias) continue;
                 } else {
                     static char temp_source[32];
-                    snprintf(temp_source, sizeof(temp_source), "n_%d", j - 1);
+                    snprintf(temp_source, sizeof(temp_source), "n_%d", ctx->anon_node_base + (j - 1));
                     source_alias = temp_source;
                 }
 
@@ -378,7 +378,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     if (!target_alias) continue;
                 } else {
                     static char temp_target[32];
-                    snprintf(temp_target, sizeof(temp_target), "n_%d", j + 1);
+                    snprintf(temp_target, sizeof(temp_target), "n_%d", ctx->anon_node_base + (j + 1));
                     target_alias = temp_target;
                 }
 
@@ -524,8 +524,14 @@ handle_where_clause:
 static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional)
 {
     cypher_path *path = (cypher_path*)pattern;
-    
+
     CYPHER_DEBUG("Transforming %s path with %d elements", optional ? "OPTIONAL" : "regular", path->elements->count);
+
+    /* Allocate a fresh range of anon-node alias indices for this pattern
+     * so anonymous `n_<j>` aliases don't collide with anon nodes from
+     * sibling patterns / preceding MATCH clauses. */
+    ctx->anon_node_base = ctx->anon_node_counter;
+    ctx->anon_node_counter += path->elements->count;
     
     /* If path has a variable name, register it as a path variable */
     if (path->var_name) {
@@ -652,7 +658,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             } else {
                 /* Anonymous node - use generated alias */
                 static char temp_alias[32];
-                snprintf(temp_alias, sizeof(temp_alias), "n_%d", i);
+                snprintf(temp_alias, sizeof(temp_alias), "n_%d", ctx->anon_node_base + i);
                 alias = temp_alias;
                 need_from_clause = true;
             }
@@ -721,6 +727,24 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                  node->variable ? node->variable : "<anonymous>",
                  first_label ? first_label : "<no label>",
                  node->labels ? node->labels->count : 0);
+
+    /* If this alias has already been added to FROM/joins by an earlier
+     * generate_relationship_match call (OPTIONAL MATCH joins the target
+     * node through the edge), skip re-adding it to avoid duplicate-alias
+     * SQL errors. */
+    {
+        const char *from_str = dbuf_get(&ctx->unified_builder->from);
+        const char *joins_str = dbuf_get(&ctx->unified_builder->joins);
+        char needle[80];
+        snprintf(needle, sizeof(needle), " AS %s ", alias);
+        char needle_end[80];
+        snprintf(needle_end, sizeof(needle_end), " AS %s\n", alias);
+        if ((from_str && (strstr(from_str, needle) || strstr(from_str, needle_end))) ||
+            (joins_str && (strstr(joins_str, needle) || strstr(joins_str, needle_end)))) {
+            CYPHER_DEBUG("Skipping duplicate node match for %s", alias);
+            return 0;
+        }
+    }
 
     /* Check if there's already a FROM clause using the unified builder */
     bool has_from = !dbuf_is_empty(&ctx->unified_builder->from);
@@ -953,7 +977,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         if (!source_alias) return -1;
     } else {
         static char temp_source[32];
-        snprintf(temp_source, sizeof(temp_source), "n_%d", rel_index - 1);
+        snprintf(temp_source, sizeof(temp_source), "n_%d", ctx->anon_node_base + (rel_index - 1));
         source_alias = temp_source;
     }
 
@@ -972,7 +996,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         if (!target_alias) return -1;
     } else {
         static char temp_target[32];
-        snprintf(temp_target, sizeof(temp_target), "n_%d", rel_index + 1);
+        snprintf(temp_target, sizeof(temp_target), "n_%d", ctx->anon_node_base + (rel_index + 1));
         target_alias = temp_target;
     }
 

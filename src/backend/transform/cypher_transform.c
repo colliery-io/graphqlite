@@ -62,6 +62,8 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     ctx->unwind_cte_counter = 0;
     ctx->reduce_counter = 0;
     ctx->prop_join_counter = 0;
+    ctx->anon_node_counter = 0;
+    ctx->anon_node_base = 0;
 
     /* Initialize pending property JOINs buffer */
     ctx->pending_prop_joins = NULL;
