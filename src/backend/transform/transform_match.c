@@ -1342,6 +1342,24 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                 dbuf_append(&edge_cond, ")");
             }
 
+            /* If the target node has labels, fold them into the edge JOIN
+             * condition so the edge is only matched when its target
+             * actually has the required label(s). Otherwise the edge can
+             * match and the target node's LEFT JOIN produces NULL, leaving
+             * r non-null when the pattern shouldn't match. */
+            const char *graph_prefix = ctx->current_graph ? ctx->current_graph : "";
+            if (!target_already_added && has_labels(target_node)) {
+                for (int li = 0; li < target_node->labels->count; li++) {
+                    const char *label = get_label_string(target_node->labels->items[li]);
+                    if (!label) continue;
+                    char *esc_label = escape_sql_string(label);
+                    dbuf_appendf(&edge_cond,
+                        " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s.target_id AND label = '%s')",
+                        graph_prefix, edge_alias, esc_label ? esc_label : label);
+                    free(esc_label);
+                }
+            }
+
             sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "edges"), edge_alias, dbuf_get(&edge_cond));
             dbuf_free(&edge_cond);
             /* target_already_added still applies to the block below. */
