@@ -123,6 +123,16 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 const char *alias;
                 if (node->variable) {
                     transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
+                    if (var && (var->kind == VAR_KIND_EDGE || var->kind == VAR_KIND_PATH)) {
+                        ctx->has_error = true;
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                                 "Variable `%s` is already bound as a %s and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                                 node->variable,
+                                 var->kind == VAR_KIND_EDGE ? "relationship" : "path");
+                        ctx->error_message = strdup(msg);
+                        return -1;
+                    }
                     if (!var) {
                         /* New variable - register it */
                         char *gen_alias = get_next_default_alias(ctx);
@@ -545,6 +555,16 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
 
             if (node->variable) {
                 transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
+                if (var && (var->kind == VAR_KIND_EDGE || var->kind == VAR_KIND_PATH)) {
+                    ctx->has_error = true;
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "Variable `%s` is already bound as a %s and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                             node->variable,
+                             var->kind == VAR_KIND_EDGE ? "relationship" : "path");
+                    ctx->error_message = strdup(msg);
+                    return -1;
+                }
                 if (var) {
                     /* Variable exists - check if it's from WITH (projected or alias_is_id) */
                     bool is_from_with = (var->kind == VAR_KIND_PROJECTED) ||
@@ -953,6 +973,17 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
     /* Edge */
     if (rel->variable) {
+        transform_var *rel_var = transform_var_lookup(ctx->var_ctx, rel->variable);
+        if (rel_var && (rel_var->kind == VAR_KIND_NODE || rel_var->kind == VAR_KIND_PATH)) {
+            ctx->has_error = true;
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Variable `%s` is already bound as a %s and cannot be used as a relationship (SyntaxError: VariableTypeConflict)",
+                     rel->variable,
+                     rel_var->kind == VAR_KIND_NODE ? "node" : "path");
+            ctx->error_message = strdup(msg);
+            return -1;
+        }
         edge_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
         if (!edge_alias) {
             /* Add new edge variable */

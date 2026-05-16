@@ -1006,7 +1006,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
 
     /* Transform MATCH clause to generate SQL */
     if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }

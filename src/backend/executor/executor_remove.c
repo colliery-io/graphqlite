@@ -30,7 +30,7 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
 
     if (transform_match_clause(ctx, match) < 0) {
         CYPHER_DEBUG("Transform MATCH failed: %s", ctx->error_message ? ctx->error_message : "No error message");
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }

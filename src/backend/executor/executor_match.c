@@ -31,7 +31,7 @@ int execute_match_clause(cypher_executor *executor, cypher_match *match, cypher_
     }
     
     if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
@@ -76,7 +76,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
 
     /* Transform MATCH clause to generate FROM/WHERE */
     if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
@@ -772,7 +772,7 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
     }
 
     if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
@@ -919,7 +919,7 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
     
     /* Transform MATCH clause to generate SQL */
     if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }

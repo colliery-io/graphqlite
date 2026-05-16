@@ -392,7 +392,7 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
     }
 
     if (transform_match_clause(ctx, match) < 0) {
-        set_result_error(result, "Failed to transform MATCH clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
