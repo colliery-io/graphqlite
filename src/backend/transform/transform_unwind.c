@@ -205,7 +205,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_appendf(&cte_query, "(%s)", ctx->sql_buffer);
                             ok = true;
                         }
-                        free(temp_buffer);
+                        /* append_sql may realloc; free what ctx->sql_buffer
+                         * now points to, not the original temp_buffer. */
+                        free(ctx->sql_buffer);
                         ctx->sql_buffer = saved_buffer;
                         ctx->sql_size = saved_size;
                         ctx->sql_capacity = saved_capacity;
