@@ -475,8 +475,11 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                         /* Property access - try to detect the original data type */
                         result->agtype_data[current_row][col] = create_property_agtype_value(value);
                     } else {
-                        /* For other non-entity columns, create string agtype values */
-                        result->agtype_data[current_row][col] = agtype_value_create_string(value);
+                        /* For other non-entity columns (binary ops, NOT,
+                         * function calls, etc.) detect the type from the
+                         * value so booleans, integers, and floats get the
+                         * right agtype rather than being stringified. */
+                        result->agtype_data[current_row][col] = create_property_agtype_value(value);
                     }
                 }
             } else {

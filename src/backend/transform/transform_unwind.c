@@ -165,7 +165,11 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_appendf(&cte_query, "'%s'", lit->value.string ? lit->value.string : "");
                             break;
                         case LITERAL_BOOLEAN:
-                            dbuf_appendf(&cte_query, "%s", lit->value.boolean ? "1" : "0");
+                            /* Emit as 'true'/'false' string so downstream
+                             * output formatting renders JSON booleans
+                             * (matches the convention used by boolean
+                             * property access). */
+                            dbuf_append(&cte_query, lit->value.boolean ? "'true'" : "'false'");
                             break;
                         case LITERAL_NULL:
                             dbuf_append(&cte_query, "NULL");
