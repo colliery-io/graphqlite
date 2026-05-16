@@ -391,7 +391,16 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     ctx->error_message = strdup("Internal error: anonymous relationship without assigned name");
                     return -1;
                 }
-                
+
+                /* Bound relationship from WITH: endpoint/edge constraints already
+                 * emitted by generate_relationship_match via subqueries; skip the
+                 * legacy edge_alias.source_id constraint that would produce
+                 * invalid SQL like `_with_0.r.source_id`. */
+                if (rel->variable &&
+                    transform_var_alias_is_id(ctx->var_ctx, rel->variable)) {
+                    continue;
+                }
+
                 /* Add relationship direction constraints using unified builder */
                 dynamic_buffer rel_cond;
                 dbuf_init(&rel_cond);
@@ -1122,8 +1131,10 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
         if (rel_is_bound) {
             /* Bound relationship: the edge expression edge_alias is the id of
-             * an already-selected edge. Skip the edges JOIN. Constrain source
-             * and target node aliases to that edge's endpoints. */
+             * an already-selected edge. Skip the edges JOIN; node JOINs are
+             * added separately by generate_node_match. Just emit WHERE
+             * constraints that tie the endpoint node aliases to the bound
+             * edge's source/target. */
             const char *graph = ctx->current_graph ? ctx->current_graph : "";
             char src_subq[256], tgt_subq[256];
             snprintf(src_subq, sizeof(src_subq),
@@ -1131,52 +1142,27 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             snprintf(tgt_subq, sizeof(tgt_subq),
                      "(SELECT target_id FROM %sedges WHERE id = %s)", graph, edge_alias);
 
-            /* Check if source/target nodes are already bound */
-            const char *from_str_pre = dbuf_get(&ctx->unified_builder->from);
-            const char *joins_str_pre = dbuf_get(&ctx->unified_builder->joins);
-            bool source_added = (from_str_pre && strstr(from_str_pre, source_alias)) ||
-                                (joins_str_pre && strstr(joins_str_pre, source_alias));
-            bool target_added = (from_str_pre && strstr(from_str_pre, target_alias)) ||
-                                (joins_str_pre && strstr(joins_str_pre, target_alias));
+            char src_id_ref[256], tgt_id_ref[256];
+            snprintf(src_id_ref, sizeof(src_id_ref), "%s",
+                     get_node_id_ref(ctx, source_alias, source_node->variable));
+            snprintf(tgt_id_ref, sizeof(tgt_id_ref), "%s",
+                     get_node_id_ref(ctx, target_alias, target_node->variable));
 
-            if (optional) {
-                if (!source_added) {
-                    char cond[256];
-                    snprintf(cond, sizeof(cond), "%s.id = %s", source_alias, src_subq);
-                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), source_alias, cond);
-                } else {
-                    char cond[512];
-                    snprintf(cond, sizeof(cond), "%s.id = %s", source_alias, src_subq);
-                    sql_where(ctx->unified_builder, cond);
-                }
-                if (!target_added) {
-                    char cond[256];
-                    snprintf(cond, sizeof(cond), "%s.id = %s", target_alias, tgt_subq);
-                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), target_alias, cond);
-                } else {
-                    char cond[512];
-                    snprintf(cond, sizeof(cond), "%s.id = %s", target_alias, tgt_subq);
-                    sql_where(ctx->unified_builder, cond);
-                }
+            char cond[1024];
+            if (rel->left_arrow && !rel->right_arrow) {
+                snprintf(cond, sizeof(cond), "%s = %s AND %s = %s",
+                         src_id_ref, tgt_subq, tgt_id_ref, src_subq);
+            } else if (!rel->left_arrow && !rel->right_arrow) {
+                snprintf(cond, sizeof(cond),
+                         "((%s = %s AND %s = %s) OR (%s = %s AND %s = %s))",
+                         src_id_ref, src_subq, tgt_id_ref, tgt_subq,
+                         src_id_ref, tgt_subq, tgt_id_ref, src_subq);
             } else {
-                /* Required MATCH with bound rel: constrain via WHERE */
-                if (!source_added) {
-                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), source_alias, NULL);
-                }
-                if (!target_added) {
-                    sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
-                }
-                char cond[512];
-                snprintf(cond, sizeof(cond), "%s.id = %s", source_alias, src_subq);
-                sql_where(ctx->unified_builder, cond);
-                snprintf(cond, sizeof(cond), "%s.id = %s", target_alias, tgt_subq);
-                sql_where(ctx->unified_builder, cond);
+                snprintf(cond, sizeof(cond), "%s = %s AND %s = %s",
+                         src_id_ref, src_subq, tgt_id_ref, tgt_subq);
             }
+            sql_where(ctx->unified_builder, cond);
 
-            /* Skip the rest of the relationship join handling */
-            if (rel->variable) {
-                /* Already registered - no-op for re-bind */
-            }
             CYPHER_DEBUG("Generated bound-rel match: %s as %s connects %s to %s",
                          rel->variable, edge_alias, source_alias, target_alias);
             return 0;
