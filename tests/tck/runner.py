@@ -201,17 +201,18 @@ def _h_having_executed(step, state, backend, m):
 def _h_parameters(step, state, backend, m):
     if not step.table:
         raise _Mismatch("missing table for 'parameters are'")
-    # First column is name, second is value (TCK conventions vary; v1 best-effort).
+    # Two-column tables in `parameters are` are always name/value rows in the
+    # TCK corpus — there's no header row. Treat every row as data and try to
+    # parse_value() the second column; fall back to literal string on parse
+    # error.
     params: dict[str, Any] = {}
-    rows = step.table
-    if not rows:
-        return
-    # Heuristic: if header row has 2 cells, skip it.
-    start = 1 if len(rows[0]) == 2 else 0
-    for row in rows[start:]:
+    for row in step.table:
         if len(row) < 2:
             continue
-        params[row[0]] = parse_value(row[1])
+        try:
+            params[row[0]] = parse_value(row[1])
+        except ValueParseError:
+            params[row[0]] = row[1]
     state.parameters = params
 
 def _h_executing_query(step, state, backend, m):

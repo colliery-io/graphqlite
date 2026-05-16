@@ -69,7 +69,13 @@ def main() -> int:
                 conn = _new_conn(ext_path)
                 _write(proto, {"ok": True})
             elif cmd == "execute":
-                raw = conn.execute("SELECT cypher(?)", (req.get("query", ""),)).fetchall()
+                params = req.get("parameters")
+                if params:
+                    params_json = json.dumps(params)
+                    raw = conn.execute("SELECT cypher(?, ?)",
+                                       (req.get("query", ""), params_json)).fetchall()
+                else:
+                    raw = conn.execute("SELECT cypher(?)", (req.get("query", ""),)).fetchall()
                 _write(proto, _decode_payload([r[0] for r in raw]))
             elif cmd == "shutdown":
                 conn.close()

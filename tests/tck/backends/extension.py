@@ -60,7 +60,10 @@ class ExtensionBackend(Backend):
 
     def execute(self, query: str, parameters: dict[str, Any] | None = None) -> QueryResult:
         try:
-            resp = self._send({"cmd": "execute", "query": query}, timeout=self._execute_timeout)
+            msg = {"cmd": "execute", "query": query}
+            if parameters:
+                msg["parameters"] = parameters
+            resp = self._send(msg, timeout=self._execute_timeout)
         except _Timeout as e:
             self._spawn()
             return QueryResult(error="ExtensionTimeout", error_message=str(e))
