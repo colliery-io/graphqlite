@@ -65,10 +65,16 @@ int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not
     return 0;
 }
 
-/* Transform null check expression (e.g., n.name IS NULL, n.age IS NOT NULL) */
+/* Transform null check expression (e.g., n.name IS NULL, n.age IS NOT NULL).
+ * Wrap in outer parens — in Cypher IS NULL has higher precedence than `=`
+ * and other comparison operators, but in SQLite the opposite is true, so
+ * `false = true IS NULL` parses as `(false = true) IS NULL`. Forcing
+ * parens recovers Cypher semantics. */
 int transform_null_check(cypher_transform_context *ctx, cypher_null_check *null_check)
 {
     CYPHER_DEBUG("Transforming NULL check expression: is_not_null=%d", null_check->is_not_null);
+
+    append_sql(ctx, "(");
 
     /* Transform the expression being checked */
     if (transform_expression(ctx, null_check->expr) < 0) {
@@ -77,9 +83,9 @@ int transform_null_check(cypher_transform_context *ctx, cypher_null_check *null_
 
     /* Append IS NULL or IS NOT NULL */
     if (null_check->is_not_null) {
-        append_sql(ctx, " IS NOT NULL");
+        append_sql(ctx, " IS NOT NULL)");
     } else {
-        append_sql(ctx, " IS NULL");
+        append_sql(ctx, " IS NULL)");
     }
 
     return 0;
