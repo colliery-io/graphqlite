@@ -101,6 +101,24 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         ctx->in_comparison = true;
     }
 
+    /* Handle list/map equality with Cypher three-valued semantics via the
+     * _gql_eq() UDF. Triggered only when at least one operand is a literal
+     * list/map (which is when the existing JSON-string equality breaks down
+     * due to embedded nulls). */
+    if ((binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ) &&
+        (binary_op->left->type == AST_NODE_LIST || binary_op->left->type == AST_NODE_MAP ||
+         binary_op->right->type == AST_NODE_LIST || binary_op->right->type == AST_NODE_MAP)) {
+        if (binary_op->op_type == BINARY_OP_NEQ) append_sql(ctx, "(NOT _gql_eq(");
+        else                                    append_sql(ctx, "_gql_eq(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ")");
+        if (binary_op->op_type == BINARY_OP_NEQ) append_sql(ctx, ")");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
     /* Handle boolean logical operators: wrap operands in _gql_bool() to coerce
      * string 'true'/'false' (from boolean property access) to int 1/0 so SQL
      * AND / OR / XOR behave correctly. */

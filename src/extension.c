@@ -527,6 +527,223 @@ static void gql_graph_loaded_func(sqlite3_context *context, int argc, sqlite3_va
     }
 }
 
+/* Cypher's three-valued equality for any pair of values.
+ *   null = anything           -> null
+ *   list = list (element-wise, three-valued)
+ *   map  = map  (key-set + value-wise, three-valued)
+ *   scalar/scalar             -> standard equality
+ *
+ * Returns SQL integer 0 / 1 / NULL. */
+typedef enum { TVAL_FALSE = 0, TVAL_TRUE = 1, TVAL_NULL = 2 } tval;
+
+/* Parse helpers — walk a JSON text using sqlite's json_each is too slow
+ * for recursion; we use a thin manual scanner that returns (json_type,
+ * value text, value length, advance). We only need to distinguish
+ * arrays, objects, null, and scalar (which we'll compare via raw text). */
+
+static const char *skip_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+/* Compare two values represented as JSON-text fragments using Cypher
+ * three-valued equality semantics. Returns TVAL_TRUE / FALSE / NULL. */
+static tval gql_eq_json(const char *a, const char *b);
+
+/* Compute the end pointer of one JSON value starting at p (which is at
+ * the first non-whitespace char of a value). Returns pointer just past
+ * the value, or NULL on malformed input. */
+static const char *json_value_end(const char *p) {
+    p = skip_ws(p);
+    if (!*p) return NULL;
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1]) p += 2;
+            else p++;
+        }
+        if (*p == '"') p++;
+        return p;
+    }
+    if (*p == '[' || *p == '{') {
+        char open = *p, close = (open == '[') ? ']' : '}';
+        int depth = 1;
+        p++;
+        bool in_str = false;
+        while (*p && depth > 0) {
+            if (in_str) {
+                if (*p == '\\' && p[1]) p += 2;
+                else { if (*p == '"') in_str = false; p++; }
+            } else {
+                if (*p == '"') { in_str = true; p++; }
+                else if (*p == open) { depth++; p++; }
+                else if (*p == close) { depth--; p++; }
+                else p++;
+            }
+        }
+        return p;
+    }
+    /* Number, true, false, null: scan until delim */
+    while (*p && *p != ',' && *p != ']' && *p != '}' && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+    return p;
+}
+
+static tval gql_eq_array(const char *a, const char *b) {
+    a = skip_ws(a); b = skip_ws(b);
+    if (*a != '[' || *b != '[') return TVAL_FALSE;
+    a++; b++;
+    tval found_null = TVAL_TRUE; /* will downgrade to NULL on element-null */
+    while (1) {
+        a = skip_ws(a); b = skip_ws(b);
+        bool a_end = (*a == ']'), b_end = (*b == ']');
+        if (a_end && b_end) return found_null;
+        if (a_end != b_end) return TVAL_FALSE; /* length mismatch */
+        const char *a_endp = json_value_end(a);
+        const char *b_endp = json_value_end(b);
+        if (!a_endp || !b_endp) return TVAL_NULL;
+        /* Extract substrings */
+        size_t alen = a_endp - a, blen = b_endp - b;
+        char *as = malloc(alen + 1), *bs = malloc(blen + 1);
+        if (!as || !bs) { free(as); free(bs); return TVAL_NULL; }
+        memcpy(as, a, alen); as[alen] = 0;
+        memcpy(bs, b, blen); bs[blen] = 0;
+        tval t = gql_eq_json(as, bs);
+        free(as); free(bs);
+        if (t == TVAL_FALSE) return TVAL_FALSE;
+        if (t == TVAL_NULL) found_null = TVAL_NULL;
+        a = a_endp; b = b_endp;
+        a = skip_ws(a); b = skip_ws(b);
+        if (*a == ',') a++;
+        if (*b == ',') b++;
+    }
+}
+
+static tval gql_eq_object(const char *a, const char *b) {
+    /* Compare two JSON objects. Sufficient to use SQLite's json_patch
+     * approach: serialize via json() canonicalization, compare keys/values.
+     * To keep this self-contained, do a simple sort-and-compare by parsing
+     * pairs into arrays of (key, value). */
+    /* For now defer to text compare unless contents include null —
+     * which we detect via substring. The TCK map cases use null values
+     * so we need handling for those. */
+    a = skip_ws(a); b = skip_ws(b);
+    if (*a != '{' || *b != '{') return TVAL_FALSE;
+    /* Count pairs and check structural equality: same key set, three-eq values. */
+    /* Helper: parse one (key, value) pair starting at p; *p must be at '"' */
+    /* For simplicity build a small list of keys and value endpoints from each side. */
+    struct kv { const char *k; size_t klen; const char *v; const char *vend; };
+    struct kv aa[64], bb[64];
+    int na = 0, nb = 0;
+    const char *p = a + 1;
+    while (1) {
+        p = skip_ws(p);
+        if (*p == '}') break;
+        if (*p != '"' || na >= 64) return TVAL_NULL;
+        const char *kstart = p + 1;
+        const char *kend = kstart;
+        while (*kend && *kend != '"') {
+            if (*kend == '\\' && kend[1]) kend += 2; else kend++;
+        }
+        if (*kend != '"') return TVAL_NULL;
+        aa[na].k = kstart; aa[na].klen = kend - kstart;
+        p = skip_ws(kend + 1);
+        if (*p != ':') return TVAL_NULL;
+        p = skip_ws(p + 1);
+        aa[na].v = p;
+        const char *vend = json_value_end(p);
+        if (!vend) return TVAL_NULL;
+        aa[na].vend = vend;
+        na++;
+        p = skip_ws(vend);
+        if (*p == ',') p++;
+        else if (*p == '}') break;
+        else return TVAL_NULL;
+    }
+    p = b + 1;
+    while (1) {
+        p = skip_ws(p);
+        if (*p == '}') break;
+        if (*p != '"' || nb >= 64) return TVAL_NULL;
+        const char *kstart = p + 1;
+        const char *kend = kstart;
+        while (*kend && *kend != '"') {
+            if (*kend == '\\' && kend[1]) kend += 2; else kend++;
+        }
+        if (*kend != '"') return TVAL_NULL;
+        bb[nb].k = kstart; bb[nb].klen = kend - kstart;
+        p = skip_ws(kend + 1);
+        if (*p != ':') return TVAL_NULL;
+        p = skip_ws(p + 1);
+        bb[nb].v = p;
+        const char *vend = json_value_end(p);
+        if (!vend) return TVAL_NULL;
+        bb[nb].vend = vend;
+        nb++;
+        p = skip_ws(vend);
+        if (*p == ',') p++;
+        else if (*p == '}') break;
+        else return TVAL_NULL;
+    }
+    if (na != nb) return TVAL_FALSE; /* different key counts */
+    /* Match each key in aa to a key in bb */
+    tval found_null = TVAL_TRUE;
+    for (int i = 0; i < na; i++) {
+        int j;
+        for (j = 0; j < nb; j++) {
+            if (bb[j].klen == aa[i].klen && memcmp(aa[i].k, bb[j].k, aa[i].klen) == 0) break;
+        }
+        if (j == nb) return TVAL_FALSE; /* key not present */
+        size_t alen = aa[i].vend - aa[i].v, blen = bb[j].vend - bb[j].v;
+        char *as = malloc(alen + 1), *bs = malloc(blen + 1);
+        if (!as || !bs) { free(as); free(bs); return TVAL_NULL; }
+        memcpy(as, aa[i].v, alen); as[alen] = 0;
+        memcpy(bs, bb[j].v, blen); bs[blen] = 0;
+        tval t = gql_eq_json(as, bs);
+        free(as); free(bs);
+        if (t == TVAL_FALSE) return TVAL_FALSE;
+        if (t == TVAL_NULL) found_null = TVAL_NULL;
+    }
+    return found_null;
+}
+
+static tval gql_eq_json(const char *a, const char *b) {
+    if (!a || !b) return TVAL_NULL;
+    a = skip_ws(a); b = skip_ws(b);
+    /* JSON null on either side => null */
+    if (strncmp(a, "null", 4) == 0 && (a[4] == 0 || a[4] == ',' || a[4] == ']' || a[4] == '}' || a[4] == ' ')) return TVAL_NULL;
+    if (strncmp(b, "null", 4) == 0 && (b[4] == 0 || b[4] == ',' || b[4] == ']' || b[4] == '}' || b[4] == ' ')) return TVAL_NULL;
+    if (*a == '[' && *b == '[') return gql_eq_array(a, b);
+    if (*a == '{' && *b == '{') return gql_eq_object(a, b);
+    /* Type mismatch between containers and scalars */
+    if ((*a == '[' || *a == '{') != (*b == '[' || *b == '{')) return TVAL_FALSE;
+    /* Scalars: compare strings */
+    const char *aend = json_value_end(a);
+    const char *bend = json_value_end(b);
+    size_t alen = aend - a, blen = bend - b;
+    if (alen == blen && memcmp(a, b, alen) == 0) return TVAL_TRUE;
+    return TVAL_FALSE;
+}
+
+static void gql_eq_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 2) { sqlite3_result_null(context); return; }
+    int at = sqlite3_value_type(argv[0]);
+    int bt = sqlite3_value_type(argv[1]);
+    if (at == SQLITE_NULL || bt == SQLITE_NULL) {
+        sqlite3_result_null(context);
+        return;
+    }
+    const char *a = (const char*)sqlite3_value_text(argv[0]);
+    const char *b = (const char*)sqlite3_value_text(argv[1]);
+    if (!a || !b) { sqlite3_result_null(context); return; }
+    tval t = gql_eq_json(a, b);
+    if (t == TVAL_NULL) sqlite3_result_null(context);
+    else sqlite3_result_int(context, t == TVAL_TRUE ? 1 : 0);
+}
+
 /* Cypher's three-valued IN operator.
  *   null IN []          -> false
  *   null IN <non-empty> -> null
@@ -2737,6 +2954,11 @@ int sqlite3_graphqlite_init(
   rc = sqlite3_create_function(db, "_gql_in", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_in_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_eq", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_eq_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
