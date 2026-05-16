@@ -845,28 +845,71 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
                 /* Handle list slicing: list[start..end] */
                 if (subscript->is_slice) {
-                    /* Generate: (SELECT json_group_array(value) FROM json_each(list)
-                     *            WHERE key >= start AND key < end) */
+                    /* Generate a slice that:
+                     *  - normalizes negative start/end to length+offset
+                     *  - returns NULL if either bound is NULL (Cypher
+                     *    three-valued semantics)
+                     *  - returns json_group_array(value) for matching keys.
+                     *
+                     * Shape:
+                     *   CASE WHEN <start> IS NULL OR <end> IS NULL THEN NULL
+                     *        ELSE (SELECT json_group_array(value)
+                     *              FROM json_each(<list>)
+                     *              WHERE key >= CASE WHEN <start> < 0 THEN
+                     *                          json_array_length(<list>) + <start>
+                     *                        ELSE <start> END
+                     *                AND key < CASE WHEN <end> < 0 THEN
+                     *                          json_array_length(<list>) + <end>
+                     *                        ELSE <end> END)
+                     *   END
+                     */
+                    append_sql(ctx, "(CASE WHEN ");
+                    bool has_start = subscript->slice_start != NULL;
+                    bool has_end = subscript->slice_end != NULL;
+                    if (has_start) {
+                        append_sql(ctx, "(");
+                        if (transform_expression(ctx, subscript->slice_start) < 0) return -1;
+                        append_sql(ctx, ") IS NULL");
+                    }
+                    if (has_start && has_end) append_sql(ctx, " OR ");
+                    if (has_end) {
+                        append_sql(ctx, "(");
+                        if (transform_expression(ctx, subscript->slice_end) < 0) return -1;
+                        append_sql(ctx, ") IS NULL");
+                    }
+                    if (!has_start && !has_end) append_sql(ctx, "0");
+                    append_sql(ctx, " THEN NULL ELSE ");
+
                     append_sql(ctx, "(SELECT json_group_array(value) FROM json_each(");
                     if (transform_expression(ctx, subscript->expr) < 0) return -1;
                     append_sql(ctx, ")");
-                    if (subscript->slice_start || subscript->slice_end) {
+                    if (has_start || has_end) {
                         append_sql(ctx, " WHERE ");
-                        if (subscript->slice_start) {
-                            append_sql(ctx, "key >= (");
+                        if (has_start) {
+                            append_sql(ctx, "key >= (CASE WHEN (");
                             if (transform_expression(ctx, subscript->slice_start) < 0) return -1;
-                            append_sql(ctx, ")");
+                            append_sql(ctx, ") < 0 THEN json_array_length(");
+                            if (transform_expression(ctx, subscript->expr) < 0) return -1;
+                            append_sql(ctx, ") + (");
+                            if (transform_expression(ctx, subscript->slice_start) < 0) return -1;
+                            append_sql(ctx, ") ELSE (");
+                            if (transform_expression(ctx, subscript->slice_start) < 0) return -1;
+                            append_sql(ctx, ") END)");
                         }
-                        if (subscript->slice_start && subscript->slice_end) {
-                            append_sql(ctx, " AND ");
-                        }
-                        if (subscript->slice_end) {
-                            append_sql(ctx, "key < (");
+                        if (has_start && has_end) append_sql(ctx, " AND ");
+                        if (has_end) {
+                            append_sql(ctx, "key < (CASE WHEN (");
                             if (transform_expression(ctx, subscript->slice_end) < 0) return -1;
-                            append_sql(ctx, ")");
+                            append_sql(ctx, ") < 0 THEN json_array_length(");
+                            if (transform_expression(ctx, subscript->expr) < 0) return -1;
+                            append_sql(ctx, ") + (");
+                            if (transform_expression(ctx, subscript->slice_end) < 0) return -1;
+                            append_sql(ctx, ") ELSE (");
+                            if (transform_expression(ctx, subscript->slice_end) < 0) return -1;
+                            append_sql(ctx, ") END)");
                         }
                     }
-                    append_sql(ctx, ")");
+                    append_sql(ctx, ") END)");
                     break;
                 }
 
