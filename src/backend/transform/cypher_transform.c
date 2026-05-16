@@ -306,6 +306,27 @@ void prepend_cte_to_sql(cypher_transform_context *ctx)
 /* Register a path variable (uses unified transform_var system) */
 int register_path_variable(cypher_transform_context *ctx, const char *name, cypher_path *path)
 {
+    /* Reject conflicts: if `name` is already bound as a node/edge or a
+     * scalar projection, the path variable can't shadow it. */
+    transform_var *existing = transform_var_lookup(ctx->var_ctx, name);
+    if (existing) {
+        const char *kind_str = "value";
+        switch (existing->kind) {
+            case VAR_KIND_NODE: kind_str = "node"; break;
+            case VAR_KIND_EDGE: kind_str = "relationship"; break;
+            case VAR_KIND_PATH: kind_str = "path"; break;
+            case VAR_KIND_PROJECTED: kind_str = "value"; break;
+            case VAR_KIND_AGGREGATED: kind_str = "aggregate"; break;
+        }
+        ctx->has_error = true;
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Variable `%s` is already bound as a %s and cannot be used as a path (SyntaxError: VariableAlreadyBound)",
+                 name, kind_str);
+        ctx->error_message = strdup(msg);
+        return -1;
+    }
+
     /* Map AST path_type to var_path_type */
     var_path_type ptype;
     switch (path->type) {

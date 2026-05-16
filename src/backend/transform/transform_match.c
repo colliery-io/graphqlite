@@ -531,8 +531,13 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
     if (path->var_name) {
         CYPHER_DEBUG("Registering path variable: %s with %d elements", path->var_name, path->elements->count);
         if (register_path_variable(ctx, path->var_name, path) < 0) {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Failed to register path variable");
+            /* register_path_variable already set a specific message if it
+             * detected a conflict; only fall back to a generic message if
+             * none is present. */
+            if (!ctx->error_message) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Failed to register path variable");
+            }
             return -1;
         }
         CYPHER_DEBUG("Successfully registered path variable: %s", path->var_name);
