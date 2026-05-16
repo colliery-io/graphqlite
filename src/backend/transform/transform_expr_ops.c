@@ -137,32 +137,26 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
 
     /* Handle IN operator specially - check membership in list */
     if (binary_op->op_type == BINARY_OP_IN) {
-        append_sql(ctx, "(");
-        /* Transform the left operand (value to check) */
-        if (transform_expression(ctx, binary_op->left) < 0) {
-            return -1;
-        }
-        append_sql(ctx, " IN ");
-
-        /* Check if right side is a literal list */
+        /* Use _gql_in() UDF for proper Cypher three-valued logic:
+         *   null IN []         -> false
+         *   null IN <nonempty> -> null
+         *   x    IN coll       -> true / null (if coll has null) / false */
+        append_sql(ctx, "_gql_in(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", ");
         if (binary_op->right->type == AST_NODE_LIST) {
-            /* Literal list: generate IN (val1, val2, val3) */
+            /* Literal list: wrap with json_array() */
             cypher_list *list = (cypher_list*)binary_op->right;
-            append_sql(ctx, "(");
-            for (int i = 0; i < list->items->count; i++) {
-                if (i > 0) append_sql(ctx, ", ");
-                if (transform_expression(ctx, list->items->items[i]) < 0) {
-                    return -1;
+            append_sql(ctx, "json_array(");
+            if (list->items) {
+                for (int i = 0; i < list->items->count; i++) {
+                    if (i > 0) append_sql(ctx, ", ");
+                    if (transform_expression(ctx, list->items->items[i]) < 0) return -1;
                 }
             }
             append_sql(ctx, ")");
         } else {
-            /* Variable or expression: use json_each subquery */
-            append_sql(ctx, "(SELECT value FROM json_each(");
-            if (transform_expression(ctx, binary_op->right) < 0) {
-                return -1;
-            }
-            append_sql(ctx, "))");
+            if (transform_expression(ctx, binary_op->right) < 0) return -1;
         }
         append_sql(ctx, ")");
         ctx->in_comparison = was_in_comparison;

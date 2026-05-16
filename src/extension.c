@@ -527,6 +527,62 @@ static void gql_graph_loaded_func(sqlite3_context *context, int argc, sqlite3_va
     }
 }
 
+/* Cypher's three-valued IN operator.
+ *   null IN []          -> false
+ *   null IN <non-empty> -> null
+ *   x    IN coll        -> true if some element equals x, null if no match
+ *                          but coll contains null, else false.
+ * coll is provided as a JSON array text. */
+static void gql_in_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 2) { sqlite3_result_null(context); return; }
+    const char *coll = (const char*)sqlite3_value_text(argv[1]);
+    if (!coll) { sqlite3_result_null(context); return; }
+
+    /* Empty array case: null IN [] -> false */
+    /* Detect empty array textually after trimming whitespace */
+    const char *p = coll;
+    while (*p == ' ' || *p == '\t') p++;
+    bool is_empty = (p[0] == '[' && p[1] == ']');
+
+    int elt_type = sqlite3_value_type(argv[0]);
+
+    if (elt_type == SQLITE_NULL) {
+        sqlite3_result_int(context, is_empty ? 0 : -1);
+        /* Use -1 sentinel for null result? No, use NULL */
+        if (!is_empty) sqlite3_result_null(context);
+        else sqlite3_result_int(context, 0);
+        return;
+    }
+
+    /* Build an "element = each element" comparison via json_each. */
+    sqlite3 *db = sqlite3_context_db_handle(context);
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db,
+        "SELECT "
+        "  MAX(CASE WHEN je.value IS NULL THEN 0 WHEN je.value = ?1 THEN 1 ELSE 0 END), "
+        "  MAX(CASE WHEN je.value IS NULL THEN 1 ELSE 0 END) "
+        "FROM json_each(?2) je",
+        -1, &stmt, NULL);
+    if (rc != SQLITE_OK) { sqlite3_result_null(context); return; }
+    sqlite3_bind_value(stmt, 1, argv[0]);
+    sqlite3_bind_text(stmt, 2, coll, -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int matched = sqlite3_column_int(stmt, 0);
+        int has_null = sqlite3_column_int(stmt, 1);
+        if (matched) sqlite3_result_int(context, 1);
+        else if (has_null) sqlite3_result_null(context);
+        else sqlite3_result_int(context, 0);
+    } else {
+        sqlite3_result_null(context);
+    }
+    sqlite3_finalize(stmt);
+}
+
 /* Coerce a possibly-string-encoded boolean ('true' / 'false') to a SQL
  * integer (1 / 0). Pass-through for NULL and other types. Used to make
  * Cypher boolean operators (NOT, AND, OR) work correctly on the
@@ -2676,6 +2732,11 @@ int sqlite3_graphqlite_init(
   rc = sqlite3_create_function(db, "_gql_order_key", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_order_key_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_in", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_in_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
