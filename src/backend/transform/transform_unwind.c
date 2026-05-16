@@ -342,7 +342,17 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         dbuf_append(&cte_query, " FROM ");
 
         if (inner_sql && strlen(inner_sql) > 0) {
-            dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
+            /* If inner_sql is `SELECT * FROM <tables>...`, splice the
+             * <tables>... portion into the outer FROM directly so the
+             * function's references to original aliases stay in scope.
+             * Falls back to subquery wrapping for non-trivial shapes. */
+            const char *select_star = "SELECT * FROM ";
+            size_t sl = strlen(select_star);
+            if (strncmp(inner_sql, select_star, sl) == 0) {
+                dbuf_appendf(&cte_query, "%s, ", inner_sql + sl);
+            } else {
+                dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
+            }
         }
 
         dbuf_appendf(&cte_query, "json_each(%s)", func_sql);
