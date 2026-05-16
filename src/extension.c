@@ -550,6 +550,188 @@ static void gql_bool_func(
     sqlite3_result_value(context, argv[0]);
 }
 
+/* Compute a sortable key for Cypher ORDER BY. For time/datetime/date strings
+ * with timezone offsets, return a UTC-normalized sortable string. For lists
+ * (JSON arrays), return a typed sortable representation. Otherwise, pass
+ * through.
+ *
+ * Inputs we recognize:
+ *   - 'YYYY-MM-DD[THH:MM[:SS[.NNN...]][TZ]]'  date or datetime
+ *   - 'HH:MM[:SS[.NNN...]][TZ]'                time
+ *   - TZ forms: 'Z', '+HH:MM', '-HH:MM'
+ *
+ * For datetimes/times with TZ, convert local components to UTC and reformat
+ * so lexicographic sort matches chronological order. We do NOT attempt to
+ * fully validate input; bad strings just pass through. */
+static int parse_int_n(const char *s, int n) {
+    int v = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        v = v*10 + (s[i] - '0');
+    }
+    return v;
+}
+
+/* Days in month, treating Feb as 29 on leap years */
+static int days_in_month(int y, int m) {
+    static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    if (m < 1 || m > 12) return 30;
+    if (m == 2) {
+        int leap = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+        return leap ? 29 : 28;
+    }
+    return dim[m-1];
+}
+
+/* Apply a signed minute offset to a date+time tuple, with proper carry. */
+static void apply_offset(int *y, int *mo, int *d, int *h, int *mi, int delta_min) {
+    /* Convert offset: we want to ADD delta_min minutes to get UTC equivalent
+     * when delta_min = -tz_offset_minutes. */
+    *mi += delta_min;
+    while (*mi < 0)  { *mi += 60; (*h)--; }
+    while (*mi >= 60) { *mi -= 60; (*h)++; }
+    while (*h  < 0)  { *h  += 24; (*d)--; }
+    while (*h  >= 24) { *h  -= 24; (*d)++; }
+    while (*d < 1) {
+        (*mo)--;
+        if (*mo < 1) { *mo = 12; (*y)--; }
+        *d += days_in_month(*y, *mo);
+    }
+    while (1) {
+        int dim = days_in_month(*y, *mo);
+        if (*d <= dim) break;
+        *d -= dim;
+        (*mo)++;
+        if (*mo > 12) { *mo = 1; (*y)++; }
+    }
+}
+
+/* Parse a timezone suffix starting at p. Returns minutes offset (positive
+ * means east-of-UTC), and the number of characters consumed. Returns
+ * (0, 0) if no TZ recognized. */
+static int parse_tz(const char *p, int *consumed) {
+    *consumed = 0;
+    if (!*p) return 0;
+    if (*p == 'Z') { *consumed = 1; return 0; }
+    if (*p != '+' && *p != '-') return 0;
+    int sign = (*p == '-') ? -1 : 1;
+    if (!p[1] || !p[2]) return 0;
+    int hh = parse_int_n(p+1, 2);
+    if (hh < 0) return 0;
+    int mm = 0;
+    int n = 3;
+    if (p[3] == ':' && p[4] && p[5]) {
+        mm = parse_int_n(p+4, 2);
+        if (mm < 0) return 0;
+        n = 6;
+    } else if (p[3] >= '0' && p[3] <= '9' && p[4] >= '0' && p[4] <= '9') {
+        mm = parse_int_n(p+3, 2);
+        n = 5;
+    }
+    *consumed = n;
+    return sign * (hh*60 + mm);
+}
+
+static void gql_order_key_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t != SQLITE_TEXT) {
+        sqlite3_result_value(context, argv[0]);
+        return;
+    }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(context); return; }
+
+    size_t slen = strlen(s);
+
+    /* Detect datetime: 'YYYY-MM-DDTHH:MM...' (need at least 16 chars) */
+    if (slen >= 16 && s[4] == '-' && s[7] == '-' && s[10] == 'T'
+        && s[13] == ':') {
+        int y = parse_int_n(s, 4);
+        int mo = parse_int_n(s+5, 2);
+        int d = parse_int_n(s+8, 2);
+        int h = parse_int_n(s+11, 2);
+        int mi = parse_int_n(s+14, 2);
+        if (y >= 0 && mo > 0 && d > 0 && h >= 0 && mi >= 0) {
+            int p = 16;
+            int sec = 0;
+            char frac[16] = "";
+            if (s[p] == ':' && slen > (size_t)(p+2)) {
+                sec = parse_int_n(s+p+1, 2);
+                if (sec < 0) sec = 0;
+                p += 3;
+                if (s[p] == '.') {
+                    int fi = 0; p++;
+                    while (s[p] >= '0' && s[p] <= '9' && fi < 9) frac[fi++] = s[p++];
+                    while (fi < 9) frac[fi++] = '0';
+                    frac[9] = '\0';
+                }
+            }
+            int tz_consumed = 0;
+            int tz_min = parse_tz(s+p, &tz_consumed);
+            if (tz_consumed > 0) {
+                /* Convert to UTC by subtracting tz_min */
+                apply_offset(&y, &mo, &d, &h, &mi, -tz_min);
+            }
+            /* Emit UTC sortable key (padded for lexicographic order) */
+            char out[64];
+            if (frac[0])
+                snprintf(out, sizeof(out), "%05d-%02d-%02dT%02d:%02d:%02d.%s",
+                         y, mo, d, h, mi, sec, frac);
+            else
+                snprintf(out, sizeof(out), "%05d-%02d-%02dT%02d:%02d:%02d",
+                         y, mo, d, h, mi, sec);
+            sqlite3_result_text(context, out, -1, SQLITE_TRANSIENT);
+            return;
+        }
+    }
+
+    /* Detect time: 'HH:MM[:SS[.fff]][TZ]' (need at least 5 chars: HH:MM) */
+    if (slen >= 5 && s[2] == ':'
+        && s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9'
+        && s[3] >= '0' && s[3] <= '9' && s[4] >= '0' && s[4] <= '9') {
+        int h = parse_int_n(s, 2);
+        int mi = parse_int_n(s+3, 2);
+        if (h >= 0 && mi >= 0) {
+            int p = 5;
+            int sec = 0;
+            char frac[16] = "";
+            if (s[p] == ':' && slen > (size_t)(p+2)) {
+                sec = parse_int_n(s+p+1, 2);
+                if (sec < 0) sec = 0;
+                p += 3;
+                if (s[p] == '.') {
+                    int fi = 0; p++;
+                    while (s[p] >= '0' && s[p] <= '9' && fi < 9) frac[fi++] = s[p++];
+                    while (fi < 9) frac[fi++] = '0';
+                    frac[9] = '\0';
+                }
+            }
+            int tz_consumed = 0;
+            int tz_min = parse_tz(s+p, &tz_consumed);
+            if (tz_consumed > 0) {
+                /* Treat as time-of-day; rotate by -tz_min to get UTC time. */
+                int y = 2000, mo = 1, d = 1;
+                apply_offset(&y, &mo, &d, &h, &mi, -tz_min);
+            }
+            char out[32];
+            if (frac[0])
+                snprintf(out, sizeof(out), "%02d:%02d:%02d.%s", h, mi, sec, frac);
+            else
+                snprintf(out, sizeof(out), "%02d:%02d:%02d", h, mi, sec);
+            sqlite3_result_text(context, out, -1, SQLITE_TRANSIENT);
+            return;
+        }
+    }
+
+    /* Fallback: pass-through */
+    sqlite3_result_value(context, argv[0]);
+}
+
 /* Extract nanosecond portion from ISO datetime string.
  * Input forms: 'YYYY-MM-DDTHH:MM:SS.<digits><tz>?', returns digits zero-padded
  * to 9 places as integer. Returns 0 if no fractional second present. */
@@ -2489,6 +2671,11 @@ int sqlite3_graphqlite_init(
   rc = sqlite3_create_function(db, "_gql_bool", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_bool_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_order_key", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_order_key_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,

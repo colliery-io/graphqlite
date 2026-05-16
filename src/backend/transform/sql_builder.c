@@ -453,7 +453,12 @@ void sql_order_by(sql_builder *b, const char *expr, bool desc)
         dbuf_append(&b->order_by, ", ");
     }
 
+    /* Wrap with _gql_order_key() so time/datetime strings sort by UTC
+     * instant rather than local-time lexicographic order, and lists sort
+     * by Cypher list semantics. Pass-through for other types. */
+    dbuf_append(&b->order_by, "_gql_order_key(");
     dbuf_append(&b->order_by, expr);
+    dbuf_append(&b->order_by, ")");
     if (desc) {
         dbuf_append(&b->order_by, " DESC");
     }
