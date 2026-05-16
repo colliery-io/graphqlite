@@ -462,10 +462,48 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 
                 sql_where(ctx->unified_builder, dbuf_get(&rel_cond));
                 dbuf_free(&rel_cond);
+
+                /* Add inline property constraints for the relationship.
+                 * Pattern like (a)-[r:KNOWS {name: 'x'}]->(b) should match
+                 * only edges whose `name` property is 'x'. */
+                if (rel->properties && rel->properties->type == AST_NODE_MAP) {
+                    cypher_map *m = (cypher_map*)rel->properties;
+                    if (m->pairs) {
+                        for (int pi = 0; pi < m->pairs->count; pi++) {
+                            cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[pi];
+                            if (!pair->key || !pair->value || pair->value->type != AST_NODE_LITERAL) continue;
+                            cypher_literal *lit = (cypher_literal*)pair->value;
+                            const char *tbl = NULL;
+                            char val_buf[256] = "";
+                            switch (lit->literal_type) {
+                                case LITERAL_STRING: tbl = "edge_props_text";
+                                    { char *esc = escape_sql_string(lit->value.string);
+                                      snprintf(val_buf, sizeof(val_buf), "'%s'", esc ? esc : lit->value.string);
+                                      free(esc); } break;
+                                case LITERAL_INTEGER: tbl = "edge_props_int";
+                                    snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
+                                case LITERAL_DECIMAL: tbl = "edge_props_real";
+                                    snprintf(val_buf, sizeof(val_buf), "%g", lit->value.decimal); break;
+                                case LITERAL_BOOLEAN: tbl = "edge_props_bool";
+                                    snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
+                                default: continue;
+                            }
+                            if (!tbl) continue;
+                            char *esc_key = escape_sql_string(pair->key);
+                            char prop_cond[1024];
+                            snprintf(prop_cond, sizeof(prop_cond),
+                                "EXISTS (SELECT 1 FROM %s ep JOIN property_keys pk ON ep.key_id = pk.id "
+                                "WHERE ep.edge_id = %s.id AND pk.key = '%s' AND ep.value = %s)",
+                                tbl, edge_alias, esc_key ? esc_key : pair->key, val_buf);
+                            free(esc_key);
+                            sql_where(ctx->unified_builder, prop_cond);
+                        }
+                    }
+                }
             }
         }
     }
-    
+
 handle_where_clause:
     /* Handle WHERE clause if present - capture expression to unified builder */
     if (match->where) {

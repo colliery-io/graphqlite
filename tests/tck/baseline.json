@@ -1,8 +1,8 @@
 {
   "backend": "extension",
   "total": 3880,
-  "pass": 3021,
-  "fail": 609,
+  "pass": 3025,
+  "fail": 605,
   "error": 173,
   "skipped": 77,
   "generated_from": "build/tck-results.json"
