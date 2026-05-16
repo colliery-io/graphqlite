@@ -89,7 +89,7 @@ int transform_foreach_clause(cypher_transform_context *ctx, cypher_foreach *fore
                         dbuf_appendf(&cte_query, "%lld", lit->value.integer);
                         break;
                     case LITERAL_DECIMAL:
-                        dbuf_appendf(&cte_query, "%f", lit->value.decimal);
+                        dbuf_appendf(&cte_query, "%.17g", lit->value.decimal);
                         break;
                     case LITERAL_STRING:
                         dbuf_appendf(&cte_query, "'%s'", lit->value.string);

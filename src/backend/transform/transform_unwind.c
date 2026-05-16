@@ -163,7 +163,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_appendf(&cte_query, "%lld", (long long)lit->value.integer);
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&cte_query, "%g", lit->value.decimal);
+                            dbuf_appendf(&cte_query, "%.17g", lit->value.decimal);
                             break;
                         case LITERAL_STRING:
                             dbuf_appendf(&cte_query, "'%s'", lit->value.string ? lit->value.string : "");

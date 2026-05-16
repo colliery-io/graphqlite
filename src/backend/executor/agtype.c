@@ -974,9 +974,10 @@ char* agtype_value_to_string(agtype_value *val)
         }
         
         case AGTV_FLOAT: {
-            result = malloc(32);
+            result = malloc(40);
             if (result) {
-                snprintf(result, 32, "%.10g", val->val.float_value);
+                /* %.17g preserves full double precision (TCK expects). */
+                snprintf(result, 40, "%.17g", val->val.float_value);
             }
             break;
         }

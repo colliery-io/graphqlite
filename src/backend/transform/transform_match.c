@@ -219,7 +219,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                             break;
                                         case LITERAL_DECIMAL:
                                             prop_table = "node_props_real";
-                                            snprintf(value_sql, sizeof(value_sql), "%f", lit->value.decimal);
+                                            snprintf(value_sql, sizeof(value_sql), "%.17g", lit->value.decimal);
                                             break;
                                         case LITERAL_BOOLEAN:
                                             prop_table = "node_props_bool";
@@ -483,7 +483,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                 case LITERAL_INTEGER: tbl = "edge_props_int";
                                     snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
                                 case LITERAL_DECIMAL: tbl = "edge_props_real";
-                                    snprintf(val_buf, sizeof(val_buf), "%g", lit->value.decimal); break;
+                                    snprintf(val_buf, sizeof(val_buf), "%.17g", lit->value.decimal); break;
                                 case LITERAL_BOOLEAN: tbl = "edge_props_bool";
                                     snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
                                 default: continue;

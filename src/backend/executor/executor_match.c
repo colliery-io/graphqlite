@@ -384,8 +384,17 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
 
         for (int col = 0; col < column_count; col++) {
             /* Store SQLite column type for proper JSON formatting */
-            result->data_types[current_row][col] = sqlite3_column_type(stmt, col);
+            int ct = sqlite3_column_type(stmt, col);
+            result->data_types[current_row][col] = ct;
             const char *value = (const char*)sqlite3_column_text(stmt, col);
+            char float_buf[40];
+            if (ct == SQLITE_FLOAT && value) {
+                /* Override SQLite's default text formatting to preserve
+                 * full double precision (matches Cypher TCK expectations). */
+                snprintf(float_buf, sizeof(float_buf), "%.17g",
+                         sqlite3_column_double(stmt, col));
+                value = float_buf;
+            }
             if (value) {
                 result->data[current_row][col] = strdup(value);
                 

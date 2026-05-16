@@ -963,7 +963,9 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         append_sql(ctx, "%lld", (long long)lit->value.integer);
                         break;
                     case LITERAL_DECIMAL:
-                        append_sql(ctx, "%f", lit->value.decimal);
+                        /* %.17g preserves full double precision while
+                         * avoiding trailing zeros %f would emit. */
+                        append_sql(ctx, "%.17g", lit->value.decimal);
                         break;
                     case LITERAL_STRING:
                         append_string_literal(ctx, lit->value.string);
