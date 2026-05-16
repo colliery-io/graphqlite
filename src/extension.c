@@ -527,6 +527,29 @@ static void gql_graph_loaded_func(sqlite3_context *context, int argc, sqlite3_va
     }
 }
 
+/* Coerce a possibly-string-encoded boolean ('true' / 'false') to a SQL
+ * integer (1 / 0). Pass-through for NULL and other types. Used to make
+ * Cypher boolean operators (NOT, AND, OR) work correctly on the
+ * 'true'/'false' strings returned by property access. */
+static void gql_bool_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (t == SQLITE_TEXT) {
+        const char *s = (const char*)sqlite3_value_text(argv[0]);
+        if (s) {
+            if (strcmp(s, "true") == 0)  { sqlite3_result_int(context, 1); return; }
+            if (strcmp(s, "false") == 0) { sqlite3_result_int(context, 0); return; }
+        }
+    }
+    /* Numeric or unknown - pass through */
+    sqlite3_result_value(context, argv[0]);
+}
+
 /* Extract nanosecond portion from ISO datetime string.
  * Input forms: 'YYYY-MM-DDTHH:MM:SS.<digits><tz>?', returns digits zero-padded
  * to 9 places as integer. Returns 0 if no fractional second present. */
@@ -2461,6 +2484,11 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "_gql_extract_ns", 1, SQLITE_UTF8, 0,
                          gql_extract_ns_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_bool", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_bool_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,

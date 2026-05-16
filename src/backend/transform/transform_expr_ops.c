@@ -52,8 +52,9 @@ int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not
 
     /* Wrap outer parens too — SQLite gives `>=` higher precedence than NOT,
      * so 'NOT (0) >= 0' parses as 'NOT ((0) >= 0)'. Outer parens force the
-     * NOT to bind to its single operand. */
-    append_sql(ctx, "(NOT (");
+     * NOT to bind to its single operand. Coerce string-encoded booleans
+     * ('true'/'false') to int via _gql_bool(). */
+    append_sql(ctx, "(NOT _gql_bool(");
 
     if (transform_expression(ctx, not_expr->expr) < 0) {
         return -1;
@@ -98,6 +99,23 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         binary_op->op_type == BINARY_OP_STARTS_WITH || binary_op->op_type == BINARY_OP_ENDS_WITH ||
         binary_op->op_type == BINARY_OP_CONTAINS) {
         ctx->in_comparison = true;
+    }
+
+    /* Handle boolean logical operators: wrap operands in _gql_bool() to coerce
+     * string 'true'/'false' (from boolean property access) to int 1/0 so SQL
+     * AND / OR / XOR behave correctly. */
+    if (binary_op->op_type == BINARY_OP_AND ||
+        binary_op->op_type == BINARY_OP_OR ||
+        binary_op->op_type == BINARY_OP_XOR) {
+        append_sql(ctx, "(_gql_bool(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ") %s _gql_bool(",
+                   binary_op->op_type == BINARY_OP_AND ? "AND" :
+                   binary_op->op_type == BINARY_OP_OR  ? "OR"  : "<>");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, "))");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
     }
 
     /* Handle REGEX_MATCH specially - convert to regexp(pattern, string) function call */
