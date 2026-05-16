@@ -14,6 +14,78 @@
 #include "parser/cypher_debug.h"
 
 /*
+ * Walk an expression AST and validate every identifier reference resolves
+ * to a variable currently in scope. Returns 0 if all OK, -1 if any
+ * identifier is undefined (and sets ctx->error_message accordingly).
+ * Used to enforce Cypher's UndefinedVariable semantics for ORDER BY in
+ * WITH where variables drop out of scope at the projection boundary.
+ */
+static int validate_identifiers_in_scope(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!expr) return 0;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER: {
+            cypher_identifier *id = (cypher_identifier*)expr;
+            if (id->name && !transform_var_lookup(ctx->var_ctx, id->name)) {
+                ctx->has_error = true;
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Variable `%s` not defined (SyntaxError: UndefinedVariable)",
+                         id->name);
+                ctx->error_message = strdup(msg);
+                return -1;
+            }
+            return 0;
+        }
+        case AST_NODE_PROPERTY: {
+            cypher_property *p = (cypher_property*)expr;
+            return validate_identifiers_in_scope(ctx, p->expr);
+        }
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *b = (cypher_binary_op*)expr;
+            if (validate_identifiers_in_scope(ctx, b->left) < 0) return -1;
+            return validate_identifiers_in_scope(ctx, b->right);
+        }
+        case AST_NODE_NOT_EXPR: {
+            cypher_not_expr *n = (cypher_not_expr*)expr;
+            return validate_identifiers_in_scope(ctx, n->expr);
+        }
+        case AST_NODE_NULL_CHECK: {
+            cypher_null_check *nc = (cypher_null_check*)expr;
+            return validate_identifiers_in_scope(ctx, nc->expr);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call*)expr;
+            if (fc->args) {
+                for (int i = 0; i < fc->args->count; i++) {
+                    if (validate_identifiers_in_scope(ctx, fc->args->items[i]) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list*)expr;
+            if (l->items) {
+                for (int i = 0; i < l->items->count; i++) {
+                    if (validate_identifiers_in_scope(ctx, l->items->items[i]) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript*)expr;
+            if (validate_identifiers_in_scope(ctx, s->expr) < 0) return -1;
+            if (validate_identifiers_in_scope(ctx, s->index) < 0) return -1;
+            if (validate_identifiers_in_scope(ctx, s->slice_start) < 0) return -1;
+            if (validate_identifiers_in_scope(ctx, s->slice_end) < 0) return -1;
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+/*
  * Transform an expression to a dynamically allocated string.
  * Uses a temporary buffer to capture output, then returns the result.
  * Caller must free the returned string.
@@ -512,6 +584,16 @@ with_star_columns_done:
 
     /* Handle ORDER BY */
     if (with->order_by && with->order_by->count > 0) {
+        /* Validate: every identifier referenced in an ORDER BY expression
+         * must be a projected variable. Cypher requires this — references
+         * to variables that fall out of scope at WITH must raise
+         * SyntaxError(UndefinedVariable). */
+        for (int i = 0; i < with->order_by->count; i++) {
+            cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
+            if (validate_identifiers_in_scope(ctx, order_item->expr) < 0) {
+                return -1;
+            }
+        }
         for (int i = 0; i < with->order_by->count; i++) {
             cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
             char *order_expr = transform_expression_to_string(ctx, order_item->expr);
