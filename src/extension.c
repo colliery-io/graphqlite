@@ -1868,6 +1868,46 @@ static void gql_dyn_addsub_func(sqlite3_context *ctx, int argc, sqlite3_value **
     int t0 = sqlite3_value_type(argv[0]);
     int t1 = sqlite3_value_type(argv[1]);
     if (t0 == SQLITE_NULL || t1 == SQLITE_NULL) { sqlite3_result_null(ctx); return; }
+    /* List append / concat for +. If either operand is a JSON array text,
+     * treat the + as Cypher list +. Use SQLite's json_insert/json_patch
+     * via a one-shot query. */
+    if (sign > 0) {
+        const char *l_text = (t0 == SQLITE_TEXT) ? (const char*)sqlite3_value_text(argv[0]) : NULL;
+        const char *r_text = (t1 == SQLITE_TEXT) ? (const char*)sqlite3_value_text(argv[1]) : NULL;
+        bool l_is_arr = l_text && l_text[0] == '[';
+        bool r_is_arr = r_text && r_text[0] == '[';
+        if (l_is_arr || r_is_arr) {
+            sqlite3 *db = sqlite3_context_db_handle(ctx);
+            sqlite3_stmt *stmt = NULL;
+            const char *sql;
+            if (l_is_arr && r_is_arr) {
+                /* list + list: concat */
+                sql = "WITH a(v) AS (SELECT value FROM json_each(?1)) , "
+                      "     b(v) AS (SELECT value FROM json_each(?2)) "
+                      "SELECT json_group_array(v) FROM (SELECT v FROM a UNION ALL SELECT v FROM b)";
+            } else if (l_is_arr) {
+                /* list + value: append */
+                sql = "SELECT json_insert(?1, '$[#]', ?2)";
+            } else {
+                /* value + list: prepend (Cypher allows this) */
+                sql = "WITH b(v) AS (SELECT value FROM json_each(?2)) "
+                      "SELECT json_group_array(v) FROM (SELECT ?1 AS v UNION ALL SELECT v FROM b)";
+            }
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_value(stmt, 1, argv[0]);
+                sqlite3_bind_value(stmt, 2, argv[1]);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    const char *out = (const char*)sqlite3_column_text(stmt, 0);
+                    if (out) sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+                    else sqlite3_result_null(ctx);
+                } else {
+                    sqlite3_result_null(ctx);
+                }
+                sqlite3_finalize(stmt);
+                return;
+            }
+        }
+    }
     /* String concat for + when either side is text (Cypher semantics). */
     if (sign > 0 && (t0 == SQLITE_TEXT || t1 == SQLITE_TEXT)) {
         const char *l = (const char*)sqlite3_value_text(argv[0]);
