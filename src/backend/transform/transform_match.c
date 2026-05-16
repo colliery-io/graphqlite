@@ -1223,6 +1223,34 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             }
             sql_where(ctx->unified_builder, cond);
 
+            /* If the new pattern specifies a relationship type, enforce it
+             * against the bound edge's type. `MATCH ()-[r:T]->() WITH r
+             * MATCH ()-[r:Y]->()` should match zero rows because r was
+             * bound as type T but the second MATCH requires type Y. */
+            if (rel->type) {
+                char type_cond[512];
+                char *esc = escape_sql_string(rel->type);
+                snprintf(type_cond, sizeof(type_cond),
+                         "(SELECT type FROM %sedges WHERE id = %s) = '%s'",
+                         graph, edge_alias, esc ? esc : rel->type);
+                free(esc);
+                sql_where(ctx->unified_builder, type_cond);
+            } else if (rel->types && rel->types->count > 0) {
+                dynamic_buffer tc; dbuf_init(&tc);
+                dbuf_appendf(&tc, "(SELECT type FROM %sedges WHERE id = %s) IN (",
+                             graph, edge_alias);
+                for (int t = 0; t < rel->types->count; t++) {
+                    if (t > 0) dbuf_append(&tc, ", ");
+                    cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+                    char *esc = escape_sql_string(type_lit->value.string);
+                    dbuf_appendf(&tc, "'%s'", esc ? esc : type_lit->value.string);
+                    free(esc);
+                }
+                dbuf_append(&tc, ")");
+                sql_where(ctx->unified_builder, dbuf_get(&tc));
+                dbuf_free(&tc);
+            }
+
             CYPHER_DEBUG("Generated bound-rel match: %s as %s connects %s to %s",
                          rel->variable, edge_alias, source_alias, target_alias);
             return 0;
