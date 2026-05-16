@@ -188,9 +188,29 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                         dbuf_append(&cte_query, "NULL");
                     }
                 } else {
-                    /* For other expression types, we'd need to transform them */
-                    /* For now, just handle literals */
-                    dbuf_append(&cte_query, "NULL");
+                    /* General expression (function call, identifier, etc.) —
+                     * transform to SQL and emit inline. */
+                    char *saved_buffer = ctx->sql_buffer;
+                    size_t saved_size = ctx->sql_size;
+                    size_t saved_capacity = ctx->sql_capacity;
+                    size_t temp_capacity = 4096;
+                    char *temp_buffer = malloc(temp_capacity);
+                    bool ok = false;
+                    if (temp_buffer) {
+                        temp_buffer[0] = '\0';
+                        ctx->sql_buffer = temp_buffer;
+                        ctx->sql_size = 0;
+                        ctx->sql_capacity = temp_capacity;
+                        if (transform_expression(ctx, item) == 0 && ctx->sql_buffer[0]) {
+                            dbuf_appendf(&cte_query, "(%s)", ctx->sql_buffer);
+                            ok = true;
+                        }
+                        free(temp_buffer);
+                        ctx->sql_buffer = saved_buffer;
+                        ctx->sql_size = saved_size;
+                        ctx->sql_capacity = saved_capacity;
+                    }
+                    if (!ok) dbuf_append(&cte_query, "NULL");
                 }
                 dbuf_append(&cte_query, " AS value");
                 if (has_carry) {
