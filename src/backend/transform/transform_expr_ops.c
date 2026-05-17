@@ -188,6 +188,25 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
 
     /* Handle IN operator specially - check membership in list */
     if (binary_op->op_type == BINARY_OP_IN) {
+        /* Right side must be a list. Reject non-list literals at compile
+         * time (TCK list/[42]). Parameters and identifiers pass through. */
+        if (binary_op->right && binary_op->right->type == AST_NODE_LITERAL) {
+            cypher_literal *rl = (cypher_literal*)binary_op->right;
+            if (rl->literal_type == LITERAL_INTEGER ||
+                rl->literal_type == LITERAL_DECIMAL ||
+                rl->literal_type == LITERAL_STRING  ||
+                rl->literal_type == LITERAL_BOOLEAN) {
+                ctx->has_error = true;
+                ctx->error_message = strdup(
+                    "SyntaxError: InvalidArgumentType: IN operator requires a list on its right side");
+                return -1;
+            }
+        } else if (binary_op->right && binary_op->right->type == AST_NODE_MAP) {
+            ctx->has_error = true;
+            ctx->error_message = strdup(
+                "SyntaxError: InvalidArgumentType: IN operator requires a list on its right side");
+            return -1;
+        }
         /* Use _gql_in() UDF for proper Cypher three-valued logic:
          *   null IN []         -> false
          *   null IN <nonempty> -> null
