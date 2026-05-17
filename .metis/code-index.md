@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-15T22:38:33Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-17T16:35:15Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -1426,12 +1426,12 @@
 
 #### tests/tck/_extension_worker.py
 
-- pub `main` function L34-88 — `def main() -> int`
--  `_decode_payload` function L91-154 — `def _decode_payload(raw_payloads: list) -> dict` — Decode the extension's `cypher()` return into the harness wire format:
--  `_new_conn` function L157-161 — `def _new_conn(ext_path: Path) -> sqlite3.Connection`
--  `_named_graph_file` function L164-171 — `def _named_graph_file(name: str) -> Path | None` — TCK named-graph fixture: vendor/tck/graphs/<name>/<name>.cypher (preferred)
--  `_write` function L174-176 — `def _write(proto, msg: dict) -> None`
--  `_classify` function L179-193 — `def _classify(msg: str) -> str`
+- pub `main` function L34-94 — `def main() -> int`
+-  `_decode_payload` function L97-160 — `def _decode_payload(raw_payloads: list) -> dict` — Decode the extension's `cypher()` return into the harness wire format:
+-  `_new_conn` function L163-167 — `def _new_conn(ext_path: Path) -> sqlite3.Connection`
+-  `_named_graph_file` function L170-177 — `def _named_graph_file(name: str) -> Path | None` — TCK named-graph fixture: vendor/tck/graphs/<name>/<name>.cypher (preferred)
+-  `_write` function L180-182 — `def _write(proto, msg: dict) -> None`
+-  `_classify` function L185-199 — `def _classify(msg: str) -> str`
 
 #### tests/tck/_python_binding_worker.py
 
@@ -1474,16 +1474,16 @@
 -  `_h_empty_graph` function L189-190 — `def _h_empty_graph(step, state, backend, m)`
 -  `_h_named_graph` function L192-194 — `def _h_named_graph(step, state, backend, m)`
 -  `_h_having_executed` function L196-199 — `def _h_having_executed(step, state, backend, m)`
--  `_h_parameters` function L201-215 — `def _h_parameters(step, state, backend, m)`
--  `_h_executing_query` function L217-223 — `def _h_executing_query(step, state, backend, m)`
--  `_h_result_ordered` function L225-227 — `def _h_result_ordered(step, state, backend, m)`
--  `_h_result_any_order` function L229-231 — `def _h_result_any_order(step, state, backend, m)`
--  `_h_result_empty` function L233-238 — `def _h_result_empty(step, state, backend, m)`
--  `_h_expect_error` function L240-243 — `def _h_expect_error(step, state, backend, m)`
--  `_h_no_side_effects` function L245-247 — `def _h_no_side_effects(step, state, backend, m)`
--  `_h_side_effects_table` function L249-255 — `def _h_side_effects_table(step, state, backend, m)`
--  `_compare_result_table` function L273-316 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
--  `_rows_equal` function L319-322 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
+-  `_h_parameters` function L201-216 — `def _h_parameters(step, state, backend, m)`
+-  `_h_executing_query` function L218-224 — `def _h_executing_query(step, state, backend, m)`
+-  `_h_result_ordered` function L226-228 — `def _h_result_ordered(step, state, backend, m)`
+-  `_h_result_any_order` function L230-232 — `def _h_result_any_order(step, state, backend, m)`
+-  `_h_result_empty` function L234-239 — `def _h_result_empty(step, state, backend, m)`
+-  `_h_expect_error` function L241-244 — `def _h_expect_error(step, state, backend, m)`
+-  `_h_no_side_effects` function L246-248 — `def _h_no_side_effects(step, state, backend, m)`
+-  `_h_side_effects_table` function L250-256 — `def _h_side_effects_table(step, state, backend, m)`
+-  `_compare_result_table` function L274-317 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
+-  `_rows_equal` function L320-323 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
 
 #### tests/tck/values.py
 
@@ -1530,17 +1530,17 @@
 
 #### tests/tck/backends/extension.py
 
-- pub `ExtensionBackend` class L26-168 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
+- pub `ExtensionBackend` class L26-171 — `(Backend) { __init__, reset, load_named_graph, execute, close }`
 - pub `__init__` method L29-38 — `def __init__(self, extension_path: Path | None = None, debug_log: Path | None = ...`
 - pub `reset` method L42-47 — `def reset(self) -> None`
 - pub `load_named_graph` method L49-59 — `def load_named_graph(self, name: str) -> None`
-- pub `execute` method L61-80 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
-- pub `close` method L82-94 — `def close(self) -> None`
--  `_spawn` method L98-120 — `def _spawn(self) -> None`
--  `_send` method L122-139 — `def _send(self, msg: dict, timeout: float | None = None) -> dict`
--  `_read_with_timeout` method L141-168 — `def _read_with_timeout(self, timeout: float | None) -> str` — Read one line from worker stdout; SIGKILL the worker on timeout.
--  `_Timeout` class L171-172 — `(BackendError)`
--  `_signal_of` function L175-184 — `def _signal_of(rc: int) -> str`
+- pub `execute` method L61-83 — `def execute(self, query: str, parameters: dict[str, Any] | None = None) -> Query...`
+- pub `close` method L85-97 — `def close(self) -> None`
+-  `_spawn` method L101-123 — `def _spawn(self) -> None`
+-  `_send` method L125-142 — `def _send(self, msg: dict, timeout: float | None = None) -> dict`
+-  `_read_with_timeout` method L144-171 — `def _read_with_timeout(self, timeout: float | None) -> str` — Read one line from worker stdout; SIGKILL the worker on timeout.
+-  `_Timeout` class L174-175 — `(BackendError)`
+-  `_signal_of` function L178-187 — `def _signal_of(rc: int) -> str`
 
 #### tests/tck/backends/python_binding.py
 

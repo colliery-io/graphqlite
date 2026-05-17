@@ -215,6 +215,42 @@ int transform_range_function(cypher_transform_context *ctx, cypher_function_call
         return -1;
     }
 
+    /* Static validation: reject obviously-wrong literal arguments at
+     * compile time. range() requires integer start/end/step; step must
+     * not be zero. Non-literal arguments are passed through to the
+     * recursive CTE below (best-effort runtime behavior). */
+    for (int i = 0; i < func_call->args->count; i++) {
+        ast_node *a = func_call->args->items[i];
+        if (!a) continue;
+        if (a->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)a;
+            switch (lit->literal_type) {
+                case LITERAL_INTEGER:
+                    if (i == 2 && lit->value.integer == 0) {
+                        ctx->has_error = true;
+                        ctx->error_message = strdup(
+                            "ArgumentError: NumberOutOfRange — range() step argument must not be zero");
+                        return -1;
+                    }
+                    break;
+                case LITERAL_DECIMAL:
+                case LITERAL_STRING:
+                case LITERAL_BOOLEAN:
+                    ctx->has_error = true;
+                    ctx->error_message = strdup(
+                        "ArgumentError: InvalidArgumentType — range() arguments must be integers");
+                    return -1;
+                default:
+                    break;
+            }
+        } else if (a->type == AST_NODE_LIST || a->type == AST_NODE_MAP) {
+            ctx->has_error = true;
+            ctx->error_message = strdup(
+                "ArgumentError: InvalidArgumentType — range() arguments must be integers");
+            return -1;
+        }
+    }
+
     /* Use a recursive CTE to generate the inclusive openCypher range.
      *
      * openCypher's range is INCLUSIVE on both ends; the iteration direction
