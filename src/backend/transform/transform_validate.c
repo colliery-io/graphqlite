@@ -594,8 +594,8 @@ static void collect_pattern_names(ast_list *patterns, name_set *out)
  *  - `CREATE (a)-[r:T]->(b)` where `r` was already bound to a relationship
  *    variable → error.
  */
-static int check_create_rebinds(ast_list *patterns, const name_set *bound,
-                                 char **error_message)
+static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
+                                    bool is_merge, char **error_message)
 {
     if (!patterns) return 0;
     for (int i = 0; i < patterns->count; i++) {
@@ -629,6 +629,11 @@ static int check_create_rebinds(ast_list *patterns, const name_set *bound,
                 is_rel = true;
             }
             if (!var || !nset_contains(bound, var)) continue;
+            /* MERGE single-node `MERGE (a)` on a bound `a` is a legal
+             * no-op match. Same for label/property predicates on an
+             * already-bound node in MERGE. Re-binding a relationship
+             * variable is still an error. */
+            if (is_merge && !is_rel) continue;
             /* A relationship variable in CREATE always means "create this
              * relationship" — re-binding is an error. */
             if (is_rel || single_node || has_labels || has_props) {
@@ -698,14 +703,16 @@ int transform_validate_query(cypher_query *query, char **error_message)
             }
             case AST_NODE_CREATE: {
                 cypher_create *c = (cypher_create *)clause;
-                rc = check_create_rebinds(c->pattern, &bound, error_message);
+                rc = check_create_rebinds_ex(c->pattern, &bound, false, error_message);
                 if (rc == 0) collect_pattern_names(c->pattern, &bound);
                 break;
             }
             case AST_NODE_MERGE: {
                 cypher_merge *m = (cypher_merge *)clause;
-                /* MERGE shares the same re-binding rules as CREATE. */
-                rc = check_create_rebinds(m->pattern, &bound, error_message);
+                /* MERGE shares the same re-binding rules as CREATE except
+                 * single-node and label/prop predicates on an already-bound
+                 * node are legal (matches the existing binding). */
+                rc = check_create_rebinds_ex(m->pattern, &bound, true, error_message);
                 if (rc == 0) {
                     /* MERGE also requires relationships to have an explicit
                      * type — `MERGE (a)-->(b)` is illegal. */
