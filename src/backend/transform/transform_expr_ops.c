@@ -142,6 +142,33 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
+    /* For =/<> where one operand is a logical operator result (NOT, AND,
+     * OR, XOR) and the other might be a 'true'/'false' string, coerce
+     * both sides via _gql_bool so comparison works regardless of whether
+     * a side flows as int 1/0 or text. */
+    if ((binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ)) {
+        bool l_is_logic = binary_op->left && (
+            binary_op->left->type == AST_NODE_NOT_EXPR ||
+            (binary_op->left->type == AST_NODE_BINARY_OP &&
+             ((cypher_binary_op*)binary_op->left)->op_type >= BINARY_OP_AND &&
+             ((cypher_binary_op*)binary_op->left)->op_type <= BINARY_OP_XOR));
+        bool r_is_logic = binary_op->right && (
+            binary_op->right->type == AST_NODE_NOT_EXPR ||
+            (binary_op->right->type == AST_NODE_BINARY_OP &&
+             ((cypher_binary_op*)binary_op->right)->op_type >= BINARY_OP_AND &&
+             ((cypher_binary_op*)binary_op->right)->op_type <= BINARY_OP_XOR));
+        if (l_is_logic || r_is_logic) {
+            append_sql(ctx, "(_gql_bool(");
+            if (transform_expression(ctx, binary_op->left) < 0) return -1;
+            append_sql(ctx, ") %s _gql_bool(",
+                       binary_op->op_type == BINARY_OP_EQ ? "=" : "<>");
+            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            append_sql(ctx, "))");
+            ctx->in_comparison = was_in_comparison;
+            return 0;
+        }
+    }
+
     /* Handle REGEX_MATCH specially - convert to regexp(pattern, string) function call */
     if (binary_op->op_type == BINARY_OP_REGEX_MATCH) {
         append_sql(ctx, "regexp(");

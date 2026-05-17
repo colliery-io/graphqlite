@@ -800,6 +800,32 @@ static void gql_in_func(
     sqlite3_finalize(stmt);
 }
 
+/* Map a boolean-ish value to the string 'true' or 'false' (NULL passes
+ * through). Used to make the result of NOT / AND / OR / XOR consistent
+ * with the rest of the system, where booleans flow as 'true'/'false'
+ * text — so downstream `= true` comparisons work. */
+static void gql_bool_str_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (t == SQLITE_INTEGER || t == SQLITE_FLOAT) {
+        long long v = sqlite3_value_int64(argv[0]);
+        sqlite3_result_text(context, v ? "true" : "false", -1, SQLITE_STATIC);
+        return;
+    }
+    /* Already text — pass through if it's 'true'/'false', else NULL. */
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (s && (strcmp(s, "true") == 0 || strcmp(s, "false") == 0)) {
+        sqlite3_result_text(context, s, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_result_null(context);
+    }
+}
+
 /* Coerce a possibly-string-encoded boolean ('true' / 'false') to a SQL
  * integer (1 / 0). Pass-through for NULL and other types. Used to make
  * Cypher boolean operators (NOT, AND, OR) work correctly on the
@@ -2984,6 +3010,11 @@ int sqlite3_graphqlite_init(
   rc = sqlite3_create_function(db, "_gql_bool", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_bool_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_bool_str", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_bool_str_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_order_key", 1,
