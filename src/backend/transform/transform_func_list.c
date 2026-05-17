@@ -58,17 +58,11 @@ int transform_tostring_function(cypher_transform_context *ctx, cypher_function_c
         return -1;
     }
 
-    /* For Duration JSON objects, render as the canonical ISO 8601 form (the
-     * '_iso8601' field). Other values fall through to plain CAST AS TEXT. */
-    append_sql(ctx, "(CASE WHEN json_valid(");
+    /* Strict UDF rejects lists/maps/nodes/relationships/paths (TypeError)
+     * but renders Duration JSON via its _iso8601 field. */
+    append_sql(ctx, "_gql_to_string_strict(");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, ") AND json_extract(");
-    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, ", '$._iso8601') IS NOT NULL THEN json_extract(");
-    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, ", '$._iso8601') ELSE CAST(");
-    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, " AS TEXT) END)");
+    append_sql(ctx, ")");
 
     return 0;
 }
@@ -86,29 +80,20 @@ int transform_type_conversion_function(cypher_transform_context *ctx, cypher_fun
         return -1;
     }
 
+    /* Route through strict UDFs that raise TypeError on incompatible
+     * input types (Cypher contract). */
+    const char *udf = NULL;
     if (strcasecmp(func_call->function_name, "toInteger") == 0) {
-        append_sql(ctx, "CAST(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) {
-            return -1;
-        }
-        append_sql(ctx, " AS INTEGER)");
+        udf = "_gql_to_int_strict";
     } else if (strcasecmp(func_call->function_name, "toFloat") == 0) {
-        append_sql(ctx, "CAST(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) {
-            return -1;
-        }
-        append_sql(ctx, " AS REAL)");
+        udf = "_gql_to_float_strict";
     } else if (strcasecmp(func_call->function_name, "toBoolean") == 0) {
-        /* Convert to boolean: 'true'/1 -> 1, 'false'/0/NULL -> 0 */
-        append_sql(ctx, "(CASE WHEN LOWER(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) {
-            return -1;
-        }
-        append_sql(ctx, ") IN ('true', '1') OR ");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) {
-            return -1;
-        }
-        append_sql(ctx, " = 1 THEN 1 ELSE 0 END)");
+        udf = "_gql_to_bool_strict";
+    }
+    if (udf) {
+        append_sql(ctx, "%s(", udf);
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")");
     }
 
     return 0;

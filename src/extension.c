@@ -800,6 +800,152 @@ static void gql_in_func(
     sqlite3_finalize(stmt);
 }
 
+/* Strict type-conversion UDFs. Each raises an SQL error (which the harness
+ * classifies as TypeError) when given an incompatible input type, matching
+ * openCypher's contract for toBoolean/toInteger/toFloat/toString. */
+
+static bool is_json_container(sqlite3_value *v) {
+    if (sqlite3_value_type(v) != SQLITE_TEXT) return false;
+    const char *s = (const char*)sqlite3_value_text(v);
+    if (!s) return false;
+    while (*s == ' ' || *s == '\t') s++;
+    return *s == '[' || *s == '{';
+}
+
+static void gql_to_bool_strict_func(
+    sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (is_json_container(argv[0])) {
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toBoolean() does not accept lists or maps", -1);
+        return;
+    }
+    if (t == SQLITE_TEXT) {
+        const char *s = (const char*)sqlite3_value_text(argv[0]);
+        if (!s) { sqlite3_result_null(context); return; }
+        if (strcmp(s, "true") == 0)  { sqlite3_result_int(context, 1); return; }
+        if (strcmp(s, "false") == 0) { sqlite3_result_int(context, 0); return; }
+        sqlite3_result_null(context);
+        return;
+    }
+    if (t == SQLITE_FLOAT) {
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toBoolean() does not accept Float", -1);
+        return;
+    }
+    /* Integer / pass-through */
+    sqlite3_result_int(context, sqlite3_value_int64(argv[0]) ? 1 : 0);
+}
+
+static void gql_to_integer_strict_func(
+    sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (is_json_container(argv[0])) {
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toInteger() does not accept lists or maps", -1);
+        return;
+    }
+    if (t == SQLITE_INTEGER) {
+        sqlite3_result_value(context, argv[0]); return;
+    }
+    if (t == SQLITE_FLOAT) {
+        sqlite3_result_int64(context, (long long)sqlite3_value_double(argv[0]));
+        return;
+    }
+    /* Text: try parse */
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(context); return; }
+    /* 'true' / 'false' are not numeric */
+    if (strcmp(s, "true") == 0 || strcmp(s, "false") == 0) {
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toInteger() does not accept Boolean", -1);
+        return;
+    }
+    char *end = NULL;
+    long long v = strtoll(s, &end, 10);
+    if (end != s && *end == 0) { sqlite3_result_int64(context, v); return; }
+    /* try float then truncate */
+    double d = strtod(s, &end);
+    if (end != s && *end == 0) { sqlite3_result_int64(context, (long long)d); return; }
+    sqlite3_result_null(context);
+}
+
+static void gql_to_float_strict_func(
+    sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (is_json_container(argv[0])) {
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toFloat() does not accept lists or maps", -1);
+        return;
+    }
+    if (t == SQLITE_INTEGER) {
+        sqlite3_result_double(context, (double)sqlite3_value_int64(argv[0])); return;
+    }
+    if (t == SQLITE_FLOAT) {
+        sqlite3_result_value(context, argv[0]); return;
+    }
+    const char *s = (const char*)sqlite3_value_text(argv[0]);
+    if (!s) { sqlite3_result_null(context); return; }
+    if (strcmp(s, "true") == 0 || strcmp(s, "false") == 0) {
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toFloat() does not accept Boolean", -1);
+        return;
+    }
+    char *end = NULL;
+    double v = strtod(s, &end);
+    if (end != s && *end == 0) { sqlite3_result_double(context, v); return; }
+    sqlite3_result_null(context);
+}
+
+static void gql_to_string_strict_func(
+    sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (is_json_container(argv[0])) {
+        /* Duration JSON has an _iso8601 field — render that. Vertex JSON
+         * has 'id'+'labels'; edge JSON has 'type'+'startNode'/'startNodeId';
+         * path JSON has 'nodes'+'rels'; reject those. */
+        const char *s = (const char*)sqlite3_value_text(argv[0]);
+        if (s && strstr(s, "\"_iso8601\"")) {
+            sqlite3 *db = sqlite3_context_db_handle(context);
+            sqlite3_stmt *stmt = NULL;
+            if (sqlite3_prepare_v2(db, "SELECT json_extract(?1, '$._iso8601')",
+                                   -1, &stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, s, -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    const char *iso = (const char*)sqlite3_column_text(stmt, 0);
+                    if (iso) sqlite3_result_text(context, iso, -1, SQLITE_TRANSIENT);
+                    else sqlite3_result_null(context);
+                }
+                sqlite3_finalize(stmt);
+                return;
+            }
+        }
+        sqlite3_result_error(context,
+            "TypeError: InvalidArgumentValue: toString() does not accept lists, maps, nodes, relationships, or paths", -1);
+        return;
+    }
+    if (t == SQLITE_TEXT) {
+        sqlite3_result_value(context, argv[0]); return;
+    }
+    if (t == SQLITE_INTEGER) {
+        char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)sqlite3_value_int64(argv[0]));
+        sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT); return;
+    }
+    if (t == SQLITE_FLOAT) {
+        char buf[40]; snprintf(buf, sizeof(buf), "%.17g", sqlite3_value_double(argv[0]));
+        sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT); return;
+    }
+    sqlite3_result_null(context);
+}
+
 /* Map a boolean-ish value to the string 'true' or 'false' (NULL passes
  * through). Used to make the result of NOT / AND / OR / XOR consistent
  * with the rest of the system, where booleans flow as 'true'/'false'
@@ -3015,6 +3161,26 @@ int sqlite3_graphqlite_init(
   rc = sqlite3_create_function(db, "_gql_bool_str", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_bool_str_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_to_bool_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_bool_strict_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_to_int_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_integer_strict_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_to_float_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_float_strict_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_to_string_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_string_strict_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_order_key", 1,
