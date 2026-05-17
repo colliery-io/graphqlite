@@ -55,17 +55,17 @@ Ranked by `fail + error` count. Click through to the vendored TCK file under `ve
 | 15 | `vendor/tck/features/clauses/match/Match5.feature` |
 | 15 | `vendor/tck/features/clauses/merge/Merge5.feature` |
 | 15 | `vendor/tck/features/expressions/list/List1.feature` |
-| 15 | `vendor/tck/features/expressions/quantifier/Quantifier11.feature` |
 | 15 | `vendor/tck/features/expressions/temporal/Temporal4.feature` |
+| 14 | `vendor/tck/features/expressions/quantifier/Quantifier11.feature` |
 | 13 | `vendor/tck/features/clauses/with-orderBy/WithOrderBy2.feature` |
 | 13 | `vendor/tck/features/expressions/comparison/Comparison2.feature` |
 | 12 | `vendor/tck/features/clauses/return/Return6.feature` |
 | 12 | `vendor/tck/features/expressions/temporal/Temporal8.feature` |
 | 11 | `vendor/tck/features/clauses/merge/Merge1.feature` |
+| 11 | `vendor/tck/features/expressions/quantifier/Quantifier12.feature` |
 | 11 | `vendor/tck/features/expressions/quantifier/Quantifier2.feature` |
 | 10 | `vendor/tck/features/clauses/create/Create6.feature` |
 | 10 | `vendor/tck/features/expressions/pattern/Pattern2.feature` |
-| 10 | `vendor/tck/features/expressions/quantifier/Quantifier12.feature` |
 
 ## Notes
 
