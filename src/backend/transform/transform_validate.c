@@ -384,15 +384,53 @@ static int validate_subscript(cypher_subscript *sub, const var_type_ctx *vctx,
     if (sub->expr->type != AST_NODE_IDENTIFIER) return 0;
     const cypher_identifier *id = (const cypher_identifier *)sub->expr;
     var_type t = vctx_lookup(vctx, id->name);
-    /* Subscript is valid on List, Map, String, Null. Reject Integer / Decimal /
-     * Boolean. */
-    if (t == VTYPE_INTEGER || t == VTYPE_DECIMAL || t == VTYPE_BOOLEAN) {
+    /* Subscript is valid on List, Map, Null. Reject Integer / Decimal /
+     * Boolean / String (openCypher TCK does not allow string subscripting). */
+    if (t == VTYPE_INTEGER || t == VTYPE_DECIMAL || t == VTYPE_BOOLEAN || t == VTYPE_STRING) {
         char buf[256];
         snprintf(buf, sizeof(buf),
                  "TypeError: InvalidArgumentType: Cannot subscript value of type %s",
                  var_type_name(t));
         set_error(error_message, "%s", buf);
         return -1;
+    }
+    /* Index must be Integer (or a slice — which uses slice_start/slice_end
+     * rather than `index`). Reject literal non-integer indices and known
+     * non-integer typed identifiers. */
+    if (!sub->is_slice && sub->index) {
+        var_type idx_t = VTYPE_UNKNOWN;
+        if (sub->index->type == AST_NODE_IDENTIFIER) {
+            idx_t = vctx_lookup(vctx, ((const cypher_identifier *)sub->index)->name);
+        } else if (sub->index->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal *)sub->index;
+            switch (lit->literal_type) {
+                case LITERAL_INTEGER: idx_t = VTYPE_INTEGER; break;
+                case LITERAL_DECIMAL: idx_t = VTYPE_DECIMAL; break;
+                case LITERAL_BOOLEAN: idx_t = VTYPE_BOOLEAN; break;
+                case LITERAL_STRING:  idx_t = VTYPE_STRING; break;
+                default: break;
+            }
+        } else if (sub->index->type == AST_NODE_LIST) {
+            idx_t = VTYPE_LIST;
+        } else if (sub->index->type == AST_NODE_MAP) {
+            idx_t = VTYPE_MAP;
+        }
+        if (idx_t != VTYPE_UNKNOWN && idx_t != VTYPE_INTEGER &&
+            idx_t != VTYPE_NULL) {
+            /* When the indexed value is a string, this is a slice with
+             * a non-integer; for a list/map subscript the index must be
+             * int (list) or string (map). Reject the obvious mismatches. */
+            if (t == VTYPE_MAP && idx_t == VTYPE_STRING) {
+                /* map['key'] is OK */
+            } else {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                         "TypeError: InvalidArgumentType: List index must be Integer, got %s",
+                         var_type_name(idx_t));
+                set_error(error_message, "%s", buf);
+                return -1;
+            }
+        }
     }
     return 0;
 }
