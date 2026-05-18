@@ -746,6 +746,10 @@ static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
                                     bool is_merge, char **error_message)
 {
     if (!patterns) return 0;
+    /* Track variables introduced *within* this CREATE/MERGE that have
+     * labels/props, so a second occurrence with new labels/props on the
+     * same name (e.g. `CREATE (n:Foo), (n:Bar)`) raises an error too. */
+    name_set local_labeled; nset_init(&local_labeled);
     for (int i = 0; i < patterns->count; i++) {
         ast_node *node = patterns->items[i];
         if (!node || node->type != AST_NODE_PATH) continue;
@@ -776,7 +780,26 @@ static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
                 has_props  = (rp->properties != NULL);
                 is_rel = true;
             }
-            if (!var || !nset_contains(bound, var)) continue;
+            if (!var) continue;
+
+            /* Intra-pattern rebind: same var with labels/props after
+             * already being introduced with labels/props in this same
+             * CREATE (Create1 [15]/[16]/[19]). */
+            if (!nset_contains(bound, var) && nset_contains(&local_labeled, var)) {
+                if (is_rel || has_labels || has_props) {
+                    char buf[200];
+                    snprintf(buf, sizeof(buf),
+                             "SyntaxError: VariableAlreadyBound: %s is already bound", var);
+                    set_error(error_message, "%s", buf);
+                    nset_free(&local_labeled);
+                    return -1;
+                }
+            }
+            /* Remember this var with labels/props so a later occurrence
+             * in this same pattern flags. */
+            if (has_labels || has_props || is_rel) nset_add(&local_labeled, var);
+
+            if (!nset_contains(bound, var)) continue;
             /* MERGE single-node `MERGE (a)` on a bound `a` is a legal
              * no-op match. Same for label/property predicates on an
              * already-bound node in MERGE. Re-binding a relationship
@@ -789,10 +812,12 @@ static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
                 snprintf(buf, sizeof(buf),
                          "SyntaxError: VariableAlreadyBound: %s is already bound", var);
                 set_error(error_message, "%s", buf);
+                nset_free(&local_labeled);
                 return -1;
             }
         }
     }
+    nset_free(&local_labeled);
     return 0;
 }
 

@@ -1716,7 +1716,13 @@ parameter:
 /* Property map support */
 properties_opt:
     /* empty */         { $$ = NULL; }
-    | '{' '}'           { $$ = NULL; }
+    | '{' '}'           {
+            /* Empty `{}` produces an empty-map node so downstream
+             * validation distinguishes "no properties block written"
+             * (NULL) from "explicit empty map" — the latter counts as
+             * a property predicate for re-bind detection. */
+            $$ = make_map(ast_list_create(), @1.first_line);
+        }
     | '{' map_pair_list '}'
         {
             $$ = make_map($2, @1.first_line);
