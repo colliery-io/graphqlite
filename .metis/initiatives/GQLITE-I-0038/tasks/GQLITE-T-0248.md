@@ -1,0 +1,119 @@
+---
+id: e14-delete-remove-set-return
+level: task
+title: "E14: DELETE/REMOVE/SET + RETURN dispatcher patterns"
+short_code: "GQLITE-T-0248"
+created_at: 2026-05-18T19:00:00+00:00
+updated_at: 2026-05-18T19:00:00+00:00
+parent: GQLITE-I-0038
+blocked_by: []
+archived: false
+
+tags:
+  - "#task"
+  - "#phase/todo"
+
+
+exit_criteria_met: false
+initiative_id: GQLITE-I-0038
+---
+
+# E14: DELETE/REMOVE/SET + RETURN dispatcher patterns
+
+Parent initiative: [[GQLITE-I-0038]] · Cluster **Delete6 + Set/Remove + RETURN** · Current count: **~12 scenarios**
+
+## Objective
+
+E5 added CREATE+RETURN, MERGE+RETURN, UNWIND+CREATE+RETURN and
+UNWIND+MERGE+RETURN. The symmetric work for DELETE, REMOVE, and SET
+is still missing — Delete6 [3]/[4]/[10]/[11]/[12] (SKIP/LIMIT after
+DELETE) all fail "row count: expected N got 0" because the dispatcher
+routes DELETE+RETURN through a path that drops the result rows.
+
+Mirror the E5 work for these three clauses:
+
+- `MATCH ... DELETE ... RETURN`
+- `MATCH ... REMOVE ... RETURN`
+- `MATCH ... SET ... RETURN`  (where existing MATCH+SET handler exists
+  but doesn't surface RETURN)
+
+The implementation already has the `project_return_row_from_var_map`
+helper from E5; reuse it.
+
+## Reproducer
+
+```sh
+sqlite3 :memory: <<'EOF'
+.load build/graphqlite
+
+CREATE (a:N {n: 1}), (b:N {n: 2}), (c:N {n: 3}), (d:N {n: 4}), (e:N {n: 5});
+
+-- Delete6 [3]: DELETE + RETURN with SKIP/LIMIT
+SELECT cypher('MATCH (n:N) WITH n DETACH DELETE n RETURN count(*) AS deleted');
+-- expect: 1 row with deleted=5
+
+-- DELETE + RETURN n (return the deleted node before it's gone)
+SELECT cypher('CREATE (n:N {x: 1}) WITH n DETACH DELETE n RETURN n.x AS x');
+-- expect: 1 row x=1
+
+-- SET + RETURN
+SELECT cypher('CREATE (n:N {x: 1}) WITH n SET n.x = 99 RETURN n.x AS x');
+-- expect: 1 row x=99
+
+-- REMOVE + RETURN
+SELECT cypher('CREATE (n:N {x: 1, y: 2}) WITH n REMOVE n.x RETURN n.y AS y');
+-- expect: 1 row y=2
+EOF
+```
+
+## Target files
+
+- `src/backend/executor/query_dispatch.c`:
+  - Add patterns `MATCH+DELETE+RETURN`, `MATCH+SET+RETURN`,
+    `MATCH+REMOVE+RETURN` at priority 95 (above the existing
+    MATCH+DELETE / MATCH+SET / MATCH+REMOVE at 90).
+  - Handler shape: run MATCH to build var_map, run the write
+    operation, then call `project_return_row_from_var_map` (already
+    defined from E5) per matched row.
+  - SKIP/LIMIT honored via the same logic as `handle_create_return`.
+
+## Expected delta
+
+`+10` to `+15`.
+
+Scenarios expected to flip:
+- `clauses/delete/Delete6.feature` [3], [4], [10], [11], [12] (~5)
+- Several Set/Remove+RETURN scenarios across the suite
+- Plus a small tail of similar shapes in Match4/Match5 etc.
+
+## Verification
+
+```sh
+angreal build extension
+angreal test tck --filter "Delete6|Set|Remove" 2>&1 | tail -10
+angreal test tck 2>&1 | grep "TCK \[ext"
+
+# Spot-checks per reproducer above.
+
+angreal test unit
+angreal test functional
+```
+
+## Acceptance criteria
+
+- [ ] MATCH+DELETE+RETURN with SKIP/LIMIT returns the right row count.
+- [ ] MATCH+SET+RETURN returns post-SET values.
+- [ ] MATCH+REMOVE+RETURN returns post-REMOVE values.
+- [ ] No regressions in MATCH+DELETE / MATCH+SET / MATCH+REMOVE
+      (no-RETURN) scenarios.
+
+## Risks
+
+- DELETE+RETURN with `count(*)` over the matched set requires the
+  count to be computed *before* the DELETE actually runs (otherwise
+  it's 0). Pattern-match the aggregating-RETURN case from E5's
+  `project_aggregate_cell` and feed it the pre-delete var_map list.
+
+## Status updates
+
+*To be added during implementation*
