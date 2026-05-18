@@ -954,11 +954,29 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     case LITERAL_INTEGER:
                         append_sql(ctx, "%lld", (long long)lit->value.integer);
                         break;
-                    case LITERAL_DECIMAL:
+                    case LITERAL_DECIMAL: {
                         /* %.17g preserves full double precision while
-                         * avoiding trailing zeros %f would emit. */
-                        append_sql(ctx, "%.17g", lit->value.decimal);
+                         * avoiding trailing zeros %f would emit. But if
+                         * the result has no '.' or 'e' (whole-number
+                         * decimals like 2.0 → "2"), SQLite parses it as
+                         * an INTEGER and integer arithmetic kicks in
+                         * (1 / 2 = 0 instead of 1 / 2.0 = 0.5). Force a
+                         * decimal point by appending '.0' in that case. */
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%.17g", lit->value.decimal);
+                        bool has_dot = false;
+                        for (char *p = buf; *p; p++) {
+                            if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n') { /* 'n' for nan/inf */
+                                has_dot = true; break;
+                            }
+                        }
+                        if (!has_dot) {
+                            size_t l = strlen(buf);
+                            if (l + 2 < sizeof(buf)) { buf[l] = '.'; buf[l+1] = '0'; buf[l+2] = 0; }
+                        }
+                        append_sql(ctx, "%s", buf);
                         break;
+                    }
                     case LITERAL_STRING:
                         append_string_literal(ctx, lit->value.string);
                         break;
