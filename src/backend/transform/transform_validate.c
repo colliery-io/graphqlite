@@ -821,6 +821,100 @@ static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
     return 0;
 }
 
+/* Walk an expression; if any AST_NODE_IDENTIFIER references a name
+ * not in `bound`, emit a SyntaxError(UndefinedVariable). Used by
+ * CREATE/MERGE property-map validation so things like
+ *   CREATE (b {name: missing}) RETURN b
+ * are rejected (the value `missing` is a reference, not a literal). */
+static int check_undef_in_expr(ast_node *expr, const name_set *bound,
+                               const char *kw, char **error_message)
+{
+    if (!expr) return 0;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER: {
+            cypher_identifier *id = (cypher_identifier *)expr;
+            if (id->name && !nset_contains(bound, id->name)) {
+                set_error(error_message,
+                          "SyntaxError: UndefinedVariable: %s references undefined variable `%s`",
+                          kw, id->name);
+                return -1;
+            }
+            return 0;
+        }
+        case AST_NODE_NOT_EXPR:
+            return check_undef_in_expr(((cypher_not_expr *)expr)->expr, bound, kw, error_message);
+        case AST_NODE_NULL_CHECK:
+            return check_undef_in_expr(((cypher_null_check *)expr)->expr, bound, kw, error_message);
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *bop = (cypher_binary_op *)expr;
+            if (check_undef_in_expr(bop->left, bound, kw, error_message) < 0) return -1;
+            return check_undef_in_expr(bop->right, bound, kw, error_message);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call *)expr;
+            if (fc->args) {
+                for (int i = 0; i < fc->args->count; i++) {
+                    if (check_undef_in_expr(fc->args->items[i], bound, kw, error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list *)expr;
+            if (l->items) {
+                for (int i = 0; i < l->items->count; i++) {
+                    if (check_undef_in_expr(l->items->items[i], bound, kw, error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_PROPERTY: {
+            cypher_property *p = (cypher_property *)expr;
+            return check_undef_in_expr(p->expr, bound, kw, error_message);
+        }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript *)expr;
+            if (check_undef_in_expr(s->expr, bound, kw, error_message) < 0) return -1;
+            return check_undef_in_expr(s->index, bound, kw, error_message);
+        }
+        default:
+            return 0;
+    }
+}
+
+/* Walk every property-map value in a CREATE/MERGE pattern checking for
+ * identifier references that aren't bound. Pattern variables being
+ * introduced by this same clause are NOT in `bound` yet — that matches
+ * Cypher scoping (you can't reference a sibling variable being
+ * introduced in the same write clause). */
+static int validate_write_undef_in_props(ast_list *patterns, const name_set *bound,
+                                         const char *kw, char **error_message)
+{
+    if (!patterns) return 0;
+    for (int pi = 0; pi < patterns->count; pi++) {
+        ast_node *pn = patterns->items[pi];
+        if (!pn || pn->type != AST_NODE_PATH) continue;
+        cypher_path *p = (cypher_path *)pn;
+        if (!p->elements) continue;
+        for (int ei = 0; ei < p->elements->count; ei++) {
+            ast_node *el = p->elements->items[ei];
+            if (!el) continue;
+            ast_node *props = NULL;
+            if (el->type == AST_NODE_NODE_PATTERN) props = ((cypher_node_pattern *)el)->properties;
+            else if (el->type == AST_NODE_REL_PATTERN) props = ((cypher_rel_pattern *)el)->properties;
+            if (!props || props->type != AST_NODE_MAP) continue;
+            cypher_map *m = (cypher_map *)props;
+            if (!m->pairs) continue;
+            for (int i = 0; i < m->pairs->count; i++) {
+                cypher_map_pair *pair = (cypher_map_pair *)m->pairs->items[i];
+                if (!pair || !pair->value) continue;
+                if (check_undef_in_expr(pair->value, bound, kw, error_message) < 0) return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* Reject NULL literals in CREATE/MERGE property maps. openCypher
  * classifies this as SemanticError: PropertyNotFound or NullValue. */
 static int validate_write_property_map(ast_node *props, const char *kw,
@@ -980,6 +1074,7 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 cypher_create *c = (cypher_create *)clause;
                 rc = check_create_rebinds_ex(c->pattern, &bound, false, error_message);
                 if (rc == 0) rc = validate_write_rel_patterns(c->pattern, "CREATE", error_message);
+                if (rc == 0) rc = validate_write_undef_in_props(c->pattern, &bound, "CREATE", error_message);
                 if (rc == 0) collect_pattern_names(c->pattern, &bound);
                 break;
             }
@@ -990,6 +1085,7 @@ int transform_validate_query(cypher_query *query, char **error_message)
                  * node are legal (matches the existing binding). */
                 rc = check_create_rebinds_ex(m->pattern, &bound, true, error_message);
                 if (rc == 0) rc = validate_write_rel_patterns(m->pattern, "MERGE", error_message);
+                if (rc == 0) rc = validate_write_undef_in_props(m->pattern, &bound, "MERGE", error_message);
                 if (rc == 0) collect_pattern_names(m->pattern, &bound);
                 break;
             }
