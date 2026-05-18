@@ -1002,6 +1002,86 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                     }
                 }
             }
+        } else if (item->expr->type == AST_NODE_PROPERTY && var_map) {
+            /* SET n.x = other.k where `other` is a bound node/edge in the
+             * var_map. Look up the source property by querying the
+             * appropriate node_props_* or edge_props_* table. */
+            cypher_property *src_prop = (cypher_property *)item->expr;
+            if (!src_prop->expr || src_prop->expr->type != AST_NODE_IDENTIFIER) {
+                set_result_error(result, "SET value property access requires a variable base");
+                property_value_free(&set_pv);
+                return -1;
+            }
+            cypher_identifier *src_id = (cypher_identifier *)src_prop->expr;
+            int src_node = get_variable_node_id(var_map, src_id->name);
+            int src_edge = (src_node < 0) ? get_variable_edge_id(var_map, src_id->name) : -1;
+            bool src_is_edge = (src_node < 0 && src_edge >= 0);
+            int src_id_val = src_is_edge ? src_edge : src_node;
+            if (src_id_val < 0) {
+                char error[256];
+                snprintf(error, sizeof(error),
+                         "SET value references unbound variable: %s", src_id->name);
+                set_result_error(result, error);
+                property_value_free(&set_pv);
+                return -1;
+            }
+            /* Probe property tables (text, int, real, bool) for the value. */
+            const char *id_col = src_is_edge ? "edge_id" : "node_id";
+            const char *tables[][2] = {
+                {src_is_edge ? "edge_props_text" : "node_props_text", "text"},
+                {src_is_edge ? "edge_props_int"  : "node_props_int",  "int"},
+                {src_is_edge ? "edge_props_real" : "node_props_real", "real"},
+                {src_is_edge ? "edge_props_bool" : "node_props_bool", "bool"},
+                {NULL, NULL}
+            };
+            bool found = false;
+            for (int t = 0; tables[t][0] && !found; t++) {
+                char sql[512];
+                snprintf(sql, sizeof(sql),
+                    "SELECT value FROM %s WHERE %s = %d AND key_id = "
+                    "(SELECT id FROM property_keys WHERE key = '%s')",
+                    tables[t][0], id_col, src_id_val, src_prop->property_name);
+                sqlite3_stmt *jstmt;
+                if (sqlite3_prepare_v2(executor->db, sql, -1, &jstmt, NULL) != SQLITE_OK)
+                    continue;
+                if (sqlite3_step(jstmt) == SQLITE_ROW) {
+                    const char *tname = tables[t][1];
+                    if (strcmp(tname, "text") == 0) {
+                        prop_type = PROP_TYPE_TEXT;
+                        set_pv.as_str = strdup((const char*)sqlite3_column_text(jstmt, 0));
+                        prop_value = set_pv.as_str;
+                    } else if (strcmp(tname, "int") == 0) {
+                        prop_type = PROP_TYPE_INTEGER;
+                        set_int_buf = sqlite3_column_int64(jstmt, 0);
+                        prop_value = &set_int_buf;
+                    } else if (strcmp(tname, "real") == 0) {
+                        prop_type = PROP_TYPE_REAL;
+                        set_real_buf = sqlite3_column_double(jstmt, 0);
+                        prop_value = &set_real_buf;
+                    } else if (strcmp(tname, "bool") == 0) {
+                        prop_type = PROP_TYPE_BOOLEAN;
+                        set_bool_buf = sqlite3_column_int(jstmt, 0);
+                        prop_value = &set_bool_buf;
+                    }
+                    found = true;
+                }
+                sqlite3_finalize(jstmt);
+            }
+            if (!found) {
+                /* Source property doesn't exist → treat as SET to null
+                 * (remove target property). */
+                if (is_edge) {
+                    if (cypher_schema_delete_edge_property(executor->schema_mgr,
+                            entity_id, prop->property_name) == 0)
+                        result->properties_set++;
+                } else {
+                    if (cypher_schema_delete_node_property(executor->schema_mgr,
+                            entity_id, prop->property_name) == 0)
+                        result->properties_set++;
+                }
+                property_value_free(&set_pv);
+                continue;
+            }
         } else {
             set_result_error(result, "SET value must be a literal, map, list, parameter, or function call");
             property_value_free(&set_pv);
