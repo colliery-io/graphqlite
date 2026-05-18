@@ -1742,10 +1742,12 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
         return 0;
     }
 
-    /* Handle list literal UNWIND */
+    /* Handle list literal UNWIND. Other expression shapes (function
+     * calls like range(), variable references, list concatenation) are
+     * outside this fast-path; defer to the generic transform pipeline
+     * which has fuller UNWIND support. */
     if (unwind->expr->type != AST_NODE_LIST) {
-        set_result_error(result, "UNWIND+CREATE requires a list literal or parameter");
-        return -1;
+        return handle_generic_transform(executor, query, result, flags);
     }
 
     cypher_list *list = (cypher_list *)unwind->expr;
