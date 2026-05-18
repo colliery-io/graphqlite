@@ -991,15 +991,32 @@ int transform_datetime_from_epoch_function(cypher_transform_context *ctx, cypher
     }
 
     if (is_millis) {
-        /* datetime.fromEpochMillis(ms) → datetime(ms/1000, 'unixepoch') */
-        append_sql(ctx, "datetime(CAST(");
+        /* datetime.fromEpochMillis(ms) →
+         *   'YYYY-MM-DDTHH:MM:SS[.fff]Z'
+         * Builds the ISO-8601 form openCypher specifies. */
+        append_sql(ctx, "(strftime('%%Y-%%m-%%dT%%H:%%M:%%S', CAST(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " AS REAL) / 1000.0, 'unixepoch')");
+        append_sql(ctx, " AS REAL) / 1000.0, 'unixepoch') || "
+            "CASE WHEN CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS INTEGER) %% 1000 = 0 THEN '' "
+            "ELSE '.' || substr('000' || (CAST(");
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " AS INTEGER) %% 1000), -3) END || 'Z')");
     } else {
-        /* datetime.fromEpoch(seconds) → datetime(seconds, 'unixepoch') */
-        append_sql(ctx, "datetime(");
+        /* datetime.fromEpoch(seconds[, nanoseconds]) → ISO-8601 UTC. */
+        append_sql(ctx, "(strftime('%%Y-%%m-%%dT%%H:%%M:%%S', ");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
         append_sql(ctx, ", 'unixepoch')");
+        if (func_call->args->count >= 2) {
+            /* Append .NNNNNNNNN nanoseconds (left-zero-padded to 9 chars). */
+            append_sql(ctx, " || CASE WHEN CAST(");
+            if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+            append_sql(ctx, " AS INTEGER) = 0 THEN '' ELSE '.' || substr('000000000' || CAST(");
+            if (transform_expression(ctx, func_call->args->items[1]) < 0) return -1;
+            append_sql(ctx, " AS INTEGER), -9) END");
+        }
+        append_sql(ctx, " || 'Z')");
     }
 
     return 0;
