@@ -796,6 +796,101 @@ static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
     return 0;
 }
 
+/* Reject NULL literals in CREATE/MERGE property maps. openCypher
+ * classifies this as SemanticError: PropertyNotFound or NullValue. */
+static int validate_write_property_map(ast_node *props, const char *kw,
+                                       char **error_message)
+{
+    if (!props || props->type != AST_NODE_MAP) return 0;
+    cypher_map *m = (cypher_map *)props;
+    if (!m->pairs) return 0;
+    for (int i = 0; i < m->pairs->count; i++) {
+        cypher_map_pair *pair = (cypher_map_pair *)m->pairs->items[i];
+        if (!pair || !pair->value) continue;
+        if (pair->value->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal *)pair->value;
+            if (lit->literal_type == LITERAL_NULL) {
+                set_error(error_message,
+                          "SemanticError: %s with a null property value is not allowed (key '%s')",
+                          kw, pair->key ? pair->key : "?");
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Walk a CREATE/MERGE pattern list checking every NODE_PATTERN and
+ * REL_PATTERN property map for NULL literal values. */
+static int validate_write_no_null_props(ast_list *patterns, const char *kw,
+                                        char **error_message)
+{
+    if (!patterns) return 0;
+    for (int pi = 0; pi < patterns->count; pi++) {
+        ast_node *pn = patterns->items[pi];
+        if (!pn || pn->type != AST_NODE_PATH) continue;
+        cypher_path *p = (cypher_path *)pn;
+        if (!p->elements) continue;
+        for (int ei = 0; ei < p->elements->count; ei++) {
+            ast_node *el = p->elements->items[ei];
+            if (!el) continue;
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *np = (cypher_node_pattern *)el;
+                if (validate_write_property_map(np->properties, kw, error_message) < 0)
+                    return -1;
+            } else if (el->type == AST_NODE_REL_PATTERN) {
+                cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+                if (validate_write_property_map(rp->properties, kw, error_message) < 0)
+                    return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* CREATE / MERGE must use a single explicit relationship type, no
+ * multi-type (`[:T1|T2]`), and no variable-length range. MATCH allows
+ * all of those — this validator is only for writes. */
+static int validate_write_rel_patterns(ast_list *patterns, const char *kw,
+                                       char **error_message)
+{
+    if (!patterns) return 0;
+    for (int pi = 0; pi < patterns->count; pi++) {
+        ast_node *pn = patterns->items[pi];
+        if (!pn || pn->type != AST_NODE_PATH) continue;
+        cypher_path *p = (cypher_path *)pn;
+        if (!p->elements) continue;
+        for (int ei = 0; ei < p->elements->count; ei++) {
+            ast_node *el = p->elements->items[ei];
+            if (!el || el->type != AST_NODE_REL_PATTERN) continue;
+            cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+
+            if (rp->varlen) {
+                set_error(error_message,
+                          "SyntaxError: CreatingVarLength: %s does not allow variable-length relationships",
+                          kw);
+                return -1;
+            }
+            int type_count = 0;
+            if (rp->type) type_count++;
+            if (rp->types) type_count += rp->types->count;
+            if (type_count == 0) {
+                set_error(error_message,
+                          "SyntaxError: NoSingleRelationshipType: %s requires a single relationship type",
+                          kw);
+                return -1;
+            }
+            if (type_count > 1) {
+                set_error(error_message,
+                          "SyntaxError: NoSingleRelationshipType: %s does not allow multiple relationship types",
+                          kw);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int validate_unwind_clause(cypher_unwind *uw, var_type_ctx *vctx_out,
                                    char **error_message)
 {
@@ -859,6 +954,7 @@ int transform_validate_query(cypher_query *query, char **error_message)
             case AST_NODE_CREATE: {
                 cypher_create *c = (cypher_create *)clause;
                 rc = check_create_rebinds_ex(c->pattern, &bound, false, error_message);
+                if (rc == 0) rc = validate_write_rel_patterns(c->pattern, "CREATE", error_message);
                 if (rc == 0) collect_pattern_names(c->pattern, &bound);
                 break;
             }
@@ -868,33 +964,8 @@ int transform_validate_query(cypher_query *query, char **error_message)
                  * single-node and label/prop predicates on an already-bound
                  * node are legal (matches the existing binding). */
                 rc = check_create_rebinds_ex(m->pattern, &bound, true, error_message);
-                if (rc == 0) {
-                    /* MERGE also requires relationships to have an explicit
-                     * type — `MERGE (a)-->(b)` is illegal. */
-                    if (m->pattern) {
-                        for (int pi = 0; pi < m->pattern->count && rc == 0; pi++) {
-                            ast_node *pn = m->pattern->items[pi];
-                            if (!pn || pn->type != AST_NODE_PATH) continue;
-                            cypher_path *p = (cypher_path *)pn;
-                            if (!p->elements) continue;
-                            for (int ei = 0; ei < p->elements->count; ei++) {
-                                ast_node *el = p->elements->items[ei];
-                                if (!el || el->type != AST_NODE_REL_PATTERN) continue;
-                                cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
-                                bool has_type = (rp->type != NULL) ||
-                                                (rp->types && rp->types->count > 0);
-                                if (!has_type) {
-                                    set_error(error_message,
-                                              "%s",
-                                              "SyntaxError: NoSingleRelationshipType: MERGE requires a single relationship type");
-                                    rc = -1;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (rc == 0) collect_pattern_names(m->pattern, &bound);
-                }
+                if (rc == 0) rc = validate_write_rel_patterns(m->pattern, "MERGE", error_message);
+                if (rc == 0) collect_pattern_names(m->pattern, &bound);
                 break;
             }
             default:

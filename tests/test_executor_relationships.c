@@ -355,26 +355,26 @@ static void test_long_path_pattern(void)
     }
 }
 
-/* Test relationships with no type (should default to RELATED) */
+/* Test relationships with no type — openCypher classifies this as
+ * SyntaxError (NoSingleRelationshipType). Previously we accepted it
+ * and defaulted to a "RELATED" type, but the E9 work brings us in line
+ * with the spec / TCK. */
 static void test_relationship_no_type(void)
 {
     cypher_executor *executor = cypher_executor_create(test_db);
     CU_ASSERT_PTR_NOT_NULL(executor);
-    
+
     if (executor) {
         const char *query = "CREATE (a:Person {name: \"Alice\"})-[r]->(b:Person {name: \"Bob\"})";
         cypher_result *result = cypher_executor_execute(executor, query);
         CU_ASSERT_PTR_NOT_NULL(result);
-        
+
         if (result) {
-            CU_ASSERT_TRUE(result->success);
-            if (!result->success) {
-                printf("No-type relationship error: %s\n", result->error_message);
-            } else {
-                printf("No-type relationship CREATE succeeded: nodes=%d, rels=%d\n", 
-                       result->nodes_created, result->relationships_created);
-                CU_ASSERT_TRUE(result->nodes_created >= 2);
-                CU_ASSERT_TRUE(result->relationships_created >= 1);
+            CU_ASSERT_FALSE(result->success);
+            CU_ASSERT_PTR_NOT_NULL(result->error_message);
+            if (result->error_message) {
+                CU_ASSERT_PTR_NOT_NULL(strstr(result->error_message,
+                                              "NoSingleRelationshipType"));
             }
             cypher_result_free(result);
         }
