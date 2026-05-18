@@ -62,8 +62,20 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* nodes(null) → null. */
+    if (arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)arg;
+        if (lit->literal_type == LITERAL_NULL) {
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("nodes() function argument must be a path variable");
+        return -1;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
         ctx->error_message = strdup("nodes() function argument must be a path variable");
@@ -122,8 +134,20 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* relationships(null) → null. */
+    if (arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)arg;
+        if (lit->literal_type == LITERAL_NULL) {
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("relationships() function argument must be a path variable");
+        return -1;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
         ctx->error_message = strdup("relationships() function argument must be a path variable");
