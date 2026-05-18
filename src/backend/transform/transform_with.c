@@ -21,45 +21,109 @@
  * Used to enforce Cypher's UndefinedVariable semantics for ORDER BY in
  * WITH where variables drop out of scope at the projection boundary.
  */
-static int validate_identifiers_in_scope(cypher_transform_context *ctx, ast_node *expr)
+/* Returns true if `name` is a Cypher aggregating function. */
+static bool is_aggregating_function(const char *name)
+{
+    if (!name) return false;
+    static const char *fns[] = {
+        "count", "sum", "avg", "max", "min", "collect",
+        "percentiledisc", "percentilecont", "stdev", "stdevp",
+        NULL
+    };
+    for (int i = 0; fns[i]; i++) {
+        size_t klen = strlen(fns[i]);
+        if (strlen(name) == klen) {
+            bool match = true;
+            for (size_t j = 0; j < klen; j++) {
+                char a = name[j];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (a != fns[i][j]) { match = false; break; }
+            }
+            if (match) return true;
+        }
+    }
+    return false;
+}
+
+/* Walk expr looking for an aggregating function call. Returns the name
+ * of the first one found (or NULL). */
+static const char *find_aggregating_call(ast_node *expr)
+{
+    if (!expr) return NULL;
+    if (expr->type == AST_NODE_FUNCTION_CALL) {
+        cypher_function_call *fc = (cypher_function_call*)expr;
+        if (is_aggregating_function(fc->function_name)) return fc->function_name;
+        if (fc->args) {
+            for (int i = 0; i < fc->args->count; i++) {
+                const char *r = find_aggregating_call(fc->args->items[i]);
+                if (r) return r;
+            }
+        }
+    } else if (expr->type == AST_NODE_BINARY_OP) {
+        cypher_binary_op *b = (cypher_binary_op*)expr;
+        const char *r = find_aggregating_call(b->left);
+        if (r) return r;
+        return find_aggregating_call(b->right);
+    } else if (expr->type == AST_NODE_NOT_EXPR) {
+        return find_aggregating_call(((cypher_not_expr*)expr)->expr);
+    } else if (expr->type == AST_NODE_PROPERTY) {
+        return find_aggregating_call(((cypher_property*)expr)->expr);
+    } else if (expr->type == AST_NODE_NULL_CHECK) {
+        return find_aggregating_call(((cypher_null_check*)expr)->expr);
+    } else if (expr->type == AST_NODE_LIST) {
+        cypher_list *l = (cypher_list*)expr;
+        if (l->items) {
+            for (int i = 0; i < l->items->count; i++) {
+                const char *r = find_aggregating_call(l->items->items[i]);
+                if (r) return r;
+            }
+        }
+    }
+    return NULL;
+}
+
+static int validate_identifiers_in_scope_ex(cypher_transform_context *ctx, ast_node *expr,
+                                             char **extra, int extra_count)
 {
     if (!expr) return 0;
     switch (expr->type) {
         case AST_NODE_IDENTIFIER: {
             cypher_identifier *id = (cypher_identifier*)expr;
-            if (id->name && !transform_var_lookup(ctx->var_ctx, id->name)) {
-                ctx->has_error = true;
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                         "Variable `%s` not defined (SyntaxError: UndefinedVariable)",
-                         id->name);
-                ctx->error_message = strdup(msg);
-                return -1;
+            if (!id->name) return 0;
+            if (transform_var_lookup(ctx->var_ctx, id->name)) return 0;
+            for (int i = 0; i < extra_count; i++) {
+                if (extra[i] && strcmp(extra[i], id->name) == 0) return 0;
             }
-            return 0;
+            ctx->has_error = true;
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Variable `%s` not defined (SyntaxError: UndefinedVariable)",
+                     id->name);
+            ctx->error_message = strdup(msg);
+            return -1;
         }
         case AST_NODE_PROPERTY: {
             cypher_property *p = (cypher_property*)expr;
-            return validate_identifiers_in_scope(ctx, p->expr);
+            return validate_identifiers_in_scope_ex(ctx, p->expr, extra, extra_count);
         }
         case AST_NODE_BINARY_OP: {
             cypher_binary_op *b = (cypher_binary_op*)expr;
-            if (validate_identifiers_in_scope(ctx, b->left) < 0) return -1;
-            return validate_identifiers_in_scope(ctx, b->right);
+            if (validate_identifiers_in_scope_ex(ctx, b->left, extra, extra_count) < 0) return -1;
+            return validate_identifiers_in_scope_ex(ctx, b->right, extra, extra_count);
         }
         case AST_NODE_NOT_EXPR: {
             cypher_not_expr *n = (cypher_not_expr*)expr;
-            return validate_identifiers_in_scope(ctx, n->expr);
+            return validate_identifiers_in_scope_ex(ctx, n->expr, extra, extra_count);
         }
         case AST_NODE_NULL_CHECK: {
             cypher_null_check *nc = (cypher_null_check*)expr;
-            return validate_identifiers_in_scope(ctx, nc->expr);
+            return validate_identifiers_in_scope_ex(ctx, nc->expr, extra, extra_count);
         }
         case AST_NODE_FUNCTION_CALL: {
             cypher_function_call *fc = (cypher_function_call*)expr;
             if (fc->args) {
                 for (int i = 0; i < fc->args->count; i++) {
-                    if (validate_identifiers_in_scope(ctx, fc->args->items[i]) < 0) return -1;
+                    if (validate_identifiers_in_scope_ex(ctx, fc->args->items[i], extra, extra_count) < 0) return -1;
                 }
             }
             return 0;
@@ -68,22 +132,27 @@ static int validate_identifiers_in_scope(cypher_transform_context *ctx, ast_node
             cypher_list *l = (cypher_list*)expr;
             if (l->items) {
                 for (int i = 0; i < l->items->count; i++) {
-                    if (validate_identifiers_in_scope(ctx, l->items->items[i]) < 0) return -1;
+                    if (validate_identifiers_in_scope_ex(ctx, l->items->items[i], extra, extra_count) < 0) return -1;
                 }
             }
             return 0;
         }
         case AST_NODE_SUBSCRIPT: {
             cypher_subscript *s = (cypher_subscript*)expr;
-            if (validate_identifiers_in_scope(ctx, s->expr) < 0) return -1;
-            if (validate_identifiers_in_scope(ctx, s->index) < 0) return -1;
-            if (validate_identifiers_in_scope(ctx, s->slice_start) < 0) return -1;
-            if (validate_identifiers_in_scope(ctx, s->slice_end) < 0) return -1;
+            if (validate_identifiers_in_scope_ex(ctx, s->expr, extra, extra_count) < 0) return -1;
+            if (validate_identifiers_in_scope_ex(ctx, s->index, extra, extra_count) < 0) return -1;
+            if (validate_identifiers_in_scope_ex(ctx, s->slice_start, extra, extra_count) < 0) return -1;
+            if (validate_identifiers_in_scope_ex(ctx, s->slice_end, extra, extra_count) < 0) return -1;
             return 0;
         }
         default:
             return 0;
     }
+}
+
+static int validate_identifiers_in_scope(cypher_transform_context *ctx, ast_node *expr)
+{
+    return validate_identifiers_in_scope_ex(ctx, expr, NULL, 0);
 }
 
 /*
@@ -503,6 +572,27 @@ with_star_columns_done:
         }
     }
 
+    /* Snapshot the immediate pre-WITH variable names so the ORDER BY
+     * validator below can accept references to them (Cypher allows ORDER
+     * BY to see both the projection scope and the input scope of the
+     * containing WITH). */
+    int pre_var_count = 0;
+    char **pre_var_names = NULL;
+    {
+        int total = transform_var_count(ctx->var_ctx);
+        if (total > 0) {
+            pre_var_names = calloc(total, sizeof(char*));
+            if (pre_var_names) {
+                for (int vi = 0; vi < total; vi++) {
+                    transform_var *v = transform_var_at(ctx->var_ctx, vi);
+                    if (v && v->name && v->is_visible) {
+                        pre_var_names[pre_var_count++] = strdup(v->name);
+                    }
+                }
+            }
+        }
+    }
+
     /* Clear old variables - WITH creates a new scope */
     transform_var_ctx_reset(ctx->var_ctx);
 
@@ -622,9 +712,42 @@ with_star_columns_done:
          * must be a projected variable. Cypher requires this — references
          * to variables that fall out of scope at WITH must raise
          * SyntaxError(UndefinedVariable). */
+        /* Aggregating functions are not allowed in ORDER BY when the
+         * containing WITH is not itself an aggregation. (Cypher TCK
+         * scenarios in WithOrderBy2 [25] enforce this.) Reject before
+         * the scope validation so we get an InvalidAggregation diagnostic
+         * rather than an UndefinedVariable one. */
+        {
+            bool with_has_agg = false;
+            if (with->items) {
+                for (int i = 0; i < with->items->count; i++) {
+                    cypher_return_item *it = (cypher_return_item*)with->items->items[i];
+                    if (it && find_aggregating_call(it->expr)) {
+                        with_has_agg = true;
+                        break;
+                    }
+                }
+            }
+            if (!with_has_agg) {
+                for (int i = 0; i < with->order_by->count; i++) {
+                    cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
+                    const char *agg = find_aggregating_call(order_item->expr);
+                    if (agg) {
+                        ctx->has_error = true;
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                                 "SyntaxError: InvalidAggregation: aggregating function `%s` is not allowed in ORDER BY of a non-aggregating WITH",
+                                 agg);
+                        ctx->error_message = strdup(msg);
+                        return -1;
+                    }
+                }
+            }
+        }
         for (int i = 0; i < with->order_by->count; i++) {
             cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
-            if (validate_identifiers_in_scope(ctx, order_item->expr) < 0) {
+            if (validate_identifiers_in_scope_ex(ctx, order_item->expr,
+                                                 pre_var_names, pre_var_count) < 0) {
                 return -1;
             }
         }
@@ -660,6 +783,11 @@ with_star_columns_done:
 
     if (limit_val >= 0 || offset_val >= 0) {
         sql_limit(ctx->unified_builder, limit_val, offset_val);
+    }
+
+    if (pre_var_names) {
+        for (int i = 0; i < pre_var_count; i++) free(pre_var_names[i]);
+        free(pre_var_names);
     }
 
     CYPHER_DEBUG("WITH clause generated CTE via unified builder: %s", cte_name);

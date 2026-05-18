@@ -4,14 +4,14 @@ level: task
 title: "E2: TCK named-graph fixtures — binary-tree-1 / binary-tree-2 (cluster L)"
 short_code: "GQLITE-T-0236"
 created_at: 2026-05-18T12:24:26.965706+00:00
-updated_at: 2026-05-18T12:37:35.607356+00:00
+updated_at: 2026-05-18T12:46:09.542795+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -110,4 +110,16 @@ files. No production code under `src/` should change.
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completed
+
+**Outcome:** TCK 3115 → 3143 (+28).
+
+**Discovery:** The named-graph fixture loader (`backend.load_named_graph()`) was already implemented and the `vendor/tck/graphs/binary-tree-1/binary-tree-1.cypher` fixture file already existed. The fixtures were loading fine. The actual blocker was unrelated.
+
+**Real issue:** OPTIONAL MATCH on a relationship with no match returned a placeholder edge object `{id:0, type:'', startNode:0, endNode:0, properties:{}}` instead of NULL. The downstream `WITH c WHERE r IS NULL` filter then dropped every row (most TriadicSelection scenarios depend on this pattern).
+
+**Fix:** Mirror the node-variable null-wrap CASE in `src/backend/transform/transform_return.c` for the edge variable RETURN path: `CASE WHEN alias.id IS NULL THEN NULL ELSE json_object(...) END`.
+
+**Scenarios moved to pass:** ~17 of 18 TriadicSelection1 scenarios, plus ~11 other OPTIONAL MATCH scenarios across Match7, MatchWhere6, etc. that were waiting on the same wrap.
+
+**Files touched:** `src/backend/transform/transform_return.c` (one CASE wrap + extra `alias` snprintf arg).
