@@ -318,17 +318,17 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
-    /* Handle CONTAINS operator - string contains substring */
+    /* Handle CONTAINS operator - case-sensitive substring match. */
     if (binary_op->op_type == BINARY_OP_CONTAINS) {
-        append_sql(ctx, "(INSTR(");
-        if (transform_expression(ctx, binary_op->left) < 0) {
-            return -1;
-        }
+        append_sql(ctx, "(CASE WHEN typeof(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ") = 'text' AND typeof(");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ") = 'text' THEN INSTR(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", ");
-        if (transform_expression(ctx, binary_op->right) < 0) {
-            return -1;
-        }
-        append_sql(ctx, ") > 0)");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ") > 0 ELSE NULL END)");
         ctx->in_comparison = was_in_comparison;
         return 0;
     }
