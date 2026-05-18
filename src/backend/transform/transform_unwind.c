@@ -296,8 +296,11 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         }
 
         dbuf_appendf(&cte_query, "json_each(%s)", json_each_arg);
-    } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL) {
-        /* Function call that returns a list (e.g., range(), keys(), etc.) */
+    } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL ||
+               unwind->expr->type == AST_NODE_SUBSCRIPT ||
+               unwind->expr->type == AST_NODE_BINARY_OP) {
+        /* Function call that returns a list (e.g., range(), keys(), etc.),
+         * subscript expression (qrows[p]), or binary op (list concat). */
         /* Transform the function expression to SQL, then use json_each on the result */
 
         /* Save current SQL buffer state */
