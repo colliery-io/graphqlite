@@ -314,6 +314,18 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
         return 0;
     }
 
+    /* keys(null) → null. */
+    if (arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)arg;
+        if (lit->literal_type == LITERAL_NULL) {
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("keys() function argument must be a node, relationship, or map");
+        return -1;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
         ctx->error_message = strdup("keys() function argument must be a node, relationship, or map");

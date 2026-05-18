@@ -206,8 +206,20 @@ int transform_startnode_function(cypher_transform_context *ctx, cypher_function_
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* startNode(null) → null. */
+    if (arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)arg;
+        if (lit->literal_type == LITERAL_NULL) {
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("startNode() function argument must be a relationship variable");
+        return -1;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
         ctx->error_message = strdup("startNode() function argument must be a relationship variable");
@@ -249,8 +261,20 @@ int transform_endnode_function(cypher_transform_context *ctx, cypher_function_ca
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* endNode(null) → null. */
+    if (arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)arg;
+        if (lit->literal_type == LITERAL_NULL) {
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("endNode() function argument must be a relationship variable");
+        return -1;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
         ctx->error_message = strdup("endNode() function argument must be a relationship variable");
