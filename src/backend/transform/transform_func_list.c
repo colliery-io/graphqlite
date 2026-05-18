@@ -391,6 +391,25 @@ int transform_length_function(cypher_transform_context *ctx, cypher_function_cal
         if (transform_var_is_path(ctx->var_ctx, id->name)) {
             return transform_path_length_function(ctx, func_call);
         }
+        /* length() on a node or relationship is a SyntaxError per the
+         * Cypher 9 spec (Path3 [2]/[3]). We detect "node" as bound but
+         * not edge / path / projected / scalar. */
+        if (transform_var_is_edge(ctx->var_ctx, id->name)) {
+            ctx->has_error = true;
+            ctx->error_message = strdup(
+                "SyntaxError: InvalidArgumentType: length() does not accept relationships");
+            return -1;
+        }
+        if (transform_var_is_bound(ctx->var_ctx, id->name) &&
+            !transform_var_is_path(ctx->var_ctx, id->name) &&
+            !transform_var_is_projected(ctx->var_ctx, id->name) &&
+            !transform_var_is_scalar_value(ctx->var_ctx, id->name)) {
+            /* Bound non-path/edge/scalar = node variable. */
+            ctx->has_error = true;
+            ctx->error_message = strdup(
+                "SyntaxError: InvalidArgumentType: length() does not accept nodes");
+            return -1;
+        }
     }
 
     /* Otherwise treat as string length */
