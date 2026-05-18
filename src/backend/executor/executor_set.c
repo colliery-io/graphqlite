@@ -784,9 +784,19 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                     prop_type = PROP_TYPE_BOOLEAN;
                     prop_value = &lit->value.boolean;
                     break;
-                case LITERAL_NULL:
-                    /* Skip null properties for now */
+                case LITERAL_NULL: {
+                    /* SET n.x = null removes the property per Cypher spec. */
+                    int removed = 0;
+                    if (is_edge) {
+                        removed = (cypher_schema_delete_edge_property(executor->schema_mgr,
+                                       entity_id, prop->property_name) == 0);
+                    } else {
+                        removed = (cypher_schema_delete_node_property(executor->schema_mgr,
+                                       entity_id, prop->property_name) == 0);
+                    }
+                    if (removed) result->properties_set++;
                     continue;
+                }
             }
         } else if (item->expr->type == AST_NODE_MAP || item->expr->type == AST_NODE_LIST) {
             /* Map or list literal - serialize to JSON and store as JSON type */
