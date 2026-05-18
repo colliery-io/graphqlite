@@ -347,9 +347,13 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
 
     /* Projected non-node/non-edge value (e.g., WITH-projected map literal):
-     * use json_each on the value itself. */
+     * use json_each on the value itself. NULL-guard so keys(null) → null
+     * instead of an empty list. */
     if (is_projected && !is_edge && !alias_is_id) {
-        append_sql(ctx, "(SELECT json_group_array(key) FROM json_each(%s))", alias);
+        append_sql(ctx,
+            "(CASE WHEN %s IS NULL THEN NULL ELSE "
+            "(SELECT json_group_array(key) FROM json_each(%s)) END)",
+            alias, alias);
         return 0;
     }
     const char *id_suffix = is_projected ? "" : ".id";
