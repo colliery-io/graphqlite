@@ -350,6 +350,61 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         free(deferred_aliases);
 
 return_star_done:
+        /* Implicit GROUP BY: when RETURN mixes aggregating and
+         * non-aggregating items, the non-aggregating expressions
+         * become grouping keys (Cypher 9 spec). Detect by walking
+         * items: count names like count/sum/avg/min/max/collect/
+         * stdev/stdevp/percentilecont/percentiledisc as aggregating;
+         * emit GROUP BY for the non-aggregating ones. */
+        if (ret->items && ret->items->count > 0) {
+            bool has_agg = false;
+            bool has_non_agg = false;
+            for (int i = 0; i < ret->items->count; i++) {
+                cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+                bool is_agg = false;
+                if (it && it->expr && it->expr->type == AST_NODE_FUNCTION_CALL) {
+                    cypher_function_call *fc = (cypher_function_call *)it->expr;
+                    if (fc->function_name) {
+                        const char *n = fc->function_name;
+                        if (!strcasecmp(n, "count") || !strcasecmp(n, "sum") ||
+                            !strcasecmp(n, "avg") || !strcasecmp(n, "min") ||
+                            !strcasecmp(n, "max") || !strcasecmp(n, "collect") ||
+                            !strcasecmp(n, "stdev") || !strcasecmp(n, "stdevp") ||
+                            !strcasecmp(n, "percentilecont") ||
+                            !strcasecmp(n, "percentiledisc"))
+                            is_agg = true;
+                    }
+                }
+                if (is_agg) has_agg = true; else has_non_agg = true;
+            }
+            if (has_agg && has_non_agg) {
+                for (int i = 0; i < ret->items->count; i++) {
+                    cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+                    bool is_agg = false;
+                    if (it && it->expr && it->expr->type == AST_NODE_FUNCTION_CALL) {
+                        cypher_function_call *fc = (cypher_function_call *)it->expr;
+                        if (fc->function_name) {
+                            const char *n = fc->function_name;
+                            if (!strcasecmp(n, "count") || !strcasecmp(n, "sum") ||
+                                !strcasecmp(n, "avg") || !strcasecmp(n, "min") ||
+                                !strcasecmp(n, "max") || !strcasecmp(n, "collect") ||
+                                !strcasecmp(n, "stdev") || !strcasecmp(n, "stdevp") ||
+                                !strcasecmp(n, "percentilecont") ||
+                                !strcasecmp(n, "percentiledisc"))
+                                is_agg = true;
+                        }
+                    }
+                    if (!is_agg) {
+                        char *gb_expr = transform_expression_to_string(ctx, it->expr);
+                        if (gb_expr) {
+                            sql_group_by(ctx->unified_builder, gb_expr);
+                            free(gb_expr);
+                        }
+                    }
+                }
+            }
+        }
+
         /* Add ORDER BY */
         if (ret->order_by && ret->order_by->count > 0) {
             for (int i = 0; i < ret->order_by->count; i++) {
