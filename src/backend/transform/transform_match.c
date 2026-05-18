@@ -1101,9 +1101,14 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             return -1;
         }
 
-        /* Get min/max hops for filtering */
+        /* Get min/max hops for filtering. min_hops == -1 → unspecified
+         * (default to 1); explicit 0 must be preserved so zero-hop matches
+         * include the start node. */
         cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
-        int min_hops = range->min_hops > 0 ? range->min_hops : 1;
+        int min_hops = range->min_hops >= 0 ? range->min_hops : 1;
+        int max_hops = range->max_hops;  /* -1 → unbounded */
+        /* Empty interval `*M..N` with M > N must return zero rows. */
+        bool empty_interval = (max_hops >= 0 && min_hops > max_hops);
 
         /* Join the main query with the CTE result using unified builder */
         sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, edge_alias, NULL);
@@ -1209,9 +1214,19 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         dbuf_appendf(&on_cond, "%s.start_id = %s AND %s.end_id = %s",
                      edge_alias, src_id_ref, edge_alias, tgt_id_ref);
 
-        /* Add minimum depth constraint if > 1 */
-        if (min_hops > 1) {
+        /* Always honor min_hops (zero-hop rows come from the CTE base case
+         * we just added; bound-1 paths are excluded if min > 1). */
+        if (min_hops >= 0) {
             dbuf_appendf(&on_cond, " AND %s.depth >= %d", edge_alias, min_hops);
+        }
+        /* Honor max_hops (the CTE already caps recursion at the internal
+         * `max_hops` ceiling, but the user-given max may be lower). */
+        if (max_hops >= 0) {
+            dbuf_appendf(&on_cond, " AND %s.depth <= %d", edge_alias, max_hops);
+        }
+        /* Empty interval (min > max) → unconditionally false. */
+        if (empty_interval) {
+            dbuf_appendf(&on_cond, " AND 0");
         }
 
         /* Add shortest path filtering based on path type */

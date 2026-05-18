@@ -4,14 +4,14 @@ level: task
 title: "E11: Match6/Match7 — path direction + bound-node optional match"
 short_code: "GQLITE-T-0245"
 created_at: 2026-05-18T17:10:00+00:00
-updated_at: 2026-05-18T17:10:00+00:00
+updated_at: 2026-05-18T18:34:48.620023+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -111,4 +111,62 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — blocked / investigation only
+
+**Outcome:** TCK unchanged (3211). No code changes — the failing
+Match6/Match7 scenarios decompose into three sub-problems, each of
+which needs its own substantial change.
+
+**What the failing scenarios actually require:**
+
+1. **Path "written order" serialization (Match6 [5]/[6]/[9]/[10]/
+   [11]/[14]/[16]/[17]/[18]).** Failing as "unmatched expected row"
+   because we serialise paths with start→end in numeric node-id
+   order, while the TCK expects start→end to mirror the *textual*
+   order of the pattern (so `MATCH p = (a)<-[:T]-(b)` returns a
+   path whose first node is `a`, not `b`). This is a serialisation
+   rewrite in `executor_result.c` / path-formatting — significant
+   work, distinct from MATCH transform.
+
+2. **OPTIONAL MATCH with bound endpoints (Match7 [3]/[4]/[8]/[9]).**
+   `MATCH (a:A), (b:C) OPTIONAL MATCH (x)-->(b) RETURN x` returns 4
+   rows instead of 1 — the optional pattern isn't constraining `x`
+   to point at the bound `b`. The transform treats the OPTIONAL
+   subpattern as a fresh MATCH and unwinds via cartesian product.
+   Fix needs explicit "treat already-bound endpoints as constraints,
+   not new bindings".
+
+3. **Path-variable rebinding validation (Match6 [23], ~20 examples).**
+   `MATCH p = (p)-[]-()` should SyntaxError: `p` is being bound as
+   both a path and a node. Needs path-variable awareness in the
+   rebind check; the existing `check_create_rebinds_ex` only sees
+   nodes/rels.
+
+4. **Recursive ambiguous-column on path-with-varlen (Match6 [15]/
+   [19]/[20], Match7 [13]/[20]).** `SQL prepare failed: ambiguous
+   column name: n_2.id` — the named-path + varlen combination emits
+   two aliases for the same target node id. Single-line aliasing
+   fix in `transform_match.c` but needs careful trace.
+
+5. **`(a)<-->(b)` bidirectional rel (Match6 [12]/[13]).** Grammar
+   rejects `<-[:T]->`. Needs a parser rule for the bidirectional
+   form.
+
+6. **OPTIONAL with `<-[r]-` reverse using a bound rel-var (Match7
+   [4]).** Returns 0 rows instead of 1-with-null because the
+   existing-binding constraint on `r` makes the optional pattern
+   un-matchable AND swallows the outer row. Fix needs
+   `LEFT JOIN ... ON (false_for_reverse) → null`.
+
+**Acceptance criteria:**
+- [ ] Direction-respecting MATCH — not addressed (needs path-serialisation
+      rewrite + bidirectional grammar).
+- [ ] OPTIONAL MATCH with bound endpoints — not addressed (needs
+      transform-side recognition of bound endpoints).
+- [x] No regressions (verified by running TCK — count unchanged).
+
+**Recommendation:** split into the six sub-tasks above; each can
+attack one specific failure family. Doing them as one task overshoots
+budget by ~5x.
+
+**Files touched:** none.

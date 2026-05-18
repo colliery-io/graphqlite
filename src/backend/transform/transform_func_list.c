@@ -58,6 +58,19 @@ int transform_tostring_function(cypher_transform_context *ctx, cypher_function_c
         return -1;
     }
 
+    /* Special-case boolean literals: the strict UDF can't distinguish a
+     * boolean from an integer 0/1 once compiled to SQL, so it renders
+     * `toString(true)` as "1" instead of "true". Emit text directly when
+     * we can see the literal in the AST. */
+    ast_node *arg = func_call->args->items[0];
+    if (arg && arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal *)arg;
+        if (lit->literal_type == LITERAL_BOOLEAN) {
+            append_sql(ctx, "'%s'", lit->value.boolean ? "true" : "false");
+            return 0;
+        }
+    }
+
     /* Strict UDF rejects lists/maps/nodes/relationships/paths (TypeError)
      * but renders Duration JSON via its _iso8601 field. */
     append_sql(ctx, "_gql_to_string_strict(");

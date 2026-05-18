@@ -72,6 +72,14 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
                 ctx->error_message = strdup(
                     "SyntaxError: UnexpectedSyntax: size() does not accept pattern predicates");
                 return -1;
+            } else if (arg->type == AST_NODE_EXISTS_EXPR) {
+                /* size((a)-->()) — was a path-count in pre-Cypher 9; spec
+                 * removed it. The pattern parses as EXISTS_EXPR in expr
+                 * position. Reject as SyntaxError. */
+                ctx->has_error = true;
+                ctx->error_message = strdup(
+                    "SyntaxError: UnexpectedSyntax: size() does not accept pattern predicates");
+                return -1;
             }
         }
         bool use_json_array_length = false;

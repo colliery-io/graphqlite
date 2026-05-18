@@ -4,14 +4,14 @@ level: task
 title: "E10: Match5 — varlen path bounds (off-by-N, expected 14 got X)"
 short_code: "GQLITE-T-0244"
 created_at: 2026-05-18T17:10:00+00:00
-updated_at: 2026-05-18T17:10:00+00:00
+updated_at: 2026-05-18T18:30:17.016904+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -112,4 +112,53 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completion (+3)
+
+**Outcome:** TCK 3208 → 3211 (+3). Below the +10..+15 target — Match5
+also has fixtures with "expected 15 got 14" (off-by-one in *upper*
+bound) that need separate work. Unit 937/937.
+
+**Implementation:**
+1. `src/backend/transform/cypher_transform.c::generate_varlen_cte`:
+   - Changed `min_hops = range->min_hops > 0 ? ... : 1` →
+     `min_hops = range->min_hops >= 0 ? ... : 1` so explicit 0 is
+     preserved (`-1` was the "unspecified" marker).
+   - Added a zero-hop base case to the recursive CTE: when
+     `min_hops == 0`, emit `(n.id, n.id, 0, ...)` for every node so
+     `(a)-[*0]->(b)` can bind a=b.
+   - Restricted the recursive step to `cte.depth >= 1` so the
+     depth=0 self-bind rows don't duplicate the depth=1 base case.
+2. `src/backend/transform/transform_match.c`:
+   - Same `>=0` fix at the call site for `min_hops`.
+   - Always apply the `depth >= min_hops` filter (previously only
+     applied when > 1), so depth=0 self-bind rows are filtered out
+     when the user asks for `*1..N`.
+   - Added an explicit `depth <= max_hops` filter for the
+     user-given upper bound.
+   - Added `empty_interval` check (min > max) that injects `AND 0`
+     into the WHERE so `*3..1` returns zero rows.
+
+**Spot-checks (extension), all correct:**
+- `*0` → just the start node
+- `*1` → direct successor
+- `*2` → 2-hop successor
+- `*0..2` → [start, 1-hop, 2-hop] (no duplicates)
+- `*1..2` → [1-hop, 2-hop]
+- `*3..1` (empty interval) → []
+
+**Match5 feature result:** flipped 3 scenarios (the zero-hop and
+empty-interval cases). Remaining Match5 fails ("expected 15 got 14",
+"expected 7 got 6") are off-by-one in the *upper* bound when the
+path has a back-edge / cycle — separate from the lower-bound issue
+this task addressed.
+
+**Acceptance criteria:**
+- [x] `*0` returns the start node.
+- [x] Bounded `*N..M` returns only paths in [N, M].
+- [x] Empty interval returns zero rows.
+- [x] No regressions in unit tests.
+- [ ] All Match5 [3]/[6]/[8]/[12]/[13]/[16] pass — partial; off-by-one
+      in *upper* bounds remains for a follow-up.
+
+**Files touched:** `src/backend/transform/cypher_transform.c`,
+`src/backend/transform/transform_match.c`.

@@ -791,7 +791,9 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
     }
 
     cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
-    int min_hops = range->min_hops > 0 ? range->min_hops : 1;
+    /* min_hops == -1 means unspecified → default to 1. Explicit 0 must be
+     * preserved so the zero-hop case (`(a)-[*0]->(b)` ⇒ a = b) works. */
+    int min_hops = range->min_hops >= 0 ? range->min_hops : 1;
     int max_hops = range->max_hops > 0 ? range->max_hops : 100; /* Default max for unbounded */
 
     CYPHER_DEBUG("Generating varlen CTE %s: min=%d, max=%d, type=%s",
@@ -808,6 +810,14 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         /* <-[*]- reversed direction */
         src_col = "target_id";
         tgt_col = "source_id";
+    }
+
+    /* Zero-hop base case (only when explicitly requested via *0..N):
+     * each node maps to itself with depth=0. */
+    if (min_hops == 0) {
+        dbuf_appendf(&cte_query,
+            "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',' || n.id || ',' "
+            "FROM nodes n UNION ALL ");
     }
 
     /* Base case: direct edges (depth = 1) */
@@ -839,7 +849,9 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         dbuf_append(&cte_query, ")");
     }
 
-    /* Recursive case */
+    /* Recursive case — only recurse from depth >= 1 rows. The depth=0
+     * base case is for self-bind (zero-hop); recursing from it would
+     * duplicate edges already emitted by the depth=1 base case. */
     dbuf_append(&cte_query, " UNION ALL ");
     dbuf_appendf(&cte_query,
         "SELECT cte.start_id, e.%s, cte.depth + 1, "
@@ -847,7 +859,7 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         "cte.visited || e.%s || ',' "
         "FROM %s cte "
         "JOIN edges e ON e.%s = cte.end_id "
-        "WHERE cte.depth < %d",
+        "WHERE cte.depth >= 1 AND cte.depth < %d",
         tgt_col, tgt_col, tgt_col,
         cte_name,
         src_col,

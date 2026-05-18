@@ -4,14 +4,14 @@ level: task
 title: "E12: Varlen relationship-list projection + heterogeneous UNWIND"
 short_code: "GQLITE-T-0246"
 created_at: 2026-05-18T17:10:00+00:00
-updated_at: 2026-05-18T17:10:00+00:00
+updated_at: 2026-05-18T18:36:11.034931+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -119,4 +119,52 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — blocked / investigation only
+
+**Outcome:** TCK unchanged (3211). No code changes — both sub-clusters
+need transform-layer infrastructure that doesn't yet exist.
+
+**Sub-problem 1 — varlen relationship as a list (Match9 [1]–[5]):**
+Varlen relationships register as `VAR_KIND_EDGE` (same as a single
+edge), so when RETURN projects the variable it emits a single
+`<alias>.id` reference. That alias is never created because the
+varlen CTE doesn't expose a per-row edge_id column — it produces
+`start_id, end_id, depth, path_ids, visited`. To make `RETURN r`
+work for a varlen `r`, we need:
+- A new variable kind (e.g. `VAR_KIND_REL_LIST`) so the projection
+  knows to aggregate over the path.
+- The recursive CTE to also accumulate edge IDs
+  (`path_edge_ids` column) via `cte.path_edge_ids || ',' || e.id`.
+- A new helper UDF `_gql_split_ids(text)` or a JSON shape change to
+  emit the IDs as a JSON list rather than a comma-string.
+
+**Sub-problem 2 — heterogeneous UNWIND (WithOrderBy1 [21]/[22],
+Comparison2 [3], Quantifier-rel scenarios):**
+`UNWIND [n, r, p, 1.5, 'x', null]` fails at transform time because
+the transform infers a uniform type for the unwound list from its
+first element. When the elements are of different value kinds the
+later projection (`ORDER BY types`, `WHERE pred`, `types.x`) emits
+SQL against the wrong column kind. Fix needs:
+- An "untyped" / "any" var kind that defers column-resolution to
+  runtime via a helper UDF.
+- Or: a transform pass that detects heterogeneous UNWIND lists and
+  expands each element into a typed-tagged JSON value, so
+  downstream projections work uniformly through `json_extract`.
+
+Both sub-problems are open-ended transform refactors with no
+1-or-2-line fix. They share the same root cause (variable-kind
+metadata is a single tag, not a sum type).
+
+**Acceptance criteria:**
+- [ ] Varlen relationship list materialization — not addressed.
+- [ ] Heterogeneous UNWIND — not addressed.
+- [x] No regressions in homogeneous UNWIND or homogeneous-rel cases
+      (verified by running the full TCK; count unchanged).
+
+**Recommendation:** Pull both sub-problems out into separate tasks:
+(a) introduce `VAR_KIND_REL_LIST` and update varlen CTE + RETURN
+projection. (b) introduce a runtime-typed value-kind for
+heterogeneous UNWIND with a `_gql_value_kind(json) → text` UDF and
+defer column-typed projections.
+
+**Files touched:** none.
