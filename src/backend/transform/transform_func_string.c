@@ -54,7 +54,26 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
     } else if (strcasecmp(func_call->function_name, "size") == 0) {
         /* size() works on both strings and lists.
          * For lists (json arrays), use json_array_length.
-         * For strings, use LENGTH. */
+         * For strings, use LENGTH.
+         * Reject paths and pattern predicates at compile time (TCK
+         * list/[5][6]). */
+        if (func_call->args && func_call->args->count > 0) {
+            ast_node *arg = func_call->args->items[0];
+            if (arg->type == AST_NODE_IDENTIFIER) {
+                cypher_identifier *id = (cypher_identifier*)arg;
+                if (id->name && transform_var_is_path(ctx->var_ctx, id->name)) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup(
+                        "SyntaxError: InvalidArgumentType: size() does not accept paths — use length() instead");
+                    return -1;
+                }
+            } else if (arg->type == AST_NODE_PATH) {
+                ctx->has_error = true;
+                ctx->error_message = strdup(
+                    "SyntaxError: UnexpectedSyntax: size() does not accept pattern predicates");
+                return -1;
+            }
+        }
         bool use_json_array_length = false;
         if (func_call->args && func_call->args->count > 0) {
             ast_node *arg = func_call->args->items[0];

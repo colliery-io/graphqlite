@@ -112,7 +112,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
 
     /* Transform RETURN clause to generate SELECT projections */
     if (transform_return_clause(ctx, return_clause) < 0) {
-        set_result_error(result, "Failed to transform RETURN clause");
+        set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform RETURN clause");
         cypher_transform_free_context(ctx);
         return -1;
     }
