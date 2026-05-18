@@ -38,7 +38,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * parser can't immediately distinguish a node pattern from a parenthesized
  * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 13
+%expect 14
 %expect-rr 3  /* IDENTIFIER, BQIDENT, END_P in variable_opt */
 
 %union {
@@ -499,6 +499,43 @@ set_item_list:
         {
             ast_list_append($1, (ast_node*)$3);
             $$ = $1;
+        }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* SET n:L1:L2 — produce two set_items, one per label. */
+            $$ = ast_list_create();
+            {
+              cypher_identifier *v1 = make_identifier($1, @1.first_line);
+              cypher_label_expr *l1 = make_label_expr((ast_node*)v1, $3, @3.first_line);
+              ast_list_append($$, (ast_node*)make_cypher_set_item((ast_node*)l1, NULL, false));
+            }
+            {
+              cypher_identifier *v2 = make_identifier(strdup($1), @1.first_line);
+              cypher_label_expr *l2 = make_label_expr((ast_node*)v2, $5, @5.first_line);
+              ast_list_append($$, (ast_node*)make_cypher_set_item((ast_node*)l2, NULL, false));
+            }
+            free($1);
+        }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* SET n:L1:L2:L3 — three labels. */
+            $$ = ast_list_create();
+            {
+              cypher_identifier *v1 = make_identifier($1, @1.first_line);
+              cypher_label_expr *l1 = make_label_expr((ast_node*)v1, $3, @3.first_line);
+              ast_list_append($$, (ast_node*)make_cypher_set_item((ast_node*)l1, NULL, false));
+            }
+            {
+              cypher_identifier *v2 = make_identifier(strdup($1), @1.first_line);
+              cypher_label_expr *l2 = make_label_expr((ast_node*)v2, $5, @5.first_line);
+              ast_list_append($$, (ast_node*)make_cypher_set_item((ast_node*)l2, NULL, false));
+            }
+            {
+              cypher_identifier *v3 = make_identifier(strdup($1), @1.first_line);
+              cypher_label_expr *l3 = make_label_expr((ast_node*)v3, $7, @7.first_line);
+              ast_list_append($$, (ast_node*)make_cypher_set_item((ast_node*)l3, NULL, false));
+            }
+            free($1);
         }
     ;
 
