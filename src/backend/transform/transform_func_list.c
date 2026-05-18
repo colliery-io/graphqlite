@@ -335,12 +335,21 @@ int transform_collect_function(cypher_transform_context *ctx, cypher_function_ca
         return -1;
     }
 
+    /* collect() filters out NULL values per Cypher spec. SQLite's
+     * FILTER clause does this cleanly without changing the aggregate. */
     append_sql(ctx, "json_group_array(");
     if (func_call->args->items[0] == NULL) {
         /* collect(*) - not really valid but handle gracefully */
         append_sql(ctx, "*");
     } else {
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+    }
+    append_sql(ctx, ") FILTER (WHERE ");
+    if (func_call->args->items[0] != NULL) {
+        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, " IS NOT NULL");
+    } else {
+        append_sql(ctx, "1=1");
     }
     append_sql(ctx, ")");
 
