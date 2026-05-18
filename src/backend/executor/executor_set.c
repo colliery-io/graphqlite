@@ -672,8 +672,24 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                                 pt = PROP_TYPE_BOOLEAN;
                                 pv = &lit->value.boolean;
                                 break;
-                            case LITERAL_NULL:
-                                continue; /* Skip null values */
+                            case LITERAL_NULL: {
+                                /* SET n += {k: null} removes property k.
+                                 * In replace mode (SET n = {...}) the
+                                 * earlier delete_all step already handled
+                                 * it, so skip there. */
+                                if (item->is_merge) {
+                                    int removed = 0;
+                                    if (is_edge) {
+                                        removed = (cypher_schema_delete_edge_property(
+                                            executor->schema_mgr, entity_id, pair->key) == 0);
+                                    } else {
+                                        removed = (cypher_schema_delete_node_property(
+                                            executor->schema_mgr, entity_id, pair->key) == 0);
+                                    }
+                                    if (removed) result->properties_set++;
+                                }
+                                continue;
+                            }
                         }
                     } else if (pair->value->type == AST_NODE_MAP || pair->value->type == AST_NODE_LIST) {
                         bulk_json_str = serialize_ast_to_json(pair->value);
