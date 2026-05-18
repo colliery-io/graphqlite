@@ -265,8 +265,20 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* type(null) → null. Same propagation rule as labels(). */
+    if (arg->type == AST_NODE_LITERAL) {
+        cypher_literal *lit = (cypher_literal*)arg;
+        if (lit->literal_type == LITERAL_NULL) {
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        ctx->has_error = true;
+        ctx->error_message = strdup("type() function argument must be a relationship variable");
+        return -1;
+    }
+
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
         ctx->error_message = strdup("type() function argument must be a relationship variable");
@@ -292,10 +304,15 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
         return -1;
     }
 
-    /* Generate SQL to extract the relationship type from the edges table */
+    /* Generate SQL to extract the relationship type from the edges table.
+     * Wrap in a CASE so OPTIONAL MATCH miss (id IS NULL) propagates to NULL. */
     bool skip_id = transform_var_is_projected(ctx->var_ctx, id->name) ||
                    transform_var_alias_is_id(ctx->var_ctx, id->name);
-    append_sql(ctx, "(SELECT type FROM edges WHERE id = %s%s)", alias, skip_id ? "" : ".id");
+    append_sql(ctx,
+        "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
+        "(SELECT type FROM edges WHERE id = %s%s) END)",
+        alias, skip_id ? "" : ".id",
+        alias, skip_id ? "" : ".id");
 
     return 0;
 }
