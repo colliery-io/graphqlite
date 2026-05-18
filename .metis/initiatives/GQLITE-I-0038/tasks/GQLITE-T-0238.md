@@ -4,14 +4,14 @@ level: task
 title: "E4: Reject unbound pattern variables in WHERE pattern predicates (cluster A subset)"
 short_code: "GQLITE-T-0238"
 created_at: 2026-05-18T12:24:40+00:00
-updated_at: 2026-05-18T12:54:03.388596+00:00
+updated_at: 2026-05-18T12:59:29.050105+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -103,4 +103,28 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completed
+
+**Outcome:** TCK 3150 → 3157 (+7).
+
+**Implementation:**
+- `src/backend/transform/transform_validate.c`: added
+  `validate_where_pattern_vars()` walker that descends through
+  AST_NODE_EXISTS_EXPR (pattern predicates), AST_NODE_PATH, and bare
+  AST_NODE_NODE_PATTERN inside WHERE expressions and rejects any
+  variable on a NODE_PATTERN / REL_PATTERN / path that isn't already
+  in the `bound` set. Bare nodes like `WHERE (a)` parse as
+  parenthesised NODE_PATTERN (no PATH wrapping), so all three shapes
+  are covered.
+- Dispatch loop wires the call into the MATCH branch *after*
+  `collect_pattern_names()` has added the current MATCH's pattern
+  variables to `bound`, so legal cases like
+  `MATCH (n) WHERE (n)-[]->(m) RETURN n, m` (where m is bound by the
+  same MATCH) still work.
+
+**Scenarios moved to pass:** Pattern1 [10] examples that introduce
+fresh variables like `r`, `a` in WHERE patterns. The original
+"Unknown variable: a" path also still fires for bare-identifier
+WHERE expressions like `WHERE (a)`.
+
+**Files touched:** `src/backend/transform/transform_validate.c` (~80 LOC: new walker + dispatch wire-up).
