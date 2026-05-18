@@ -280,25 +280,32 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     }
 
     /* Handle STARTS WITH operator — case-sensitive prefix match.
-     * SQLite's LIKE is case-insensitive by default for ASCII, so we use
-     * substr() comparison instead: s STARTS WITH p  ⇔
-     * substr(s, 1, length(p)) = p (and length(s) >= length(p)). */
+     * Spec returns NULL when either operand is not a string. Use the
+     * typeof() guard to gate the substr comparison; otherwise NULL. */
     if (binary_op->op_type == BINARY_OP_STARTS_WITH) {
-        append_sql(ctx, "(substr(");
+        append_sql(ctx, "(CASE WHEN typeof(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ") = 'text' AND typeof(");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ") = 'text' THEN substr(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", 1, length(");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
         append_sql(ctx, ")) = ");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
-        append_sql(ctx, ")");
+        append_sql(ctx, " ELSE NULL END)");
         ctx->in_comparison = was_in_comparison;
         return 0;
     }
 
     /* Handle ENDS WITH operator — case-sensitive suffix match.
-     * s ENDS WITH p  ⇔  substr(s, length(s) - length(p) + 1) = p. */
+     * Same NULL-on-non-string semantics as STARTS WITH. */
     if (binary_op->op_type == BINARY_OP_ENDS_WITH) {
-        append_sql(ctx, "(substr(");
+        append_sql(ctx, "(CASE WHEN typeof(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ") = 'text' AND typeof(");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ") = 'text' THEN substr(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", length(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
@@ -306,7 +313,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
         append_sql(ctx, ") + 1) = ");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
-        append_sql(ctx, ")");
+        append_sql(ctx, " ELSE NULL END)");
         ctx->in_comparison = was_in_comparison;
         return 0;
     }
