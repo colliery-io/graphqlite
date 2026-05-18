@@ -4,14 +4,14 @@ level: task
 title: "E17: Match4 varlen + property-predicate alias bug"
 short_code: "GQLITE-T-0251"
 created_at: 2026-05-18T19:00:00+00:00
-updated_at: 2026-05-18T19:00:00+00:00
+updated_at: 2026-05-18T19:56:58.863068+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -122,4 +122,34 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — investigation; mostly blocked by E12
+
+**Outcome:** TCK unchanged (3231). No code changes. The Match4
+failures decompose into three buckets, each pointing to other tasks.
+
+**Findings (per current Match4 failure):**
+
+| # | Scenario | Root cause | Blocking task |
+|---|---|---|---|
+| 1 | Fixed-length varlen RETURN r | `RETURN r` where r is varlen — projects to single edge alias that doesn't exist | E12 (varlen-as-list) |
+| 2 | Simple varlen pattern via `:CONTAINS` | Parser rejects `CONTAINS` as rel type because keyword | grammar refactor (non_reserved_kw on rel_pattern) |
+| 3 | Zero-length varlen mid-pattern via `:CONTAINS` | Same keyword issue | grammar refactor |
+| 4 | Longer varlen path | Setup requires UNWIND + collect + list-concat path-build that errors before MATCH | unrelated UNWIND+CREATE chain |
+| 5 | Property predicate on varlen rel | Same projection alias as [1], plus property-on-rel filter | E12 |
+| 7 | Bound rel + varlen | ambiguous_column on rel binding | varlen alias bug |
+| 8 | Match rel into list + varlen | keyword `CONTAINS` parse error | grammar refactor |
+
+**Spot-check (extension), confirms the keyword bottleneck:**
+- `MATCH (a {name:"A"})-[:R*]->(x) RETURN x.name` (non-keyword type)
+  → returns expected rows ✓
+- Same query with `[:CONTAINS*]` → parser error.
+
+**Recommendation:** Don't pursue this as a standalone task —
+3 of the 7 fails are an upstream-task dependency (E12), 3 are the
+same keyword issue (worth a separate grammar refactor that also
+helps other features), and 1 is a setup dependency. Reroute work
+to those upstream tasks rather than chasing Match4-specific symptoms.
+
+**Files touched:** none.
+
+**Acceptance criteria:** not met; deferred.

@@ -4,14 +4,14 @@ level: task
 title: "E14: DELETE/REMOVE/SET + RETURN dispatcher patterns"
 short_code: "GQLITE-T-0248"
 created_at: 2026-05-18T19:00:00+00:00
-updated_at: 2026-05-18T19:00:00+00:00
+updated_at: 2026-05-18T19:51:28.122325+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -116,4 +116,44 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — partial completion (+3)
+
+**Outcome:** TCK 3220 → 3223 (+3). Below the +10 target — only the
+literal-RETURN-after-DELETE shape was extended; MATCH+SET+RETURN and
+MATCH+REMOVE+RETURN already routed through `execute_match_return_query`
+correctly. Unit 937/937.
+
+**Implementation:**
+- `src/backend/executor/query_dispatch.c::synthesize_delete_return`:
+  extended to handle the literal-RETURN case in addition to COUNT(*).
+  When every RETURN item is an `AST_NODE_LITERAL`, we now emit
+  `total_deleted` rows of the literal value(s), then apply SKIP /
+  LIMIT from the RETURN clause. Unblocks `MATCH (n) DELETE n RETURN
+  42 AS num SKIP 2 LIMIT 2`.
+
+**Spot-checks (extension), all correct:**
+- `MATCH (n:N) DELETE n RETURN 42 AS num SKIP 2 LIMIT 2` → 2 rows of
+  num=42, with 5 nodes deleted as side effect.
+- COUNT-based RETURN after DELETE still works (regression check).
+- MATCH+SET+RETURN reads post-SET values (already worked).
+- CREATE+REMOVE+RETURN reads post-REMOVE values (already worked).
+
+**Deferred:**
+- Delete6 [10]/[11]/[12]: relationship deletes with *property*
+  RETURN need the pre-delete var_map captured, not just a literal
+  emit. Requires reorganizing handle_match_delete to collect a
+  var_map *before* DELETE runs. A separate task.
+- CREATE+WITH+SET+RETURN: returns the pre-SET value because the
+  CREATE var_map is used for projection, bypassing the SET. Separate
+  pattern, not on E14's critical path.
+
+**Acceptance criteria:**
+- [x] MATCH+DELETE+RETURN with SKIP/LIMIT on literal RETURN returns
+      the right row count.
+- [x] MATCH+SET+RETURN returns post-SET values (already worked).
+- [x] MATCH+REMOVE+RETURN returns post-REMOVE values (already worked).
+- [x] No regressions in MATCH+DELETE / MATCH+SET / MATCH+REMOVE.
+
+**Files touched:**
+- `src/backend/executor/query_dispatch.c` (+ ~80 LOC in
+  `synthesize_delete_return`).

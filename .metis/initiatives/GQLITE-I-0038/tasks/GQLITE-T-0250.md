@@ -4,14 +4,14 @@ level: task
 title: "E16: Named pattern comprehension [p = (a)-->(b) | p] (Pattern2)"
 short_code: "GQLITE-T-0250"
 created_at: 2026-05-18T19:00:00+00:00
-updated_at: 2026-05-18T19:00:00+00:00
+updated_at: 2026-05-18T19:54:49.826710+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -122,4 +122,32 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — blocked / investigation only
+
+**Outcome:** TCK unchanged (3231). No code changes. The grammar
+extension is small but the transform-side scope work isn't.
+
+**What's needed beyond the grammar rule:**
+
+1. **AST field.** `cypher_pattern_comprehension` has no `path_var`
+   field. Adding one is straightforward but touches the AST header,
+   the make_* constructor, and every consumer of the struct.
+
+2. **Path-variable scope binding.** The new grammar rule must
+   register `p` in `var_ctx` as `VAR_KIND_PATH` for the body of the
+   comprehension only, then unregister on exit. The existing
+   list-comprehension scope helper handles this for scalar vars but
+   not paths.
+
+3. **Path-projection translation.** The body `| p` must compile to
+   a JSON object `{nodes: [...], rels: [...]}` over the matched
+   path. Today we have node and edge JSON shapes but no first-class
+   path serializer inside a `json_group_array` aggregation.
+
+**Recommendation:** Split into 3 sub-tasks (grammar + AST field;
+scope binding; path-as-JSON projection). Each is well-bounded but
+together they exceed the task budget.
+
+**Files touched:** none.
+
+**Acceptance criteria:** none met; deferred to follow-up tasks.

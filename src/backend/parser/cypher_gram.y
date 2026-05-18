@@ -1179,6 +1179,36 @@ primary_expr:
             free($1);
             free($3);
         }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* Conjunctive label expression `n:L1:L2` — emit
+             * (n:L1) AND (n:L2). */
+            cypher_identifier *b1 = make_identifier($1, @1.first_line);
+            cypher_identifier *b2 = make_identifier(strdup($1), @1.first_line);
+            cypher_label_expr *l1 = make_label_expr((ast_node*)b1, $3, @3.first_line);
+            cypher_label_expr *l2 = make_label_expr((ast_node*)b2, $5, @5.first_line);
+            $$ = (ast_node*)make_binary_op(BINARY_OP_AND,
+                                            (ast_node*)l1, (ast_node*)l2,
+                                            @1.first_line);
+            free($1); free($3); free($5);
+        }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* Three-label conjunction. */
+            cypher_identifier *b1 = make_identifier($1, @1.first_line);
+            cypher_identifier *b2 = make_identifier(strdup($1), @1.first_line);
+            cypher_identifier *b3 = make_identifier(strdup($1), @1.first_line);
+            cypher_label_expr *l1 = make_label_expr((ast_node*)b1, $3, @3.first_line);
+            cypher_label_expr *l2 = make_label_expr((ast_node*)b2, $5, @5.first_line);
+            cypher_label_expr *l3 = make_label_expr((ast_node*)b3, $7, @7.first_line);
+            cypher_binary_op *and12 = make_binary_op(BINARY_OP_AND,
+                                                     (ast_node*)l1, (ast_node*)l2,
+                                                     @1.first_line);
+            $$ = (ast_node*)make_binary_op(BINARY_OP_AND,
+                                            (ast_node*)and12, (ast_node*)l3,
+                                            @1.first_line);
+            free($1); free($3); free($5); free($7);
+        }
     ;
 
 literal_expr:

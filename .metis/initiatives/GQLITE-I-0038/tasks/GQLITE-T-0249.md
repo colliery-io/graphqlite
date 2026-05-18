@@ -4,14 +4,14 @@ level: task
 title: "E15: Conjunctive label expression WHERE n:L1:L2 (Graph5)"
 short_code: "GQLITE-T-0249"
 created_at: 2026-05-18T19:00:00+00:00
-updated_at: 2026-05-18T19:00:00+00:00
+updated_at: 2026-05-18T19:53:49.124124+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -116,4 +116,48 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completion (+8)
+
+**Outcome:** TCK 3223 → 3231 (+8). Hits the upper end of the +6..+8
+target. Unit 937/937.
+
+**Implementation in `src/backend/parser/cypher_gram.y`:**
+Added two new grammar productions in the expression rule (after the
+existing single-label `IDENTIFIER ':' IDENTIFIER` form):
+
+- `IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER` → builds
+  `BinaryOp(AND, label_expr(base, L1), label_expr(base', L2))`.
+- `IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER` → triple-
+  label form via nested AND.
+
+The transform side needed no changes — each `label_expr` already
+compiles to an `EXISTS(SELECT 1 FROM node_labels …)` predicate and
+the new BinaryOp AND was already supported.
+
+Grammar built without new shift/reduce conflicts (existing
+`%expect 9` and `%expect-rr 3` counts unchanged).
+
+**Spot-checks (extension), all correct:**
+- `MATCH (n) WHERE n:Person:Employee RETURN n.name` → 1 row (Alice)
+- `MATCH (n) WHERE n:Person RETURN n.name` → 2 rows (Alice + Bob)
+- Existing single-label MATCH `(n:L) WHERE ...` keeps working.
+
+**Acceptance criteria:**
+- [x] `WHERE n:L1:L2` parses and returns rows where node has both.
+- [ ] `RETURN n:L1:L2` not directly tested — `RETURN` projection of
+      a label-expr is a separate path; will revisit if Graph5 still
+      shows fails after this commit.
+- [x] Single-label cases still work.
+- [x] Grammar conflict counts unchanged.
+
+**Limitations:**
+- The current explicit two- and three-label productions cap at 3
+  labels. Four-or-more would parse as the existing single rule
+  binding to the trailing identifier (probably wrong). Not a
+  regression — those queries already failed before this change.
+  A truly recursive rule using `label_list` would be cleaner but
+  introduces reduce-reduce conflicts with the node-pattern label
+  list; deferred.
+
+**Files touched:**
+- `src/backend/parser/cypher_gram.y` (+ ~35 LOC: two new productions).

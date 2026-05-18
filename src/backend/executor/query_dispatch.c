@@ -752,37 +752,115 @@ static bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
     int total_deleted = result->nodes_deleted + result->relationships_deleted;
     if (total_deleted == 0) return false;
 
-    /* Check that every RETURN item is a COUNT function call */
+    /* Classify every RETURN item. We can synthesize when:
+     *   - all items are COUNT(...) calls  → one-row aggregate
+     *   - all items are literal constants → N rows of the constants,
+     *     where N = total_deleted (the matched row count). Honors
+     *     SKIP / LIMIT clamps on the RETURN. */
+    bool all_count = true;
+    bool all_literal = true;
     for (int i = 0; i < ret->items->count; i++) {
         cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-        if (!item || !item->expr || item->expr->type != AST_NODE_FUNCTION_CALL) return false;
-        cypher_function_call *func = (cypher_function_call*)item->expr;
-        if (!func->function_name || strcasecmp(func->function_name, "count") != 0) return false;
+        if (!item || !item->expr) return false;
+        if (item->expr->type == AST_NODE_FUNCTION_CALL) {
+            cypher_function_call *func = (cypher_function_call*)item->expr;
+            if (!func->function_name || strcasecmp(func->function_name, "count") != 0) {
+                all_count = false;
+            }
+            all_literal = false;
+        } else if (item->expr->type == AST_NODE_LITERAL) {
+            all_count = false;
+        } else {
+            all_count = false;
+            all_literal = false;
+        }
+    }
+    if (!all_count && !all_literal) return false;
+
+    int col_count = ret->items->count;
+    result->column_count = col_count;
+    result->column_names = malloc(col_count * sizeof(char*));
+
+    int rows = all_count ? 1 : total_deleted;
+    /* Apply SKIP / LIMIT for the literal-row case. */
+    int64_t skip_val = 0, limit_val = -1;
+    if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal *)ret->skip;
+        if (l->literal_type == LITERAL_INTEGER) skip_val = l->value.integer;
+    }
+    if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal *)ret->limit;
+        if (l->literal_type == LITERAL_INTEGER) limit_val = l->value.integer;
+    }
+    if (all_literal) {
+        int start = (skip_val > 0 && skip_val < rows) ? (int)skip_val
+                                                       : (skip_val >= rows ? rows : 0);
+        int end = rows;
+        if (limit_val == 0) end = start;
+        else if (limit_val > 0 && start + (int)limit_val < end) end = start + (int)limit_val;
+        rows = (end - start > 0) ? (end - start) : 0;
     }
 
-    /* All items are COUNT — synthesize a single-row result */
-    result->column_count = ret->items->count;
-    result->column_names = malloc(result->column_count * sizeof(char*));
-    result->data = malloc(sizeof(char**));
-    result->data[0] = calloc(result->column_count, sizeof(char*));
-    result->data_types = malloc(sizeof(int*));
-    result->data_types[0] = calloc(result->column_count, sizeof(int));
-    result->row_count = 1;
+    result->row_count = rows;
+    if (rows > 0) {
+        result->data = malloc(rows * sizeof(char**));
+        result->data_types = malloc(rows * sizeof(int*));
+    } else {
+        result->data = NULL;
+        result->data_types = NULL;
+    }
 
-    for (int i = 0; i < ret->items->count; i++) {
+    for (int r = 0; r < rows; r++) {
+        result->data[r] = calloc(col_count, sizeof(char*));
+        result->data_types[r] = calloc(col_count, sizeof(int));
+    }
+
+    for (int i = 0; i < col_count; i++) {
         cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-        /* Use alias if provided, otherwise generate "count" */
         if (item->alias) {
             result->column_names[i] = strdup(item->alias);
-        } else {
+        } else if (all_count) {
             result->column_names[i] = strdup("count");
+        } else {
+            result->column_names[i] = strdup("?column?");
         }
 
-        /* All COUNT columns get the total delete count */
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", total_deleted);
-        result->data[0][i] = strdup(buf);
-        result->data_types[0][i] = SQLITE_INTEGER;
+        if (all_count) {
+            if (rows > 0) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%d", total_deleted);
+                result->data[0][i] = strdup(buf);
+                result->data_types[0][i] = SQLITE_INTEGER;
+            }
+        } else {
+            /* Render the literal value once, then repeat per row. */
+            cypher_literal *lit = (cypher_literal *)item->expr;
+            char buf[64] = "";
+            int sqltype = SQLITE_NULL;
+            switch (lit->literal_type) {
+                case LITERAL_INTEGER:
+                    snprintf(buf, sizeof(buf), "%lld", (long long)lit->value.integer);
+                    sqltype = SQLITE_INTEGER;
+                    break;
+                case LITERAL_DECIMAL:
+                    snprintf(buf, sizeof(buf), "%g", lit->value.decimal);
+                    sqltype = SQLITE_FLOAT;
+                    break;
+                case LITERAL_STRING:
+                    snprintf(buf, sizeof(buf), "%s", lit->value.string ? lit->value.string : "");
+                    sqltype = SQLITE_TEXT;
+                    break;
+                case LITERAL_BOOLEAN:
+                    snprintf(buf, sizeof(buf), "%s", lit->value.boolean ? "true" : "false");
+                    sqltype = SQLITE_TEXT;
+                    break;
+                default: break;
+            }
+            for (int r = 0; r < rows; r++) {
+                result->data[r][i] = (buf[0] != '\0' || sqltype == SQLITE_TEXT) ? strdup(buf) : NULL;
+                result->data_types[r][i] = sqltype;
+            }
+        }
     }
 
     result->success = true;
