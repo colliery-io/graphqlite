@@ -137,8 +137,14 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         }
     }
 
-    /* Check expression type and generate appropriate SQL */
-    if (unwind->expr->type == AST_NODE_LIST) {
+    /* UNWIND null AS x → zero rows (openCypher spec). Emit an empty
+     * CTE; the common tail below handles var registration and FROM. */
+    if (unwind->expr->type == AST_NODE_LITERAL &&
+        ((cypher_literal *)unwind->expr)->literal_type == LITERAL_NULL) {
+        dbuf_append(&cte_query, "SELECT NULL AS value");
+        if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
+        dbuf_append(&cte_query, " WHERE 0");
+    } else if (unwind->expr->type == AST_NODE_LIST) {
         /* List literal: use UNION ALL approach */
         cypher_list *list = (cypher_list*)unwind->expr;
 
