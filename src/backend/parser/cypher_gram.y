@@ -1695,6 +1695,13 @@ map_pair:
         {
             $$ = make_map_pair("by", $3, @1.first_line);
         }
+    | NULL_P ':' expr
+        {
+            /* `null` and `NULL` are legal map keys per the openCypher
+             * spec (Map2 [5]). The scanner up-cases the keyword, so
+             * preserve the textual form here as `null`. */
+            $$ = make_map_pair(strdup("null"), $3, @1.first_line);
+        }
     ;
 
 %%
