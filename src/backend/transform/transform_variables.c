@@ -319,6 +319,21 @@ bool transform_var_alias_is_id(transform_var_context *ctx, const char *name)
     return var && var->alias_is_id;
 }
 
+int transform_var_set_scalar_value(transform_var_context *ctx,
+                                   const char *name, bool scalar)
+{
+    int idx = find_var_index(ctx, name);
+    if (idx < 0) return -1;
+    ctx->vars[idx].is_scalar_value = scalar;
+    return 0;
+}
+
+bool transform_var_is_scalar_value(transform_var_context *ctx, const char *name)
+{
+    transform_var *var = transform_var_lookup(ctx, name);
+    return var && var->is_scalar_value;
+}
+
 /* Scope management */
 
 void transform_var_enter_clause(transform_var_context *ctx)

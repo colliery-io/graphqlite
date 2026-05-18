@@ -614,6 +614,15 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                     ctx->error_message = strdup(msg);
                     return -1;
                 }
+                if (var && var->is_scalar_value) {
+                    ctx->has_error = true;
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "Variable `%s` is already bound to a scalar value and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                             node->variable);
+                    ctx->error_message = strdup(msg);
+                    return -1;
+                }
                 if (var) {
                     /* Variable exists - check if it's from WITH (projected or alias_is_id) */
                     bool is_from_with = (var->kind == VAR_KIND_PROJECTED) ||

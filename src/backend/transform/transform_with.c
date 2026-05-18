@@ -570,6 +570,27 @@ with_star_columns_done:
                     CYPHER_DEBUG("WITH: Registered edge variable '%s' -> %s (alias_is_id)", col_name, select_expr);
                 } else {
                     transform_var_register_projected(ctx->var_ctx, col_name, select_expr);
+                    /* Mark vars whose projection is a scalar literal /
+                     * scalar expression so MATCH can later reject
+                     * `WITH 123 AS n MATCH (n)`. */
+                    if (item->expr) {
+                        bool is_scalar = false;
+                        if (item->expr->type == AST_NODE_LITERAL) {
+                            cypher_literal *lit = (cypher_literal*)item->expr;
+                            if (lit->literal_type == LITERAL_INTEGER ||
+                                lit->literal_type == LITERAL_DECIMAL ||
+                                lit->literal_type == LITERAL_STRING  ||
+                                lit->literal_type == LITERAL_BOOLEAN) {
+                                is_scalar = true;
+                            }
+                        } else if (item->expr->type == AST_NODE_LIST ||
+                                   item->expr->type == AST_NODE_MAP) {
+                            is_scalar = true;
+                        }
+                        if (is_scalar) {
+                            transform_var_set_scalar_value(ctx->var_ctx, col_name, true);
+                        }
+                    }
                     CYPHER_DEBUG("WITH: Registered projected variable '%s' -> %s", col_name, select_expr);
                 }
             }

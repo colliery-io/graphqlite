@@ -40,6 +40,8 @@ struct transform_var {
     bool is_visible;         /* Currently in scope? */
     bool is_bound;           /* Has a value assigned? */
     bool alias_is_id;        /* True if table_alias IS the id value (post-WITH) */
+    bool is_scalar_value;    /* True if bound from a scalar literal — cannot
+                              * be re-used as a node/relationship pattern var. */
 
     /* Multi-graph support */
     char *graph;             /* Source graph name (NULL = default graph) */
@@ -140,6 +142,11 @@ int transform_var_set_cte(transform_var_context *ctx,
 int transform_var_set_bound(transform_var_context *ctx,
                            const char *name,
                            bool is_bound);
+
+/* Set is_scalar_value flag (var bound from a literal scalar) */
+int transform_var_set_scalar_value(transform_var_context *ctx,
+                                   const char *name, bool scalar);
+bool transform_var_is_scalar_value(transform_var_context *ctx, const char *name);
 
 /* Set alias_is_id flag (for post-WITH node/edge variables) */
 int transform_var_set_alias_is_id(transform_var_context *ctx,
