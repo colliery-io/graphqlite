@@ -3,15 +3,15 @@ id: e4-reject-unbound-pattern
 level: task
 title: "E4: Reject unbound pattern variables in WHERE pattern predicates (cluster A subset)"
 short_code: "GQLITE-T-0238"
-created_at: 2026-05-18T12:24:40.0+00:00
-updated_at: 2026-05-18T12:24:40.0+00:00
+created_at: 2026-05-18T12:24:40+00:00
+updated_at: 2026-05-18T12:54:03.388596+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false

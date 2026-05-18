@@ -4,14 +4,14 @@ level: task
 title: "E3: Relax ORDER BY UndefinedVariable check — allow pre-WITH scope (cluster O)"
 short_code: "GQLITE-T-0237"
 created_at: 2026-05-18T12:24:33+00:00
-updated_at: 2026-05-18T12:46:16.330643+00:00
+updated_at: 2026-05-18T12:53:56.543510+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -108,4 +108,35 @@ angreal test functional
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completed
+
+**Outcome:** TCK 3143 → 3150 (+7).
+
+**Implementation:**
+- `src/backend/transform/transform_with.c`: snapshot the immediate
+  pre-WITH variable names just before `transform_var_ctx_reset()`,
+  pass them to `validate_identifiers_in_scope_ex()` which adds them
+  to the allowed set alongside the post-WITH scope. Frees the
+  snapshot at function exit.
+
+**Loose-mode caveat discovered:** allowing pre-WITH refs unmasked 24
+scenarios in WithOrderBy2 [25] "Fail on sorting by an aggregation"
+that had been accidentally classified as SyntaxError via my prior
+strict UndefinedVariable check. They actually require a different
+InvalidAggregation rejection.
+
+**Companion fix:** added `find_aggregating_call()` walker that scans
+ORDER BY expressions for count/sum/avg/max/min/collect/percentile*/
+stdev/stdevP calls. When the containing WITH is non-aggregating
+(no aggregating call in its projection list), reject any aggregating
+function in ORDER BY with SyntaxError(InvalidAggregation). Runs
+before the scope check so the diagnostic is specific.
+
+**Scenarios moved to pass:**
+- WithOrderBy2 [21]/[22]/[23]/[24] (8 scenarios, pre-WITH a.name refs)
+- WithOrderBy4 [11] (aggregate projection — pre-WITH a refs)
+- WithSkipLimit3 [3]
+- plus the [25] aggregation negative tests that were going to break
+  with loose mode survive via the new InvalidAggregation check.
+
+**Files touched:** `src/backend/transform/transform_with.c` (~80 LOC: snapshot + agg walker + InvalidAggregation check).

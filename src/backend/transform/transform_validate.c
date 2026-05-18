@@ -633,6 +633,105 @@ static void collect_pattern_names(ast_list *patterns, name_set *out)
     }
 }
 
+/* Walk an expression looking for patterns (paths) used in a WHERE/predicate
+ * context. Every variable inside such a pattern must already be bound in
+ * `bound` — otherwise emit SyntaxError(UndefinedVariable). Pattern
+ * existence checks aren't allowed to introduce fresh variables.
+ *
+ * Anonymous elements (no variable name) are always allowed. */
+static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
+                                       char **error_message)
+{
+    if (!expr) return 0;
+    if (expr->type == AST_NODE_EXISTS_EXPR) {
+        cypher_exists_expr *ex = (cypher_exists_expr *)expr;
+        if (ex->expr_type == EXISTS_TYPE_PATTERN && ex->expr.pattern) {
+            for (int i = 0; i < ex->expr.pattern->count; i++) {
+                if (validate_where_pattern_vars(ex->expr.pattern->items[i], bound, error_message) < 0) return -1;
+            }
+        }
+        return 0;
+    }
+    if (expr->type == AST_NODE_PATH) {
+        cypher_path *p = (cypher_path *)expr;
+        if (p->elements) {
+            for (int j = 0; j < p->elements->count; j++) {
+                ast_node *el = p->elements->items[j];
+                if (!el) continue;
+                const char *var = NULL;
+                if (el->type == AST_NODE_NODE_PATTERN) {
+                    var = ((cypher_node_pattern *)el)->variable;
+                } else if (el->type == AST_NODE_REL_PATTERN) {
+                    var = ((cypher_rel_pattern *)el)->variable;
+                }
+                if (var && !nset_contains(bound, var)) {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                             "SyntaxError: UndefinedVariable: pattern in WHERE introduces fresh variable `%s`",
+                             var);
+                    set_error(error_message, "%s", buf);
+                    return -1;
+                }
+            }
+        }
+        if (p->var_name && !nset_contains(bound, p->var_name)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "SyntaxError: UndefinedVariable: pattern in WHERE introduces fresh path variable `%s`",
+                     p->var_name);
+            set_error(error_message, "%s", buf);
+            return -1;
+        }
+        return 0;
+    }
+    /* `WHERE (a)` parses as a parenthesised NODE_PATTERN at the top of
+     * the WHERE expression (not a PATH). Apply the same rule. */
+    if (expr->type == AST_NODE_NODE_PATTERN) {
+        const char *var = ((cypher_node_pattern *)expr)->variable;
+        if (var && !nset_contains(bound, var)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "SyntaxError: UndefinedVariable: pattern in WHERE introduces fresh variable `%s`",
+                     var);
+            set_error(error_message, "%s", buf);
+            return -1;
+        }
+        return 0;
+    }
+    /* Recurse into operands for nested expressions. */
+    switch (expr->type) {
+        case AST_NODE_NOT_EXPR:
+            return validate_where_pattern_vars(((cypher_not_expr *)expr)->expr, bound, error_message);
+        case AST_NODE_NULL_CHECK:
+            return validate_where_pattern_vars(((cypher_null_check *)expr)->expr, bound, error_message);
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *bop = (cypher_binary_op *)expr;
+            if (validate_where_pattern_vars(bop->left, bound, error_message) < 0) return -1;
+            return validate_where_pattern_vars(bop->right, bound, error_message);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call *)expr;
+            if (fc->args) {
+                for (int i = 0; i < fc->args->count; i++) {
+                    if (validate_where_pattern_vars(fc->args->items[i], bound, error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list *)expr;
+            if (l->items) {
+                for (int i = 0; i < l->items->count; i++) {
+                    if (validate_where_pattern_vars(l->items->items[i], bound, error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
+
 /* For each NODE_PATTERN / REL_PATTERN in `patterns`, if its variable is
  * already in `bound`, emit a "VariableAlreadyBound" error.
  *
@@ -742,6 +841,13 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 cypher_match *m = (cypher_match *)clause;
                 rc = validate_match_clause(m, &vctx, error_message);
                 collect_pattern_names(m->pattern, &bound);
+                /* WHERE patterns may not introduce fresh variables — every
+                 * var in a pattern predicate must already be bound. Run
+                 * after collect_pattern_names so the current MATCH's own
+                 * variables count as bound. */
+                if (rc == 0 && m->where) {
+                    rc = validate_where_pattern_vars(m->where, &bound, error_message);
+                }
                 break;
             }
             case AST_NODE_UNWIND: {
