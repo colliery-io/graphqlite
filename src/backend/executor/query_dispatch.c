@@ -131,6 +131,13 @@ static int handle_generic_transform(cypher_executor *executor, cypher_query *que
                                     cypher_result *result, clause_flags flags);
 static int handle_match_set(cypher_executor *executor, cypher_query *query,
                             cypher_result *result, clause_flags flags);
+/* Forward declarations — defined later in this file (from E5 work). */
+static void project_return_row_from_var_map(cypher_executor *executor,
+                                            cypher_return *ret,
+                                            variable_map *var_map,
+                                            cypher_result *result,
+                                            int row_idx);
+static void set_return_column_names(cypher_return *ret, cypher_result *result);
 static int handle_match_delete(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
 static int handle_match_remove(cypher_executor *executor, cypher_query *query,

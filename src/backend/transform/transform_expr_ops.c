@@ -98,13 +98,59 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     
     /* Set comparison context for comparison operators */
     bool was_in_comparison = ctx->in_comparison;
-    if (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||
+    bool is_cmp = (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||
         binary_op->op_type == BINARY_OP_LT || binary_op->op_type == BINARY_OP_GT ||
         binary_op->op_type == BINARY_OP_LTE || binary_op->op_type == BINARY_OP_GTE ||
         binary_op->op_type == BINARY_OP_REGEX_MATCH || binary_op->op_type == BINARY_OP_IN ||
         binary_op->op_type == BINARY_OP_STARTS_WITH || binary_op->op_type == BINARY_OP_ENDS_WITH ||
-        binary_op->op_type == BINARY_OP_CONTAINS) {
+        binary_op->op_type == BINARY_OP_CONTAINS);
+    if (is_cmp) {
         ctx->in_comparison = true;
+    }
+
+    /* Chained comparison: openCypher allows `1 < n < 3` meaning
+     * `(1 < n) AND (n < 3)`. Bison gives a left-associative tree
+     * `((1 < n) < 3)`, which the naïve compile treats as
+     * `(true < 3)` and lets every row through. Detect when both this
+     * op and its LHS are *ordering* comparisons (<, <=, >, >=) and
+     * rewrite to the conjunction.
+     *
+     * Limited to ordering operators on purpose: a `(a < b) = true`
+     * expression is genuinely "compare a boolean result against true",
+     * not a chained comparison, and rewriting it would be wrong. */
+    bool is_order_cmp = (binary_op->op_type == BINARY_OP_LT ||
+                         binary_op->op_type == BINARY_OP_GT ||
+                         binary_op->op_type == BINARY_OP_LTE ||
+                         binary_op->op_type == BINARY_OP_GTE);
+    if (is_order_cmp && binary_op->left &&
+        binary_op->left->type == AST_NODE_BINARY_OP) {
+        cypher_binary_op *lop = (cypher_binary_op *)binary_op->left;
+        bool lhs_is_order_cmp = (lop->op_type == BINARY_OP_LT ||
+                                  lop->op_type == BINARY_OP_GT ||
+                                  lop->op_type == BINARY_OP_LTE ||
+                                  lop->op_type == BINARY_OP_GTE);
+        if (lhs_is_order_cmp) {
+            /* Build SQL: (<lhs>) AND (<lop.right> <cur op> <rhs>) */
+            append_sql(ctx, "((");
+            if (transform_expression(ctx, binary_op->left) < 0) return -1;
+            append_sql(ctx, ") AND (");
+            if (transform_expression(ctx, lop->right) < 0) return -1;
+            const char *op_sql = NULL;
+            switch (binary_op->op_type) {
+                case BINARY_OP_EQ: op_sql = "="; break;
+                case BINARY_OP_NEQ: op_sql = "<>"; break;
+                case BINARY_OP_LT: op_sql = "<"; break;
+                case BINARY_OP_GT: op_sql = ">"; break;
+                case BINARY_OP_LTE: op_sql = "<="; break;
+                case BINARY_OP_GTE: op_sql = ">="; break;
+                default: op_sql = "="; break;
+            }
+            append_sql(ctx, " %s ", op_sql);
+            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            append_sql(ctx, "))");
+            ctx->in_comparison = was_in_comparison;
+            return 0;
+        }
     }
 
     /* Handle list/map equality with Cypher three-valued semantics via the
