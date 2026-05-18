@@ -931,27 +931,16 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     }
                 }
 
-                append_sql(ctx, "json_extract(");
-                if (transform_expression(ctx, subscript->expr) < 0) {
-                    return -1;
-                }
-                append_sql(ctx, ", '$[' || CAST(CASE WHEN (");
-                if (transform_expression(ctx, subscript->index) < 0) {
-                    return -1;
-                }
-                append_sql(ctx, ") < 0 THEN json_array_length(");
-                if (transform_expression(ctx, subscript->expr) < 0) {
-                    return -1;
-                }
-                append_sql(ctx, ") + (");
-                if (transform_expression(ctx, subscript->index) < 0) {
-                    return -1;
-                }
-                append_sql(ctx, ") ELSE (");
-                if (transform_expression(ctx, subscript->index) < 0) {
-                    return -1;
-                }
-                append_sql(ctx, ") END AS INTEGER) || ']')");
+                /* Route through _gql_subscript() which performs runtime
+                 * type checking (TypeError for non-list/map values or
+                 * mismatched index types) and handles negative indices.
+                 * Falls back to plain json_extract semantics when types
+                 * match. */
+                append_sql(ctx, "_gql_subscript(");
+                if (transform_expression(ctx, subscript->expr) < 0) return -1;
+                append_sql(ctx, ", ");
+                if (transform_expression(ctx, subscript->index) < 0) return -1;
+                append_sql(ctx, ")");
             }
             break;
 

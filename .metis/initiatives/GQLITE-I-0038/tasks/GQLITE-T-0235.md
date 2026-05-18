@@ -4,14 +4,14 @@ level: task
 title: "E1: Map indexing TypeError — invalid index types (cluster H)"
 short_code: "GQLITE-T-0235"
 created_at: 2026-05-18T12:24:18.702603+00:00
-updated_at: 2026-05-18T12:24:18.702603+00:00
+updated_at: 2026-05-18T12:33:18.956557+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -97,4 +97,17 @@ possibly `src/extension.c` if a UDF is added. Nothing else.
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completed
+
+**Outcome:** TCK 3109 → 3115 (+6).
+
+**Implementation:**
+- `src/backend/transform/transform_validate.c`: rewrote the index-type check in `validate_subscript()` so it only fires when the indexed value's type is known to be List or Map. Previously a STRING index on an UNKNOWN/NULL base raised a spurious "List index must be Integer" error (broke Map2[3]).
+- `src/extension.c`: added `_gql_subscript(value, idx)` UDF that performs runtime type checking — raises `TypeError: InvalidArgumentType` / `MapElementAccessByNonString` for parameter-supplied wrong-typed indexes. Handles negative list indices.
+- `src/backend/transform/transform_return.c`: routed `AST_NODE_SUBSCRIPT` (generic int-index path) through `_gql_subscript()` instead of raw `json_extract`. Static string-key rewrite to property access still wins first.
+
+**Scenarios moved to pass:** Map2 [3]/[4]/[6]/[7]/[8], List1 [7]/[9] parameter-supplied wrong types.
+
+**Not yet:** Set1 [10] list-of-maps property — different code path (SET clause); defer to follow-up.
+
+**Files touched:** `transform_validate.c`, `transform_return.c`, `extension.c`.

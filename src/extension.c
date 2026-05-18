@@ -744,6 +744,87 @@ static void gql_eq_func(
     else sqlite3_result_int(context, t == TVAL_TRUE ? 1 : 0);
 }
 
+/* Cypher subscript with runtime type checks.
+ *   value[idx]:
+ *     value NULL                      -> NULL
+ *     value JSON-array, idx integer   -> json_extract by index (neg ok)
+ *     value JSON-array, idx other     -> TypeError InvalidArgumentType
+ *     value JSON-object, idx string   -> json_extract by key
+ *     value JSON-object, idx other    -> TypeError MapElementAccessByNonString
+ *     value scalar (int/float/bool)   -> TypeError InvalidArgumentType
+ *     value string                    -> TypeError (Cypher disallows string subscript)
+ *
+ * Use sqlite3_result_error to abort the query — the harness classifies
+ * "TypeError:" messages as TypeError. */
+static void gql_subscript_func(
+    sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(context); return; }
+    int vt = sqlite3_value_type(argv[0]);
+    int it = sqlite3_value_type(argv[1]);
+    if (vt == SQLITE_NULL || it == SQLITE_NULL) { sqlite3_result_null(context); return; }
+
+    const char *vstr = (vt == SQLITE_TEXT) ? (const char*)sqlite3_value_text(argv[0]) : NULL;
+    bool is_arr = vstr && vstr[0] == '[';
+    bool is_obj = vstr && vstr[0] == '{';
+
+    if (is_arr) {
+        if (it != SQLITE_INTEGER) {
+            sqlite3_result_error(context,
+                "TypeError: InvalidArgumentType: List index must be Integer", -1);
+            return;
+        }
+        sqlite3 *db = sqlite3_context_db_handle(context);
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db,
+            "SELECT json_extract(?1, '$[' || "
+            " CAST(CASE WHEN ?2 < 0 THEN json_array_length(?1) + ?2 ELSE ?2 END AS INTEGER) "
+            " || ']')", -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_value(stmt, 1, argv[0]);
+            sqlite3_bind_value(stmt, 2, argv[1]);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                sqlite3_result_value(context, sqlite3_column_value(stmt, 0));
+            } else {
+                sqlite3_result_null(context);
+            }
+            sqlite3_finalize(stmt);
+        } else {
+            sqlite3_result_null(context);
+        }
+        return;
+    }
+
+    if (is_obj) {
+        if (it != SQLITE_TEXT) {
+            sqlite3_result_error(context,
+                "TypeError: MapElementAccessByNonString: Map index must be String", -1);
+            return;
+        }
+        const char *key = (const char*)sqlite3_value_text(argv[1]);
+        if (!key) { sqlite3_result_null(context); return; }
+        char path[512];
+        snprintf(path, sizeof(path), "$.%s", key);
+        sqlite3 *db = sqlite3_context_db_handle(context);
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT json_extract(?1, ?2)", -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_value(stmt, 1, argv[0]);
+            sqlite3_bind_text(stmt, 2, path, -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                sqlite3_result_value(context, sqlite3_column_value(stmt, 0));
+            } else {
+                sqlite3_result_null(context);
+            }
+            sqlite3_finalize(stmt);
+        } else {
+            sqlite3_result_null(context);
+        }
+        return;
+    }
+
+    /* Not a list or map — scalar / non-JSON text. */
+    sqlite3_result_error(context,
+        "TypeError: InvalidArgumentType: Cannot subscript value of non-list/non-map", -1);
+}
+
 /* Cypher's three-valued IN operator.
  *   null IN []          -> false
  *   null IN <non-empty> -> null
@@ -3191,6 +3272,11 @@ int sqlite3_graphqlite_init(
   rc = sqlite3_create_function(db, "_gql_in", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_in_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "_gql_subscript", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_subscript_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "_gql_eq", 2,
