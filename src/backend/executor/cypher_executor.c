@@ -53,12 +53,26 @@ static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_valu
     sqlite3_result_text(context, result, len, sqlite3_free);
 }
 
+/* Implemented in src/extension.c. Registers the cache-less helper UDFs
+ * (_gql_bool, _gql_normalize_date, _gql_in, _gql_dyn_add, ...). Without
+ * these, transformed Cypher SQL that uses any of those helpers fails with
+ * "no such function: _gql_*" at prepare time. */
+extern int graphqlite_register_helper_udfs(sqlite3 *db);
+
 /* Register custom SQLite functions needed for Cypher execution */
 static int register_custom_functions(sqlite3 *db)
 {
     int rc = sqlite3_create_function(db, "REVERSE", 1, SQLITE_UTF8, NULL,
                                       sqlite_reverse_func, NULL, NULL);
     if (rc != SQLITE_OK) {
+        return -1;
+    }
+    /* SQLITE_BUSY (5) means we are being called from inside an active
+     * statement (e.g. cypher() invoked from SQL) and the UDFs are already
+     * registered by sqlite3_graphqlite_init. That's the normal case for
+     * the loadable-extension path; just keep going. */
+    int hrc = graphqlite_register_helper_udfs(db);
+    if (hrc != SQLITE_OK && hrc != SQLITE_BUSY) {
         return -1;
     }
     return 0;

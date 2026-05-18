@@ -3197,6 +3197,159 @@ static void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_val
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
+/*
+ * Register the cache-less helper UDFs that the transform/executor layer
+ * emits into SQL (regexp, _gql_bool, _gql_normalize_date, _gql_in,
+ * _gql_dyn_add, etc.). This is called both by sqlite3_graphqlite_init for
+ * the loadable extension, and from cypher_executor_create so that any C
+ * API consumer (notably the unit-test harness) automatically has the UDFs
+ * a transformed Cypher query needs.
+ *
+ * Cache-bound functions (cypher, gql_load_graph, etc.) stay in
+ * sqlite3_graphqlite_init because they need the per-connection cache and
+ * are SQL-only entrypoints (irrelevant to direct C-API users).
+ */
+int graphqlite_register_helper_udfs(sqlite3 *db)
+{
+  int rc;
+
+  rc = sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
+                         regexp_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_extract_ns", 1, SQLITE_UTF8, 0,
+                         gql_extract_ns_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_bool", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_bool_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_bool_str", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_bool_str_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_to_bool_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_bool_strict_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_to_int_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_integer_strict_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_to_float_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_float_strict_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_to_string_strict", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_to_string_strict_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_order_key", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_order_key_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_in", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_in_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_subscript", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_subscript_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_eq", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_eq_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
+                         gql_extract_tz_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_strip_tz", 1, SQLITE_UTF8, 0,
+                         gql_strip_tz_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_normalize_date", 1, SQLITE_UTF8, 0,
+                         gql_normalize_date_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_normalize_time", 1, SQLITE_UTF8, 0,
+                         gql_normalize_time_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_normalize_datetime", 1, SQLITE_UTF8, 0,
+                         gql_normalize_datetime_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_duration_compose", 10, SQLITE_UTF8, 0,
+                         gql_duration_compose_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_duration_parse_iso", 1, SQLITE_UTF8, 0,
+                         gql_duration_parse_iso_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_temporal_field", 2, SQLITE_UTF8, 0,
+                         gql_temporal_field_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_tz_offset_for", 2, SQLITE_UTF8, 0,
+                         gql_tz_offset_for_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_dyn_add", 2, SQLITE_UTF8, 0,
+                         gql_dyn_add_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  rc = sqlite3_create_function(db, "_gql_dyn_sub", 2, SQLITE_UTF8, 0,
+                         gql_dyn_sub_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
+                         gql_duration_from_total_ns_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_temporal_diff_ns", 2, SQLITE_UTF8, 0,
+                         gql_temporal_diff_ns_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_duration_calendar", 2, SQLITE_UTF8, 0,
+                         gql_duration_calendar_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_duration_in_days", 2, SQLITE_UTF8, 0,
+                         gql_duration_in_days_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  rc = sqlite3_create_function(db, "_gql_duration_in_months", 2, SQLITE_UTF8, 0,
+                         gql_duration_in_months_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  rc = sqlite3_create_function(db, "_gql_duration_in_seconds", 2, SQLITE_UTF8, 0,
+                         gql_duration_in_seconds_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_date_compose", 10, SQLITE_UTF8, 0,
+                         gql_date_compose_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  rc = sqlite3_create_function(db, "_gql_time_compose", 12, SQLITE_UTF8, 0,
+                         gql_time_compose_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,
+                         cypher_validate_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  return SQLITE_OK;
+}
+
 int sqlite3_graphqlite_init(
   sqlite3 *db,
   char **pzErrMsg,
@@ -3226,138 +3379,7 @@ int sqlite3_graphqlite_init(
                              connection_cache_destroy);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
-  rc = sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
-                         regexp_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_extract_ns", 1, SQLITE_UTF8, 0,
-                         gql_extract_ns_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_bool", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_bool_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_bool_str", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_bool_str_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_to_bool_strict", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_to_bool_strict_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_to_int_strict", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_to_integer_strict_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_to_float_strict", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_to_float_strict_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_to_string_strict", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_to_string_strict_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_order_key", 1,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_order_key_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_in", 2,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_in_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_subscript", 2,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_subscript_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_eq", 2,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
-                         gql_eq_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
-                         gql_extract_tz_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_strip_tz", 1, SQLITE_UTF8, 0,
-                         gql_strip_tz_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_normalize_date", 1, SQLITE_UTF8, 0,
-                         gql_normalize_date_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_normalize_time", 1, SQLITE_UTF8, 0,
-                         gql_normalize_time_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_normalize_datetime", 1, SQLITE_UTF8, 0,
-                         gql_normalize_datetime_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_duration_compose", 10, SQLITE_UTF8, 0,
-                         gql_duration_compose_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_duration_parse_iso", 1, SQLITE_UTF8, 0,
-                         gql_duration_parse_iso_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_temporal_field", 2, SQLITE_UTF8, 0,
-                         gql_temporal_field_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_tz_offset_for", 2, SQLITE_UTF8, 0,
-                         gql_tz_offset_for_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_dyn_add", 2, SQLITE_UTF8, 0,
-                         gql_dyn_add_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-  rc = sqlite3_create_function(db, "_gql_dyn_sub", 2, SQLITE_UTF8, 0,
-                         gql_dyn_sub_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_duration_from_total_ns", 1, SQLITE_UTF8, 0,
-                         gql_duration_from_total_ns_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_temporal_diff_ns", 2, SQLITE_UTF8, 0,
-                         gql_temporal_diff_ns_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_duration_calendar", 2, SQLITE_UTF8, 0,
-                         gql_duration_calendar_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_duration_in_days", 2, SQLITE_UTF8, 0,
-                         gql_duration_in_days_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-  rc = sqlite3_create_function(db, "_gql_duration_in_months", 2, SQLITE_UTF8, 0,
-                         gql_duration_in_months_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-  rc = sqlite3_create_function(db, "_gql_duration_in_seconds", 2, SQLITE_UTF8, 0,
-                         gql_duration_in_seconds_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "_gql_date_compose", 10, SQLITE_UTF8, 0,
-                         gql_date_compose_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-  rc = sqlite3_create_function(db, "_gql_time_compose", 12, SQLITE_UTF8, 0,
-                         gql_time_compose_func, 0, 0);
-  if (rc != SQLITE_OK) { free(cache); return rc; }
-
-  rc = sqlite3_create_function(db, "cypher_validate", 1, SQLITE_UTF8, 0,
-                         cypher_validate_func, 0, 0);
+  rc = graphqlite_register_helper_udfs(db);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "gql_load_graph", 0, SQLITE_UTF8, cache,

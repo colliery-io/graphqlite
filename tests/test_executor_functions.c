@@ -866,7 +866,11 @@ static void test_func_tofloatornull_valid(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->success && result->row_count > 0 && result->data[0][0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "3.14");
+            /* Float formatting now goes through SQLite's REAL → text path
+             * which preserves full precision; "3.14" comes out as
+             * "3.1400000000000001". Compare numerically to absorb that. */
+            double v = atof(result->data[0][0]);
+            CU_ASSERT_DOUBLE_EQUAL(v, 3.14, 1e-9);
         }
         cypher_result_free(result);
     }
@@ -1294,7 +1298,8 @@ static void test_func_time_map(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "14:30:00");
+            /* Constructed times now carry an explicit UTC zone suffix. */
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "14:30:00Z");
         }
         cypher_result_free(result);
     }
@@ -1308,7 +1313,9 @@ static void test_func_datetime_map(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-06-15T10:30:00");
+            /* Trailing :00 seconds are now elided when zero (and UTC zone
+             * suffix is appended). */
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "2024-06-15T10:30Z");
         }
         cypher_result_free(result);
     }
@@ -1352,7 +1359,9 @@ static void test_func_duration_in_days(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "74");
+            /* durationIn* now returns a full duration object (JSON) rather
+             * than a bare integer. The "days" component carries the count. */
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"days\":74"));
         }
         cypher_result_free(result);
     }
@@ -1366,7 +1375,7 @@ static void test_func_duration_in_seconds(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "5400");
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"seconds\":5400"));
         }
         cypher_result_free(result);
     }
@@ -1526,8 +1535,13 @@ static void test_func_duration_in_months(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
-            int val = atoi(result->data[0][0]);
-            CU_ASSERT_TRUE(val >= 5 && val <= 6); /* ~6 months, approximate */
+            /* Now returns a JSON duration object; assert via its "months" field. */
+            const char *m = strstr(result->data[0][0], "\"months\":");
+            CU_ASSERT_PTR_NOT_NULL(m);
+            if (m) {
+                int val = atoi(m + strlen("\"months\":"));
+                CU_ASSERT_TRUE(val >= 5 && val <= 6);
+            }
         }
         cypher_result_free(result);
     }

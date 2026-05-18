@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "executor/query_patterns.h"
 #include "executor/executor_internal.h"
@@ -164,6 +165,12 @@ static int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags);
 static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags);
+static int handle_unwind_create_return(cypher_executor *executor, cypher_query *query,
+                                       cypher_result *result, clause_flags flags);
+static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *query,
+                                      cypher_result *result, clause_flags flags);
+static int handle_merge_return(cypher_executor *executor, cypher_query *query,
+                               cypher_result *result, clause_flags flags);
 
 /*
  * Pattern registry - ordered by priority (highest first)
@@ -180,11 +187,25 @@ static const query_pattern patterns[] = {
      * Priority 100: Most specific multi-clause patterns
      */
     {
+        .name = "UNWIND+CREATE+RETURN",
+        .required = CLAUSE_UNWIND | CLAUSE_CREATE | CLAUSE_RETURN,
+        .forbidden = CLAUSE_MATCH | CLAUSE_MERGE,
+        .handler = handle_unwind_create_return,
+        .priority = 105
+    },
+    {
         .name = "UNWIND+CREATE",
         .required = CLAUSE_UNWIND | CLAUSE_CREATE,
         .forbidden = CLAUSE_RETURN | CLAUSE_MATCH,
         .handler = handle_unwind_create,
         .priority = 100
+    },
+    {
+        .name = "UNWIND+MERGE+RETURN",
+        .required = CLAUSE_UNWIND | CLAUSE_MERGE | CLAUSE_RETURN,
+        .forbidden = CLAUSE_MATCH | CLAUSE_CREATE,
+        .handler = handle_unwind_merge_return,
+        .priority = 105
     },
     {
         .name = "UNWIND+MERGE",
@@ -323,6 +344,13 @@ static const query_pattern patterns[] = {
         .required = CLAUSE_MERGE | CLAUSE_WITH,
         .forbidden = CLAUSE_NONE,
         .handler = handle_merge_with_pipeline,
+        .priority = 55
+    },
+    {
+        .name = "MERGE+RETURN",
+        .required = CLAUSE_MERGE | CLAUSE_RETURN,
+        .forbidden = CLAUSE_MATCH | CLAUSE_UNWIND | CLAUSE_WITH,
+        .handler = handle_merge_return,
         .priority = 55
     },
     {
@@ -2126,6 +2154,665 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
 
     result->success = true;
     free_variable_map(var_map);
+    return 0;
+}
+
+/* Return lowercased agg-function name if expr is an aggregating call, else NULL.
+ * Caller does NOT own the string (static buffer per call). */
+static const char *aggregating_call_name(ast_node *expr) {
+    static char buf[64];
+    if (!expr || expr->type != AST_NODE_FUNCTION_CALL) return NULL;
+    cypher_function_call *fc = (cypher_function_call*)expr;
+    if (!fc->function_name) return NULL;
+    size_t n = strlen(fc->function_name);
+    if (n >= sizeof(buf)) return NULL;
+    for (size_t i = 0; i < n; i++) buf[i] = (char)tolower((unsigned char)fc->function_name[i]);
+    buf[n] = 0;
+    if (!strcmp(buf, "count") || !strcmp(buf, "sum") || !strcmp(buf, "avg") ||
+        !strcmp(buf, "min") || !strcmp(buf, "max") || !strcmp(buf, "collect") ||
+        !strcmp(buf, "stdev") || !strcmp(buf, "stdevp") ||
+        !strcmp(buf, "percentilecont") || !strcmp(buf, "percentiledisc"))
+        return buf;
+    return NULL;
+}
+
+/* True if any RETURN item is an aggregating call. */
+static bool return_has_aggregation(cypher_return *ret) {
+    if (!ret || !ret->items) return false;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+        if (aggregating_call_name(it->expr)) return true;
+    }
+    return false;
+}
+
+/* Fetch a node's property value as int64. Returns true on success. */
+static bool fetch_node_prop_int(cypher_executor *executor, int node_id,
+                                const char *prop_name, int64_t *out) {
+    const char *type_tables[] = {"node_props_int", "node_props_real", "node_props_text", NULL};
+    for (int t = 0; type_tables[t]; t++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT value FROM %s WHERE node_id = %d AND key_id = "
+            "(SELECT id FROM property_keys WHERE key = '%s')",
+            type_tables[t], node_id, prop_name);
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            int rc = sqlite3_step(stmt);
+            bool got = false;
+            if (rc == SQLITE_ROW) {
+                *out = sqlite3_column_int64(stmt, 0);
+                got = true;
+            }
+            sqlite3_finalize(stmt);
+            if (got) return true;
+        }
+    }
+    return false;
+}
+
+static bool fetch_node_prop_double(cypher_executor *executor, int node_id,
+                                   const char *prop_name, double *out) {
+    const char *type_tables[] = {"node_props_real", "node_props_int", NULL};
+    for (int t = 0; type_tables[t]; t++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT value FROM %s WHERE node_id = %d AND key_id = "
+            "(SELECT id FROM property_keys WHERE key = '%s')",
+            type_tables[t], node_id, prop_name);
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            int rc = sqlite3_step(stmt);
+            bool got = false;
+            if (rc == SQLITE_ROW) {
+                *out = sqlite3_column_double(stmt, 0);
+                got = true;
+            }
+            sqlite3_finalize(stmt);
+            if (got) return true;
+        }
+    }
+    return false;
+}
+
+/* Compute an aggregate over a list of var_maps for a single RETURN item.
+ * Writes a result cell into result->data[0][col_idx]. */
+static void project_aggregate_cell(cypher_executor *executor,
+                                   cypher_return_item *item,
+                                   variable_map **maps, int n_maps,
+                                   cypher_result *result, int col_idx)
+{
+    const char *agg = aggregating_call_name(item->expr);
+    cypher_function_call *fc = (cypher_function_call*)item->expr;
+    ast_node *arg = (fc->args && fc->args->count > 0) ? fc->args->items[0] : NULL;
+
+    if (!strcmp(agg, "count")) {
+        /* count(*) → n_maps; count(n) → n_maps where n bound; count(n.prop) → non-null count */
+        int64_t cnt = 0;
+        if (!arg) {
+            cnt = n_maps;
+        } else if (arg->type == AST_NODE_IDENTIFIER) {
+            const char *var_name = ((cypher_identifier*)arg)->name;
+            for (int m = 0; m < n_maps; m++) {
+                if (get_variable_node_id(maps[m], var_name) >= 0 ||
+                    get_variable_edge_id(maps[m], var_name) >= 0) cnt++;
+            }
+        } else if (arg->type == AST_NODE_PROPERTY) {
+            cypher_property *prop = (cypher_property*)arg;
+            const char *var_name = NULL;
+            if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER)
+                var_name = ((cypher_identifier*)prop->expr)->name;
+            if (var_name) {
+                for (int m = 0; m < n_maps; m++) {
+                    int nid = get_variable_node_id(maps[m], var_name);
+                    int64_t tmp;
+                    if (nid >= 0 && fetch_node_prop_int(executor, nid, prop->property_name, &tmp))
+                        cnt++;
+                }
+            }
+        } else {
+            cnt = n_maps;
+        }
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%lld", (long long)cnt);
+        result->data[0][col_idx] = strdup(buf);
+        result->data_types[0][col_idx] = SQLITE_INTEGER;
+        return;
+    }
+
+    /* For sum/avg/min/max we need a property access argument */
+    if (!arg || arg->type != AST_NODE_PROPERTY) {
+        result->data[0][col_idx] = NULL;
+        return;
+    }
+    cypher_property *prop = (cypher_property*)arg;
+    const char *var_name = NULL;
+    if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER)
+        var_name = ((cypher_identifier*)prop->expr)->name;
+    if (!var_name) { result->data[0][col_idx] = NULL; return; }
+
+    double dsum = 0, dmin = 0, dmax = 0;
+    int seen = 0;
+    bool all_int = true;
+    int64_t isum = 0, imin = 0, imax = 0;
+    for (int m = 0; m < n_maps; m++) {
+        int nid = get_variable_node_id(maps[m], var_name);
+        if (nid < 0) continue;
+        int64_t iv;
+        double dv;
+        if (fetch_node_prop_int(executor, nid, prop->property_name, &iv)) {
+            dv = (double)iv;
+        } else if (fetch_node_prop_double(executor, nid, prop->property_name, &dv)) {
+            all_int = false;
+            iv = (int64_t)dv;
+        } else {
+            continue;
+        }
+        if (seen == 0) {
+            isum = iv; imin = iv; imax = iv;
+            dsum = dv; dmin = dv; dmax = dv;
+        } else {
+            isum += iv;
+            if (iv < imin) imin = iv;
+            if (iv > imax) imax = iv;
+            dsum += dv;
+            if (dv < dmin) dmin = dv;
+            if (dv > dmax) dmax = dv;
+        }
+        seen++;
+    }
+
+    char buf[64];
+    if (!strcmp(agg, "sum")) {
+        if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)isum); result->data_types[0][col_idx] = SQLITE_INTEGER; }
+        else { snprintf(buf, sizeof(buf), "%g", dsum); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        result->data[0][col_idx] = strdup(buf);
+    } else if (!strcmp(agg, "min")) {
+        if (seen == 0) { result->data[0][col_idx] = NULL; return; }
+        if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)imin); result->data_types[0][col_idx] = SQLITE_INTEGER; }
+        else { snprintf(buf, sizeof(buf), "%g", dmin); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        result->data[0][col_idx] = strdup(buf);
+    } else if (!strcmp(agg, "max")) {
+        if (seen == 0) { result->data[0][col_idx] = NULL; return; }
+        if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)imax); result->data_types[0][col_idx] = SQLITE_INTEGER; }
+        else { snprintf(buf, sizeof(buf), "%g", dmax); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        result->data[0][col_idx] = strdup(buf);
+    } else if (!strcmp(agg, "avg")) {
+        if (seen == 0) { result->data[0][col_idx] = NULL; return; }
+        snprintf(buf, sizeof(buf), "%g", dsum / seen);
+        result->data_types[0][col_idx] = SQLITE_FLOAT;
+        result->data[0][col_idx] = strdup(buf);
+    } else {
+        result->data[0][col_idx] = NULL;
+    }
+}
+
+/* Project a single var_map into result->data[row_idx] using the RETURN items.
+ * Caller must have allocated result->data[row_idx] and result->data_types[row_idx]
+ * with col_count slots. */
+static void project_return_row_from_var_map(cypher_executor *executor,
+                                            cypher_return *ret,
+                                            variable_map *var_map,
+                                            cypher_result *result,
+                                            int row_idx)
+{
+    int col_count = ret->items->count;
+    for (int i = 0; i < col_count; i++) {
+        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+        ast_node *expr = item->expr;
+        result->data[row_idx][i] = NULL;
+
+        if (expr && expr->type == AST_NODE_PROPERTY) {
+            cypher_property *prop = (cypher_property*)expr;
+            const char *prop_name = prop->property_name;
+            const char *var_name = NULL;
+            if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+                var_name = ((cypher_identifier*)prop->expr)->name;
+            }
+            if (var_name && prop_name) {
+                int node_id = get_variable_node_id(var_map, var_name);
+                if (node_id >= 0) {
+                    const char *type_tables[] = {
+                        "node_props_text", "node_props_int",
+                        "node_props_real", "node_props_bool", NULL
+                    };
+                    for (int t = 0; type_tables[t]; t++) {
+                        char sql[512];
+                        snprintf(sql, sizeof(sql),
+                            "SELECT value FROM %s WHERE node_id = %d AND key_id = "
+                            "(SELECT id FROM property_keys WHERE key = '%s')",
+                            type_tables[t], node_id, prop_name);
+                        sqlite3_stmt *stmt;
+                        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                                int sql_type = sqlite3_column_type(stmt, 0);
+                                const char *val = (const char*)sqlite3_column_text(stmt, 0);
+                                if (val) {
+                                    if (strcmp(type_tables[t], "node_props_bool") == 0) {
+                                        result->data[row_idx][i] = strdup(atoi(val) ? "true" : "false");
+                                        result->data_types[row_idx][i] = SQLITE_TEXT;
+                                    } else {
+                                        result->data[row_idx][i] = strdup(val);
+                                        result->data_types[row_idx][i] = sql_type;
+                                    }
+                                }
+                            }
+                            sqlite3_finalize(stmt);
+                        }
+                        if (result->data[row_idx][i]) break;
+                    }
+                }
+            }
+        } else if (expr && expr->type == AST_NODE_IDENTIFIER) {
+            const char *var_name = ((cypher_identifier*)expr)->name;
+            int node_id = get_variable_node_id(var_map, var_name);
+            int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
+            int id = (node_id >= 0) ? node_id : edge_id;
+            if (id >= 0) {
+                char id_str[32];
+                snprintf(id_str, sizeof(id_str), "%d", id);
+                result->data[row_idx][i] = strdup(id_str);
+                result->data_types[row_idx][i] = SQLITE_INTEGER;
+            }
+        }
+    }
+}
+
+static void set_return_column_names(cypher_return *ret, cypher_result *result) {
+    int col_count = ret->items->count;
+    result->column_count = col_count;
+    result->column_names = malloc(col_count * sizeof(char*));
+    for (int i = 0; i < col_count; i++) {
+        cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+        const char *alias = item->alias;
+        ast_node *expr = item->expr;
+        if (alias) {
+            result->column_names[i] = strdup(alias);
+        } else if (expr && expr->type == AST_NODE_PROPERTY) {
+            cypher_property *prop = (cypher_property*)expr;
+            const char *prop_name = prop->property_name;
+            const char *var_name = NULL;
+            if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+                var_name = ((cypher_identifier*)prop->expr)->name;
+            }
+            if (var_name && prop_name) {
+                char col_name[256];
+                snprintf(col_name, sizeof(col_name), "%s.%s", var_name, prop_name);
+                result->column_names[i] = strdup(col_name);
+            } else {
+                result->column_names[i] = strdup("?column?");
+            }
+        } else if (expr && expr->type == AST_NODE_IDENTIFIER) {
+            result->column_names[i] = strdup(((cypher_identifier*)expr)->name);
+        } else {
+            result->column_names[i] = strdup("?column?");
+        }
+    }
+}
+
+/*
+ * UNWIND+CREATE+RETURN handler
+ * Iterates the UNWIND list, executes CREATE per iteration, collects each
+ * var_map, then projects one result row per iteration.
+ */
+static int handle_unwind_create_return(cypher_executor *executor, cypher_query *query,
+                                       cypher_result *result, clause_flags flags)
+{
+    (void)flags;
+    cypher_unwind *unwind = find_unwind_clause(query);
+    cypher_create *create = find_create_clause(query);
+    cypher_return *ret = find_return_clause(query);
+    if (!unwind || !create || !ret || !ret->items) {
+        set_result_error(result, "UNWIND+CREATE+RETURN: missing clause");
+        return -1;
+    }
+
+    CYPHER_DEBUG("Executing UNWIND+CREATE+RETURN via pattern dispatch");
+
+    if (unwind->expr->type != AST_NODE_LIST) {
+        set_result_error(result, "UNWIND+CREATE+RETURN requires a list literal");
+        return -1;
+    }
+    cypher_list *list = (cypher_list*)unwind->expr;
+
+    set_return_column_names(ret, result);
+    int col_count = ret->items->count;
+
+    if (!list->items || list->items->count == 0) {
+        result->row_count = 0;
+        result->data = NULL;
+        result->data_types = NULL;
+        result->success = true;
+        return 0;
+    }
+
+    foreach_context *ctx = create_foreach_context();
+    if (!ctx) {
+        set_result_error(result, "Failed to create foreach context");
+        return -1;
+    }
+    foreach_context *prev_ctx = g_foreach_ctx;
+    g_foreach_ctx = ctx;
+
+    int cap = list->items->count;
+    variable_map **maps = calloc(cap, sizeof(variable_map*));
+    int n_maps = 0;
+
+    for (int i = 0; i < list->items->count; i++) {
+        ast_node *item = list->items->items[i];
+        if (item->type != AST_NODE_LITERAL) {
+            CYPHER_DEBUG("UNWIND+CREATE+RETURN: skipping non-literal item %d", item->type);
+            continue;
+        }
+        cypher_literal *lit = (cypher_literal*)item;
+        switch (lit->literal_type) {
+            case LITERAL_INTEGER:
+                set_foreach_binding_int(ctx, unwind->alias, lit->value.integer);
+                break;
+            case LITERAL_STRING:
+                set_foreach_binding_string(ctx, unwind->alias, lit->value.string);
+                break;
+            case LITERAL_DECIMAL:
+                set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal);
+                break;
+            default:
+                continue;
+        }
+        variable_map *vm = NULL;
+        if (execute_create_clause_with_varmap(executor, create, result, &vm) < 0) {
+            for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+            free(maps);
+            g_foreach_ctx = prev_ctx;
+            free_foreach_context(ctx);
+            return -1;
+        }
+        if (vm) maps[n_maps++] = vm;
+    }
+
+    g_foreach_ctx = prev_ctx;
+    free_foreach_context(ctx);
+
+    /* SKIP/LIMIT */
+    int64_t limit_val = -1, skip_val = 0;
+    if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal*)ret->limit;
+        if (l->literal_type == LITERAL_INTEGER) limit_val = l->value.integer;
+    }
+    if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal*)ret->skip;
+        if (l->literal_type == LITERAL_INTEGER) skip_val = l->value.integer;
+    }
+    int start = 0;
+    if (skip_val > 0) start = (skip_val >= n_maps) ? n_maps : (int)skip_val;
+    int end = n_maps;
+    if (limit_val == 0) end = start;
+    else if (limit_val > 0 && start + (int)limit_val < end) end = start + (int)limit_val;
+    int produced = end - start;
+    if (produced < 0) produced = 0;
+
+    bool agg = return_has_aggregation(ret);
+    if (agg) {
+        /* Single aggregated row across all (post-skip/limit) maps. */
+        result->row_count = 1;
+        result->data = malloc(sizeof(char**));
+        result->data_types = malloc(sizeof(int*));
+        result->data[0] = malloc(col_count * sizeof(char*));
+        result->data_types[0] = calloc(col_count, sizeof(int));
+        for (int i = 0; i < col_count; i++) {
+            cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+            if (aggregating_call_name(it->expr)) {
+                project_aggregate_cell(executor, it, maps + start, produced, result, i);
+            } else {
+                /* Non-aggregated item with aggregation present: use first map. */
+                if (produced > 0) {
+                    /* Temporarily project one row's worth via helper-style code */
+                    char **save_data = result->data[0];
+                    int *save_types = result->data_types[0];
+                    char ***save_data_all = result->data;
+                    int **save_types_all = result->data_types;
+                    char **tmp = malloc(col_count * sizeof(char*));
+                    int *tmp_t = calloc(col_count, sizeof(int));
+                    result->data = &tmp;
+                    result->data_types = &tmp_t;
+                    project_return_row_from_var_map(executor, ret, maps[start], result, 0);
+                    result->data = save_data_all;
+                    result->data_types = save_types_all;
+                    save_data[i] = tmp[i];
+                    save_types[i] = tmp_t[i];
+                    /* Free the other tmp cells we didn't use */
+                    for (int k = 0; k < col_count; k++) if (k != i && tmp[k]) free(tmp[k]);
+                    free(tmp); free(tmp_t);
+                } else {
+                    result->data[0][i] = NULL;
+                }
+            }
+        }
+    } else {
+        result->row_count = produced;
+        if (produced == 0) {
+            result->data = NULL;
+            result->data_types = NULL;
+        } else {
+            result->data = malloc(produced * sizeof(char**));
+            result->data_types = malloc(produced * sizeof(int*));
+            for (int r = 0; r < produced; r++) {
+                result->data[r] = malloc(col_count * sizeof(char*));
+                result->data_types[r] = calloc(col_count, sizeof(int));
+                project_return_row_from_var_map(executor, ret, maps[start + r], result, r);
+            }
+        }
+    }
+
+    for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+    free(maps);
+    result->success = true;
+    return 0;
+}
+
+/*
+ * UNWIND+MERGE+RETURN handler — mirrors UNWIND+CREATE+RETURN but with MERGE
+ */
+static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *query,
+                                      cypher_result *result, clause_flags flags)
+{
+    (void)flags;
+    cypher_unwind *unwind = find_unwind_clause(query);
+    cypher_merge *merge = NULL;
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        if (query->clauses->items[i]->type == AST_NODE_MERGE) {
+            merge = (cypher_merge*)query->clauses->items[i];
+            break;
+        }
+    }
+    cypher_return *ret = find_return_clause(query);
+    if (!unwind || !merge || !ret || !ret->items) {
+        set_result_error(result, "UNWIND+MERGE+RETURN: missing clause");
+        return -1;
+    }
+    if (unwind->expr->type != AST_NODE_LIST) {
+        set_result_error(result, "UNWIND+MERGE+RETURN requires a list literal");
+        return -1;
+    }
+    cypher_list *list = (cypher_list*)unwind->expr;
+
+    set_return_column_names(ret, result);
+    int col_count = ret->items->count;
+    if (!list->items || list->items->count == 0) {
+        result->row_count = 0;
+        result->data = NULL;
+        result->data_types = NULL;
+        result->success = true;
+        return 0;
+    }
+
+    foreach_context *ctx = create_foreach_context();
+    if (!ctx) { set_result_error(result, "Failed to create foreach context"); return -1; }
+    foreach_context *prev_ctx = g_foreach_ctx;
+    g_foreach_ctx = ctx;
+
+    int cap = list->items->count;
+    variable_map **maps = calloc(cap, sizeof(variable_map*));
+    int n_maps = 0;
+
+    for (int i = 0; i < list->items->count; i++) {
+        ast_node *item = list->items->items[i];
+        if (item->type != AST_NODE_LITERAL) continue;
+        cypher_literal *lit = (cypher_literal*)item;
+        switch (lit->literal_type) {
+            case LITERAL_INTEGER: set_foreach_binding_int(ctx, unwind->alias, lit->value.integer); break;
+            case LITERAL_STRING: set_foreach_binding_string(ctx, unwind->alias, lit->value.string); break;
+            case LITERAL_DECIMAL: set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal); break;
+            default: continue;
+        }
+        variable_map *vm = NULL;
+        if (execute_merge_clause_with_varmap(executor, merge, result, &vm) < 0) {
+            for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+            free(maps);
+            g_foreach_ctx = prev_ctx;
+            free_foreach_context(ctx);
+            return -1;
+        }
+        if (vm) maps[n_maps++] = vm;
+    }
+
+    g_foreach_ctx = prev_ctx;
+    free_foreach_context(ctx);
+
+    int64_t limit_val = -1, skip_val = 0;
+    if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal*)ret->limit;
+        if (l->literal_type == LITERAL_INTEGER) limit_val = l->value.integer;
+    }
+    if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+        cypher_literal *l = (cypher_literal*)ret->skip;
+        if (l->literal_type == LITERAL_INTEGER) skip_val = l->value.integer;
+    }
+    int start = 0;
+    if (skip_val > 0) start = (skip_val >= n_maps) ? n_maps : (int)skip_val;
+    int end = n_maps;
+    if (limit_val == 0) end = start;
+    else if (limit_val > 0 && start + (int)limit_val < end) end = start + (int)limit_val;
+    int produced = end - start;
+    if (produced < 0) produced = 0;
+
+    bool agg = return_has_aggregation(ret);
+    if (agg) {
+        result->row_count = 1;
+        result->data = malloc(sizeof(char**));
+        result->data_types = malloc(sizeof(int*));
+        result->data[0] = malloc(col_count * sizeof(char*));
+        result->data_types[0] = calloc(col_count, sizeof(int));
+        for (int i = 0; i < col_count; i++) {
+            cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+            if (aggregating_call_name(it->expr)) {
+                project_aggregate_cell(executor, it, maps + start, produced, result, i);
+            } else if (produced > 0) {
+                char **tmp = malloc(col_count * sizeof(char*));
+                int *tmp_t = calloc(col_count, sizeof(int));
+                char ***sd = result->data; int **st = result->data_types;
+                result->data = &tmp; result->data_types = &tmp_t;
+                project_return_row_from_var_map(executor, ret, maps[start], result, 0);
+                result->data = sd; result->data_types = st;
+                result->data[0][i] = tmp[i];
+                result->data_types[0][i] = tmp_t[i];
+                for (int k = 0; k < col_count; k++) if (k != i && tmp[k]) free(tmp[k]);
+                free(tmp); free(tmp_t);
+            } else {
+                result->data[0][i] = NULL;
+            }
+        }
+    } else {
+        result->row_count = produced;
+        if (produced == 0) { result->data = NULL; result->data_types = NULL; }
+        else {
+            result->data = malloc(produced * sizeof(char**));
+            result->data_types = malloc(produced * sizeof(int*));
+            for (int r = 0; r < produced; r++) {
+                result->data[r] = malloc(col_count * sizeof(char*));
+                result->data_types[r] = calloc(col_count, sizeof(int));
+                project_return_row_from_var_map(executor, ret, maps[start + r], result, r);
+            }
+        }
+    }
+
+    for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+    free(maps);
+    result->success = true;
+    return 0;
+}
+
+/*
+ * MERGE+RETURN — execute MERGE, then project a single result row from
+ * the resulting var_map. Handles non-aggregating and basic aggregating
+ * RETURN items.
+ */
+static int handle_merge_return(cypher_executor *executor, cypher_query *query,
+                               cypher_result *result, clause_flags flags)
+{
+    (void)flags;
+    cypher_merge *merge = find_merge_clause(query);
+    cypher_return *ret = find_return_clause(query);
+    if (!merge || !ret || !ret->items) {
+        set_result_error(result, "MERGE+RETURN: missing clause");
+        return -1;
+    }
+
+    CYPHER_DEBUG("Executing MERGE+RETURN via pattern dispatch");
+
+    variable_map *vm = NULL;
+    if (execute_merge_clause_with_varmap(executor, merge, result, &vm) < 0) {
+        if (vm) free_variable_map(vm);
+        return -1;
+    }
+
+    set_return_column_names(ret, result);
+    int col_count = ret->items->count;
+
+    if (!vm) {
+        result->row_count = 0;
+        result->data = NULL;
+        result->data_types = NULL;
+        result->success = true;
+        return 0;
+    }
+
+    bool agg = return_has_aggregation(ret);
+    if (agg) {
+        result->row_count = 1;
+        result->data = malloc(sizeof(char**));
+        result->data_types = malloc(sizeof(int*));
+        result->data[0] = malloc(col_count * sizeof(char*));
+        result->data_types[0] = calloc(col_count, sizeof(int));
+        variable_map *maps[1] = { vm };
+        for (int i = 0; i < col_count; i++) {
+            cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+            if (aggregating_call_name(it->expr)) {
+                project_aggregate_cell(executor, it, maps, 1, result, i);
+            } else {
+                /* Project single row cell using helper */
+                char **tmp = malloc(col_count * sizeof(char*));
+                int *tmp_t = calloc(col_count, sizeof(int));
+                char ***sd = result->data; int **st = result->data_types;
+                result->data = &tmp; result->data_types = &tmp_t;
+                project_return_row_from_var_map(executor, ret, vm, result, 0);
+                result->data = sd; result->data_types = st;
+                result->data[0][i] = tmp[i];
+                result->data_types[0][i] = tmp_t[i];
+                for (int k = 0; k < col_count; k++) if (k != i && tmp[k]) free(tmp[k]);
+                free(tmp); free(tmp_t);
+            }
+        }
+    } else {
+        result->row_count = 1;
+        result->data = malloc(sizeof(char**));
+        result->data_types = malloc(sizeof(int*));
+        result->data[0] = malloc(col_count * sizeof(char*));
+        result->data_types[0] = calloc(col_count, sizeof(int));
+        project_return_row_from_var_map(executor, ret, vm, result, 0);
+    }
+
+    free_variable_map(vm);
+    result->success = true;
     return 0;
 }
 

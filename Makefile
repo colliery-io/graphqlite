@@ -327,6 +327,13 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c | dirs
 $(BUILD_DIR)/extension.o: $(SRC_DIR)/extension.c | dirs
 	$(CC) $(EXTENSION_CFLAGS_BASE) $(EXTENSION_CFLAGS) -fPIC -c $< -o $@
 
+# Extension object for the unit-test runner. Compiled with -DSQLITE_CORE so
+# SQLITE_EXTENSION_INIT macros become no-ops and sqlite3_create_function and
+# friends bind directly to the linked libsqlite3 (rather than going through
+# the loadable-extension API pointer, which isn't set up in tests).
+$(BUILD_DIR)/extension.test.o: $(SRC_DIR)/extension.c | dirs
+	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) -DSQLITE_CORE -c $< -o $@
+
 # Help target
 help:
 	@echo "GraphQLite Makefile Commands:"
@@ -437,7 +444,7 @@ $(BUILD_TEST_DIR)/%.o: $(TEST_DIR)/%.c $(GRAMMAR_HDR) | dirs
 	$(CC) $(CFLAGS) -I$(BUILD_PARSER_DIR) -c $< -o $@
 
 # Test runner executable
-$(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) $(EXECUTOR_OBJS_COV) | dirs
+$(TEST_RUNNER): $(TEST_OBJS) $(PARSER_OBJS_COV) $(TRANSFORM_OBJS_COV) $(EXECUTOR_OBJS_COV) $(BUILD_DIR)/extension.test.o | dirs
 	$(CC) $(CFLAGS) $(COVERAGE_FLAGS) $^ -o $@ $(LDFLAGS) $(COVERAGE_LIBS)
 
 # Run constraint tests (expected to fail with specific errors)

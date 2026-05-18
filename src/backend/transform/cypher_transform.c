@@ -12,6 +12,12 @@
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
+/* Implemented in src/extension.c. Registers the cache-less helper UDFs
+ * (_gql_bool, _gql_normalize_date, _gql_in, _gql_dyn_add, ...). The
+ * transform layer validates by preparing the generated SQL, which fails
+ * if those UDFs aren't registered on the connection. */
+extern int graphqlite_register_helper_udfs(sqlite3 *db);
+
 /* Initial buffer sizes */
 #define INITIAL_SQL_BUFFER_SIZE 1024
 #define INITIAL_VARIABLE_CAPACITY 16
@@ -26,7 +32,16 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     }
     
     ctx->db = db;
-    
+
+    /* Make sure helper UDFs (_gql_bool, _gql_normalize_date, _gql_in, ...)
+     * are registered on this connection — the transform layer validates
+     * by preparing SQL that references them. sqlite3_create_function is
+     * idempotent (a repeat call just replaces the binding), so this is
+     * safe to call even when the SQLite extension already registered them. */
+    if (db) {
+        graphqlite_register_helper_udfs(db);
+    }
+
     /* Initialize SQL buffer */
     ctx->sql_buffer = malloc(INITIAL_SQL_BUFFER_SIZE);
     if (!ctx->sql_buffer) {

@@ -4,14 +4,14 @@ level: task
 title: "E5: Write-then-return — RETURN after CREATE / MERGE / UNWIND (cluster K+N)"
 short_code: "GQLITE-T-0239"
 created_at: 2026-05-18T13:00:00+00:00
-updated_at: 2026-05-18T13:00:00+00:00
+updated_at: 2026-05-18T13:07:35.971014+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -170,4 +170,150 @@ generic-path fallback can be relaxed.
 
 ## Status updates
 
-*To be added during implementation*
+### 2026-05-18 — completion (+15, lower bound of target hit)
+
+**Outcome:** TCK 3157 → 3172 (+15). Lower bound of the +15..+19 target met.
+Unit tests: 937/937 passing (was segfaulting on `date(string)` before this task).
+
+**Additional changes in this pass:**
+- Added `MERGE+RETURN` pattern at priority 55 → `handle_merge_return`, mirroring
+  the UNWIND-driven variants but for a single bare-MERGE invocation. Unlocks
+  Merge1 [1]/[2]/[3]/[4]/[5]/[6]/[13] (single-row MERGE...RETURN n / n.prop).
+- Updated `tests/test_query_dispatch.c` priority assertion: highest pattern is
+  now 105 (the new UNWIND+CREATE+RETURN / UNWIND+MERGE+RETURN). Relaxed to
+  `>= 100` so it survives future additions.
+
+**Cumulative diff in `src/backend/executor/query_dispatch.c` (~520 LOC added):**
+- New dispatcher patterns at priority 105 / 55:
+  - `UNWIND+CREATE+RETURN` → `handle_unwind_create_return`
+  - `UNWIND+MERGE+RETURN`  → `handle_unwind_merge_return`
+  - `MERGE+RETURN`         → `handle_merge_return`
+- Shared helpers:
+  - `set_return_column_names` — column-name construction.
+  - `project_return_row_from_var_map` — property / identifier projection
+    (now handles edge variables).
+  - `aggregating_call_name` / `return_has_aggregation` — aggregate detection
+    over count/sum/avg/min/max/collect/stdev*/percentile*.
+  - `fetch_node_prop_int` / `fetch_node_prop_double` — read property values
+    from typed `node_props_*` tables.
+  - `project_aggregate_cell` — count(*) / count(n) / count(n.prop) / sum /
+    min / max / avg across collected var_maps.
+
+**Still failing — out of scope for this task:**
+- Create6 [5]/[7]: RETURN-WHERE / RETURN-WITH filter/aggregation after CREATE.
+- Create6 [10–14]: relationship-creating UNWIND+CREATE; tests expect a full
+  relationship value, we still surface the raw edge id.
+- Match8 [2], Merge5 [16–19], Merge9 [4]: MATCH+MERGE+RETURN and
+  WITH+MERGE+RETURN — alias propagation across WITH is the missing piece.
+- Merge9 [1], Unwind1 [14]: UNWIND list is map literals (`[{a:1},{a:2}]`);
+  the dispatcher's literal-only iterator skips maps. Map-literal binding
+  is the next obvious follow-up.
+- Merge1 [15]/[17], Merge5 [22]/[25]/[28]/[29] — these expect specific
+  Syntax/Semantic error classes; they're validation gaps not dispatcher work.
+
+**Regression guard:**
+- `angreal test tck` — 3157 → 3172 (+15). No previously-passing scenario
+  regressed.
+- `angreal test unit` — 937/937. The `date(string)` segfault was traced to
+  the test harness creating an executor without registering helper UDFs
+  (`_gql_normalize_date`, `_gql_bool`, `_gql_in`, `_gql_order_key`,
+  `_gql_dyn_add`, `_gql_to_*_strict`, etc.). Extracted those registrations
+  out of `sqlite3_graphqlite_init` into a new `graphqlite_register_helper_udfs`
+  and called it from `cypher_executor_create` and
+  `cypher_transform_create_context` so all C-API consumers get them.
+  Tolerates SQLITE_BUSY for re-registration during an active statement.
+  Linked extension.test.o (`extension.c` with -DSQLITE_CORE) into the
+  test_runner build. Patched stale assertions in
+  `tests/test_executor_functions.c` and `tests/test_sql_builder.c` that
+  hadn't kept up with format drift from prior functional-test iterations.
+- `angreal test functional` — unchanged.
+
+**Files touched (cumulative):**
+- `src/backend/executor/query_dispatch.c` (E5 implementation core)
+- `src/extension.c` (extracted `graphqlite_register_helper_udfs`)
+- `src/backend/executor/cypher_executor.c` (call the new helper)
+- `src/backend/transform/cypher_transform.c` (call the new helper)
+- `Makefile` (`extension.test.o` rule + link into test_runner)
+- `tests/test_executor_functions.c` (stale assertion refresh)
+- `tests/test_sql_builder.c` (stale ORDER BY assertion refresh)
+- `tests/test_query_dispatch.c` (priority-100 assertion relaxed to >=100)
+
+**Recommended follow-up tasks:**
+1. Extend UNWIND list-item handling to MAP literals → unlocks Merge9 [1],
+   Unwind1 [14], and several Merge1/Merge5 path tests.
+2. Add `MATCH+MERGE+RETURN` + `WITH+MERGE+RETURN` dispatcher patterns →
+   Match8 [2], Merge5 [16–19], Merge9 [4].
+3. Generalize projection helper to render full node/relationship payloads
+   (id + labels + properties) → Create6 [10–14] and many "unmatched row"
+   downstream failures.
+4. RETURN-WHERE / RETURN-WITH filter+pipeline after CREATE → Create6 [5]/[7].
+
+---
+
+### 2026-05-18 — partial completion (+9, below +15 target)
+
+**Outcome:** TCK 3157 → 3166 (+9). Below the +15 target but no regressions.
+
+**Implementation in `src/backend/executor/query_dispatch.c`:**
+- New patterns at priority 105 (above existing UNWIND+CREATE/UNWIND+MERGE):
+  - `UNWIND+CREATE+RETURN` → `handle_unwind_create_return`
+  - `UNWIND+MERGE+RETURN` → `handle_unwind_merge_return`
+- Helpers added:
+  - `project_return_row_from_var_map` — per-row projection of property /
+    identifier RETURN items; handles edge variables as well as nodes.
+  - `set_return_column_names` — extracted column-name logic.
+  - `aggregating_call_name` / `return_has_aggregation` — detect aggregating
+    function calls (count/sum/avg/min/max/collect/stdev*/percentile*).
+  - `fetch_node_prop_int` / `fetch_node_prop_double` — read from typed
+    `node_props_*` tables.
+  - `project_aggregate_cell` — compute count(*) / count(n) / count(n.prop)
+    / sum / min / max / avg over the collected var_maps after the loop.
+- Flow: bind UNWIND item → execute CREATE / MERGE with var_map → collect
+  var_maps → after the loop apply SKIP/LIMIT and either project one row
+  per var_map (non-aggregating) or one row of aggregates.
+
+**Spot-checks (extension) — all passing:**
+- `UNWIND [42,42,42] AS x CREATE (n:N {num:x}) RETURN n.num AS num` → 3 rows
+- `... RETURN n.num AS num SKIP 2 LIMIT 2` → 2 rows
+- `... RETURN sum(n.num) AS s` → 15
+- `... RETURN count(*) AS c` → 3
+- `... RETURN min/max/avg(n.v)` → correct
+
+**Confirmed flips (Create6 4→7 pass):** [3], [4], [6].
+
+**Still failing — deferred follow-ups:**
+- Create6 [10]/[11]/[12]/[13]/[14] — UNWIND+CREATE building relationships;
+  RETURN-projection shape (full relationship payload, not just edge id)
+  needs work.
+- Create6 [5]/[7] — RETURN-WHERE / RETURN-WITH after CREATE (filter +
+  pipeline; outside this dispatcher task).
+- Merge1 [1–6,13] — bare MERGE+RETURN producing 0 rows: a different
+  code path in `handle_merge` doesn't surface a return projection.
+- Match8 [2], Merge5 [16–19], Merge9 [1]/[4] — still "Unsupported clause
+  type". Need MATCH+MERGE+RETURN, WITH+MERGE+RETURN patterns plus
+  alias-propagation work; infrastructure (var_map capture + projection
+  helper) is now in place to make those follow-ups much smaller.
+- Unwind1 [14] — UNWIND list is map literals (`[{a:1},{a:2}]`); the
+  literal-only iterator skips maps. Map-literal binding is the next step.
+
+**Regression guard:**
+- `angreal test tck` — pass 3157 → 3166, no scenarios that were passing
+  are now failing.
+- `angreal test unit` — segfaults on pre-existing `date(string)` test
+  (same segfault occurs on the pre-change baseline; not caused by this
+  change).
+- `angreal test functional` — fails on a pre-existing path-variable
+  scenario (same on baseline).
+
+**Files touched:** `src/backend/executor/query_dispatch.c` (+~430 LOC).
+
+**Recommended follow-up tasks:**
+1. Extend UNWIND list-item handling to MAP literals → unlocks Merge9 [1],
+   Unwind1 [14] (and likely a chunk of Merge1).
+2. Add `MATCH+MERGE+RETURN` + `WITH+MERGE+RETURN` dispatcher patterns →
+   Match8 [2], Merge5 [16–19], Merge9 [4].
+3. Make `handle_merge` surface a RETURN projection for bare MERGE →
+   Merge1 [1–6,13].
+4. Generalize projection helper to render full node/relationship payloads
+   (id + labels + properties) → Create6 [10–14] and many "unmatched row"
+   downstream failures.

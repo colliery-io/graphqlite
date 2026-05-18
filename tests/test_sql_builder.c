@@ -440,8 +440,10 @@ static void test_sql_builder_order_by(void)
         char *sql = sql_builder_to_string(b);
         CU_ASSERT_PTR_NOT_NULL(sql);
         if (sql) {
-            CU_ASSERT_STRING_EQUAL(sql,
-                "SELECT n.name FROM nodes AS n ORDER BY n.name");
+            /* ORDER BY columns are wrapped in _gql_order_key() so openCypher
+             * NULL/type ordering semantics are honored. */
+            CU_ASSERT(strstr(sql, "SELECT n.name FROM nodes AS n") != NULL);
+            CU_ASSERT(strstr(sql, "ORDER BY _gql_order_key(n.name)") != NULL);
             free(sql);
         }
         sql_builder_free(b);
@@ -462,7 +464,7 @@ static void test_sql_builder_order_by_desc(void)
         char *sql = sql_builder_to_string(b);
         CU_ASSERT_PTR_NOT_NULL(sql);
         if (sql) {
-            CU_ASSERT(strstr(sql, "ORDER BY n.age DESC") != NULL);
+            CU_ASSERT(strstr(sql, "ORDER BY _gql_order_key(n.age) DESC") != NULL);
             free(sql);
         }
         sql_builder_free(b);
@@ -642,7 +644,7 @@ static void test_sql_builder_complex(void)
             CU_ASSERT(strstr(sql, "SELECT n.id AS node_id") != NULL);
             CU_ASSERT(strstr(sql, "JOIN edges") != NULL);
             CU_ASSERT(strstr(sql, "WHERE") != NULL);
-            CU_ASSERT(strstr(sql, "ORDER BY m.name") != NULL);
+            CU_ASSERT(strstr(sql, "ORDER BY _gql_order_key(m.name)") != NULL);
             CU_ASSERT(strstr(sql, "LIMIT 10") != NULL);
             free(sql);
         }

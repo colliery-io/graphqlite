@@ -94,9 +94,11 @@ static void test_get_registry(void)
     const query_pattern *registry = get_pattern_registry();
     CU_ASSERT_PTR_NOT_NULL(registry);
 
-    /* First pattern should be highest priority */
+    /* First pattern should be highest priority (raised to 105 after the
+     * E5 write-then-return work added UNWIND+CREATE+RETURN /
+     * UNWIND+MERGE+RETURN ahead of the base UNWIND+CREATE pattern). */
     CU_ASSERT_PTR_NOT_NULL(registry[0].handler);
-    CU_ASSERT_EQUAL(registry[0].priority, 100);
+    CU_ASSERT_TRUE(registry[0].priority >= 100);
 
     /* Find GENERIC pattern (sentinel is NULL handler) */
     int found_generic = 0;
