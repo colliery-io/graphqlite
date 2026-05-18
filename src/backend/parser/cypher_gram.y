@@ -662,6 +662,43 @@ remove_item_list:
             ast_list_append($1, (ast_node*)$3);
             $$ = $1;
         }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* REMOVE n:L1:L2 — produce two remove_items, one per label. */
+            $$ = ast_list_create();
+            {
+              cypher_identifier *v1 = make_identifier($1, @1.first_line);
+              cypher_label_expr *l1 = make_label_expr((ast_node*)v1, $3, @3.first_line);
+              ast_list_append($$, (ast_node*)make_remove_item((ast_node*)l1));
+            }
+            {
+              cypher_identifier *v2 = make_identifier(strdup($1), @1.first_line);
+              cypher_label_expr *l2 = make_label_expr((ast_node*)v2, $5, @5.first_line);
+              ast_list_append($$, (ast_node*)make_remove_item((ast_node*)l2));
+            }
+            free($1);
+        }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* REMOVE n:L1:L2:L3 — three labels. */
+            $$ = ast_list_create();
+            {
+              cypher_identifier *v1 = make_identifier($1, @1.first_line);
+              cypher_label_expr *l1 = make_label_expr((ast_node*)v1, $3, @3.first_line);
+              ast_list_append($$, (ast_node*)make_remove_item((ast_node*)l1));
+            }
+            {
+              cypher_identifier *v2 = make_identifier(strdup($1), @1.first_line);
+              cypher_label_expr *l2 = make_label_expr((ast_node*)v2, $5, @5.first_line);
+              ast_list_append($$, (ast_node*)make_remove_item((ast_node*)l2));
+            }
+            {
+              cypher_identifier *v3 = make_identifier(strdup($1), @1.first_line);
+              cypher_label_expr *l3 = make_label_expr((ast_node*)v3, $7, @7.first_line);
+              ast_list_append($$, (ast_node*)make_remove_item((ast_node*)l3));
+            }
+            free($1);
+        }
     ;
 
 remove_item:
