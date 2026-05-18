@@ -743,8 +743,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                 alias, alias, alias, alias, alias);
                             }
                         } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
-                            /* This is an edge variable - return full relationship object */
-                            append_sql(ctx, "json_object("
+                            /* Edge variable - return full relationship object,
+                             * or NULL when the row came from an OPTIONAL MATCH
+                             * miss (LEFT JOIN with no match → alias.id IS NULL). */
+                            append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_object("
                                 "'id', %s.id, "
                                 "'type', %s.type, "
                                 "'startNodeId', %s.source_id, "
@@ -762,7 +764,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id) OR "
                                     "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = %s.id AND key_id = pk.id)"
                                 "), json('{}'))"
-                            ")",
+                            ") END)",
+                            alias,
                             alias, alias, alias, alias,
                             alias, alias, alias, alias, alias,
                             alias, alias, alias, alias, alias);

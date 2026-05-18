@@ -4,14 +4,14 @@ level: task
 title: "E1: Map indexing TypeError — invalid index types (cluster H)"
 short_code: "GQLITE-T-0235"
 created_at: 2026-05-18T12:24:18.702603+00:00
-updated_at: 2026-05-18T12:33:18.956557+00:00
+updated_at: 2026-05-18T12:37:27.383475+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

@@ -4,14 +4,14 @@ level: task
 title: "E2: TCK named-graph fixtures — binary-tree-1 / binary-tree-2 (cluster L)"
 short_code: "GQLITE-T-0236"
 created_at: 2026-05-18T12:24:26.965706+00:00
-updated_at: 2026-05-18T12:24:26.965706+00:00
+updated_at: 2026-05-18T12:37:35.607356+00:00
 parent: GQLITE-I-0038
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false
