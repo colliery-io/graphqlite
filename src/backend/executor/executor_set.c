@@ -16,9 +16,13 @@
 /* Evaluate a function call that references node/edge properties.
  * Uses the var_map to build a FROM clause so property lookups resolve.
  * Returns 0 on success, -1 on error, -2 for NULL result. */
-static int evaluate_function_with_context(
+/* Evaluate an arbitrary expression AST against the var_map by emitting
+ * a SELECT … FROM nodes WHERE id=… SQL query and reading the result.
+ * Used by SET to handle any RHS shape beyond bare literals/params/funcs
+ * (e.g. 'SET n.num = n.num + 1' where the RHS is a BINARY_OP). */
+static int evaluate_ast_with_context(
     cypher_executor *executor,
-    cypher_function_call *func_call,
+    ast_node *expr,
     variable_map *var_map,
     property_type *out_type,
     property_value *out_value)
@@ -47,9 +51,9 @@ static int evaluate_function_with_context(
         }
     }
 
-    /* Transform the function expression */
+    /* Transform the expression to SQL */
     append_sql(ctx, "SELECT ");
-    if (transform_expression(ctx, (ast_node*)func_call) < 0) {
+    if (transform_expression(ctx, expr) < 0) {
         cypher_transform_free_context(ctx);
         return -1;
     }
@@ -901,8 +905,8 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             int rc;
             if (has_prop_arg && var_map) {
                 /* Build SQL with FROM clause for property resolution */
-                rc = evaluate_function_with_context(executor, func, var_map,
-                                                     &prop_type, &set_pv);
+                rc = evaluate_ast_with_context(executor, (ast_node *)func, var_map,
+                                               &prop_type, &set_pv);
             } else {
                 rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &set_pv);
             }
@@ -1081,6 +1085,48 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 }
                 property_value_free(&set_pv);
                 continue;
+            }
+        } else if (var_map &&
+                   (item->expr->type == AST_NODE_BINARY_OP ||
+                    item->expr->type == AST_NODE_NOT_EXPR ||
+                    item->expr->type == AST_NODE_NULL_CHECK ||
+                    item->expr->type == AST_NODE_SUBSCRIPT)) {
+            /* Arbitrary expression RHS: SET n.num = n.num + 1, etc.
+             * Evaluate via SQL with the var_map's nodes joined in. */
+            int rc = evaluate_ast_with_context(executor, item->expr, var_map,
+                                               &prop_type, &set_pv);
+            if (rc == -2) {
+                /* NULL result → remove property. */
+                if (is_edge) {
+                    if (cypher_schema_delete_edge_property(executor->schema_mgr,
+                            entity_id, prop->property_name) == 0)
+                        result->properties_set++;
+                } else {
+                    if (cypher_schema_delete_node_property(executor->schema_mgr,
+                            entity_id, prop->property_name) == 0)
+                        result->properties_set++;
+                }
+                property_value_free(&set_pv);
+                continue;
+            } else if (rc < 0) {
+                set_result_error(result, "Failed to evaluate SET expression");
+                property_value_free(&set_pv);
+                return -1;
+            }
+            static int64_t set_expr_int_buf;
+            static double  set_expr_real_buf;
+            static int     set_expr_bool_buf;
+            if (prop_type == PROP_TYPE_INTEGER) {
+                set_expr_int_buf = set_pv.as_int;
+                prop_value = &set_expr_int_buf;
+            } else if (prop_type == PROP_TYPE_REAL) {
+                set_expr_real_buf = set_pv.as_real;
+                prop_value = &set_expr_real_buf;
+            } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                set_expr_bool_buf = set_pv.as_bool;
+                prop_value = &set_expr_bool_buf;
+            } else if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
+                prop_value = set_pv.as_str;
             }
         } else {
             set_result_error(result, "SET value must be a literal, map, list, parameter, or function call");
