@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-19T12:06:20Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-19T15:24:01Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -652,67 +652,67 @@
 - pub `TestTemporalFromEpoch` class L303-314 — `{ test_datetime_from_epoch, test_datetime_from_epoch_millis }`
 - pub `test_datetime_from_epoch` method L304-308 — `def test_datetime_from_epoch(self, db)`
 - pub `test_datetime_from_epoch_millis` method L310-314 — `def test_datetime_from_epoch_millis(self, db)`
-- pub `TestDurationIn` class L317-331 — `{ test_duration_in_days, test_duration_in_seconds }`
-- pub `test_duration_in_days` method L318-324 — `def test_duration_in_days(self, db)`
-- pub `test_duration_in_seconds` method L326-331 — `def test_duration_in_seconds(self, db)`
-- pub `TestDateTruncate` class L334-340 — `{ test_date_truncate }`
-- pub `test_date_truncate` method L335-340 — `def test_date_truncate(self, db)`
-- pub `TestDateArithmetic` class L343-356 — `{ test_date_add, test_date_sub }`
-- pub `test_date_add` method L344-349 — `def test_date_add(self, db)`
-- pub `test_date_sub` method L351-356 — `def test_date_sub(self, db)`
-- pub `TestPointConstruction` class L359-372 — `{ test_point_cartesian, test_point_geographic }`
-- pub `test_point_cartesian` method L360-365 — `def test_point_cartesian(self, db)`
-- pub `test_point_geographic` method L367-372 — `def test_point_geographic(self, db)`
-- pub `TestDistance` class L375-390 — `{ test_distance_cartesian, test_distance_geographic }`
-- pub `test_distance_cartesian` method L376-381 — `def test_distance_cartesian(self, db)`
-- pub `test_distance_geographic` method L383-390 — `def test_distance_geographic(self, db)`
-- pub `TestPointWithinBBox` class L393-411 — `{ test_point_within_bbox_true, test_point_within_bbox_false, test_point_within_b...`
-- pub `test_point_within_bbox_true` method L394-398 — `def test_point_within_bbox_true(self, db)`
-- pub `test_point_within_bbox_false` method L400-404 — `def test_point_within_bbox_false(self, db)`
-- pub `test_point_within_bbox_edge` method L406-411 — `def test_point_within_bbox_edge(self, db)` — Point exactly on the boundary should be inside.
-- pub `TestOrNullEdgeCases` class L419-453 — `{ test_tointegerornull_float_string, test_tointegerornull_empty_string, test_toi...` — Boundary tests for OrNull type conversion functions.
-- pub `test_tointegerornull_float_string` method L422-427 — `def test_tointegerornull_float_string(self, db)` — Float string should convert to integer (truncated).
-- pub `test_tointegerornull_empty_string` method L429-431 — `def test_tointegerornull_empty_string(self, db)`
-- pub `test_tointegerornull_negative` method L433-435 — `def test_tointegerornull_negative(self, db)`
-- pub `test_tofloatornull_negative` method L437-441 — `def test_tofloatornull_negative(self, db)`
-- pub `test_tobooleanornull_integer_one` method L443-445 — `def test_tobooleanornull_integer_one(self, db)`
-- pub `test_tobooleanornull_integer_zero` method L447-449 — `def test_tobooleanornull_integer_zero(self, db)`
-- pub `test_tostringornull_boolean` method L451-453 — `def test_tostringornull_boolean(self, db)`
-- pub `TestIsEmptyEdgeCases` class L456-469 — `{ test_isempty_null, test_isempty_whitespace, test_isempty_single_char }`
-- pub `test_isempty_null` method L457-460 — `def test_isempty_null(self, db)`
-- pub `test_isempty_whitespace` method L462-465 — `def test_isempty_whitespace(self, db)` — Whitespace-only string is NOT empty (has length > 0).
-- pub `test_isempty_single_char` method L467-469 — `def test_isempty_single_char(self, db)`
-- pub `TestListSlicingEdgeCases` class L472-494 — `{ test_slice_empty_result, test_slice_single_element, test_slice_full_range, tes...`
-- pub `test_slice_empty_result` method L473-477 — `def test_slice_empty_result(self, db)` — Slice beyond array length returns empty array.
-- pub `test_slice_single_element` method L479-482 — `def test_slice_single_element(self, db)`
-- pub `test_slice_full_range` method L484-488 — `def test_slice_full_range(self, db)` — Slice covering entire list.
-- pub `test_slice_zero_length` method L490-494 — `def test_slice_zero_length(self, db)` — Start == end gives empty slice.
-- pub `TestTemporalEdgeCases` class L497-534 — `{ test_date_leap_year, test_date_end_of_year, test_date_add_cross_month, test_da...`
-- pub `test_date_leap_year` method L498-500 — `def test_date_leap_year(self, db)`
-- pub `test_date_end_of_year` method L502-504 — `def test_date_end_of_year(self, db)`
-- pub `test_date_add_cross_month` method L506-509 — `def test_date_add_cross_month(self, db)` — Adding days that cross a month boundary.
-- pub `test_date_add_cross_year` method L511-514 — `def test_date_add_cross_year(self, db)` — Adding months that cross a year boundary.
-- pub `test_date_sub_cross_year` method L516-518 — `def test_date_sub_cross_year(self, db)`
-- pub `test_duration_in_days_same_date` method L520-522 — `def test_duration_in_days_same_date(self, db)`
-- pub `test_duration_in_seconds_negative` method L524-529 — `def test_duration_in_seconds_negative(self, db)` — Earlier date first gives negative duration.
-- pub `test_datetime_from_epoch_negative` method L531-534 — `def test_datetime_from_epoch_negative(self, db)` — Negative epoch = before 1970.
-- pub `TestSpatialEdgeCases` class L537-577 — `{ test_distance_same_point, test_distance_negative_coords, test_point_3d, test_g...`
-- pub `test_distance_same_point` method L538-542 — `def test_distance_same_point(self, db)`
-- pub `test_distance_negative_coords` method L544-548 — `def test_distance_negative_coords(self, db)`
-- pub `test_point_3d` method L550-553 — `def test_point_3d(self, db)`
-- pub `test_geographic_distance_same_point` method L555-559 — `def test_geographic_distance_same_point(self, db)`
-- pub `test_geographic_distance_antipodal` method L561-567 — `def test_geographic_distance_antipodal(self, db)` — North pole to south pole ≈ 20,015 km.
-- pub `test_bbox_geographic` method L569-577 — `def test_bbox_geographic(self, db)` — NYC is within a US northeast bounding box.
-- pub `TestNullIfEdgeCases` class L580-593 — `{ test_nullif_strings, test_nullif_null_args, test_nullif_mixed_types }`
-- pub `test_nullif_strings` method L581-583 — `def test_nullif_strings(self, db)`
-- pub `test_nullif_null_args` method L585-587 — `def test_nullif_null_args(self, db)`
-- pub `test_nullif_mixed_types` method L589-593 — `def test_nullif_mixed_types(self, db)`
-- pub `TestValueTypeEdgeCases` class L596-604 — `{ test_valuetype_null, test_valuetype_boolean }`
-- pub `test_valuetype_null` method L597-599 — `def test_valuetype_null(self, db)`
-- pub `test_valuetype_boolean` method L601-604 — `def test_valuetype_boolean(self, db)`
-- pub `TestReturnStarEdgeCases` class L607-620 — `{ test_return_star_with_relationship, test_return_star_multiple_nodes }`
-- pub `test_return_star_with_relationship` method L608-614 — `def test_return_star_with_relationship(self, db)`
-- pub `test_return_star_multiple_nodes` method L616-620 — `def test_return_star_multiple_nodes(self, db)`
+- pub `TestDurationIn` class L317-335 — `{ test_duration_in_days, test_duration_in_seconds }`
+- pub `test_duration_in_days` method L322-328 — `def test_duration_in_days(self, db)`
+- pub `test_duration_in_seconds` method L330-335 — `def test_duration_in_seconds(self, db)`
+- pub `TestDateTruncate` class L338-344 — `{ test_date_truncate }`
+- pub `test_date_truncate` method L339-344 — `def test_date_truncate(self, db)`
+- pub `TestDateArithmetic` class L347-360 — `{ test_date_add, test_date_sub }`
+- pub `test_date_add` method L348-353 — `def test_date_add(self, db)`
+- pub `test_date_sub` method L355-360 — `def test_date_sub(self, db)`
+- pub `TestPointConstruction` class L363-376 — `{ test_point_cartesian, test_point_geographic }`
+- pub `test_point_cartesian` method L364-369 — `def test_point_cartesian(self, db)`
+- pub `test_point_geographic` method L371-376 — `def test_point_geographic(self, db)`
+- pub `TestDistance` class L379-394 — `{ test_distance_cartesian, test_distance_geographic }`
+- pub `test_distance_cartesian` method L380-385 — `def test_distance_cartesian(self, db)`
+- pub `test_distance_geographic` method L387-394 — `def test_distance_geographic(self, db)`
+- pub `TestPointWithinBBox` class L397-415 — `{ test_point_within_bbox_true, test_point_within_bbox_false, test_point_within_b...`
+- pub `test_point_within_bbox_true` method L398-402 — `def test_point_within_bbox_true(self, db)`
+- pub `test_point_within_bbox_false` method L404-408 — `def test_point_within_bbox_false(self, db)`
+- pub `test_point_within_bbox_edge` method L410-415 — `def test_point_within_bbox_edge(self, db)` — Point exactly on the boundary should be inside.
+- pub `TestOrNullEdgeCases` class L423-457 — `{ test_tointegerornull_float_string, test_tointegerornull_empty_string, test_toi...` — Boundary tests for OrNull type conversion functions.
+- pub `test_tointegerornull_float_string` method L426-431 — `def test_tointegerornull_float_string(self, db)` — Float string should convert to integer (truncated).
+- pub `test_tointegerornull_empty_string` method L433-435 — `def test_tointegerornull_empty_string(self, db)`
+- pub `test_tointegerornull_negative` method L437-439 — `def test_tointegerornull_negative(self, db)`
+- pub `test_tofloatornull_negative` method L441-445 — `def test_tofloatornull_negative(self, db)`
+- pub `test_tobooleanornull_integer_one` method L447-449 — `def test_tobooleanornull_integer_one(self, db)`
+- pub `test_tobooleanornull_integer_zero` method L451-453 — `def test_tobooleanornull_integer_zero(self, db)`
+- pub `test_tostringornull_boolean` method L455-457 — `def test_tostringornull_boolean(self, db)`
+- pub `TestIsEmptyEdgeCases` class L460-473 — `{ test_isempty_null, test_isempty_whitespace, test_isempty_single_char }`
+- pub `test_isempty_null` method L461-464 — `def test_isempty_null(self, db)`
+- pub `test_isempty_whitespace` method L466-469 — `def test_isempty_whitespace(self, db)` — Whitespace-only string is NOT empty (has length > 0).
+- pub `test_isempty_single_char` method L471-473 — `def test_isempty_single_char(self, db)`
+- pub `TestListSlicingEdgeCases` class L476-498 — `{ test_slice_empty_result, test_slice_single_element, test_slice_full_range, tes...`
+- pub `test_slice_empty_result` method L477-481 — `def test_slice_empty_result(self, db)` — Slice beyond array length returns empty array.
+- pub `test_slice_single_element` method L483-486 — `def test_slice_single_element(self, db)`
+- pub `test_slice_full_range` method L488-492 — `def test_slice_full_range(self, db)` — Slice covering entire list.
+- pub `test_slice_zero_length` method L494-498 — `def test_slice_zero_length(self, db)` — Start == end gives empty slice.
+- pub `TestTemporalEdgeCases` class L501-539 — `{ test_date_leap_year, test_date_end_of_year, test_date_add_cross_month, test_da...`
+- pub `test_date_leap_year` method L502-504 — `def test_date_leap_year(self, db)`
+- pub `test_date_end_of_year` method L506-508 — `def test_date_end_of_year(self, db)`
+- pub `test_date_add_cross_month` method L510-513 — `def test_date_add_cross_month(self, db)` — Adding days that cross a month boundary.
+- pub `test_date_add_cross_year` method L515-518 — `def test_date_add_cross_year(self, db)` — Adding months that cross a year boundary.
+- pub `test_date_sub_cross_year` method L520-522 — `def test_date_sub_cross_year(self, db)`
+- pub `test_duration_in_days_same_date` method L524-527 — `def test_duration_in_days_same_date(self, db)`
+- pub `test_duration_in_seconds_negative` method L529-534 — `def test_duration_in_seconds_negative(self, db)` — Earlier date first gives negative duration.
+- pub `test_datetime_from_epoch_negative` method L536-539 — `def test_datetime_from_epoch_negative(self, db)` — Negative epoch = before 1970.
+- pub `TestSpatialEdgeCases` class L542-582 — `{ test_distance_same_point, test_distance_negative_coords, test_point_3d, test_g...`
+- pub `test_distance_same_point` method L543-547 — `def test_distance_same_point(self, db)`
+- pub `test_distance_negative_coords` method L549-553 — `def test_distance_negative_coords(self, db)`
+- pub `test_point_3d` method L555-558 — `def test_point_3d(self, db)`
+- pub `test_geographic_distance_same_point` method L560-564 — `def test_geographic_distance_same_point(self, db)`
+- pub `test_geographic_distance_antipodal` method L566-572 — `def test_geographic_distance_antipodal(self, db)` — North pole to south pole ≈ 20,015 km.
+- pub `test_bbox_geographic` method L574-582 — `def test_bbox_geographic(self, db)` — NYC is within a US northeast bounding box.
+- pub `TestNullIfEdgeCases` class L585-598 — `{ test_nullif_strings, test_nullif_null_args, test_nullif_mixed_types }`
+- pub `test_nullif_strings` method L586-588 — `def test_nullif_strings(self, db)`
+- pub `test_nullif_null_args` method L590-592 — `def test_nullif_null_args(self, db)`
+- pub `test_nullif_mixed_types` method L594-598 — `def test_nullif_mixed_types(self, db)`
+- pub `TestValueTypeEdgeCases` class L601-609 — `{ test_valuetype_null, test_valuetype_boolean }`
+- pub `test_valuetype_null` method L602-604 — `def test_valuetype_null(self, db)`
+- pub `test_valuetype_boolean` method L606-609 — `def test_valuetype_boolean(self, db)`
+- pub `TestReturnStarEdgeCases` class L612-625 — `{ test_return_star_with_relationship, test_return_star_multiple_nodes }`
+- pub `test_return_star_with_relationship` method L613-619 — `def test_return_star_with_relationship(self, db)`
+- pub `test_return_star_multiple_nodes` method L621-625 — `def test_return_star_multiple_nodes(self, db)`
 
 ### bindings/rust
 

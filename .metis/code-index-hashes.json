@@ -24,7 +24,7 @@
     "bindings/python/tests/test_connection.py": "de1c79104d55f9e5dd5b0b0ae66ce18994ce405d554804ec0a774d76afd58fe8",
     "bindings/python/tests/test_graph.py": "dce6cea3cbfa0ebf1ac14002446c680c639af5a0660824521390c62a9c77b30d",
     "bindings/python/tests/test_manager.py": "22220d47b53960cbfd06c003090033dd71876efc0392a2c33e0c983deeb5b7d0",
-    "bindings/python/tests/test_new_functions.py": "20edde40c57ba1d3861abb764d3b9964a24ef3024a67ff334822353f32d13f39",
+    "bindings/python/tests/test_new_functions.py": "f61c42c85e3ddde9abbd5bdd858275fde90cdc3e79a811cd8cdf1c111fb00b52",
     "bindings/rust/build.rs": "e4b209fae36edddf2220559b38a591a971b97a1a30db591a227e5fd921da321b",
     "bindings/rust/examples/tck_runner.rs": "7e0b5ca430bb1188f5d3b669bc7c4b055f7e42a1a69dc550ead820bdd2a581ad",
     "bindings/rust/src/algorithms/centrality.rs": "45e2da90181b265bacd9a5364088e4826d59642bd9141fa5c73930474ce06848",
