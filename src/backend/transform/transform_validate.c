@@ -1329,6 +1329,27 @@ int transform_validate_query(cypher_query *query, char **error_message)
                             cypher_property *pr = (cypher_property *)it->property;
                             if (pr->expr && check_undef_in_expr(pr->expr, &bound, "SET", error_message) < 0) { rc = -1; break; }
                         }
+                        /* A *property*-target SET (n.prop = value) rejects
+                         * a list-of-maps RHS (Set1 [10]) because the
+                         * storage layer can't represent it. Bulk SET on
+                         * a variable (SET n = {…}) is a different
+                         * shape — its property is a bare IDENTIFIER, not
+                         * AST_NODE_PROPERTY — so it's untouched here. */
+                        if (it->expr && it->expr->type == AST_NODE_LIST &&
+                            it->property && it->property->type == AST_NODE_PROPERTY) {
+                            cypher_list *l = (cypher_list *)it->expr;
+                            if (l->items) {
+                                for (int li = 0; li < l->items->count; li++) {
+                                    ast_node *el = l->items->items[li];
+                                    if (el && el->type == AST_NODE_MAP) {
+                                        set_error(error_message,
+                                                  "TypeError: InvalidPropertyType: a property value cannot be a list of maps");
+                                        rc = -1; break;
+                                    }
+                                }
+                            }
+                            if (rc < 0) break;
+                        }
                     }
                 }
                 break;
