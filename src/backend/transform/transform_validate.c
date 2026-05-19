@@ -990,6 +990,15 @@ static int validate_write_rel_patterns(ast_list *patterns, const char *kw,
                           kw);
                 return -1;
             }
+            /* CREATE/MERGE requires exactly one direction (left XOR right).
+             * Undirected `()-[:T]-()` and bidirectional `()<-[:T]->()`
+             * both error per openCypher. */
+            if (rp->left_arrow == rp->right_arrow) {
+                set_error(error_message,
+                          "SyntaxError: RequiresDirectedRelationship: %s requires a directed relationship",
+                          kw);
+                return -1;
+            }
             int type_count = 0;
             if (rp->type) type_count++;
             if (rp->types) type_count += rp->types->count;

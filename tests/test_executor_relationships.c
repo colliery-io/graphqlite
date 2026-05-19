@@ -383,26 +383,23 @@ static void test_relationship_no_type(void)
     }
 }
 
-/* Test undirected relationships */
+/* Undirected CREATE is a SyntaxError per openCypher
+ * (RequiresDirectedRelationship). The executor must reject it. */
 static void test_undirected_relationship(void)
 {
     cypher_executor *executor = cypher_executor_create(test_db);
     CU_ASSERT_PTR_NOT_NULL(executor);
-    
+
     if (executor) {
         const char *query = "CREATE (a:Person {name: \"Alice\"})-[r:CONNECTED]-(b:Person {name: \"Bob\"})";
         cypher_result *result = cypher_executor_execute(executor, query);
         CU_ASSERT_PTR_NOT_NULL(result);
-        
+
         if (result) {
-            CU_ASSERT_TRUE(result->success);
-            if (!result->success) {
-                printf("Undirected relationship error: %s\n", result->error_message);
-            } else {
-                printf("Undirected relationship CREATE succeeded: nodes=%d, rels=%d\n", 
-                       result->nodes_created, result->relationships_created);
-                CU_ASSERT_TRUE(result->nodes_created >= 2);
-                CU_ASSERT_TRUE(result->relationships_created >= 1);
+            CU_ASSERT_FALSE(result->success);
+            CU_ASSERT_PTR_NOT_NULL(result->error_message);
+            if (result->error_message) {
+                CU_ASSERT_PTR_NOT_NULL(strstr(result->error_message, "RequiresDirectedRelationship"));
             }
             cypher_result_free(result);
         }
