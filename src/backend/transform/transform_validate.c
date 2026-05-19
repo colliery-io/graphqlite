@@ -1020,7 +1020,7 @@ static int validate_write_property_map(ast_node *props, const char *kw,
             cypher_literal *lit = (cypher_literal *)pair->value;
             if (lit->literal_type == LITERAL_NULL) {
                 set_error(error_message,
-                          "SemanticError: %s with a null property value is not allowed (key '%s')",
+                          "SemanticError: MergeReadOwnWrites: %s with null property value '%s' is not allowed",
                           kw, pair->key ? pair->key : "?");
                 return -1;
             }
@@ -1341,6 +1341,12 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 rc = check_create_rebinds_ex(m->pattern, &bound, true, error_message);
                 if (rc == 0) rc = validate_write_rel_patterns(m->pattern, "MERGE", error_message);
                 if (rc == 0) rc = validate_write_undef_in_props(m->pattern, &bound, "MERGE", error_message);
+                /* MERGE rejects null property values at runtime per spec
+                 * (SemanticError: MergeReadOwnWrites) — Merge1 [17] /
+                 * Merge5 [29]. CREATE has different semantics (cluster
+                 * silently dropped them historically) so we only invoke
+                 * the check for MERGE. */
+                if (rc == 0) rc = validate_write_no_null_props(m->pattern, "MERGE", error_message);
                 if (rc == 0) collect_pattern_names(m->pattern, &bound);
                 /* ON CREATE SET / ON MATCH SET reference variables that
                  * must already be bound (either from earlier clauses or
