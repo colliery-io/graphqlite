@@ -197,6 +197,65 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     }
                 }
 
+                /* Runtime validation for parameter-driven SKIP/LIMIT
+                 * (openCypher rejects negative or non-integer values).
+                 * Spec violations on literals are caught at compile time
+                 * by transform_validate_query; the parameter path needs
+                 * params_json which only exists at execution. */
+                if (executor->params_json && query->clauses) {
+                    for (int ci = 0; ci < query->clauses->count; ci++) {
+                        ast_node *cl = query->clauses->items[ci];
+                        if (!cl) continue;
+                        ast_node *skip = NULL, *limit = NULL;
+                        if (cl->type == AST_NODE_RETURN) {
+                            cypher_return *r = (cypher_return *)cl;
+                            skip = r->skip; limit = r->limit;
+                        } else if (cl->type == AST_NODE_WITH) {
+                            cypher_with *w = (cypher_with *)cl;
+                            skip = w->skip; limit = w->limit;
+                        }
+                        const char *err_label = NULL;
+                        const char *err_param = NULL;
+                        bool err_neg = false, err_nonint = false;
+                        ast_node *targets[2] = { skip, limit };
+                        const char *labels[2] = { "SKIP", "LIMIT" };
+                        for (int t = 0; t < 2 && !err_label; t++) {
+                            if (!targets[t] || targets[t]->type != AST_NODE_PARAMETER) continue;
+                            cypher_parameter *p = (cypher_parameter *)targets[t];
+                            if (!p->name) continue;
+                            property_type pt;
+                            property_value pv; property_value_init(&pv);
+                            int rc = get_param_value(executor->params_json, p->name, &pt, &pv);
+                            if (rc == 0) {
+                                if (pt == PROP_TYPE_INTEGER) {
+                                    if (pv.as_int < 0) {
+                                        err_label = labels[t]; err_param = p->name; err_neg = true;
+                                    }
+                                } else if (pt == PROP_TYPE_REAL) {
+                                    err_label = labels[t]; err_param = p->name; err_nonint = true;
+                                } else {
+                                    err_label = labels[t]; err_param = p->name; err_nonint = true;
+                                }
+                            }
+                            property_value_free(&pv);
+                        }
+                        if (err_label) {
+                            char buf[256];
+                            if (err_neg) {
+                                snprintf(buf, sizeof(buf),
+                                    "SyntaxError: NegativeIntegerArgument: %s parameter `%s` must be non-negative",
+                                    err_label, err_param ? err_param : "?");
+                            } else {
+                                snprintf(buf, sizeof(buf),
+                                    "SyntaxError: InvalidArgumentType: %s parameter `%s` must be an integer",
+                                    err_label, err_param ? err_param : "?");
+                            }
+                            set_result_error(result, buf);
+                            return result;
+                        }
+                    }
+                }
+
                 if (query->clauses) {
                     /* Handle EXPLAIN - return generated SQL and pattern info */
                     if (query->explain) {
