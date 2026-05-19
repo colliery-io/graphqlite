@@ -1742,6 +1742,57 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
         return 0;
     }
 
+    /* Handle range(start, end[, step]) — expand via SQLite recursive
+     * CTE and iterate like the parameter branch. Common UNWIND
+     * generator (Return4 [8], Set/Remove/Delete N-row scenarios). */
+    if (unwind->expr->type == AST_NODE_FUNCTION_CALL) {
+        cypher_function_call *fc = (cypher_function_call *)unwind->expr;
+        if (fc->function_name && strcasecmp(fc->function_name, "range") == 0 &&
+            fc->args && (fc->args->count == 2 || fc->args->count == 3)) {
+            ast_node *a0 = fc->args->items[0];
+            ast_node *a1 = fc->args->items[1];
+            ast_node *a2 = fc->args->count == 3 ? fc->args->items[2] : NULL;
+            if (a0 && a0->type == AST_NODE_LITERAL && a1 && a1->type == AST_NODE_LITERAL &&
+                ((cypher_literal *)a0)->literal_type == LITERAL_INTEGER &&
+                ((cypher_literal *)a1)->literal_type == LITERAL_INTEGER &&
+                (!a2 || (a2->type == AST_NODE_LITERAL &&
+                         ((cypher_literal *)a2)->literal_type == LITERAL_INTEGER))) {
+                int64_t start = ((cypher_literal *)a0)->value.integer;
+                int64_t end   = ((cypher_literal *)a1)->value.integer;
+                int64_t step  = a2 ? ((cypher_literal *)a2)->value.integer : 1;
+                if (step == 0) step = 1;
+                foreach_context *ctx = create_foreach_context();
+                if (!ctx) {
+                    set_result_error(result, "Failed to create foreach context");
+                    return -1;
+                }
+                foreach_context *prev_ctx = g_foreach_ctx;
+                g_foreach_ctx = ctx;
+                for (int64_t v = start;
+                     (step > 0) ? v <= end : v >= end;
+                     v += step) {
+                    set_foreach_binding_int(ctx, unwind->alias, v);
+                    variable_map *create_vars = NULL;
+                    if (execute_create_clause_with_varmap(executor, create, result, &create_vars) < 0) {
+                        g_foreach_ctx = prev_ctx;
+                        free_foreach_context(ctx);
+                        return -1;
+                    }
+                    if (set && create_vars) {
+                        if (execute_set_operations(executor, set, create_vars, result) < 0) {
+                            CYPHER_DEBUG("UNWIND+CREATE+SET (range): SET failed");
+                        }
+                    }
+                    if (create_vars) free_variable_map(create_vars);
+                }
+                g_foreach_ctx = prev_ctx;
+                free_foreach_context(ctx);
+                result->success = true;
+                return 0;
+            }
+        }
+    }
+
     /* Handle list literal UNWIND. Other expression shapes (function
      * calls like range(), variable references, list concatenation) are
      * outside this fast-path; defer to the generic transform pipeline
