@@ -1204,9 +1204,28 @@ int transform_validate_query(cypher_query *query, char **error_message)
             case AST_NODE_RETURN:
                 rc = validate_return_clause((cypher_return *)clause, &vctx, error_message);
                 break;
-            case AST_NODE_WITH:
-                rc = validate_with_clause((cypher_with *)clause, &vctx, error_message);
+            case AST_NODE_WITH: {
+                cypher_with *w = (cypher_with *)clause;
+                rc = validate_with_clause(w, &vctx, error_message);
+                /* WITH projects a new scope: clear previously-bound names
+                 * and add only the names this WITH carries forward. Items
+                 * with an explicit alias use that alias; bare-identifier
+                 * items (e.g. 'WITH a') carry the variable's name. */
+                if (rc == 0 && w->items) {
+                    nset_free(&bound);
+                    nset_init(&bound);
+                    for (int wi = 0; wi < w->items->count; wi++) {
+                        cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                        if (!it) continue;
+                        if (it->alias) {
+                            nset_add(&bound, it->alias);
+                        } else if (it->expr && it->expr->type == AST_NODE_IDENTIFIER) {
+                            nset_add(&bound, ((cypher_identifier *)it->expr)->name);
+                        }
+                    }
+                }
                 break;
+            }
             case AST_NODE_MATCH: {
                 cypher_match *m = (cypher_match *)clause;
                 rc = validate_match_clause(m, &vctx, error_message);
@@ -1234,6 +1253,21 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 if (rc == 0) collect_pattern_names(c->pattern, &bound);
                 break;
             }
+            case AST_NODE_SET: {
+                cypher_set *s = (cypher_set *)clause;
+                if (s->items) {
+                    for (int si = 0; si < s->items->count; si++) {
+                        cypher_set_item *it = (cypher_set_item *)s->items->items[si];
+                        if (!it) continue;
+                        if (it->expr && check_undef_in_expr(it->expr, &bound, "SET", error_message) < 0) { rc = -1; break; }
+                        if (it->property && it->property->type == AST_NODE_PROPERTY) {
+                            cypher_property *pr = (cypher_property *)it->property;
+                            if (pr->expr && check_undef_in_expr(pr->expr, &bound, "SET", error_message) < 0) { rc = -1; break; }
+                        }
+                    }
+                }
+                break;
+            }
             case AST_NODE_MERGE: {
                 cypher_merge *m = (cypher_merge *)clause;
                 /* MERGE shares the same re-binding rules as CREATE except
@@ -1243,6 +1277,33 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 if (rc == 0) rc = validate_write_rel_patterns(m->pattern, "MERGE", error_message);
                 if (rc == 0) rc = validate_write_undef_in_props(m->pattern, &bound, "MERGE", error_message);
                 if (rc == 0) collect_pattern_names(m->pattern, &bound);
+                /* ON CREATE SET / ON MATCH SET reference variables that
+                 * must already be bound (either from earlier clauses or
+                 * by the MERGE pattern itself, which we just collected). */
+                if (rc == 0 && m->on_create) {
+                    for (int si = 0; si < m->on_create->count; si++) {
+                        cypher_set_item *it = (cypher_set_item *)m->on_create->items[si];
+                        if (it && it->expr && check_undef_in_expr(it->expr, &bound, "ON CREATE SET", error_message) < 0) { rc = -1; break; }
+                        if (rc < 0) break;
+                        /* Also: the SET target itself must reference a
+                         * bound variable (e.g. 'x.num = 1' where 'x' is
+                         * not in scope). */
+                        if (it && it->property && it->property->type == AST_NODE_PROPERTY) {
+                            cypher_property *pr = (cypher_property *)it->property;
+                            if (pr->expr && check_undef_in_expr(pr->expr, &bound, "ON CREATE SET", error_message) < 0) { rc = -1; break; }
+                        }
+                    }
+                }
+                if (rc == 0 && m->on_match) {
+                    for (int si = 0; si < m->on_match->count; si++) {
+                        cypher_set_item *it = (cypher_set_item *)m->on_match->items[si];
+                        if (it && it->expr && check_undef_in_expr(it->expr, &bound, "ON MATCH SET", error_message) < 0) { rc = -1; break; }
+                        if (it && it->property && it->property->type == AST_NODE_PROPERTY) {
+                            cypher_property *pr = (cypher_property *)it->property;
+                            if (pr->expr && check_undef_in_expr(pr->expr, &bound, "ON MATCH SET", error_message) < 0) { rc = -1; break; }
+                        }
+                    }
+                }
                 break;
             }
             default:
