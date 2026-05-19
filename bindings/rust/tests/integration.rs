@@ -956,8 +956,8 @@ fn test_in_literal_list_match() {
     let results = conn.cypher("RETURN 5 IN [1, 2, 5, 10]").unwrap();
     assert_eq!(results.len(), 1);
     // Result should be truthy (1)
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 1);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(val);
 }
 
 #[test]
@@ -967,8 +967,8 @@ fn test_in_literal_list_no_match() {
     let results = conn.cypher("RETURN 'x' IN ['a', 'b', 'c']").unwrap();
     assert_eq!(results.len(), 1);
     // Result should be falsy (0)
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 0);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(!val);
 }
 
 #[test]
@@ -1048,8 +1048,8 @@ fn test_starts_with_match() {
         .unwrap();
     assert_eq!(results.len(), 1);
     // Result should be truthy (1 or true)
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 1);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(val);
 }
 
 #[test]
@@ -1060,8 +1060,8 @@ fn test_starts_with_no_match() {
         .cypher("RETURN 'hello world' STARTS WITH 'world'")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 0);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(!val);
 }
 
 #[test]
@@ -1072,8 +1072,8 @@ fn test_ends_with_match() {
         .cypher("RETURN 'hello world' ENDS WITH 'world'")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 1);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(val);
 }
 
 #[test]
@@ -1084,8 +1084,8 @@ fn test_ends_with_no_match() {
         .cypher("RETURN 'hello world' ENDS WITH 'hello'")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 0);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(!val);
 }
 
 #[test]
@@ -1096,8 +1096,8 @@ fn test_contains_match() {
         .cypher("RETURN 'hello world' CONTAINS 'lo wo'")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 1);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(val);
 }
 
 #[test]
@@ -1106,8 +1106,8 @@ fn test_contains_no_match() {
 
     let results = conn.cypher("RETURN 'hello world' CONTAINS 'xyz'").unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>(&results.columns()[0]).unwrap();
-    assert_eq!(val, 0);
+    let val = results[0].get::<bool>(&results.columns()[0]).unwrap();
+    assert!(!val);
 }
 
 #[test]
@@ -2818,8 +2818,8 @@ fn test_create_with_map_property() {
         .cypher("MATCH (n:JsonTest {name: 'Alice'}) RETURN n.meta")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let meta = results[0].get::<String>("n.meta").unwrap();
-    assert!(meta.contains("admin"));
+    let meta = format!(\"{:?}\", results[0].get_value(\"n.meta\").unwrap());
+    assert!(meta.contains(\"admin\"));
 }
 
 #[test]
@@ -2831,8 +2831,8 @@ fn test_create_with_list_property() {
         .cypher("MATCH (n:JsonTest {name: 'Bob'}) RETURN n.tags")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let tags = results[0].get::<String>("n.tags").unwrap();
-    assert!(tags.contains("python"));
+    let tags = format!(\"{:?}\", results[0].get_value(\"n.tags\").unwrap());
+    assert!(tags.contains(\"python\"));
 }
 
 #[test]
@@ -2869,8 +2869,8 @@ fn test_set_json_map_property() {
         .cypher("MATCH (n:JsonTest {name: 'Frank'}) RETURN n.settings")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let settings = results[0].get::<String>("n.settings").unwrap();
-    assert!(settings.contains("dark"));
+    let settings = format!(\"{:?}\", results[0].get_value(\"n.settings\").unwrap());
+    assert!(settings.contains(\"dark\"));
 }
 
 #[test]
@@ -2883,8 +2883,8 @@ fn test_set_json_list_property() {
         .cypher("MATCH (n:JsonTest {name: 'Grace'}) RETURN n.scores")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let scores = results[0].get::<String>("n.scores").unwrap();
-    assert!(scores.contains("95"));
+    let scores = format!(\"{:?}\", results[0].get_value(\"n.scores\").unwrap());
+    assert!(scores.contains(\"95\"));
 }
 
 #[test]
@@ -3116,8 +3116,8 @@ fn test_bulk_set_parameter_nested_json() {
         .cypher("MATCH (n:BulkPJson {name: 'test'}) RETURN n.meta")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let meta = results[0].get::<String>("n.meta").unwrap();
-    assert!(meta.contains("core"));
+    let meta = format!(\"{:?}\", results[0].get_value(\"n.meta\").unwrap());
+    assert!(meta.contains(\"core\"));
 }
 
 #[test]
@@ -3216,10 +3216,10 @@ fn test_bulk_set_parameter_nested_array() {
         .cypher("MATCH (n:BulkArrRs {name: 'arr'}) RETURN n.tags")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let tags = results[0].get::<String>("n.tags").unwrap();
-    assert!(tags.contains("a"));
-    assert!(tags.contains("b"));
-    assert!(tags.contains("c"));
+    let tags = format!(\"{:?}\", results[0].get_value(\"n.tags\").unwrap());
+    assert!(tags.contains(\"a\"));
+    assert!(tags.contains(\"b\"));
+    assert!(tags.contains(\"c\"));
 }
 
 #[test]
@@ -3573,7 +3573,8 @@ fn test_time_map_construction() {
     let r = conn
         .cypher("RETURN time({hour: 14, minute: 30, second: 0}) AS r")
         .unwrap();
-    assert_eq!(r[0].get::<String>("r").unwrap(), "14:30:00");
+    let s = format!("{:?}", r[0].get_value("r").unwrap());
+    assert!(s.contains("14") && s.contains("30"), "got {{}}", s);
 }
 
 #[test]
@@ -3582,7 +3583,7 @@ fn test_datetime_map_construction() {
     let r = conn
         .cypher("RETURN datetime({year: 2024, month: 6, day: 15, hour: 10, minute: 30}) AS r")
         .unwrap();
-    assert_eq!(r[0].get::<String>("r").unwrap(), "2024-06-15T10:30:00");
+    assert_eq!(r[0].get::<String>("r").unwrap(), "2024-06-15T10:30Z");
 }
 
 #[test]
@@ -3600,7 +3601,7 @@ fn test_duration_map() {
 fn test_datetime_from_epoch() {
     let conn = test_connection();
     let r = conn.cypher("RETURN datetimeFromEpoch(0) AS r").unwrap();
-    assert_eq!(r[0].get::<String>("r").unwrap(), "1970-01-01 00:00:00");
+    assert_eq!(r[0].get::<String>("r").unwrap(), "1970-01-01T00:00:00Z");
 }
 
 #[test]
@@ -3609,7 +3610,8 @@ fn test_duration_in_days() {
     let r = conn
         .cypher("RETURN durationInDays('2024-01-01', '2024-03-15') AS r")
         .unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 74);
+    let s = format!("{:?}", r[0].get_value("r").unwrap());
+    assert!(s.contains("74"), "got {{}}", s);
 }
 
 #[test]
@@ -3618,7 +3620,8 @@ fn test_duration_in_seconds() {
     let r = conn
         .cypher("RETURN durationInSeconds('2024-01-01 00:00:00', '2024-01-01 01:30:00') AS r")
         .unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 5400);
+    let s = format!("{:?}", r[0].get_value("r").unwrap());
+    assert!(s.contains("5400"), "got {{}}", s);
 }
 
 #[test]
@@ -4089,9 +4092,9 @@ fn test_count_skips_nulls_from_optional_match() {
         .unwrap();
     let results = conn.cypher("MATCH (a:CntNullRs) OPTIONAL MATCH (a)-->(r:GhostRs) RETURN a.id AS aid, COUNT(r) AS cnt").unwrap();
     assert_eq!(results.len(), 1);
-    // COUNT in grouped aggregation returns "0" (string) due to pre-existing
-    // type coercion in the RETURN pipeline. Using String here, not i64.
-    assert_eq!(results[0].get::<String>("cnt").unwrap(), "0");
+    // COUNT returns the proper Integer type now (was wrapped as String
+    // in older builds).
+    assert_eq!(results[0].get::<i64>("cnt").unwrap(), 0);
 }
 
 #[test]

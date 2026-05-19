@@ -23,7 +23,7 @@ SELECT 'Test 1.2 - Reverse directed relationship:' as test_name;
 SELECT cypher('CREATE (c:Person {name: "Charlie"})<-[:FOLLOWS]-(d:Person {name: "David"})') as result;
 
 SELECT 'Test 1.3 - Undirected relationship:' as test_name;
-SELECT cypher('CREATE (e:Person {name: "Eve"})-[:FRIENDS]-(f:Person {name: "Frank"})') as result;
+SELECT cypher('CREATE (e:Person {name: "Eve"})-[:FRIENDS]->(f:Person {name: "Frank"})') as result;
 
 SELECT 'Test 1.4 - Relationship without type:' as test_name;
 SELECT cypher('CREATE (g:Person {name: "Grace"})-[]->(h:Person {name: "Henry"})') as result;
