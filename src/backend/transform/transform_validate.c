@@ -585,6 +585,20 @@ static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
         for (int i = 0; i < ret->items->count; i++) {
             cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
             if (!item) continue;
+            /* Patterns are not valid expressions in RETURN projection
+             * (Pattern1 [22]). The parser routes a bare pattern in
+             * expression context to AST_NODE_EXISTS_EXPR (pattern-type);
+             * Cypher 9 only permits that inside a WHERE / boolean
+             * context, not as a RETURN value. */
+            if (item->expr &&
+                (item->expr->type == AST_NODE_PATH ||
+                 (item->expr->type == AST_NODE_EXISTS_EXPR &&
+                  ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN))) {
+                set_error(error_message,
+                          "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in RETURN");
+                nset_free(&seen);
+                return -1;
+            }
             if (item->alias) {
                 if (nset_contains(&seen, item->alias)) {
                     set_error(error_message,
@@ -617,6 +631,17 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
         for (int i = 0; i < with->items->count; i++) {
             cypher_return_item *item = (cypher_return_item *)with->items->items[i];
             if (!item || !item->expr) continue;
+            /* Patterns are not valid expressions in WITH projection
+             * (Pattern1 [23]). See the matching RETURN comment for why
+             * EXISTS_EXPR also triggers this. */
+            if (item->expr->type == AST_NODE_PATH ||
+                (item->expr->type == AST_NODE_EXISTS_EXPR &&
+                 ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN)) {
+                set_error(error_message,
+                          "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in WITH");
+                nset_free(&seen);
+                return -1;
+            }
             /* Every non-identifier expression in WITH must be aliased.
              * `WITH a` is fine (carries the bare variable forward), but
              * `WITH a, count(*)` requires `count(*) AS c` (With4 [5]). */
