@@ -142,6 +142,8 @@ typedef struct {
     dynamic_buffer order_by;  /* ORDER BY */
     int limit;                /* LIMIT value, -1 if not set */
     int offset;               /* OFFSET value, -1 if not set */
+    char *limit_expr;         /* Raw SQL expression for LIMIT (overrides limit when non-NULL). Owned. */
+    char *offset_expr;        /* Raw SQL expression for OFFSET (overrides offset). Owned. */
     int select_count;         /* Number of SELECT expressions */
     int cte_count;            /* Number of CTEs */
     int where_count;          /* Number of WHERE conditions */
@@ -232,6 +234,11 @@ void sql_order_by(sql_builder *b, const char *expr, bool desc);
  * offset: Rows to skip (-1 to not set)
  */
 void sql_limit(sql_builder *b, int limit, int offset);
+
+/* Set raw SQL expressions for LIMIT / OFFSET. NULL leaves the existing
+ * value untouched. Strings are copied. Used when LIMIT/OFFSET is a
+ * parameter or arbitrary expression rather than a constant int. */
+void sql_limit_expr(sql_builder *b, const char *limit_expr, const char *offset_expr);
 
 /*
  * Add a CTE (Common Table Expression).

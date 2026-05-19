@@ -421,17 +421,33 @@ return_star_done:
         if (ret->limit || ret->skip) {
             int limit_val = -1;
             int offset_val = -1;
+            char *limit_param = NULL;
+            char *offset_param = NULL;
 
             if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
                 cypher_literal *lit = (cypher_literal*)ret->limit;
                 if (lit->literal_type == LITERAL_INTEGER) {
                     limit_val = (int)lit->value.integer;
                 }
+            } else if (ret->limit && ret->limit->type == AST_NODE_PARAMETER) {
+                cypher_parameter *p = (cypher_parameter*)ret->limit;
+                if (p->name) {
+                    char buf[128]; snprintf(buf, sizeof(buf), ":%s", p->name);
+                    limit_param = strdup(buf);
+                    register_parameter(ctx, p->name);
+                }
             }
             if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
                 cypher_literal *lit = (cypher_literal*)ret->skip;
                 if (lit->literal_type == LITERAL_INTEGER) {
                     offset_val = (int)lit->value.integer;
+                }
+            } else if (ret->skip && ret->skip->type == AST_NODE_PARAMETER) {
+                cypher_parameter *p = (cypher_parameter*)ret->skip;
+                if (p->name) {
+                    char buf[128]; snprintf(buf, sizeof(buf), ":%s", p->name);
+                    offset_param = strdup(buf);
+                    register_parameter(ctx, p->name);
                 }
             }
 
@@ -441,6 +457,10 @@ return_star_done:
             }
 
             sql_limit(ctx->unified_builder, limit_val, offset_val);
+            if (limit_param || offset_param) {
+                sql_limit_expr(ctx->unified_builder, limit_param, offset_param);
+                free(limit_param); free(offset_param);
+            }
         }
 
         /* Add pending property JOINs from aggregate functions */
@@ -603,11 +623,20 @@ return_star_done:
             if (ret->limit || ret->skip) {
                 int limit_val = -1;
                 int offset_val = -1;
+                char *limit_param = NULL;
+                char *offset_param = NULL;
 
                 if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)ret->limit;
                     if (lit->literal_type == LITERAL_INTEGER) {
                         limit_val = (int)lit->value.integer;
+                    }
+                } else if (ret->limit && ret->limit->type == AST_NODE_PARAMETER) {
+                    cypher_parameter *p = (cypher_parameter*)ret->limit;
+                    if (p->name) {
+                        char buf[128]; snprintf(buf, sizeof(buf), ":%s", p->name);
+                        limit_param = strdup(buf);
+                        register_parameter(ctx, p->name);
                     }
                 }
                 if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
@@ -615,9 +644,20 @@ return_star_done:
                     if (lit->literal_type == LITERAL_INTEGER) {
                         offset_val = (int)lit->value.integer;
                     }
+                } else if (ret->skip && ret->skip->type == AST_NODE_PARAMETER) {
+                    cypher_parameter *p = (cypher_parameter*)ret->skip;
+                    if (p->name) {
+                        char buf[128]; snprintf(buf, sizeof(buf), ":%s", p->name);
+                        offset_param = strdup(buf);
+                        register_parameter(ctx, p->name);
+                    }
                 }
 
                 sql_limit(ctx->unified_builder, limit_val, offset_val);
+                if (limit_param || offset_param) {
+                    sql_limit_expr(ctx->unified_builder, limit_param, offset_param);
+                    free(limit_param); free(offset_param);
+                }
             }
 
             /* Finalize the unified builder into sql_buffer */
