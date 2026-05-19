@@ -279,6 +279,16 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
             /* UNION query - transform and execute via the transform layer */
             {
                 CYPHER_DEBUG("Executing UNION query");
+                /* Validate UNION shape (column agreement, no UNION/UNION ALL
+                 * mixing) before transform. */
+                {
+                    char *uerr = NULL;
+                    if (transform_validate_union((cypher_union *)ast, &uerr) < 0) {
+                        set_result_error(result, uerr ? uerr : "UNION validation failed");
+                        if (uerr) free(uerr);
+                        return result;
+                    }
+                }
                 cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
                 if (!ctx) {
                     set_result_error(result, "Failed to create transform context");

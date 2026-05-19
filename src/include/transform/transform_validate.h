@@ -17,4 +17,8 @@
 
 int transform_validate_query(cypher_query *query, char **error_message);
 
+/* Validate a UNION tree: column-name agreement across branches, and no
+ * mixing of UNION with UNION ALL. */
+int transform_validate_union(cypher_union *u, char **error_message);
+
 #endif

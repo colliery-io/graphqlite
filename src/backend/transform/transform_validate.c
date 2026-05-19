@@ -593,6 +593,15 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
         for (int i = 0; i < with->items->count; i++) {
             cypher_return_item *item = (cypher_return_item *)with->items->items[i];
             if (!item || !item->expr) continue;
+            /* Every non-identifier expression in WITH must be aliased.
+             * `WITH a` is fine (carries the bare variable forward), but
+             * `WITH a, count(*)` requires `count(*) AS c` (With4 [5]). */
+            if (!item->alias && item->expr->type != AST_NODE_IDENTIFIER) {
+                set_error(error_message,
+                          "SyntaxError: NoExpressionAlias: every WITH item that is not a bare variable must be aliased");
+                nset_free(&seen);
+                return -1;
+            }
             if (item->alias) {
                 if (nset_contains(&seen, item->alias)) {
                     set_error(error_message,
@@ -1072,6 +1081,113 @@ static int validate_unwind_clause(cypher_unwind *uw, var_type_ctx *vctx_out,
         vctx_register(vctx_out, uw->alias, elem_t);
     }
     return 0;
+}
+
+/* Return the RETURN clause of a single-query AST, or NULL if absent. */
+static cypher_return *find_terminal_return(cypher_query *q)
+{
+    if (!q || !q->clauses) return NULL;
+    for (int i = q->clauses->count - 1; i >= 0; i--) {
+        ast_node *c = q->clauses->items[i];
+        if (c && c->type == AST_NODE_RETURN) return (cypher_return *)c;
+    }
+    return NULL;
+}
+
+/* Collect column names from a query's RETURN clause into `out`. Uses
+ * alias if present, otherwise a synthesized name from the expression
+ * (currently the alias-or-NULL slot). Returns -1 if no RETURN. */
+static int collect_branch_columns(cypher_query *q, ast_list **out_items)
+{
+    cypher_return *r = find_terminal_return(q);
+    if (!r) return -1;
+    *out_items = r->items;
+    return 0;
+}
+
+static int validate_union_recursive(cypher_union *u, bool *first_all_seen,
+                                    bool *first_all, ast_list **first_items,
+                                    char **error_message)
+{
+    /* Check this node's UNION/UNION ALL flag against the first seen. */
+    if (!*first_all_seen) {
+        *first_all = u->all;
+        *first_all_seen = true;
+    } else if (u->all != *first_all) {
+        set_error(error_message,
+                  "SyntaxError: InvalidClauseComposition: cannot mix UNION and UNION ALL");
+        return -1;
+    }
+    /* Recurse left if it's another UNION; otherwise treat as query. */
+    if (u->left && u->left->type == AST_NODE_UNION) {
+        if (validate_union_recursive((cypher_union *)u->left, first_all_seen,
+                                     first_all, first_items, error_message) < 0)
+            return -1;
+    } else if (u->left && (u->left->type == AST_NODE_QUERY ||
+                            u->left->type == AST_NODE_SINGLE_QUERY)) {
+        ast_list *items = NULL;
+        if (collect_branch_columns((cypher_query *)u->left, &items) == 0 && items) {
+            if (!*first_items) {
+                *first_items = items;
+            } else {
+                /* Compare column count and alias names. */
+                if (items->count != (*first_items)->count) {
+                    set_error(error_message,
+                              "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
+                    return -1;
+                }
+                for (int i = 0; i < items->count; i++) {
+                    cypher_return_item *a = (cypher_return_item *)(*first_items)->items[i];
+                    cypher_return_item *b = (cypher_return_item *)items->items[i];
+                    const char *an = a ? a->alias : NULL;
+                    const char *bn = b ? b->alias : NULL;
+                    if (!an || !bn || strcmp(an, bn) != 0) {
+                        set_error(error_message,
+                                  "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+    /* Right side is always a query. */
+    if (u->right && (u->right->type == AST_NODE_QUERY ||
+                     u->right->type == AST_NODE_SINGLE_QUERY)) {
+        ast_list *items = NULL;
+        if (collect_branch_columns((cypher_query *)u->right, &items) == 0 && items) {
+            if (!*first_items) {
+                *first_items = items;
+            } else {
+                if (items->count != (*first_items)->count) {
+                    set_error(error_message,
+                              "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
+                    return -1;
+                }
+                for (int i = 0; i < items->count; i++) {
+                    cypher_return_item *a = (cypher_return_item *)(*first_items)->items[i];
+                    cypher_return_item *b = (cypher_return_item *)items->items[i];
+                    const char *an = a ? a->alias : NULL;
+                    const char *bn = b ? b->alias : NULL;
+                    if (!an || !bn || strcmp(an, bn) != 0) {
+                        set_error(error_message,
+                                  "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int transform_validate_union(cypher_union *u, char **error_message)
+{
+    if (!u) return 0;
+    bool first_all_seen = false;
+    bool first_all = false;
+    ast_list *first_items = NULL;
+    return validate_union_recursive(u, &first_all_seen, &first_all,
+                                    &first_items, error_message);
 }
 
 int transform_validate_query(cypher_query *query, char **error_message)
