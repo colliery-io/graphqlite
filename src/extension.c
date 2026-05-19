@@ -302,8 +302,8 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             col_type = result->data_types[row][col];
                         }
 
-                        /* Check if value is already JSON (starts with [ or {) */
-                        if (val[0] == '[' || val[0] == '{') {
+                        /* Check if value is already JSON (starts with [, { or "). */
+                        if (val[0] == '[' || val[0] == '{' || val[0] == '"') {
                             size_t slen = strlen(val);
                             if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
                         } else if (col_type == SQLITE_INTEGER || col_type == SQLITE_FLOAT) {

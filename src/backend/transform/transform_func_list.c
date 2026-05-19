@@ -58,17 +58,42 @@ int transform_tostring_function(cypher_transform_context *ctx, cypher_function_c
         return -1;
     }
 
-    /* Special-case boolean literals: the strict UDF can't distinguish a
-     * boolean from an integer 0/1 once compiled to SQL, so it renders
-     * `toString(true)` as "1" instead of "true". Emit text directly when
-     * we can see the literal in the AST. */
+    /* Special-case boolean expressions: SQLite can't tell a boolean
+     * apart from integer 0/1 at SQL level, so `_gql_to_string_strict(true)`
+     * returns "1". Detect the AST shapes that *must* produce a boolean
+     * (literal true/false, NOT, AND/OR/XOR, comparison ops) and emit a
+     * pre-JSON-encoded string so the JSON formatter's "starts with [, {, \""
+     * fast-path passes it through verbatim. */
     ast_node *arg = func_call->args->items[0];
-    if (arg && arg->type == AST_NODE_LITERAL) {
-        cypher_literal *lit = (cypher_literal *)arg;
-        if (lit->literal_type == LITERAL_BOOLEAN) {
-            append_sql(ctx, "'%s'", lit->value.boolean ? "true" : "false");
-            return 0;
+    bool is_bool_ast = false;
+    if (arg) {
+        if (arg->type == AST_NODE_LITERAL &&
+            ((cypher_literal *)arg)->literal_type == LITERAL_BOOLEAN) {
+            is_bool_ast = true;
+        } else if (arg->type == AST_NODE_NOT_EXPR ||
+                   arg->type == AST_NODE_NULL_CHECK) {
+            is_bool_ast = true;
+        } else if (arg->type == AST_NODE_BINARY_OP) {
+            binary_op_type op = ((cypher_binary_op *)arg)->op_type;
+            if (op == BINARY_OP_AND || op == BINARY_OP_OR || op == BINARY_OP_XOR ||
+                op == BINARY_OP_EQ  || op == BINARY_OP_NEQ ||
+                op == BINARY_OP_LT  || op == BINARY_OP_GT  ||
+                op == BINARY_OP_LTE || op == BINARY_OP_GTE ||
+                op == BINARY_OP_IN  || op == BINARY_OP_STARTS_WITH ||
+                op == BINARY_OP_ENDS_WITH || op == BINARY_OP_CONTAINS ||
+                op == BINARY_OP_REGEX_MATCH)
+                is_bool_ast = true;
         }
+    }
+    if (is_bool_ast) {
+        /* Wrap as ('"' || (CASE WHEN expr THEN 'true' ELSE 'false' END) || '"')
+         * so the JSON formatter sees the quoted-string form. */
+        append_sql(ctx, "('\"' || (CASE WHEN ");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, " IS NULL THEN NULL WHEN ");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, " THEN 'true' ELSE 'false' END) || '\"')");
+        return 0;
     }
 
     /* Strict UDF rejects lists/maps/nodes/relationships/paths (TypeError)
