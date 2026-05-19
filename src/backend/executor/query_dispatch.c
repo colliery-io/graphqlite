@@ -2501,15 +2501,71 @@ static void project_return_row_from_var_map(cypher_executor *executor,
                 }
             }
         } else if (expr && expr->type == AST_NODE_IDENTIFIER) {
+            /* Project a bare node/edge variable as the full JSON form the
+             * MATCH+RETURN path would have produced. Required so MATCH
+             * (n) ... SET ... RETURN n returns (:Label {props}) and not
+             * a bare id. */
             const char *var_name = ((cypher_identifier*)expr)->name;
             int node_id = get_variable_node_id(var_map, var_name);
             int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
-            int id = (node_id >= 0) ? node_id : edge_id;
-            if (id >= 0) {
-                char id_str[32];
-                snprintf(id_str, sizeof(id_str), "%d", id);
-                result->data[row_idx][i] = strdup(id_str);
-                result->data_types[row_idx][i] = SQLITE_INTEGER;
+            if (node_id >= 0) {
+                char sql[2048];
+                snprintf(sql, sizeof(sql),
+                    "SELECT json_object('id', %d, "
+                    "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %d), json('[]')), "
+                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                    "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %d AND npt.key_id = pk.id), "
+                    "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %d AND npi.key_id = pk.id), "
+                    "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %d AND npr.key_id = pk.id), "
+                    "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %d AND npb.key_id = pk.id), "
+                    "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %d AND npj.key_id = pk.id))) "
+                    "FROM property_keys pk WHERE EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %d AND key_id = pk.id)), json('{}')))",
+                    node_id, node_id, node_id, node_id, node_id, node_id, node_id,
+                    node_id, node_id, node_id, node_id, node_id);
+                sqlite3_stmt *stmt;
+                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char *val = (const char *)sqlite3_column_text(stmt, 0);
+                        if (val) {
+                            result->data[row_idx][i] = strdup(val);
+                            result->data_types[row_idx][i] = SQLITE_TEXT;
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+                }
+            } else if (edge_id >= 0) {
+                char sql[2048];
+                snprintf(sql, sizeof(sql),
+                    "SELECT json_object('id', %d, "
+                    "'type', (SELECT type FROM edges WHERE id = %d), "
+                    "'startNode', (SELECT source_id FROM edges WHERE id = %d), "
+                    "'endNode', (SELECT target_id FROM edges WHERE id = %d), "
+                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                    "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %d AND ept.key_id = pk.id), "
+                    "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %d AND epi.key_id = pk.id), "
+                    "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %d AND epr.key_id = pk.id), "
+                    "(SELECT json(CASE WHEN epb.value THEN 'true' ELSE 'false' END) FROM edge_props_bool epb WHERE epb.edge_id = %d AND epb.key_id = pk.id))) "
+                    "FROM property_keys pk WHERE EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %d AND key_id = pk.id) "
+                    "OR EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %d AND key_id = pk.id)), json('{}')))",
+                    edge_id, edge_id, edge_id, edge_id, edge_id, edge_id, edge_id, edge_id,
+                    edge_id, edge_id, edge_id, edge_id);
+                sqlite3_stmt *stmt;
+                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char *val = (const char *)sqlite3_column_text(stmt, 0);
+                        if (val) {
+                            result->data[row_idx][i] = strdup(val);
+                            result->data_types[row_idx][i] = SQLITE_TEXT;
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+                }
             }
         } else if (expr && expr->type == AST_NODE_FUNCTION_CALL) {
             /* Handle entity-introspection functions on var_map entries:
