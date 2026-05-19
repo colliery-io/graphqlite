@@ -10,6 +10,13 @@
 #include <regex.h>
 #include <time.h>
 #include <stdbool.h>
+
+/* MSYS2/MinGW's <time.h> doesn't expose `timegm`; the Microsoft CRT
+ * equivalent is `_mkgmtime`. Provide a portable alias so the temporal
+ * UDFs compile on Windows. */
+#if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
+#  define timegm(tm) _mkgmtime(tm)
+#endif
 #include "executor/cypher_schema.h"
 #include "executor/cypher_executor.h"
 #include "executor/agtype.h"

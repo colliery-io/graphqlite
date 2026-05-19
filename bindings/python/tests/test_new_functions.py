@@ -315,20 +315,24 @@ class TestTemporalFromEpoch:
 
 
 class TestDurationIn:
+    # durationInDays / durationInSeconds now return a spec-compliant
+    # Duration object ({"days": …, "seconds": …, "_iso8601": …}) rather
+    # than a bare int. The pre-spec-push tests asserted int values;
+    # we now look at the corresponding Duration field.
     def test_duration_in_days(self, db):
         results = db.cypher(
             "RETURN durationInDays('2024-01-01', '2024-03-15') AS result"
         )
         val = results[0]["result"]
         # Jan has 31 days, Feb has 29 (2024 is leap year), + 14 days in March = 74
-        assert int(val) == 74
+        assert val["days"] == 74
 
     def test_duration_in_seconds(self, db):
         results = db.cypher(
             "RETURN durationInSeconds('2024-01-01 00:00:00', '2024-01-01 01:30:00') AS result"
         )
         val = results[0]["result"]
-        assert int(val) == 5400
+        assert val["seconds"] == 5400
 
 
 class TestDateTruncate:
@@ -519,14 +523,15 @@ class TestTemporalEdgeCases:
 
     def test_duration_in_days_same_date(self, db):
         results = db.cypher("RETURN durationInDays('2024-01-01', '2024-01-01') AS result")
-        assert results[0]["result"] == 0
+        # Zero-length duration carries the ISO 8601 sentinel 'PT0S'.
+        assert results[0]["result"]["days"] == 0
 
     def test_duration_in_seconds_negative(self, db):
         """Earlier date first gives negative duration."""
         results = db.cypher(
             "RETURN durationInSeconds('2024-01-02 00:00:00', '2024-01-01 00:00:00') AS result"
         )
-        assert results[0]["result"] < 0
+        assert results[0]["result"]["seconds"] < 0
 
     def test_datetime_from_epoch_negative(self, db):
         """Negative epoch = before 1970."""
