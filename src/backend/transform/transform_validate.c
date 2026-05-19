@@ -1160,6 +1160,28 @@ static int collect_branch_columns(cypher_query *q, ast_list **out_items)
     return 0;
 }
 
+/* Effective column name for a RETURN item: explicit alias if present,
+ * else the rendered expression (bare identifier, property access, …).
+ * Returns a temporary buffer pointer per call; not thread-safe. */
+static const char *column_name_of(cypher_return_item *it)
+{
+    if (!it) return NULL;
+    if (it->alias) return it->alias;
+    if (!it->expr) return NULL;
+    if (it->expr->type == AST_NODE_IDENTIFIER) {
+        return ((cypher_identifier *)it->expr)->name;
+    }
+    if (it->expr->type == AST_NODE_PROPERTY) {
+        static char buf[256];
+        cypher_property *p = (cypher_property *)it->expr;
+        const char *base = (p->expr && p->expr->type == AST_NODE_IDENTIFIER)
+            ? ((cypher_identifier *)p->expr)->name : "?";
+        snprintf(buf, sizeof(buf), "%s.%s", base, p->property_name ? p->property_name : "?");
+        return buf;
+    }
+    return NULL;
+}
+
 static int validate_union_recursive(cypher_union *u, bool *first_all_seen,
                                     bool *first_all, ast_list **first_items,
                                     char **error_message)
@@ -1194,8 +1216,9 @@ static int validate_union_recursive(cypher_union *u, bool *first_all_seen,
                 for (int i = 0; i < items->count; i++) {
                     cypher_return_item *a = (cypher_return_item *)(*first_items)->items[i];
                     cypher_return_item *b = (cypher_return_item *)items->items[i];
-                    const char *an = a ? a->alias : NULL;
-                    const char *bn = b ? b->alias : NULL;
+                    const char *an = column_name_of(a);
+                    char a_copy[256]; if (an) { snprintf(a_copy, sizeof(a_copy), "%s", an); an = a_copy; }
+                    const char *bn = column_name_of(b);
                     if (!an || !bn || strcmp(an, bn) != 0) {
                         set_error(error_message,
                                   "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
@@ -1221,8 +1244,9 @@ static int validate_union_recursive(cypher_union *u, bool *first_all_seen,
                 for (int i = 0; i < items->count; i++) {
                     cypher_return_item *a = (cypher_return_item *)(*first_items)->items[i];
                     cypher_return_item *b = (cypher_return_item *)items->items[i];
-                    const char *an = a ? a->alias : NULL;
-                    const char *bn = b ? b->alias : NULL;
+                    const char *an = column_name_of(a);
+                    char a_copy[256]; if (an) { snprintf(a_copy, sizeof(a_copy), "%s", an); an = a_copy; }
+                    const char *bn = column_name_of(b);
                     if (!an || !bn || strcmp(an, bn) != 0) {
                         set_error(error_message,
                                   "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
