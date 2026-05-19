@@ -79,7 +79,10 @@ def values_equal(a: Any, b: Any) -> bool:
             return False
         return all(values_equal(a[k], b[k]) for k in a)
     if isinstance(a, Node) and isinstance(b, Node):
-        return a.labels == b.labels and _props_equal(a.properties, b.properties)
+        # Labels are an unordered set per Cypher spec; TCK expected text
+        # encodes a particular order but that's a textual convention, not
+        # semantic.
+        return set(a.labels) == set(b.labels) and _props_equal(a.properties, b.properties)
     if isinstance(a, Relationship) and isinstance(b, Relationship):
         return a.type == b.type and _props_equal(a.properties, b.properties)
     if isinstance(a, Path) and isinstance(b, Path):
