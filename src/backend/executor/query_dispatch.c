@@ -2511,6 +2511,57 @@ static void project_return_row_from_var_map(cypher_executor *executor,
                 result->data[row_idx][i] = strdup(id_str);
                 result->data_types[row_idx][i] = SQLITE_INTEGER;
             }
+        } else if (expr && expr->type == AST_NODE_FUNCTION_CALL) {
+            /* Handle entity-introspection functions on var_map entries:
+             * labels(n), id(n), type(r). Build a JSON-array string for
+             * labels so the extension's JSON formatter passes it
+             * through verbatim. */
+            cypher_function_call *fc = (cypher_function_call*)expr;
+            if (!fc->function_name || !fc->args || fc->args->count != 1) continue;
+            ast_node *arg = fc->args->items[0];
+            if (!arg || arg->type != AST_NODE_IDENTIFIER) continue;
+            const char *var_name = ((cypher_identifier*)arg)->name;
+            int node_id = get_variable_node_id(var_map, var_name);
+            int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
+            if (strcasecmp(fc->function_name, "labels") == 0 && node_id >= 0) {
+                char sql[256];
+                snprintf(sql, sizeof(sql),
+                    "SELECT COALESCE(json_group_array(label), json('[]')) "
+                    "FROM node_labels WHERE node_id = %d", node_id);
+                sqlite3_stmt *stmt;
+                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char *val = (const char*)sqlite3_column_text(stmt, 0);
+                        if (val) {
+                            result->data[row_idx][i] = strdup(val);
+                            result->data_types[row_idx][i] = SQLITE_TEXT;
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+                }
+            } else if (strcasecmp(fc->function_name, "id") == 0) {
+                int id = (node_id >= 0) ? node_id : edge_id;
+                if (id >= 0) {
+                    char buf[32]; snprintf(buf, sizeof(buf), "%d", id);
+                    result->data[row_idx][i] = strdup(buf);
+                    result->data_types[row_idx][i] = SQLITE_INTEGER;
+                }
+            } else if (strcasecmp(fc->function_name, "type") == 0 && edge_id >= 0) {
+                char sql[128];
+                snprintf(sql, sizeof(sql),
+                    "SELECT type FROM edges WHERE id = %d", edge_id);
+                sqlite3_stmt *stmt;
+                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char *val = (const char*)sqlite3_column_text(stmt, 0);
+                        if (val) {
+                            result->data[row_idx][i] = strdup(val);
+                            result->data_types[row_idx][i] = SQLITE_TEXT;
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+                }
+            }
         }
     }
 }
