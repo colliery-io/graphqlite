@@ -60,7 +60,7 @@ def parse_value(text: str) -> Any:
     return v
 
 
-def values_equal(a: Any, b: Any) -> bool:
+def values_equal(a: Any, b: Any, lists_unordered: bool = False) -> bool:
     # Normalize: the extension emits nodes/relationships as dicts; the TCK
     # comparator parses them into Node/Relationship dataclasses. Coerce dicts
     # that look like nodes/rels into the dataclass before comparing.
@@ -73,11 +73,26 @@ def values_equal(a: Any, b: Any) -> bool:
             return float(a) == float(b)
         return False
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(values_equal(x, y) for x, y in zip(a, b))
+        if len(a) != len(b):
+            return False
+        if lists_unordered:
+            # Multiset comparison on lists. Match each expected element to
+            # exactly one remaining actual element.
+            remaining = list(b)
+            for x in a:
+                for i, y in enumerate(remaining):
+                    if values_equal(x, y, lists_unordered=lists_unordered):
+                        remaining.pop(i)
+                        break
+                else:
+                    return False
+            return True
+        return all(values_equal(x, y, lists_unordered=lists_unordered)
+                   for x, y in zip(a, b))
     if isinstance(a, dict) and isinstance(b, dict):
         if a.keys() != b.keys():
             return False
-        return all(values_equal(a[k], b[k]) for k in a)
+        return all(values_equal(a[k], b[k], lists_unordered=lists_unordered) for k in a)
     if isinstance(a, Node) and isinstance(b, Node):
         # Labels are an unordered set per Cypher spec; TCK expected text
         # encodes a particular order but that's a textual convention, not

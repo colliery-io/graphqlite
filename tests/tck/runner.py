@@ -55,6 +55,13 @@ _STEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^executing control query$"), "executing_query"),
     (re.compile(r"^the result should be, in order$"), "result_ordered"),
     (re.compile(r"^the result should be, in any order$"), "result_any_order"),
+    # openCypher TCK ships a variant where the row order doesn't matter
+    # AND list-valued cells compare as multisets (used in DISTINCT/aggregation
+    # scenarios where the order of returned list elements is unspecified).
+    (re.compile(r"^the result should be \(ignoring element order for lists\)$"),
+     "result_any_order_lists_unordered"),
+    (re.compile(r"^the result should be, in order \(ignoring element order for lists\)$"),
+     "result_ordered_lists_unordered"),
     (re.compile(r"^the result should be empty$"), "result_empty"),
     (re.compile(r"^a (?P<err>\w+(?:Error|Failure)) should be raised at \w+"), "expect_error"),
     (re.compile(r"^no side effects$"), "no_side_effects"),
@@ -231,6 +238,16 @@ def _h_result_any_order(step, state, backend, m):
     _compare_result_table(state.last_result, step.table, ordered=False)
     return _PassMarker
 
+def _h_result_any_order_lists_unordered(step, state, backend, m):
+    _compare_result_table(state.last_result, step.table, ordered=False,
+                          lists_unordered=True)
+    return _PassMarker
+
+def _h_result_ordered_lists_unordered(step, state, backend, m):
+    _compare_result_table(state.last_result, step.table, ordered=True,
+                          lists_unordered=True)
+    return _PassMarker
+
 def _h_result_empty(step, state, backend, m):
     if state.last_result is None:
         raise _Mismatch("no result captured")
@@ -264,6 +281,8 @@ _HANDLERS = {
     "executing_query":  _h_executing_query,
     "result_ordered":   _h_result_ordered,
     "result_any_order": _h_result_any_order,
+    "result_any_order_lists_unordered": _h_result_any_order_lists_unordered,
+    "result_ordered_lists_unordered":   _h_result_ordered_lists_unordered,
     "result_empty":     _h_result_empty,
     "expect_error":     _h_expect_error,
     "no_side_effects":  _h_no_side_effects,
@@ -271,7 +290,8 @@ _HANDLERS = {
 }
 
 
-def _compare_result_table(result: QueryResult | None, table: list[list[str]] | None, ordered: bool) -> None:
+def _compare_result_table(result: QueryResult | None, table: list[list[str]] | None,
+                          ordered: bool, lists_unordered: bool = False) -> None:
     if table is None:
         raise _Mismatch("missing expected table")
     if not table:
@@ -303,21 +323,22 @@ def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N
         )
     if ordered:
         for e, a in zip(expected_rows, actual_rows):
-            if not _rows_equal(e, a):
+            if not _rows_equal(e, a, lists_unordered=lists_unordered):
                 raise _Mismatch("row mismatch", expected=e, actual=a)
     else:
         # Multiset comparison.
         remaining = list(actual_rows)
         for e in expected_rows:
             for i, a in enumerate(remaining):
-                if _rows_equal(e, a):
+                if _rows_equal(e, a, lists_unordered=lists_unordered):
                     remaining.pop(i)
                     break
             else:
                 raise _Mismatch("unmatched expected row", expected=e, actual=remaining)
 
 
-def _rows_equal(expected: list[Any], actual: list[Any]) -> bool:
+def _rows_equal(expected: list[Any], actual: list[Any], lists_unordered: bool = False) -> bool:
     if len(expected) != len(actual):
         return False
-    return all(values_equal(e, a) for e, a in zip(expected, actual))
+    return all(values_equal(e, a, lists_unordered=lists_unordered)
+               for e, a in zip(expected, actual))
