@@ -1793,6 +1793,13 @@ void cypher_yyerror(CYPHER_YYLTYPE *yylloc, cypher_parser_context *context, cons
         return;
     }
 
+    /* If the scanner already raised a specific error (e.g. IntegerOverflow),
+     * keep its message — Bison's generic 'syntax error, unexpected end of
+     * file' would otherwise mask it. */
+    if (context->has_error && context->error_message) {
+        return;
+    }
+
     context->has_error = true;
     context->error_location = yylloc ? yylloc->first_line : -1;
     context->error_column = yylloc ? yylloc->first_column : -1;

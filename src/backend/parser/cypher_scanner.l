@@ -293,21 +293,29 @@ static void prepare_string_token(CypherScannerState *state, CypherTokenType type
 static void prepare_integer_token(CypherScannerState *state, const char *text)
 {
     prepare_token(state, CYPHER_TOKEN_INTEGER, text);
-    
-    /* Parse integer with proper base detection */
+
+    /* Parse integer with proper base detection.
+     * strtoll sets errno=ERANGE on overflow and clamps to LLONG_MIN/MAX;
+     * surface that as SyntaxError: IntegerOverflow. */
+    errno = 0;
+    long long parsed;
     if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-        /* Hexadecimal */
-        state->current_token.value.integer = strtoll(text, NULL, 16);
+        parsed = strtoll(text, NULL, 16);
     } else if (text[0] == '0' && (text[1] == 'o' || text[1] == 'O')) {
-        /* openCypher octal: '0o…' — skip the 0o prefix before octal parse. */
-        state->current_token.value.integer = strtoll(text + 2, NULL, 8);
+        parsed = strtoll(text + 2, NULL, 8);
     } else if (text[0] == '0' && strlen(text) > 1) {
-        /* Legacy C-style octal: '0…' */
-        state->current_token.value.integer = strtoll(text, NULL, 8);
+        parsed = strtoll(text, NULL, 8);
     } else {
-        /* Decimal */
-        state->current_token.value.integer = strtoll(text, NULL, 10);
+        parsed = strtoll(text, NULL, 10);
     }
+    if (errno == ERANGE) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "SyntaxError: IntegerOverflow: integer literal '%s' is out of range",
+                 text);
+        scanner_error(state, buf);
+    }
+    state->current_token.value.integer = parsed;
 }
 
 static void prepare_decimal_token(CypherScannerState *state, const char *text)
