@@ -524,63 +524,6 @@ static int validate_skip_limit(ast_node *expr, const char *kw, char **error_mess
     return -1;
 }
 
-/* Walk a clause's expressions with the given var-type context, also
- * picking up new var bindings from WITH items along the way. */
-static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
-                                  char **error_message)
-{
-    if (!ret) return 0;
-    if (ret->items) {
-        for (int i = 0; i < ret->items->count; i++) {
-            cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
-            if (item && item->expr) {
-                if (validate_expr(item->expr, error_message) < 0) return -1;
-                if (validate_expr_typed(item->expr, vctx, error_message) < 0) return -1;
-            }
-        }
-    }
-    if (validate_skip_limit(ret->skip, "SKIP", error_message) < 0) return -1;
-    if (validate_skip_limit(ret->limit, "LIMIT", error_message) < 0) return -1;
-    return 0;
-}
-
-static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
-                                 char **error_message)
-{
-    if (!with) return 0;
-    if (with->items) {
-        for (int i = 0; i < with->items->count; i++) {
-            cypher_return_item *item = (cypher_return_item *)with->items->items[i];
-            if (!item || !item->expr) continue;
-            if (validate_expr(item->expr, error_message) < 0) return -1;
-            if (validate_expr_typed(item->expr, vctx_out, error_message) < 0) return -1;
-            /* Track the alias's bound type for downstream clauses. */
-            if (item->alias) {
-                vctx_register(vctx_out, item->alias,
-                              type_of_literal_expr(item->expr));
-            }
-        }
-    }
-    if (with->where) {
-        if (validate_expr(with->where, error_message) < 0) return -1;
-        if (validate_expr_typed(with->where, vctx_out, error_message) < 0) return -1;
-    }
-    if (validate_skip_limit(with->skip, "SKIP", error_message) < 0) return -1;
-    if (validate_skip_limit(with->limit, "LIMIT", error_message) < 0) return -1;
-    return 0;
-}
-
-static int validate_match_clause(cypher_match *match, const var_type_ctx *vctx,
-                                  char **error_message)
-{
-    if (!match) return 0;
-    if (match->where) {
-        if (validate_expr(match->where, error_message) < 0) return -1;
-        if (validate_expr_typed(match->where, vctx, error_message) < 0) return -1;
-    }
-    return 0;
-}
-
 /* Track names bound by MATCH patterns so CREATE can detect re-binding. */
 typedef struct {
     const char **names;
@@ -604,6 +547,90 @@ static void nset_add(name_set *s, const char *name) {
         s->names = realloc(s->names, s->cap * sizeof(const char *));
     }
     s->names[s->count++] = name;
+}
+
+/* Walk a clause's expressions with the given var-type context, also
+ * picking up new var bindings from WITH items along the way. */
+static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
+                                  char **error_message)
+{
+    if (!ret) return 0;
+    if (ret->items) {
+        /* Duplicate explicit aliases in RETURN are a ColumnNameConflict. */
+        name_set seen; nset_init(&seen);
+        for (int i = 0; i < ret->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
+            if (!item) continue;
+            if (item->alias) {
+                if (nset_contains(&seen, item->alias)) {
+                    set_error(error_message,
+                              "SyntaxError: ColumnNameConflict: Multiple result columns with the same name `%s`",
+                              item->alias);
+                    nset_free(&seen);
+                    return -1;
+                }
+                nset_add(&seen, item->alias);
+            }
+            if (item->expr) {
+                if (validate_expr(item->expr, error_message) < 0) { nset_free(&seen); return -1; }
+                if (validate_expr_typed(item->expr, vctx, error_message) < 0) { nset_free(&seen); return -1; }
+            }
+        }
+        nset_free(&seen);
+    }
+    if (validate_skip_limit(ret->skip, "SKIP", error_message) < 0) return -1;
+    if (validate_skip_limit(ret->limit, "LIMIT", error_message) < 0) return -1;
+    return 0;
+}
+
+static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
+                                 char **error_message)
+{
+    if (!with) return 0;
+    if (with->items) {
+        /* Duplicate aliases in WITH are a ColumnNameConflict. */
+        name_set seen; nset_init(&seen);
+        for (int i = 0; i < with->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item *)with->items->items[i];
+            if (!item || !item->expr) continue;
+            if (item->alias) {
+                if (nset_contains(&seen, item->alias)) {
+                    set_error(error_message,
+                              "SyntaxError: ColumnNameConflict: Multiple result columns with the same name `%s`",
+                              item->alias);
+                    nset_free(&seen);
+                    return -1;
+                }
+                nset_add(&seen, item->alias);
+            }
+            if (validate_expr(item->expr, error_message) < 0) { nset_free(&seen); return -1; }
+            if (validate_expr_typed(item->expr, vctx_out, error_message) < 0) { nset_free(&seen); return -1; }
+            /* Track the alias's bound type for downstream clauses. */
+            if (item->alias) {
+                vctx_register(vctx_out, item->alias,
+                              type_of_literal_expr(item->expr));
+            }
+        }
+        nset_free(&seen);
+    }
+    if (with->where) {
+        if (validate_expr(with->where, error_message) < 0) return -1;
+        if (validate_expr_typed(with->where, vctx_out, error_message) < 0) return -1;
+    }
+    if (validate_skip_limit(with->skip, "SKIP", error_message) < 0) return -1;
+    if (validate_skip_limit(with->limit, "LIMIT", error_message) < 0) return -1;
+    return 0;
+}
+
+static int validate_match_clause(cypher_match *match, const var_type_ctx *vctx,
+                                  char **error_message)
+{
+    if (!match) return 0;
+    if (match->where) {
+        if (validate_expr(match->where, error_message) < 0) return -1;
+        if (validate_expr_typed(match->where, vctx, error_message) < 0) return -1;
+    }
+    return 0;
 }
 
 /* Helper: walk a list of paths (a CREATE/MATCH pattern list) and append all
@@ -800,11 +827,15 @@ static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
             if (has_labels || has_props || is_rel) nset_add(&local_labeled, var);
 
             if (!nset_contains(bound, var)) continue;
-            /* MERGE single-node `MERGE (a)` on a bound `a` is a legal
-             * no-op match. Same for label/property predicates on an
-             * already-bound node in MERGE. Re-binding a relationship
-             * variable is still an error. */
-            if (is_merge && !is_rel) continue;
+            /* MERGE re-binding rules:
+             *  - MERGE (a) single-node: error (cannot re-merge an already-
+             *    bound node).
+             *  - MERGE (a:L) / MERGE (a {p:1}) imposing new labels/props on
+             *    an already-bound node: error (VariableAlreadyBound).
+             *  - MERGE (a)-[:R]->(b) with bare `a`/`b` (no labels/props):
+             *    legal reference.
+             *  - Re-binding a relationship variable: always error. */
+            if (is_merge && !is_rel && !single_node && !has_labels && !has_props) continue;
             /* A relationship variable in CREATE always means "create this
              * relationship" — re-binding is an error. */
             if (is_rel || single_node || has_labels || has_props) {
