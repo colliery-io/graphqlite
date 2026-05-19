@@ -118,6 +118,9 @@ typedef enum {
     VTYPE_NULL,
     VTYPE_LIST,
     VTYPE_MAP,
+    VTYPE_NODE,
+    VTYPE_EDGE,
+    VTYPE_PATH,
 } var_type;
 
 typedef struct {
@@ -189,6 +192,9 @@ static const char *var_type_name(var_type t) {
         case VTYPE_NULL:    return "Null";
         case VTYPE_LIST:    return "List";
         case VTYPE_MAP:     return "Map";
+        case VTYPE_NODE:    return "Node";
+        case VTYPE_EDGE:    return "Relationship";
+        case VTYPE_PATH:    return "Path";
         case VTYPE_UNKNOWN: return "Unknown";
     }
     return "Unknown";
@@ -467,6 +473,24 @@ static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **
         }
         case AST_NODE_FUNCTION_CALL: {
             cypher_function_call *func = (cypher_function_call *)expr;
+            /* length() accepts paths, strings, and lists per the openCypher
+             * spec — but not nodes or relationships. Catch the common
+             * 'MATCH (n) RETURN length(n)' / 'length(r)' mistakes here. */
+            if (func->function_name && strcasecmp(func->function_name, "length") == 0 &&
+                func->args && func->args->count == 1) {
+                ast_node *a = func->args->items[0];
+                if (a && a->type == AST_NODE_IDENTIFIER) {
+                    var_type t = vctx_lookup(vctx, ((cypher_identifier *)a)->name);
+                    if (t == VTYPE_NODE || t == VTYPE_EDGE) {
+                        char buf[200];
+                        snprintf(buf, sizeof(buf),
+                                 "SyntaxError: InvalidArgumentType: length() does not accept %s arguments",
+                                 t == VTYPE_NODE ? "Node" : "Relationship");
+                        set_error(error_message, "%s", buf);
+                        return -1;
+                    }
+                }
+            }
             if (func->args) {
                 for (int i = 0; i < func->args->count; i++) {
                     if (validate_expr_typed(func->args->items[i], vctx, error_message) < 0) return -1;
@@ -664,6 +688,32 @@ static void collect_pattern_names(ast_list *patterns, name_set *out)
                     cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
                     if (rp->variable) nset_add(out, rp->variable);
                 }
+            }
+        }
+    }
+}
+
+/* Parallel collector that registers each pattern variable's kind
+ * (node / relationship / path) in vctx so callers can type-check
+ * functions like length() that reject node/relationship arguments. */
+static void register_pattern_kinds(ast_list *patterns, var_type_ctx *vctx)
+{
+    if (!patterns || !vctx) return;
+    for (int i = 0; i < patterns->count; i++) {
+        ast_node *node = patterns->items[i];
+        if (!node || node->type != AST_NODE_PATH) continue;
+        cypher_path *p = (cypher_path *)node;
+        if (p->var_name) vctx_register(vctx, p->var_name, VTYPE_PATH);
+        if (!p->elements) continue;
+        for (int j = 0; j < p->elements->count; j++) {
+            ast_node *el = p->elements->items[j];
+            if (!el) continue;
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *np = (cypher_node_pattern *)el;
+                if (np->variable) vctx_register(vctx, np->variable, VTYPE_NODE);
+            } else if (el->type == AST_NODE_REL_PATTERN) {
+                cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+                if (rp->variable) vctx_register(vctx, rp->variable, VTYPE_EDGE);
             }
         }
     }
@@ -1230,6 +1280,7 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 cypher_match *m = (cypher_match *)clause;
                 rc = validate_match_clause(m, &vctx, error_message);
                 collect_pattern_names(m->pattern, &bound);
+                register_pattern_kinds(m->pattern, &vctx);
                 /* WHERE patterns may not introduce fresh variables — every
                  * var in a pattern predicate must already be bound. Run
                  * after collect_pattern_names so the current MATCH's own
