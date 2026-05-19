@@ -63,7 +63,7 @@ fn test_open_file() {
 fn test_create_node() {
     let conn = test_connection();
 
-    conn.cypher("CREATE (n:Person {name: \"Alice\", age: 30})")
+    conn.cypher("CREATE (n:Person {name: "Alice", age: 30})")
         .unwrap();
 
     let results = conn
@@ -2818,8 +2818,8 @@ fn test_create_with_map_property() {
         .cypher("MATCH (n:JsonTest {name: 'Alice'}) RETURN n.meta")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let meta = format!(\"{:?}\", results[0].get_value(\"n.meta\").unwrap());
-    assert!(meta.contains(\"admin\"));
+    let meta = format!("{:?}", results[0].get_value("n.meta").unwrap());
+    assert!(meta.contains("admin"));
 }
 
 #[test]
@@ -2831,8 +2831,8 @@ fn test_create_with_list_property() {
         .cypher("MATCH (n:JsonTest {name: 'Bob'}) RETURN n.tags")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let tags = format!(\"{:?}\", results[0].get_value(\"n.tags\").unwrap());
-    assert!(tags.contains(\"python\"));
+    let tags = format!("{:?}", results[0].get_value("n.tags").unwrap());
+    assert!(tags.contains("python"));
 }
 
 #[test]
@@ -2869,8 +2869,8 @@ fn test_set_json_map_property() {
         .cypher("MATCH (n:JsonTest {name: 'Frank'}) RETURN n.settings")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let settings = format!(\"{:?}\", results[0].get_value(\"n.settings\").unwrap());
-    assert!(settings.contains(\"dark\"));
+    let settings = format!("{:?}", results[0].get_value("n.settings").unwrap());
+    assert!(settings.contains("dark"));
 }
 
 #[test]
@@ -2883,8 +2883,8 @@ fn test_set_json_list_property() {
         .cypher("MATCH (n:JsonTest {name: 'Grace'}) RETURN n.scores")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let scores = format!(\"{:?}\", results[0].get_value(\"n.scores\").unwrap());
-    assert!(scores.contains(\"95\"));
+    let scores = format!("{:?}", results[0].get_value("n.scores").unwrap());
+    assert!(scores.contains("95"));
 }
 
 #[test]
@@ -3116,8 +3116,8 @@ fn test_bulk_set_parameter_nested_json() {
         .cypher("MATCH (n:BulkPJson {name: 'test'}) RETURN n.meta")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let meta = format!(\"{:?}\", results[0].get_value(\"n.meta\").unwrap());
-    assert!(meta.contains(\"core\"));
+    let meta = format!("{:?}", results[0].get_value("n.meta").unwrap());
+    assert!(meta.contains("core"));
 }
 
 #[test]
@@ -3216,10 +3216,10 @@ fn test_bulk_set_parameter_nested_array() {
         .cypher("MATCH (n:BulkArrRs {name: 'arr'}) RETURN n.tags")
         .unwrap();
     assert_eq!(results.len(), 1);
-    let tags = format!(\"{:?}\", results[0].get_value(\"n.tags\").unwrap());
-    assert!(tags.contains(\"a\"));
-    assert!(tags.contains(\"b\"));
-    assert!(tags.contains(\"c\"));
+    let tags = format!("{:?}", results[0].get_value("n.tags").unwrap());
+    assert!(tags.contains("a"));
+    assert!(tags.contains("b"));
+    assert!(tags.contains("c"));
 }
 
 #[test]
