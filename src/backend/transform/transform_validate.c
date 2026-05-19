@@ -1251,9 +1251,18 @@ int transform_validate_query(cypher_query *query, char **error_message)
         ast_node *clause = query->clauses->items[i];
         if (!clause) { continue; }
         switch (clause->type) {
-            case AST_NODE_RETURN:
-                rc = validate_return_clause((cypher_return *)clause, &vctx, error_message);
+            case AST_NODE_RETURN: {
+                cypher_return *r = (cypher_return *)clause;
+                /* RETURN * requires at least one variable in scope. */
+                if (r->return_all && bound.count == 0) {
+                    set_error(error_message,
+                              "SyntaxError: NoVariablesInScope: RETURN * requires at least one variable in scope");
+                    rc = -1;
+                    break;
+                }
+                rc = validate_return_clause(r, &vctx, error_message);
                 break;
+            }
             case AST_NODE_WITH: {
                 cypher_with *w = (cypher_with *)clause;
                 rc = validate_with_clause(w, &vctx, error_message);

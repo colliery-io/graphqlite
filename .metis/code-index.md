@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-17T16:35:15Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-19T12:06:20Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -1460,30 +1460,32 @@
 #### tests/tck/runner.py
 
 - pub `ScenarioOutcome` class L29-37 — `-`
-- pub `run_feature` function L65-70 — `def run_feature(feature: Feature, backend: Backend) -> list[ScenarioOutcome]`
-- pub `__init__` method L156-159 — `def __init__(self, msg: str, expected: Any = None, actual: Any = None)`
-- pub `__init__` method L165-168 — `def __init__(self, error_class: str, message: str)`
+- pub `run_feature` function L72-77 — `def run_feature(feature: Feature, backend: Backend) -> list[ScenarioOutcome]`
+- pub `__init__` method L163-166 — `def __init__(self, msg: str, expected: Any = None, actual: Any = None)`
+- pub `__init__` method L172-175 — `def __init__(self, error_class: str, message: str)`
 -  `_State` class L41-44 — `-`
--  `_rel_to_features_root` function L73-78 — `def _rel_to_features_root(path: Path) -> str`
--  `_run_scenario` function L81-135 — `def _run_scenario(feature_file: str, sc: Scenario, backend: Backend) -> Scenario...`
--  `_outcome` function L138-149 — `def _outcome(feature_file: str, sc: Scenario, status: str, backend: Backend, t0:...`
--  `_Mismatch` class L155-159 — `(Exception) { __init__ }`
--  `_BackendErrorAtThen` class L162-168 — `(Exception) { __init__ }` — Backend raised/crashed when the scenario expected a successful result table.
--  `_Marker` class L171 — `-`
--  `_dispatch` function L176-183 — `def _dispatch(step: Step)`
--  `_h_empty_graph` function L189-190 — `def _h_empty_graph(step, state, backend, m)`
--  `_h_named_graph` function L192-194 — `def _h_named_graph(step, state, backend, m)`
--  `_h_having_executed` function L196-199 — `def _h_having_executed(step, state, backend, m)`
--  `_h_parameters` function L201-216 — `def _h_parameters(step, state, backend, m)`
--  `_h_executing_query` function L218-224 — `def _h_executing_query(step, state, backend, m)`
--  `_h_result_ordered` function L226-228 — `def _h_result_ordered(step, state, backend, m)`
--  `_h_result_any_order` function L230-232 — `def _h_result_any_order(step, state, backend, m)`
--  `_h_result_empty` function L234-239 — `def _h_result_empty(step, state, backend, m)`
--  `_h_expect_error` function L241-244 — `def _h_expect_error(step, state, backend, m)`
--  `_h_no_side_effects` function L246-248 — `def _h_no_side_effects(step, state, backend, m)`
--  `_h_side_effects_table` function L250-256 — `def _h_side_effects_table(step, state, backend, m)`
--  `_compare_result_table` function L274-317 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
--  `_rows_equal` function L320-323 — `def _rows_equal(expected: list[Any], actual: list[Any]) -> bool`
+-  `_rel_to_features_root` function L80-85 — `def _rel_to_features_root(path: Path) -> str`
+-  `_run_scenario` function L88-142 — `def _run_scenario(feature_file: str, sc: Scenario, backend: Backend) -> Scenario...`
+-  `_outcome` function L145-156 — `def _outcome(feature_file: str, sc: Scenario, status: str, backend: Backend, t0:...`
+-  `_Mismatch` class L162-166 — `(Exception) { __init__ }`
+-  `_BackendErrorAtThen` class L169-175 — `(Exception) { __init__ }` — Backend raised/crashed when the scenario expected a successful result table.
+-  `_Marker` class L178 — `-`
+-  `_dispatch` function L183-190 — `def _dispatch(step: Step)`
+-  `_h_empty_graph` function L196-197 — `def _h_empty_graph(step, state, backend, m)`
+-  `_h_named_graph` function L199-201 — `def _h_named_graph(step, state, backend, m)`
+-  `_h_having_executed` function L203-206 — `def _h_having_executed(step, state, backend, m)`
+-  `_h_parameters` function L208-223 — `def _h_parameters(step, state, backend, m)`
+-  `_h_executing_query` function L225-231 — `def _h_executing_query(step, state, backend, m)`
+-  `_h_result_ordered` function L233-235 — `def _h_result_ordered(step, state, backend, m)`
+-  `_h_result_any_order` function L237-239 — `def _h_result_any_order(step, state, backend, m)`
+-  `_h_result_any_order_lists_unordered` function L241-244 — `def _h_result_any_order_lists_unordered(step, state, backend, m)`
+-  `_h_result_ordered_lists_unordered` function L246-249 — `def _h_result_ordered_lists_unordered(step, state, backend, m)`
+-  `_h_result_empty` function L251-256 — `def _h_result_empty(step, state, backend, m)`
+-  `_h_expect_error` function L258-261 — `def _h_expect_error(step, state, backend, m)`
+-  `_h_no_side_effects` function L263-265 — `def _h_no_side_effects(step, state, backend, m)`
+-  `_h_side_effects_table` function L267-273 — `def _h_side_effects_table(step, state, backend, m)`
+-  `_compare_result_table` function L293-337 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
+-  `_rows_equal` function L340-344 — `def _rows_equal(expected: list[Any], actual: list[Any], lists_unordered: bool = ...`
 
 #### tests/tck/values.py
 
@@ -1492,27 +1494,27 @@
 - pub `Path` class L44-47 — `-`
 - pub `ValueParseError` class L50-51 — `(ValueError)`
 - pub `parse_value` function L54-60 — `def parse_value(text: str) -> Any`
-- pub `values_equal` function L63-93 — `def values_equal(a: Any, b: Any) -> bool`
-- pub `__init__` method L132-134 — `def __init__(self, text: str)`
-- pub `eof` method L136-137 — `def eof(self) -> bool`
-- pub `peek` method L139-140 — `def peek(self) -> str`
-- pub `skip_ws` method L142-144 — `def skip_ws(self) -> None`
-- pub `expect` method L146-150 — `def expect(self, ch: str) -> None`
-- pub `parse_top` method L152-154 — `def parse_top(self) -> Any`
--  `_coerce_graph_value` function L96-119 — `def _coerce_graph_value(v: Any) -> Any` — Coerce extension-side dict representations to our dataclasses.
--  `_props_equal` function L122-125 — `def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...])...`
--  `_Parser` class L131-338 — `{ __init__, eof, peek, skip_ws, expect, parse_top }`
--  `_parse_value` method L156-173 — `def _parse_value(self) -> Any`
--  `_parse_node` method L175-188 — `def _parse_node(self) -> Node`
--  `_parse_list_or_rel` method L190-218 — `def _parse_list_or_rel(self) -> Any`
--  `_parse_map` method L220-240 — `def _parse_map(self) -> dict[str, Any]`
--  `_parse_path` method L242-270 — `def _parse_path(self) -> Path`
--  `_parse_rel_segment` method L272-281 — `def _parse_rel_segment(self) -> Relationship`
--  `_parse_string` method L283-299 — `def _parse_string(self) -> str`
--  `_parse_ident` method L301-307 — `def _parse_ident(self) -> str`
--  `_parse_ident_or_string` method L309-312 — `def _parse_ident_or_string(self) -> str`
--  `_parse_atom` method L314-338 — `def _parse_atom(self) -> Any`
--  `_props_from_map` function L341-342 — `def _props_from_map(d: dict[str, Any]) -> tuple[tuple[str, Any], ...]`
+- pub `values_equal` function L63-111 — `def values_equal(a: Any, b: Any, lists_unordered: bool = False) -> bool`
+- pub `__init__` method L162-164 — `def __init__(self, text: str)`
+- pub `eof` method L166-167 — `def eof(self) -> bool`
+- pub `peek` method L169-170 — `def peek(self) -> str`
+- pub `skip_ws` method L172-174 — `def skip_ws(self) -> None`
+- pub `expect` method L176-180 — `def expect(self, ch: str) -> None`
+- pub `parse_top` method L182-184 — `def parse_top(self) -> Any`
+-  `_coerce_graph_value` function L114-149 — `def _coerce_graph_value(v: Any) -> Any` — Coerce extension-side dict representations to our dataclasses.
+-  `_props_equal` function L152-155 — `def _props_equal(a: tuple[tuple[str, Any], ...], b: tuple[tuple[str, Any], ...])...`
+-  `_Parser` class L161-368 — `{ __init__, eof, peek, skip_ws, expect, parse_top }`
+-  `_parse_value` method L186-203 — `def _parse_value(self) -> Any`
+-  `_parse_node` method L205-218 — `def _parse_node(self) -> Node`
+-  `_parse_list_or_rel` method L220-248 — `def _parse_list_or_rel(self) -> Any`
+-  `_parse_map` method L250-270 — `def _parse_map(self) -> dict[str, Any]`
+-  `_parse_path` method L272-300 — `def _parse_path(self) -> Path`
+-  `_parse_rel_segment` method L302-311 — `def _parse_rel_segment(self) -> Relationship`
+-  `_parse_string` method L313-329 — `def _parse_string(self) -> str`
+-  `_parse_ident` method L331-337 — `def _parse_ident(self) -> str`
+-  `_parse_ident_or_string` method L339-342 — `def _parse_ident_or_string(self) -> str`
+-  `_parse_atom` method L344-368 — `def _parse_atom(self) -> Any`
+-  `_props_from_map` function L371-372 — `def _props_from_map(d: dict[str, Any]) -> tuple[tuple[str, Any], ...]`
 
 ### tests/tck/backends
 
