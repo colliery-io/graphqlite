@@ -322,6 +322,49 @@ jobs:
         run: cargo test --lib --test integration -- --test-threads=1
 
   # =============================================================================
+  # TCK Conformance Gate
+  # Runs the openCypher TCK suite and fails the build on regression vs
+  # tests/tck/baseline.json. Improvements (more passing scenarios) are
+  # surfaced but non-fatal — refresh the baseline in a follow-up commit.
+  # =============================================================================
+
+  tck-conformance:
+    needs: [build-and-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev libcunit1-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build extension
+        run: make extension
+
+      - name: Run TCK suite
+        run: python -m tests.tck --backend extension --out build/tck-results.json
+
+      - name: Compare against baseline
+        run: scripts/check-tck-baseline.sh
+
+      - name: Upload TCK results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tck-results
+          path: |
+            build/tck-results.json
+            build/tck-debug.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # =============================================================================
   # Semantic Coverage Matrix - PR discipline (GQLITE-T-0204)
   # Fails when a PR touches src/backend/transform/ or src/backend/executor/
   # without updating tests/functional/*.sql or the matrix doc. Override by
