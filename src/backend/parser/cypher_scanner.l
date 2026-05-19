@@ -23,6 +23,7 @@ static void prepare_integer_token(CypherScannerState *state, const char *text);
 static void prepare_decimal_token(CypherScannerState *state, const char *text);
 static void scanner_error(CypherScannerState *state, const char *message);
 static char* unescape_string(const char *escaped_str, int length);
+extern bool g_invalid_unicode_in_string;
 
 /* Update location tracking - yyextra is CypherScannerState* in reentrant mode */
 #define YY_USER_ACTION \
@@ -167,6 +168,10 @@ operator    [+*/%^=!&|~]+
                         scanner_error(yyextra, "Out of memory processing string literal");
                         return CYPHER_TOKEN_EOF;
                     }
+                    if (g_invalid_unicode_in_string) {
+                        scanner_error(yyextra,
+                            "SyntaxError: InvalidUnicodeLiteral: invalid \\u escape in string literal");
+                    }
                     
                     prepare_string_token(yyextra, CYPHER_TOKEN_STRING, yytext, unescaped);
                     free(unescaped);
@@ -180,6 +185,10 @@ operator    [+*/%^=!&|~]+
                     if (!unescaped) {
                         scanner_error(yyextra, "Out of memory processing string literal");
                         return CYPHER_TOKEN_EOF;
+                    }
+                    if (g_invalid_unicode_in_string) {
+                        scanner_error(yyextra,
+                            "SyntaxError: InvalidUnicodeLiteral: invalid \\u escape in string literal");
                     }
                     
                     prepare_string_token(yyextra, CYPHER_TOKEN_STRING, yytext, unescaped);
@@ -347,8 +356,15 @@ CypherToken cypher_scanner_get_current_token(const CypherScannerState *state)
 }
 
 /* Process escape sequences in string literals */
+/* Set by unescape_string to flag an InvalidUnicodeLiteral so the caller
+ * can route a specific scanner_error. We're single-threaded per parse so
+ * a file-scope slot is fine. (Declared `extern` at top of file so the
+ * earlier callers can read it.) */
+bool g_invalid_unicode_in_string = false;
+
 static char* unescape_string(const char *escaped_str, int length)
 {
+    g_invalid_unicode_in_string = false;
     char *result = malloc(length + 1); /* Worst case - no escapes */
     if (!result) {
         return NULL;
@@ -430,11 +446,15 @@ static char* unescape_string(const char *escaped_str, int length)
                             }
                             i += 6; /* Skip \uxxxx */
                         } else {
-                            /* Invalid unicode escape - treat as literal */
+                            /* Invalid unicode escape — flag for caller and
+                             * fall through, treating as literal so the
+                             * token still has coherent state. */
+                            g_invalid_unicode_in_string = true;
                             result[j++] = escaped_str[i++];
                         }
                     } else {
-                        /* Incomplete unicode escape - treat as literal */
+                        /* Incomplete unicode escape — flag and treat as literal. */
+                        g_invalid_unicode_in_string = true;
                         result[j++] = escaped_str[i++];
                     }
                     break;
