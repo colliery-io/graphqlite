@@ -113,8 +113,20 @@ def _coerce_graph_value(v: Any) -> Any:
             return Relationship(type=v["type"], properties=props)
         if "nodes" in v and "rels" in v and isinstance(v["nodes"], list) and isinstance(v["rels"], list):
             nodes = tuple(_coerce_graph_value(n) for n in v["nodes"])
-            rels = tuple((_coerce_graph_value(r), ">") for r in v["rels"])  # direction defaulted
-            return Path(nodes=nodes, rels=rels)
+            # Derive direction from each rel's startNode/endNode relative
+            # to the path's node-id sequence: if rel.startNode == the
+            # earlier node, the path traverses it forward (">"); else "<".
+            node_ids = [n.get("id") if isinstance(n, dict) else None for n in v["nodes"]]
+            rels_out = []
+            for idx, r in enumerate(v["rels"]):
+                direction = ">"
+                if isinstance(r, dict) and idx + 1 < len(node_ids):
+                    sn = r.get("startNode")
+                    if sn is not None and sn == node_ids[idx + 1] \
+                            and r.get("endNode") == node_ids[idx]:
+                        direction = "<"
+                rels_out.append((_coerce_graph_value(r), direction))
+            return Path(nodes=nodes, rels=tuple(rels_out))
         # Duration objects carry an `_iso8601` rendering — collapse to that
         # string so TCK comparisons against the canonical 'PT22H' form work.
         if "_iso8601" in v and isinstance(v["_iso8601"], str):
