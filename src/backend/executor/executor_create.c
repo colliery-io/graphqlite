@@ -480,6 +480,13 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                 return -1;
             }
 
+            /* Register the relationship variable so CREATE+RETURN can
+             * resolve `r.prop` against the edge tables. */
+            if (rel_pattern->variable && var_map) {
+                set_variable_edge_id(var_map, rel_pattern->variable, edge_id);
+                CYPHER_DEBUG("Mapped variable '%s' to edge %d", rel_pattern->variable, edge_id);
+            }
+
             /* Process relationship properties if present */
             if (rel_pattern->properties && rel_pattern->properties->type == AST_NODE_MAP) {
                 cypher_map *map = (cypher_map*)rel_pattern->properties;

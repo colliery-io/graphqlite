@@ -2184,19 +2184,28 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                 }
 
                 int node_id = get_variable_node_id(var_map, var_name);
-                if (node_id >= 0) {
+                int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
+                bool is_edge = (edge_id >= 0);
+                int entity_id = is_edge ? edge_id : node_id;
+                if (entity_id >= 0) {
                     /* Query each property type table for the value */
-                    const char *type_tables[] = {
+                    const char *node_tables[] = {
                         "node_props_text", "node_props_int",
                         "node_props_real", "node_props_bool", NULL
                     };
+                    const char *edge_tables[] = {
+                        "edge_props_text", "edge_props_int",
+                        "edge_props_real", "edge_props_bool", NULL
+                    };
+                    const char **type_tables = is_edge ? edge_tables : node_tables;
+                    const char *id_col = is_edge ? "edge_id" : "node_id";
                     for (int t = 0; type_tables[t]; t++) {
                         char sql[512];
                         snprintf(sql, sizeof(sql),
                             "SELECT value FROM %s "
-                            "WHERE node_id = %d AND key_id = "
+                            "WHERE %s = %d AND key_id = "
                             "(SELECT id FROM property_keys WHERE key = '%s')",
-                            type_tables[t], node_id, prop_name);
+                            type_tables[t], id_col, entity_id, prop_name);
 
                         sqlite3_stmt *stmt;
                         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -2204,11 +2213,12 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 int sql_type = sqlite3_column_type(stmt, 0);
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
                                 if (val) {
-                                    /* node_props_bool stores 0/1; expose as
+                                    /* {node,edge}_props_bool stores 0/1; expose as
                                      * "true"/"false" so the JSON formatter
                                      * treats it as a string and openCypher's
                                      * boolean literal is preserved. */
-                                    if (strcmp(type_tables[t], "node_props_bool") == 0) {
+                                    if (strcmp(type_tables[t], "node_props_bool") == 0 ||
+                                        strcmp(type_tables[t], "edge_props_bool") == 0) {
                                         result->data[0][i] = strdup(atoi(val) ? "true" : "false");
                                         result->data_types[0][i] = SQLITE_TEXT;
                                     } else {
