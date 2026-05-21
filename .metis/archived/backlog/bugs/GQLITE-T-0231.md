@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Phase B: Type-conversion function arg validation (~22 scenarios)"
 short_code: "GQLITE-T-0231"
 created_at: 2026-05-14T01:54:01.879521+00:00
-updated_at: 2026-05-14T02:09:00.368063+00:00
+updated_at: 2026-05-21T17:58:13.402626+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -49,10 +49,18 @@ In the function-dispatch layer (`transform_func_*`), validate operand types at c
 
 ## Acceptance Criteria
 
-- [ ] Validation logic implemented in `src/backend/transform/` (likely a new file `transform_validate.c` plus wiring).
-- [ ] Validation emits the openCypher-expected error class (`SyntaxError` or `TypeError`) with `InvalidArgumentType` / `InvalidArgumentValue` codes per TCK convention.
-- [ ] No regression on existing passing scenarios.
-- [ ] Baseline JSON regenerated and pass-count delta recorded in the closeout note.
+- [x] Validation logic in `transform_validate.c` (`validate_conversion_call` + `literal_incompatible_with`).
+- [x] Emits `TypeError: InvalidArgumentValue: <fname>() does not accept argument of type <Type>`.
+- [x] No regression — 944/944 unit, functional clean.
+- [x] TCK pass at 3462 (was 3347 baseline).
+
+## Status Updates
+
+**2026-05-21** — Completed. Rejects toFloat/toInteger(true), toBoolean(1),
+all toX() with list/map literal args. One remaining TCK scenario
+(TypeConversion3 [6]) needs runtime boolean-subtype preservation
+through `json_each` of a list comprehension — out of scope for
+compile-time validation.
 
 ## Parent
 Backlog item filed under initiative [[GQLITE-I-0037]] (openCypher TCK Conformance Audit).

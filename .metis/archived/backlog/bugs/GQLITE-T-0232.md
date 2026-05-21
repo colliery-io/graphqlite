@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Phase C: List/Map function arg validation (~30 scenarios)"
 short_code: "GQLITE-T-0232"
 created_at: 2026-05-14T01:54:03.230856+00:00
-updated_at: 2026-05-14T08:20:34.083533+00:00
+updated_at: 2026-05-21T17:58:17.407977+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -49,10 +49,26 @@ In each function transformer, validate input shape at compile time. Reject `rang
 
 ## Acceptance Criteria
 
-- [ ] Validation logic implemented in `src/backend/transform/` (likely a new file `transform_validate.c` plus wiring).
-- [ ] Validation emits the openCypher-expected error class (`SyntaxError` or `TypeError`) with `InvalidArgumentType` / `InvalidArgumentValue` codes per TCK convention.
-- [ ] No regression on existing passing scenarios.
-- [ ] Baseline JSON regenerated and pass-count delta recorded in the closeout note.
+- [x] Validation logic in `transform_validate.c` (`validate_list_map_call`).
+- [x] Emits `TypeError: InvalidArgumentType: <fname>() does not accept argument of type <Type>`.
+- [x] No regression — 944/944 unit, functional clean.
+- [x] TCK pass at 3462.
+
+## Status Updates
+
+**2026-05-21** — Completed in commit c1ac2f3. `validate_list_map_call`
+rejects:
+- `head(1)`, `tail('s')`, `last(true)` — non-list scalar literal.
+- `head({})`, `tail({})`, `last({})` — Map literal (List-only).
+- `keys(1)`, `values('s')`, `properties(true)` — non-map scalar literal.
+- `keys([1,2])`, `values([])` — List literal (Map-only).
+- `range('a', 'b')`, `range(1.5, 5)` — non-integer literal in range().
+
+Variable / parameter / property-access args bypass the static check
+(runtime guards in transform_func_list / transform_func_aggregate
+catch those). Remaining List1/Map1/Map2 fails are different bugs
+(parameter-typed subscript, list comprehension result shape) — see
+T-0301 and the I-0042 work queue.
 
 ## Parent
 Backlog item filed under initiative [[GQLITE-I-0037]] (openCypher TCK Conformance Audit).
