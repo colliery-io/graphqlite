@@ -7,7 +7,7 @@ created_at: 2026-05-21T11:28:12.562592+00:00
 updated_at: 2026-05-21T11:28:12.562592+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -56,6 +56,8 @@ way (rebinding semantics are mostly null/empty paths).
 - `src/backend/transform/transform_match.c` — the WITH-bound-variable
   re-attachment path (around lines 626–680 where `is_from_with` sets
   `need_from_clause = false`)
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

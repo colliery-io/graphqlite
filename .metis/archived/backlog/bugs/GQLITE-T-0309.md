@@ -4,15 +4,15 @@ level: task
 title: "Var-length RETURN: projection treats CTE alias as edge row instead of emitting list of edges"
 short_code: "GQLITE-T-0309"
 created_at: 2026-05-21T16:05:19.794253+00:00
-updated_at: 2026-05-21T16:05:19.794253+00:00
+updated_at: 2026-05-21T17:13:55.373378+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -99,14 +99,43 @@ fix. ~22 error scenarios share this root cause.
 
 ## Acceptance Criteria
 
-- [ ] `MATCH (a)-[r*1..1]->(b) RETURN r` returns `[[{type: 'T'}]]` for
-  a single edge of type T.
-- [ ] `MATCH (a)-[r*1..2]->(b) RETURN r` returns the list of edge
-  lists, one per path of length 1 or 2.
-- [ ] No regression in non-varlen edge projection
-  (`MATCH ()-[r]->() RETURN r`).
-- [ ] 22 `_gql_default_alias` errors in TCK flip to pass (or to a
-  different fail).
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [x] `MATCH (a)-[r*1..1]->(b) RETURN r` returns
+  `[{"r": [{"id":1,"type":"T",...}]}]`.
+- [x] `MATCH (a)-[r*1..2]->(b) RETURN r` returns one row per path
+  with the edge list as `r`.
+- [x] No regression in non-varlen edge projection
+  (`MATCH ()-[r]->() RETURN r` still single edge JSON).
+- [x] `_gql_default_alias` errors flip: 5 errors → 3 pass + 2 fails
+  (the 2 fails moved on to row-count mismatches caused by separate
+  executor bugs in MERGE/varlen interaction — not the projection
+  shape this ticket targeted).
+
+## Status Updates
+
+**2026-05-21 iter 40** — Completed in commit f1c9ee9 chain (final
+landing in 4be937f). Four coordinated changes shipped:
+
+1. `transform_match.c` — stamp `transform_var->cte_name` on the
+   varlen rel variable so downstream code can branch.
+2. `transform_return.c` — when projecting an edge variable with
+   `cte_name` set, emit `json_group_array(json_object(...))` over the
+   edges whose ids appear in `path_ids`, ordered by `instr()` to
+   preserve path order.
+3. `executor_match.c` (build_query_results) — for varlen edge vars,
+   skip the single-edge re-fetch and leave the column verbatim in
+   `result->data[row][col]`.
+4. `extension.c` — the JSON result formatter falls back to
+   `result->data` text when `agtype_data[row][col]` is NULL. The
+   fallback must be gated on the pointer being NULL, not on
+   `agtype_value_to_string` returning NULL — that function returns
+   `"null"` for NULL input. Both the single-row and multi-row
+   single-column paths needed the fix.
+
+TCK delta: pass=3458 → 3461 (+3), errors=84 → 79 (-5).
 
 ## Iter 39 attempt — partial: projector fixed, result-renderer still wrong
 

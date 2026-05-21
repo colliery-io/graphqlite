@@ -1,13 +1,13 @@
 ---
-id: percentilecont-disc-out-of-range
+id: json-renderer-drops-0-from
 level: task
-title: "percentileCont/Disc out-of-range param raises generic error instead of ArgumentError: NumberOutOfRange"
-short_code: "GQLITE-T-0303"
-created_at: 2026-05-20T16:16:13.402828+00:00
-updated_at: 2026-05-20T19:48:45.437603+00:00
+title: "JSON renderer drops .0 from integral floats (e.g. 20 instead of 20.0)"
+short_code: "GQLITE-T-0302"
+created_at: 2026-05-20T16:16:11.824680+00:00
+updated_at: 2026-05-20T19:51:19.824694+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -19,74 +19,66 @@ exit_criteria_met: false
 initiative_id: NULL
 ---
 
-# percentileCont/Disc out-of-range param raises generic error instead of ArgumentError: NumberOutOfRange
+# JSON renderer drops .0 from integral floats (e.g. 20 instead of 20.0)
 
 ## Reproducer
 
 ```sql
 .load build/graphqlite.dylib
-SELECT cypher('CREATE ({price: 10.0})');
-SELECT cypher('MATCH (n) RETURN percentileCont(n.price, 1.1) AS p');
--- Got:      [] (with generic error)
--- Expected: ArgumentError: NumberOutOfRange (TCK-classified error)
+SELECT cypher('CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})');
+SELECT cypher('MATCH (n) RETURN percentileDisc(n.price, 0.5) AS p');
+-- Got:      [{"p":20}]
+-- Expected: [{"p":20.0}]
 ```
 
-Same for `-1`, `1000`, etc. Per openCypher spec the percentile
-parameter must be in `[0, 1]`.
+Generalizes to any whole-number float — `RETURN 20.0` returns `20`,
+`RETURN 1.0` returns `1`, etc.
 
 ## Context — surfaced 2026-05-20
 
 Discovered while landing M15 (percentile aggregates, GQLITE-T-0300).
-The out-of-range path correctly raises an error via
-`sqlite3_result_error("percentileCont: percentile must be in [0,1]")`
-in `runtime/udf_helpers.c` — but the error string doesn't carry the
-TCK error-class prefix, so the harness classifies it as a generic
-internal error rather than the expected
-`ArgumentError: NumberOutOfRange`.
+Math is correct; JSON formatter is the issue. openCypher TCK
+`Aggregation6 [1]/[2]` expect literal `20.0` and currently
+match-fail because we emit `20`.
 
-TCK targets: `Aggregation6 [3]` (percentileCont bad args, examples
-1000/-1/1.1), `Aggregation6 [4]` (percentileDisc bad args, same).
+## Root cause
+
+`src/extension.c:295-323` JSON renderer for `SQLITE_FLOAT` cells uses
+`sqlite3_column_text(stmt, col)` whose `%g`-based formatting drops
+trailing zeros: `20.0` → `"20"`. The override that DOES preserve
+`.0` lives in `executor_match.c:391-405` but only fires for the
+MATCH path; aggregate results don't go through it.
 
 ## Fix sketch
 
-Change `percentile_cont_final` and `percentile_disc_final` in
-`src/backend/runtime/udf_helpers.c` to:
-
-```c
-sqlite3_result_error(ctx,
-    "ArgumentError: NumberOutOfRange: percentile must be in [0,1]", -1);
-```
-
-Also validate at xStep (so zero-row aggregates still raise). Audit
-other UDFs that raise errors without TCK-class prefixes — same
-pattern across the codebase is worth a sister sweep (related to
-I-0037 Phase B work).
+In `src/extension.c` JSON renderer, when `col_type == SQLITE_FLOAT`:
+after copying val to json_result, scan for `.`/`e`/`E` and append
+`.0` if absent. Mirror the fix on the agtype path in
+`executor_match.c`.
 
 ## Impact
 
-~6 TCK scenarios (Aggregation6 [3]/[4] across their example rows).
+~6 TCK scenarios in Aggregation6; generalizes to any whole-float
+RETURN.
 
 ## Acceptance Criteria
 
 ## Acceptance Criteria
 
-- [x] Out-of-range param produces `ArgumentError: NumberOutOfRange: ...` error
-- [x] Detection at xStep (`out_of_range` flag); raised at xFinal (sqlite aggregate API only emits in xFinal)
-- [x] Out-of-range error propagated through executor_match.c step loop (previously swallowed)
-- [x] In-range percentile (0.5) still works
+## Acceptance Criteria
+
+- [x] `RETURN 1.0 AS x` returns `[{"x":1.0}]`
+- [x] `RETURN 20.0 AS y` returns `[{"y":20.0}]`
+- [x] `RETURN 1.5 AS z` returns `[{"z":1.5}]` (unchanged)
+- [x] `MATCH (n) RETURN percentileDisc(n.price, 0.5)` returns `20.0` (was `20`)
+- [x] Integer rendering unchanged (`RETURN 1 AS i` → `1`)
 - [x] All 937 unit tests + functional suite pass
 
 ## Status Updates
 
 **2026-05-20** — Completed.
 
-Fix in `src/backend/runtime/udf_helpers.c`:
-- Added `out_of_range` flag to `percentile_agg` struct
-- `percentile_step_common` validates p in [0,1] when first recording the percentile arg; sets `out_of_range = 1` if invalid
-- `percentile_cont_final` / `percentile_disc_final` check the flag first and emit `ArgumentError: NumberOutOfRange: ...` (TCK-classifiable error class)
-
-Fix in `src/backend/executor/executor_match.c` (line ~514):
-- After the step loop, if `first_step_rc` is neither SQLITE_DONE nor SQLITE_ROW (e.g. SQLITE_ERROR from xFinal), capture `sqlite3_errmsg` and call `set_result_error`. Previously the error was silently swallowed and the result returned as success with zero rows. Benefits ALL UDFs that raise errors, not just percentile.
+Split the `SQLITE_INTEGER || SQLITE_FLOAT` branch in `src/extension.c` JSON renderer. For `SQLITE_FLOAT`: after copying the textual value, scan for `.`, `e`, or `E`; if absent (whole-number float), append `.0`. The agtype-path `%.17g` formatter in `executor_match.c` produces a no-dot string for whole floats (`"20"`), so the renderer-side fix is sufficient — the column type tags it as `SQLITE_FLOAT`, the renderer adds `.0`.
 
 ---
 

@@ -7,7 +7,7 @@ created_at: 2026-05-20T16:16:14.406957+00:00
 updated_at: 2026-05-20T20:08:06.283115+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -95,6 +95,8 @@ expressions inside lists.
 - `Precedence3 [4]/[5]` (list+comparison precedence tests)
 - Any TCK scenario embedding booleans in lists/maps
 - Probably ~8-12 scenarios when audited
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -7,7 +7,7 @@ created_at: 2026-05-19T14:45:37.924593+00:00
 updated_at: 2026-05-20T22:57:32.834619+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -27,6 +27,8 @@ GQLITE-I-0039 (archived — moved to backlog 2026-05-20)
 ## Objective
 
 Add a typed "pending CTE / prepend" clause section to `sql_builder` so `pending_prop_joins` has a target API to migrate into. Section needs the same prepend semantics as today's manual splicing — placed BEFORE any user-written CTEs, then the existing CTE section, then SELECT.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

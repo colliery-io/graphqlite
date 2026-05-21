@@ -1,13 +1,13 @@
 ---
 id: unwind-after-with-loses-list
 level: task
-title: "UNWIND after WITH loses list variables — "_prev.X" column missing"
+title: "UNWIND after WITH loses list variables — _prev.X column missing"
 short_code: "GQLITE-T-0305"
 created_at: 2026-05-21T01:58:37.141580+00:00
 updated_at: 2026-05-21T02:30:09.208679+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
@@ -58,6 +58,8 @@ reproducer above.
 
 - `src/backend/transform/transform_unwind.c` (around the `carry_cols`
   builder, line ~117-140)
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
