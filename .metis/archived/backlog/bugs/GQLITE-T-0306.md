@@ -4,15 +4,15 @@ level: task
 title: "OPTIONAL MATCH after WITH emits invalid SQL alias (uses column ref as table alias)"
 short_code: "GQLITE-T-0306"
 created_at: 2026-05-21T02:58:20.251410+00:00
-updated_at: 2026-05-21T02:58:20.251410+00:00
+updated_at: 2026-05-21T19:01:56.288678+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -70,10 +70,35 @@ construction bug.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [x] Reproducer query parses and runs without "near '.':" error
 - [x] No regression on existing OPTIONAL MATCH / WITH chain scenarios
 - [x] 2 of 5 TCK scenarios flipped error → fail (Match7 [21]/[27])
-- [ ] Remaining 3 (Match4 [8], Match9 [6]/[7]) still error — they use variable-length relationships, a different code path (`generate_varlen_cte`)
+- [x] Remaining 3 (Match4 [8], Match9 [6]/[7]) flipped error → pass
+  or different fail — the var-length CTE join path no longer emits
+  column-refs as table aliases.
+
+## Status Updates
+
+**2026-05-21 iter 50** — Var-length follow-on completed in commit
+c503c9b. Two coordinated changes in transform_match.c's varlen branch:
+
+1. Detect alias-is-colref by substring `.` on edge_alias /
+   target_alias (catches both alias_is_id=true and PROJECTED scalar
+   alias forms).
+2. When edge alias is colref: substitute a fresh `_vp_inner_N`
+   alias for the CTE JOIN; WHERE constraints use that alias.
+3. When target alias is colref: skip the `CROSS JOIN nodes AS <colref>`
+   emission entirely. The column ref already IS the id so no new
+   table is needed.
+
+TCK delta: pass=3466 → 3468 (+2), errors=77 → 74 (-3). The one
+extra fail (Match9 [6]) moves to result-mismatch territory — the
+bound-list-vs-iterated-path semantic isn't matched against the
+specific rs list yet (filed as separate follow-on if needed).
 
 ## Status Updates
 
