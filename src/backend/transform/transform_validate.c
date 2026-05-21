@@ -713,9 +713,67 @@ static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **
     }
 }
 
-/* SKIP / LIMIT must be a non-negative integer constant or a parameter.
- * Expressions referencing variables (e.g. `LIMIT n.count`) and negative
- * literals are rejected at compile time per the openCypher spec. */
+/* True if `expr` contains any free variable reference (identifier or
+ * property access whose base is an identifier). Walks function-call
+ * args, binary ops, list/map literals, etc. Used by validate_skip_limit
+ * to allow constant-valued expressions like `toInteger(ceil(1.7))`. */
+static bool expr_has_var_reference(const ast_node *expr)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER:
+            return true;
+        case AST_NODE_PROPERTY:
+            return true;  /* base is implicitly a var */
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            return expr_has_var_reference(s->expr) ||
+                   expr_has_var_reference(s->index);
+        }
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            return expr_has_var_reference(b->left) ||
+                   expr_has_var_reference(b->right);
+        }
+        case AST_NODE_NOT_EXPR:
+            return expr_has_var_reference(((const cypher_not_expr *)expr)->expr);
+        case AST_NODE_NULL_CHECK:
+            return expr_has_var_reference(((const cypher_null_check *)expr)->expr);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (!f->args) return false;
+            for (int i = 0; i < f->args->count; i++) {
+                if (expr_has_var_reference(f->args->items[i])) return true;
+            }
+            return false;
+        }
+        case AST_NODE_LIST: {
+            const cypher_list *l = (const cypher_list *)expr;
+            if (!l->items) return false;
+            for (int i = 0; i < l->items->count; i++) {
+                if (expr_has_var_reference(l->items->items[i])) return true;
+            }
+            return false;
+        }
+        case AST_NODE_MAP: {
+            const cypher_map *m = (const cypher_map *)expr;
+            if (!m->pairs) return false;
+            for (int i = 0; i < m->pairs->count; i++) {
+                const cypher_map_pair *p = (const cypher_map_pair *)m->pairs->items[i];
+                if (p && expr_has_var_reference(p->value)) return true;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+/* SKIP / LIMIT must be a non-negative integer constant, a parameter, or
+ * a constant expression that doesn't reference variables. Expressions
+ * referencing variables (e.g. `LIMIT n.count`) and negative literals
+ * are rejected at compile time per the openCypher spec.
+ * `LIMIT toInteger(ceil(1.7))` is valid (ReturnSkipLimit2 [6]). */
 static int validate_skip_limit(ast_node *expr, const char *kw, char **error_message)
 {
     if (!expr) return 0;
@@ -740,7 +798,9 @@ static int validate_skip_limit(ast_node *expr, const char *kw, char **error_mess
         return -1;
     }
     if (expr->type == AST_NODE_PARAMETER) return 0;
-    /* Identifiers, property access, function calls, etc. — non-constant. */
+    /* Constant-valued expression (no var reference) is OK; runtime checks
+     * value. References to variables are rejected at compile time. */
+    if (!expr_has_var_reference(expr)) return 0;
     char buf[160];
     snprintf(buf, sizeof(buf),
              "SyntaxError: NonConstantExpression: %s must be a constant integer or parameter",
