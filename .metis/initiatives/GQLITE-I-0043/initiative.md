@@ -222,10 +222,14 @@ When old table is empty, delete it.
 
 ### Phase 1 — Add new API surface
 
-- **X1**: Add `transform_expression_into` (new entry point) +
-  `transform_expression_str` (convenience wrapper) in
-  `transform_return.c`. Initially just delegates to the existing
-  scratchpad-based path.
+- **X1** ✅ (2026-05-21): Added `transform_expression_into(ctx, expr,
+  dynamic_buffer*)` and `transform_expression_str(ctx, expr)` in
+  `src/include/transform/cypher_transform.h` +
+  `src/backend/transform/cypher_transform.c`. Both delegate to the
+  existing `cypher_transform_capture_expression` scratchpad path —
+  zero behavioral change, durable infrastructure. The case-by-case
+  X2 migrations route through these wrappers; X5 deletes the legacy
+  path along with append_sql / sql_buffer / sql_size / sql_capacity.
 
 ### Phase 2 — Migrate cases in transform_expression
 

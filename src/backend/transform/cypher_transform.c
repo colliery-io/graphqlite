@@ -252,6 +252,33 @@ int register_parameter(cypher_transform_context *ctx, const char *name)
  * expression's SQL into a sql_raw() emission without polluting the
  * main sql_buffer. */
 extern int transform_expression(cypher_transform_context *ctx, ast_node *expr);
+/* I-0043 X1: new expression transform API. Currently delegates to the
+ * legacy scratchpad path (capture into a temp string, then memcpy into
+ * the caller's buffer). When individual AST cases are migrated to
+ * dynamic_buffer-native emitters under X2.x, these wrappers route to
+ * the new path. The legacy body of transform_expression will be deleted
+ * in X5 along with append_sql / sql_buffer / sql_size / sql_capacity. */
+int transform_expression_into(cypher_transform_context *ctx,
+                              ast_node *expr,
+                              dynamic_buffer *out)
+{
+    if (!ctx || !expr || !out) return -1;
+    char *s = cypher_transform_capture_expression(ctx, expr);
+    if (!s) return -1;
+    dbuf_append(out, s);
+    free(s);
+    return 0;
+}
+
+char *transform_expression_str(cypher_transform_context *ctx, ast_node *expr)
+{
+    /* For now this is just cypher_transform_capture_expression with a
+     * non-NULL guarantee on success. Kept as a separate symbol so the
+     * X4 caller migration can grep for it independently of the older
+     * capture helper. */
+    return cypher_transform_capture_expression(ctx, expr);
+}
+
 char *cypher_transform_capture_expression(cypher_transform_context *ctx, ast_node *expr)
 {
     if (!ctx || !expr) return NULL;

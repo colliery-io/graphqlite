@@ -175,6 +175,30 @@ void append_string_literal(cypher_transform_context *ctx, const char *value);
  * I-0039 transitional helper. */
 char *cypher_transform_capture_expression(cypher_transform_context *ctx, ast_node *expr);
 
+/* I-0043 X1: new expression transform API.
+ *
+ * transform_expression_into() — transform `expr` and append the
+ * resulting SQL into the caller-supplied `out` dynamic_buffer. Does
+ * NOT touch ctx->sql_buffer (the legacy scratchpad). Returns 0 on
+ * success, -1 on error.
+ *
+ * transform_expression_str() — transform `expr` and return the result
+ * as a freshly-allocated NUL-terminated string. Caller frees. Returns
+ * NULL on error.
+ *
+ * Both are transitional and currently delegate to the legacy
+ * scratchpad path (sql_buffer swap, transform_expression, snapshot).
+ * As individual AST cases are migrated under I-0043 X2.x they will be
+ * routed to dynamic_buffer-native emitters; the old
+ * transform_expression body will be deleted in X5. Callers that
+ * want to use the new shape today can adopt these helpers without
+ * waiting for the case-by-case migration. */
+int transform_expression_into(cypher_transform_context *ctx,
+                              ast_node *expr,
+                              dynamic_buffer *out);
+char *transform_expression_str(cypher_transform_context *ctx,
+                               ast_node *expr);
+
 /* Pending property joins for aggregation optimization */
 void add_pending_prop_join(cypher_transform_context *ctx, const char *join_sql);
 const char* get_pending_prop_joins(cypher_transform_context *ctx);
