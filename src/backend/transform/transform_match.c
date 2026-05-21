@@ -1149,6 +1149,13 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         char cte_name[64];
         snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", rel_index);
 
+        /* T-0309: mark this rel variable as varlen-bound so the RETURN
+         * projector emits a list-of-edges JSON array (and the result
+         * builder skips single-edge re-fetch). */
+        if (rel->variable) {
+            transform_var_set_cte(ctx->var_ctx, rel->variable, cte_name);
+        }
+
         /* Generate the recursive CTE (added to unified builder) */
         if (generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name) < 0) {
             ctx->has_error = true;

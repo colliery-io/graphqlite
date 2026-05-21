@@ -954,6 +954,39 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                 alias, alias, alias, alias, alias);
                             }
                         } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
+                            /* T-0309: varlen-bound edge variable holds a path
+                             * of edges (CTE alias has columns start_id/end_id/
+                             * depth/path_ids/visited, not edge fields). Emit
+                             * a JSON array constructed from path_ids — one
+                             * edge JSON per id, in path order. */
+                            transform_var *evar = transform_var_lookup_edge(ctx->var_ctx, id->name);
+                            if (evar && evar->cte_name) {
+                                append_sql(ctx,
+                                  "(SELECT json_group_array(json_object("
+                                    "'id', e.id, "
+                                    "'type', e.type, "
+                                    "'startNodeId', e.source_id, "
+                                    "'endNodeId', e.target_id, "
+                                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                      "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = e.id AND ept.key_id = pk.id), "
+                                      "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = e.id AND epi.key_id = pk.id), "
+                                      "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = e.id AND epr.key_id = pk.id), "
+                                      "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = e.id AND epb.key_id = pk.id), "
+                                      "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = e.id AND epj.key_id = pk.id))) "
+                                      "FROM property_keys pk WHERE "
+                                        "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = e.id AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = e.id AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = e.id AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = e.id AND key_id = pk.id) OR "
+                                        "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = e.id AND key_id = pk.id)"
+                                      "), json('{}'))"
+                                  ")) "
+                                  "FROM edges e WHERE e.id IN ("
+                                    "SELECT CAST(value AS INTEGER) FROM json_each('[' || %s.path_ids || ']')"
+                                  ") ORDER BY instr(',' || %s.path_ids || ',', ',' || e.id || ','))",
+                                  alias, alias);
+                                goto edge_alias_projection_done;
+                            }
                             /* Edge variable - return full relationship object,
                              * or NULL when the row came from an OPTIONAL MATCH
                              * miss (LEFT JOIN with no match → alias.id IS NULL). */
@@ -980,6 +1013,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                             alias, alias, alias, alias,
                             alias, alias, alias, alias, alias,
                             alias, alias, alias, alias, alias);
+                            edge_alias_projection_done: ;
                         } else {
                             /* This is a node variable - return full node object,
                              * or NULL when the row came from an OPTIONAL MATCH

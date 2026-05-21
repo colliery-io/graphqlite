@@ -147,19 +147,26 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
         if (result->row_count > 0 && result->use_agtype && result->agtype_data) {
             /* Use AGE-compatible format */
             if (result->row_count == 1 && result->column_count == 1) {
-                /* Single result - wrap with column name for consistent format */
-                char *agtype_str = agtype_value_to_string(result->agtype_data[0][0]);
-                if (agtype_str) {
+                /* Single result - wrap with column name for consistent format.
+                 * T-0309: when agtype cell is unset (varlen edge JSON array
+                 * lives in result->data verbatim), agtype_value_to_string(NULL)
+                 * returns 'null' — we want the text data instead. */
+                int use_text_fallback = (result->agtype_data[0][0] == NULL &&
+                                          result->data && result->data[0] && result->data[0][0]);
+                char *agtype_str = use_text_fallback ? NULL : agtype_value_to_string(result->agtype_data[0][0]);
+                const char *text_val = use_text_fallback ? result->data[0][0] : NULL;
+                if (agtype_str || text_val) {
+                    const char *render = agtype_str ? agtype_str : text_val;
                     const char *col_name = (result->column_names && result->column_names[0])
                         ? result->column_names[0] : "result";
-                    int json_size = strlen(agtype_str) + strlen(col_name) + 32;
+                    int json_size = strlen(render) + strlen(col_name) + 32;
                     char *json_result = malloc(json_size);
                     if (json_result) {
-                        snprintf(json_result, json_size, "[{\"%s\": %s}]", col_name, agtype_str);
+                        snprintf(json_result, json_size, "[{\"%s\": %s}]", col_name, render);
                         sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
                         free(json_result);
                     } else {
-                        sqlite3_result_text(context, agtype_str, -1, SQLITE_TRANSIENT);
+                        sqlite3_result_text(context, render, -1, SQLITE_TRANSIENT);
                     }
                     free(agtype_str);
                 } else {
@@ -176,6 +183,9 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                                 buffer_size += strlen(temp_str) + 20;
                                 free(temp_str);
                             }
+                        } else if (result->data && result->data[row] && result->data[row][col]) {
+                            /* T-0309: include text fallback data in sizing. */
+                            buffer_size += strlen(result->data[row][col]) + 20;
                         }
                     }
                 }
@@ -203,13 +213,25 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             offset += snprintf(json_result + offset, buffer_size - offset, "result");
                         }
                         offset += snprintf(json_result + offset, buffer_size - offset, "\":");
-                        char *agtype_str = agtype_value_to_string(result->agtype_data[row][0]);
-                        if (agtype_str) {
-                            size_t slen = strlen(agtype_str);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, agtype_str, slen); offset += slen; }
-                            free(agtype_str);
+                        /* T-0309: when agtype cell unset (varlen edge JSON
+                         * array in result->data), fall back to text data
+                         * verbatim. agtype_value_to_string(NULL) returns
+                         * 'null' — so the fallback must check the agtype
+                         * pointer itself, not the rendered string. */
+                        if (result->agtype_data[row][0] == NULL &&
+                            result->data && result->data[row] && result->data[row][0]) {
+                            const char *txt = result->data[row][0];
+                            size_t slen = strlen(txt);
+                            if (offset + slen < buffer_size) { memcpy(json_result + offset, txt, slen); offset += slen; }
                         } else {
-                            offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                            char *agtype_str = agtype_value_to_string(result->agtype_data[row][0]);
+                            if (agtype_str) {
+                                size_t slen = strlen(agtype_str);
+                                if (offset + slen < buffer_size) { memcpy(json_result + offset, agtype_str, slen); offset += slen; }
+                                free(agtype_str);
+                            } else {
+                                offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                            }
                         }
                         offset += snprintf(json_result + offset, buffer_size - offset, "}");
                     } else {
@@ -230,13 +252,24 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             }
                             offset += snprintf(json_result + offset, buffer_size - offset, "\":");
 
-                            char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
-                            if (agtype_str) {
-                                size_t slen = strlen(agtype_str);
-                                if (offset + slen < buffer_size) { memcpy(json_result + offset, agtype_str, slen); offset += slen; }
-                                free(agtype_str);
+                            /* T-0309: agtype_value_to_string(NULL) returns
+                             * 'null' — so the text-fallback path must be
+                             * gated on agtype_data being NULL, not the
+                             * return value. */
+                            if (result->agtype_data[row][col] == NULL &&
+                                result->data && result->data[row] && result->data[row][col]) {
+                                const char *txt = result->data[row][col];
+                                size_t slen = strlen(txt);
+                                if (offset + slen < buffer_size) { memcpy(json_result + offset, txt, slen); offset += slen; }
                             } else {
-                                offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                                char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
+                                if (agtype_str) {
+                                    size_t slen = strlen(agtype_str);
+                                    if (offset + slen < buffer_size) { memcpy(json_result + offset, agtype_str, slen); offset += slen; }
+                                    free(agtype_str);
+                                } else {
+                                    offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                                }
                             }
                         }
                         offset += snprintf(json_result + offset, buffer_size - offset, "}");

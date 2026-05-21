@@ -418,6 +418,16 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                             /* Parse the JSON array of element IDs and build path object */
                             result->agtype_data[current_row][col] = build_path_from_ids(executor, ctx, ident->name, value);
                         } else if (ctx && transform_var_is_edge(ctx->var_ctx, ident->name)) {
+                            /* T-0309: varlen-bound edge vars hold a JSON array
+                             * of edge objects (the RETURN projector emitted
+                             * json_group_array). Skip the single-edge
+                             * interpretation; leave the value as the text
+                             * column so the renderer outputs it verbatim. */
+                            transform_var *_evar = transform_var_lookup_edge(ctx->var_ctx, ident->name);
+                            if (_evar && _evar->cte_name && value[0] == '[') {
+                                /* No agtype conversion — text result will be
+                                 * rendered as the JSON array. */
+                            } else
                             /* Check if value is already a JSON object (from new RETURN format) */
                             if (value[0] == '{') {
                                 /* Parse the JSON object directly */
