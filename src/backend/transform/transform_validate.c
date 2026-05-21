@@ -320,6 +320,85 @@ static int validate_conversion_call(cypher_function_call *func, char **error_mes
     return 0;
 }
 
+/* T-0232 — list/map function arg validation at compile time.
+ * - head/tail/last/reverse/size: require a list (or string for size/reverse);
+ *   reject non-list scalar/map LITERAL.
+ * - keys/values/properties: require map/node/edge; reject scalar/list LITERAL.
+ * - range: integer args only; reject string/decimal/bool literals.
+ * Only fires when args are literals — variable inputs require runtime checks. */
+static int validate_list_map_call(cypher_function_call *func, char **error_message)
+{
+    if (!func || !func->function_name || !func->args || func->args->count == 0) return 0;
+    const char *fname = func->function_name;
+
+    /* head/tail/last/reverse: list literal required. (size and reverse
+     * also accept strings, so they get a softer check.) */
+    bool list_only = (strcasecmp(fname, "head") == 0 ||
+                      strcasecmp(fname, "tail") == 0 ||
+                      strcasecmp(fname, "last") == 0);
+    if (list_only) {
+        ast_node *arg = func->args->items[0];
+        if (arg && arg->type == AST_NODE_LITERAL) {
+            const cypher_literal *lit = (const cypher_literal *)arg;
+            if (lit->literal_type != LITERAL_NULL) {
+                set_error(error_message,
+                    "TypeError: InvalidArgumentType: %s() does not accept argument of type %s",
+                    fname, literal_type_name(arg));
+                return -1;
+            }
+        }
+        if (arg && arg->type == AST_NODE_MAP) {
+            set_error(error_message,
+                "TypeError: InvalidArgumentType: %s() does not accept argument of type Map",
+                fname);
+            return -1;
+        }
+    }
+
+    /* keys/values/properties: map/node/edge required. Reject scalar
+     * literal AND list literal. */
+    bool map_only = (strcasecmp(fname, "keys") == 0 ||
+                     strcasecmp(fname, "values") == 0 ||
+                     strcasecmp(fname, "properties") == 0);
+    if (map_only) {
+        ast_node *arg = func->args->items[0];
+        if (arg && arg->type == AST_NODE_LITERAL) {
+            const cypher_literal *lit = (const cypher_literal *)arg;
+            if (lit->literal_type != LITERAL_NULL) {
+                set_error(error_message,
+                    "TypeError: InvalidArgumentType: %s() does not accept argument of type %s",
+                    fname, literal_type_name(arg));
+                return -1;
+            }
+        }
+        if (arg && arg->type == AST_NODE_LIST) {
+            set_error(error_message,
+                "TypeError: InvalidArgumentType: %s() does not accept argument of type List",
+                fname);
+            return -1;
+        }
+    }
+
+    /* range(): all args must be integer literals (or non-literal expressions
+     * that we can't check statically). Reject string/decimal/bool literals. */
+    if (strcasecmp(fname, "range") == 0) {
+        for (int i = 0; i < func->args->count; i++) {
+            ast_node *arg = func->args->items[i];
+            if (!arg || arg->type != AST_NODE_LITERAL) continue;
+            const cypher_literal *lit = (const cypher_literal *)arg;
+            if (lit->literal_type != LITERAL_INTEGER &&
+                lit->literal_type != LITERAL_NULL) {
+                set_error(error_message,
+                    "TypeError: InvalidArgumentType: range() arguments must be integers (got %s)",
+                    literal_type_name(arg));
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 /* Detect homogeneously-typed literal lists. Returns the literal type
  * (LITERAL_STRING / LITERAL_BOOLEAN / LITERAL_INTEGER / LITERAL_DECIMAL)
  * when every element is a literal of the same type. Returns -1 for
@@ -425,6 +504,7 @@ static int validate_expr(ast_node *expr, char **error_message)
         case AST_NODE_FUNCTION_CALL: {
             cypher_function_call *func = (cypher_function_call *)expr;
             if (validate_conversion_call(func, error_message) < 0) return -1;
+            if (validate_list_map_call(func, error_message) < 0) return -1;
             if (func->args) {
                 for (int i = 0; i < func->args->count; i++) {
                     if (validate_expr(func->args->items[i], error_message) < 0)
