@@ -21,6 +21,9 @@ void gql_to_string_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **a
 void gql_bool_str_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_bool_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 
+/* T-0308: cross-type ordering comparison (returns null on type mismatch). */
+void gql_order_cmp_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+
 /* Order key + namespace/timezone extractors */
 void gql_order_key_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_extract_ns_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);

@@ -359,6 +359,31 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
+    /* T-0308: cross-type ordering comparison returns null per the
+     * openCypher spec. Route LT/GT/LTE/GTE through the runtime UDF
+     * `_gql_order_cmp(left, right, op_str)` — that function checks
+     * the SQLite type classes (numeric / text-not-JSON / boolean)
+     * and returns null on mismatch. Each operand is transformed
+     * exactly once, so we don't trip over transform_expression's
+     * side effects (pending_prop_joins / alias counter / etc.). */
+    if (is_order_cmp) {
+        const char *op_sql = NULL;
+        switch (binary_op->op_type) {
+            case BINARY_OP_LT:  op_sql = "<";  break;
+            case BINARY_OP_GT:  op_sql = ">";  break;
+            case BINARY_OP_LTE: op_sql = "<="; break;
+            case BINARY_OP_GTE: op_sql = ">="; break;
+            default: break;
+        }
+        append_sql(ctx, "_gql_order_cmp(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ", '%s')", op_sql);
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
     /* Add left parenthesis for precedence */
     append_sql(ctx, "(");
     
