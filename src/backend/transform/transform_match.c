@@ -1172,8 +1172,43 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         /* Empty interval `*M..N` with M > N must return zero rows. */
         bool empty_interval = (max_hops >= 0 && min_hops > max_hops);
 
+        /* T-0306 follow-on: when the rel/target variables came from a prior
+         * WITH (alias_is_id), their "alias" is actually a column reference
+         * like `_with_0.rs` — using that as a SQL table alias produces
+         * `CROSS JOIN _varlen_path_1 AS _with_0.rs` which doesn't parse
+         * (SQLite sees `.` as a column accessor). Generate fresh internal
+         * aliases for the JOIN and constrain via WHERE using the column
+         * refs. */
+        /* A bound variable (via WITH) has an alias that's a column ref
+         * like `_with_0.rs` — either alias_is_id=true (node/edge id from
+         * WITH) or kind=VAR_KIND_PROJECTED (scalar projection). Either
+         * way, the alias contains a dot and can't be used as a SQL
+         * table alias. The simplest reliable detection: substring `.`. */
+        bool edge_alias_is_colref = (edge_alias && strchr(edge_alias, '.') != NULL);
+        bool target_alias_is_colref = (target_alias && strchr(target_alias, '.') != NULL);
+        char fresh_cte_alias[64];
+        char fresh_target_alias[64];
+        if (edge_alias_is_colref) {
+            snprintf(fresh_cte_alias, sizeof(fresh_cte_alias),
+                     "_vp_inner_%d", rel_index);
+            edge_alias = fresh_cte_alias;
+        }
+        if (target_alias_is_colref) {
+            snprintf(fresh_target_alias, sizeof(fresh_target_alias),
+                     "_vp_tgt_%d", rel_index);
+        }
+
         /* Join the main query with the CTE result using unified builder */
         sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, edge_alias, NULL);
+
+        /* T-0306 follow-on: skip the target-node JOIN entirely when the
+         * target var is bound via WITH (its column-ref IS the id; no
+         * fresh `nodes AS _with_0.x` is needed and would be invalid SQL
+         * anyway). The WHERE constraint downstream uses the column-ref
+         * directly. */
+        if (target_alias_is_colref) {
+            goto skip_target_node_join;
+        }
 
         /* Add target node to FROM clause - needed for the CTE join */
         bool target_has_properties = (target_node->properties && target_node->properties->type == AST_NODE_MAP);
@@ -1242,6 +1277,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
         }
 
+skip_target_node_join:
         /* Add label constraints for target node if specified */
         if (has_labels(target_node)) {
             const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
