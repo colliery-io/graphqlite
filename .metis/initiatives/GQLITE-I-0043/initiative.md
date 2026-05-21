@@ -241,6 +241,10 @@ For each `case AST_NODE_*` in transform_expression's switch (~30 cases):
   the legacy switch case. `transform_expression_into` routes LITERAL
   AST nodes directly; everything else still falls through to the
   scratchpad. TCK unchanged at 3461.
+- **X2.2** ✅ (2026-05-21): AST_NODE_PARAMETER native dbuf emitter
+  (`transform_parameter_into`). Named `$x` → `:x` with
+  `register_parameter` side effect; positional `$` → `?`.
+  Byte-identical to legacy. TCK unchanged.
 - **X2.2**: AST_NODE_IDENTIFIER — needs path-var, alias resolution.
 - **X2.3**: AST_NODE_PROPERTY — needs sub-expression recurse.
 - **X2.4**: AST_NODE_PARAMETER — straightforward.

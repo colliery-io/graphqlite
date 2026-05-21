@@ -311,14 +311,35 @@ static int transform_literal_into(const cypher_literal *lit,
  * AST cases not yet migrated. The legacy body of transform_expression
  * is deleted in X5 along with append_sql / sql_buffer / sql_size /
  * sql_capacity. */
+/* I-0043 X2.2: dynamic_buffer-native PARAMETER emission.
+ *   $name -> :name (SQLite named parameter)
+ *   $     -> ?     (positional placeholder)
+ * Side effect: registers the parameter with the context tracker. */
+static int transform_parameter_into(cypher_transform_context *ctx,
+                                    const cypher_parameter *param,
+                                    dynamic_buffer *out)
+{
+    if (!ctx || !param || !out) return -1;
+    if (param->name) {
+        register_parameter(ctx, param->name);
+        dbuf_appendf(out, ":%s", param->name);
+    } else {
+        dbuf_append(out, "?");
+    }
+    return 0;
+}
+
 int transform_expression_into(cypher_transform_context *ctx,
                               ast_node *expr,
                               dynamic_buffer *out)
 {
     if (!ctx || !expr || !out) return -1;
-    /* X2.1: AST_NODE_LITERAL has a native dbuf emitter — no scratchpad swap. */
+    /* Native dbuf emitters — no scratchpad swap. */
     if (expr->type == AST_NODE_LITERAL) {
         return transform_literal_into((const cypher_literal *)expr, out);
+    }
+    if (expr->type == AST_NODE_PARAMETER) {
+        return transform_parameter_into(ctx, (const cypher_parameter *)expr, out);
     }
     /* Other cases still route through the legacy scratchpad path until
      * X2.x migration covers them. */
