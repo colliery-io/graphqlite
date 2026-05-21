@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Extension accepts queries openCypher requires to be rejected — 66 scenarios"
 short_code: "GQLITE-T-0222"
 created_at: 2026-05-13T17:03:53.541385+00:00
-updated_at: 2026-05-13T17:03:53.541385+00:00
+updated_at: 2026-05-21T19:07:03.387364+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -52,6 +52,29 @@ This is a correctness ticket: silent acceptance of invalid queries is worse than
 - `vendor/tck/features/expressions/literals/Literals2.feature` — 2 scenario(s)
 - `vendor/tck/features/expressions/literals/Literals3.feature` — 2 scenario(s)
 - `vendor/tck/features/expressions/path/Path3.feature` — 2 scenario(s)
+
+## Status Updates
+
+**2026-05-21** — Substantively complete. Cluster reduced from 66 →
+4 over the long open-work session. The 4 remaining scenarios each
+need structural work outside compile-time validation:
+
+- Pattern1 [24] — pattern in SET RHS (AST recognition of pattern-in-
+  expression context).
+- Aggregation6 [5] — `percentileDisc()` in pattern comprehension
+  context (`[(n)-->() | 1]` not yet parsed).
+- List1 [9] — parameter-typed subscript validation (runtime).
+- TypeConversion3 [6] — runtime boolean subtype preservation through
+  json_each of a list comprehension.
+
+These are tracked in their respective parsing/runtime tickets.
+Closing this omnibus.
+
+Phase A-E validation work (T-0230 / T-0231 / T-0232 / T-0233 / T-0234)
+delivered the bulk: AmbiguousAggregationExpression, NonConstantExpression
+in aggregate, ORDER BY scoping + new-aggregate, Quantifier type
+mismatch, WHERE bare-node Boolean check, conversion-fn arg validation,
+list/map-fn arg validation, LIMIT/SKIP constant-expression check.
 
 ## Parent
 Backlog item filed under initiative [[GQLITE-I-0037]] (openCypher TCK Conformance Audit).

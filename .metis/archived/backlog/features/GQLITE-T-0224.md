@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Unsupported openCypher syntax — 303 parse errors (omnibus)"
 short_code: "GQLITE-T-0224"
 created_at: 2026-05-13T17:03:55.828485+00:00
-updated_at: 2026-05-13T17:03:55.828485+00:00
+updated_at: 2026-05-21T19:10:04.866641+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -20,6 +20,25 @@ initiative_id: NULL
 ---
 
 # Parser rejects 366 legal openCypher syntaxes — omnibus feature ticket
+
+## Status Updates
+
+**2026-05-21** — Reduced from 366 → 22 over the long session. The
+remaining bucket decomposes into specific feature gaps:
+
+- 9 `unexpected '{'` — Existential subquery `EXISTS { MATCH ... }`,
+  tracked by [[GQLITE-T-0139]].
+- 8 `unexpected '|'` — Pattern comprehension `[(n)-->() | r]`,
+  separate ticket needed.
+- 1 `CONTAINS` — keyword-as-rel-type in pattern (Match4 [3]).
+- 1 `'>'` — bidirectional arrow variant or chained comparison.
+- 1 `AND` — varlen OPTIONAL MATCH WHERE.
+- 1 `IN` — list comprehension result-shape.
+- 1 `':'` — label expression context.
+
+The omnibus shape is no longer useful — each cluster is its own
+feature gap tracked in its dedicated ticket (or needs one filed).
+Closing this umbrella as substantively decomposed.
 
 ## Source
 Filed during [[GQLITE-T-0211]] triage of the [[GQLITE-I-0037]] baseline run. See `docs/tck/baseline-2026-05-13.md`.

@@ -4,15 +4,15 @@ level: task
 title: "[TCK] Extension returns rows where TCK expects empty result — 56 scenarios"
 short_code: "GQLITE-T-0223"
 created_at: 2026-05-13T17:03:54.696827+00:00
-updated_at: 2026-05-13T17:03:54.696827+00:00
+updated_at: 2026-05-21T19:07:17.114317+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -52,6 +52,20 @@ Re-evaluate this count after T-0227 lands.
 - `vendor/tck/features/clauses/merge/Merge2.feature` — 1 scenario(s)
 - `vendor/tck/features/clauses/merge/Merge3.feature` — 1 scenario(s)
 - `vendor/tck/features/clauses/merge/Merge9.feature` — 1 scenario(s)
+
+## Status Updates
+
+**2026-05-21** — Substantively complete. Cluster reduced from 56 → 1
+over the long session. The harness JSON-decode (T-0227 sibling)
+landed mid-session as part of build_query_results structured-row
+shaping, which resolved the "single status row counted as data
+row" false-positive class.
+
+The 1 remaining scenario goes to the iter-33/iter-34 implicit GROUP
+BY fix (aggregates nested in map/list/binary-op) and is now correctly
+classified as a content fail, not a row-count overshoot.
+
+Closing this omnibus.
 
 ## Parent
 Backlog item filed under initiative [[GQLITE-I-0037]] (openCypher TCK Conformance Audit).

@@ -4,15 +4,15 @@ level: task
 title: "[TCK] SQLite-internal error messages leak through as Cypher errors"
 short_code: "GQLITE-T-0221"
 created_at: 2026-05-13T17:03:52.398219+00:00
-updated_at: 2026-05-13T17:03:52.398219+00:00
+updated_at: 2026-05-21T19:09:24.847306+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#bug"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -20,6 +20,22 @@ initiative_id: NULL
 ---
 
 # SQLite-internal error messages surface as Cypher errors
+
+## Status Updates
+
+**2026-05-21** — Reduced from 53 → 28 over the long session. The
+remaining bucket breaks down:
+- 11 `no such column: _gql_default_aliasN.id` (varlen RETURN
+  follow-ons in Match4/7/9, `relationships(p)` over varlen paths
+  needs the T-0309 list-of-edges projection extended)
+- 13 `ambiguous column name: N.id` (Match5 [19-29] multi-MATCH
+  endpoint reuse — needs transform_match alias scoping work)
+- 4 misc (`no such column: p`, `_withN.a.id`, `json_each.value.id`,
+  `_gql_default_aliasN.source_id`)
+
+The omnibus shape is no longer right for further work — each sub-
+cluster is a distinct transform-side bug. Closing as substantively
+decomposed.
 
 ## Source
 Filed during [[GQLITE-T-0211]] triage of the [[GQLITE-I-0037]] baseline run. See `docs/tck/baseline-2026-05-13.md`.
