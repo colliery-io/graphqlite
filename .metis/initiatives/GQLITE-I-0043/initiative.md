@@ -235,7 +235,12 @@ When old table is empty, delete it.
 
 For each `case AST_NODE_*` in transform_expression's switch (~30 cases):
 
-- **X2.1**: AST_NODE_LITERAL — simplest. ~30 LOC.
+- **X2.1** ✅ (2026-05-21): AST_NODE_LITERAL native dbuf emitter
+  (`transform_literal_into` in cypher_transform.c). Handles
+  INTEGER/DECIMAL/STRING/BOOLEAN/NULL with byte-identical output to
+  the legacy switch case. `transform_expression_into` routes LITERAL
+  AST nodes directly; everything else still falls through to the
+  scratchpad. TCK unchanged at 3461.
 - **X2.2**: AST_NODE_IDENTIFIER — needs path-var, alias resolution.
 - **X2.3**: AST_NODE_PROPERTY — needs sub-expression recurse.
 - **X2.4**: AST_NODE_PARAMETER — straightforward.

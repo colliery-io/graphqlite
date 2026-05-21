@@ -252,17 +252,76 @@ int register_parameter(cypher_transform_context *ctx, const char *name)
  * expression's SQL into a sql_raw() emission without polluting the
  * main sql_buffer. */
 extern int transform_expression(cypher_transform_context *ctx, ast_node *expr);
-/* I-0043 X1: new expression transform API. Currently delegates to the
- * legacy scratchpad path (capture into a temp string, then memcpy into
- * the caller's buffer). When individual AST cases are migrated to
- * dynamic_buffer-native emitters under X2.x, these wrappers route to
- * the new path. The legacy body of transform_expression will be deleted
- * in X5 along with append_sql / sql_buffer / sql_size / sql_capacity. */
+/* I-0043 X2.1: dynamic_buffer-native LITERAL emission. Emits the SQL
+ * form of a Cypher literal directly into `out`. The legacy switch
+ * case in transform_expression (transform_return.c) still exists for
+ * the old append_sql / sql_buffer path; this is the new entry point
+ * for callers that hold a dynamic_buffer.
+ *
+ * Behavior is byte-identical to the legacy LITERAL case:
+ *   INTEGER  -> "%lld"
+ *   DECIMAL  -> "%.17g" with ".0" appended if whole-number
+ *   STRING   -> escaped 'value'  (uses escape_sql_string)
+ *   BOOLEAN  -> "0" or "1"
+ *   NULL     -> "NULL" */
+static int transform_literal_into(const cypher_literal *lit,
+                                  dynamic_buffer *out)
+{
+    if (!lit || !out) return -1;
+    switch (lit->literal_type) {
+        case LITERAL_INTEGER:
+            dbuf_appendf(out, "%lld", (long long)lit->value.integer);
+            return 0;
+        case LITERAL_DECIMAL: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%.17g", lit->value.decimal);
+            bool has_dot = false;
+            for (char *p = buf; *p; p++) {
+                if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n') {
+                    has_dot = true; break;
+                }
+            }
+            if (!has_dot) {
+                size_t l = strlen(buf);
+                if (l + 2 < sizeof(buf)) { buf[l] = '.'; buf[l+1] = '0'; buf[l+2] = 0; }
+            }
+            dbuf_append(out, buf);
+            return 0;
+        }
+        case LITERAL_STRING: {
+            char *esc = escape_sql_string(lit->value.string);
+            dbuf_appendf(out, "'%s'", esc ? esc : (lit->value.string ? lit->value.string : ""));
+            free(esc);
+            return 0;
+        }
+        case LITERAL_BOOLEAN:
+            dbuf_append(out, lit->value.boolean ? "1" : "0");
+            return 0;
+        case LITERAL_NULL:
+            dbuf_append(out, "NULL");
+            return 0;
+    }
+    return -1;
+}
+
+/* I-0043 X1: new expression transform API. As individual AST cases
+ * are migrated under X2.x they get dynamic_buffer-native emitters
+ * (e.g. transform_literal_into); transform_expression_into routes
+ * those directly, falling back to the legacy scratchpad path for
+ * AST cases not yet migrated. The legacy body of transform_expression
+ * is deleted in X5 along with append_sql / sql_buffer / sql_size /
+ * sql_capacity. */
 int transform_expression_into(cypher_transform_context *ctx,
                               ast_node *expr,
                               dynamic_buffer *out)
 {
     if (!ctx || !expr || !out) return -1;
+    /* X2.1: AST_NODE_LITERAL has a native dbuf emitter — no scratchpad swap. */
+    if (expr->type == AST_NODE_LITERAL) {
+        return transform_literal_into((const cypher_literal *)expr, out);
+    }
+    /* Other cases still route through the legacy scratchpad path until
+     * X2.x migration covers them. */
     char *s = cypher_transform_capture_expression(ctx, expr);
     if (!s) return -1;
     dbuf_append(out, s);
