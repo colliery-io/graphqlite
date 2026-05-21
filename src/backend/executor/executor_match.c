@@ -828,7 +828,10 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
         int var_count = transform_var_count(ctx->var_ctx);
         for (int i = 0; i < var_count; i++) {
             transform_var *var = transform_var_at(ctx->var_ctx, i);
-            if (var && var->kind == VAR_KIND_NODE) {
+            /* I-0042 E4 prep: also bind edge variables. DELETE/SET
+             * may target edges; without this they'd be missing from
+             * var_map. */
+            if (var && (var->kind == VAR_KIND_NODE || var->kind == VAR_KIND_EDGE)) {
                 if (!first) append_sql(ctx, ", ");
                 append_sql(ctx, "%s.id AS \"%s_id\"", var->table_alias, var->name);
                 first = false;
@@ -866,6 +869,11 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
                 int64_t node_id = sqlite3_column_int64(stmt, col);
                 set_variable_node_id(var_map, var->name, (int)node_id);
                 CYPHER_DEBUG("multi-MATCH bound '%s' -> node %lld", var->name, (long long)node_id);
+                col++;
+            } else if (var && var->kind == VAR_KIND_EDGE) {
+                int64_t edge_id = sqlite3_column_int64(stmt, col);
+                set_variable_edge_id(var_map, var->name, (int)edge_id);
+                CYPHER_DEBUG("multi-MATCH bound '%s' -> edge %lld", var->name, (long long)edge_id);
                 col++;
             }
         }

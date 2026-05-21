@@ -131,6 +131,11 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
 /* REMOVE operations with variable map */
 int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, variable_map *var_map, cypher_result *result);
 
+/* DELETE operations with variable map (I-0042 E4): deletes nodes/edges
+ * whose ids are bound in var_map per the variables named in delete->items.
+ * Increments result->nodes_deleted / relationships_deleted. */
+int execute_delete_operations(cypher_executor *executor, cypher_delete *del, variable_map *var_map, cypher_result *result);
+
 /* Pattern matching functions */
 int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern);
 int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id,

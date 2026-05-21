@@ -766,16 +766,33 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
     cypher_delete *del = find_delete_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+DELETE via pattern dispatch");
+
+    /* I-0042 E4: execute_match_delete_query iterates ALL matched rows
+     * (the synthetic RETURN + agtype_data path was the only way to do
+     * that today; bind_match_clause_into_varmap only captures first-
+     * row). Keep it for the per-row delete. After DELETE, the RETURN
+     * gets a synth-match-without-where re-run — falling back to the
+     * pattern's structural match (the WHERE was likely property-based
+     * and the targeted rows are gone). */
     int rc = execute_match_delete_query(executor, match, del, result);
     if (rc >= 0) {
         result->success = true;
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
             if (ret) {
-                /* Try to synthesize COUNT results from delete counts
-                 * instead of re-querying the now-empty graph */
+                /* Synthesize COUNT/literal results from the delete
+                 * counts when possible (the graph rows are gone, so
+                 * re-MATCH would be empty). Falls back to the
+                 * synth-match-without-where path used by SET — same
+                 * principle as the SET light-fix from iter 29. */
                 if (!synthesize_delete_return(ret, result)) {
-                    rc = execute_match_return_query(executor, match, ret, result);
+                    cypher_match *synth = make_cypher_match(match->pattern,
+                                                           NULL,
+                                                           match->optional,
+                                                           match->from_graph);
+                    rc = execute_match_return_query(executor,
+                        synth ? synth : match, ret, result);
+                    if (synth) free(synth);
                 }
             }
         }
