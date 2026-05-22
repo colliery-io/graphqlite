@@ -300,6 +300,12 @@ unwind_clause:
             $$ = (ast_node*)make_cypher_unwind($2, $4, @1.first_line);
             free($4);
         }
+    | UNWIND expr AS BQIDENT
+        {
+            /* Backtick-quoted alias (scanner stripped the backticks). */
+            $$ = (ast_node*)make_cypher_unwind($2, $4, @1.first_line);
+            free($4);
+        }
     ;
 
 /* FOREACH clause - iterate over list and apply update clauses */
