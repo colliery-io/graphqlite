@@ -410,6 +410,17 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     rets_clause = m.group("rets")
     yield_clause = m.group("yields")
     yield_alias_map: dict[str, str] = {}
+    # T-0252: detect duplicate YIELD destination names. Cypher spec
+    # treats this as VariableAlreadyBound — fall through to backend
+    # so the expected SyntaxError surfaces. Call5 [5]/[6].
+    if yield_clause and yield_clause.strip() != "*":
+        seen_dst: set[str] = set()
+        for item in [c.strip() for c in yield_clause.split(",") if c.strip()]:
+            mas = re.match(r"^(?P<src>\w+)\s+AS\s+(?P<dst>\w+)$", item, re.IGNORECASE)
+            dst = mas.group("dst") if mas else item
+            if dst in seen_dst:
+                return None
+            seen_dst.add(dst)
     if yield_clause and yield_clause.strip() != "*":
         for item in [c.strip() for c in yield_clause.split(",") if c.strip()]:
             mas = re.match(r"^(?P<src>\w+)\s+AS\s+(?P<dst>\w+)$", item, re.IGNORECASE)
