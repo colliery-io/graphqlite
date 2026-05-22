@@ -487,6 +487,14 @@ return_item:
             $$ = make_return_item($1, $3);
             free($3);
         }
+    | expr AS BQIDENT
+        {
+            /* Backtick-quoted alias (e.g. RETURN x AS `name`) — the
+             * scanner has already stripped the surrounding backticks.
+             * Same shape as IDENTIFIER. */
+            $$ = make_return_item($1, $3);
+            free($3);
+        }
     ;
 
 set_item_list:
