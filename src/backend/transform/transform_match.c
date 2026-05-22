@@ -811,7 +811,14 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
     /* If this alias has already been added to FROM/joins by an earlier
      * generate_relationship_match call (OPTIONAL MATCH joins the target
      * node through the edge), skip re-adding it to avoid duplicate-alias
-     * SQL errors. */
+     * SQL errors.
+     *
+     * T-0261: also catch the case where the alias is at the END of the
+     * joins buffer (no trailing space/newline). The varlen rel handler
+     * emits `CROSS JOIN nodes AS n_3` via sql_join which doesn't add a
+     * trailing separator; the path loop then runs generate_node_match
+     * for the same anon node and previously emitted a duplicate join.
+     * Match4 [6] / Match5 [19]/[21]/[23]/[28]/[29] family. */
     {
         const char *from_str = dbuf_get(&ctx->unified_builder->from);
         const char *joins_str = dbuf_get(&ctx->unified_builder->joins);
@@ -819,8 +826,25 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
         snprintf(needle, sizeof(needle), " AS %s ", alias);
         char needle_end[80];
         snprintf(needle_end, sizeof(needle_end), " AS %s\n", alias);
-        if ((from_str && (strstr(from_str, needle) || strstr(from_str, needle_end))) ||
-            (joins_str && (strstr(joins_str, needle) || strstr(joins_str, needle_end)))) {
+        size_t alias_len = strlen(alias);
+        char suffix[80];
+        snprintf(suffix, sizeof(suffix), " AS %s", alias);
+        size_t suffix_len = strlen(suffix);
+        bool found = false;
+        if (from_str) {
+            if (strstr(from_str, needle) || strstr(from_str, needle_end)) found = true;
+            size_t flen = strlen(from_str);
+            if (!found && flen >= suffix_len &&
+                strcmp(from_str + flen - suffix_len, suffix) == 0) found = true;
+        }
+        if (!found && joins_str) {
+            if (strstr(joins_str, needle) || strstr(joins_str, needle_end)) found = true;
+            size_t jlen = strlen(joins_str);
+            if (!found && jlen >= suffix_len &&
+                strcmp(joins_str + jlen - suffix_len, suffix) == 0) found = true;
+        }
+        (void)alias_len;
+        if (found) {
             CYPHER_DEBUG("Skipping duplicate node match for %s", alias);
             return 0;
         }
