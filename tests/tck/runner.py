@@ -359,6 +359,11 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     # so the harness sees the expected error class.
     if m.group("rets") and not m.group("yields"):
         return None
+    # T-0252: CALL <proc> YIELD * RETURN ... is in-query YIELD * which
+    # the Cypher spec disallows (UnexpectedSyntax). Fall through.
+    # (Standalone CALL YIELD * is OK — handled when rets is absent.)
+    if m.group("yields") and m.group("yields").strip() == "*" and m.group("rets"):
+        return None
 
     # Parse args. Three cases:
     # - Explicit: CALL name(a, b)        → use literal values.
