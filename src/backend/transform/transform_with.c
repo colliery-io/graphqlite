@@ -809,29 +809,72 @@ with_star_columns_done:
         }
     }
 
-    /* Handle LIMIT and SKIP */
+    /* Handle LIMIT and SKIP. T-0252 follow-on: when the LIMIT/SKIP
+     * expression isn't a bare integer literal (e.g. `toInteger(
+     * ceil(1.7))`), atoi() returns 0 and we emit `LIMIT 0` which
+     * drops all rows. Detect non-numeric exprs and use the
+     * builder's expr path (sql_limit_expr) which inlines the SQL
+     * verbatim. */
+    char *limit_str = NULL;
+    char *skip_str = NULL;
     int limit_val = -1;
     int offset_val = -1;
+    bool limit_is_expr = false;
+    bool skip_is_expr = false;
 
     if (with->limit) {
-        char *limit_str = transform_expression_to_string(ctx, with->limit);
+        limit_str = transform_expression_to_string(ctx, with->limit);
         if (limit_str) {
-            limit_val = atoi(limit_str);
-            free(limit_str);
+            const char *p = limit_str;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '-') p++;
+            bool all_digits = (*p != '\0');
+            for (; *p; p++) {
+                if (*p < '0' || *p > '9') { all_digits = false; break; }
+            }
+            if (all_digits) {
+                limit_val = atoi(limit_str);
+            } else {
+                limit_is_expr = true;
+            }
         }
     }
 
     if (with->skip) {
-        char *skip_str = transform_expression_to_string(ctx, with->skip);
+        skip_str = transform_expression_to_string(ctx, with->skip);
         if (skip_str) {
-            offset_val = atoi(skip_str);
-            free(skip_str);
+            const char *p = skip_str;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '-') p++;
+            bool all_digits = (*p != '\0');
+            for (; *p; p++) {
+                if (*p < '0' || *p > '9') { all_digits = false; break; }
+            }
+            if (all_digits) {
+                offset_val = atoi(skip_str);
+            } else {
+                skip_is_expr = true;
+            }
         }
     }
 
-    if (limit_val >= 0 || offset_val >= 0) {
+    if (limit_is_expr || skip_is_expr) {
+        sql_limit_expr(ctx->unified_builder,
+                       limit_is_expr ? limit_str : NULL,
+                       skip_is_expr ? skip_str : NULL);
+        /* Also set numeric for the non-expr side if both present. */
+        if (!limit_is_expr && limit_val >= 0) {
+            sql_limit(ctx->unified_builder, limit_val, -1);
+        }
+        if (!skip_is_expr && offset_val >= 0) {
+            sql_limit(ctx->unified_builder, -1, offset_val);
+        }
+    } else if (limit_val >= 0 || offset_val >= 0) {
         sql_limit(ctx->unified_builder, limit_val, offset_val);
     }
+
+    free(limit_str);
+    free(skip_str);
 
     if (pre_var_names) {
         for (int i = 0; i < pre_var_count; i++) free(pre_var_names[i]);
