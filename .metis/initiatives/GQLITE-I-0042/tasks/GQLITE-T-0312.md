@@ -4,14 +4,15 @@ level: task
 title: "E3: relocate finalize in cypher_transform_query + remove raw_output drain shim"
 short_code: "GQLITE-T-0312"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T00:12:47.008348+00:00
+updated_at: 2026-05-22T13:14:58.342621+00:00
 parent: GQLITE-I-0042
 blocked_by: [GQLITE-T-0311]
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
+
 
 exit_criteria_met: false
 initiative_id: GQLITE-I-0042
@@ -33,6 +34,8 @@ gives raw_output a proper home, the shim is dead code.
 ## Blocked by
 
 T-0311 (E2) — same architectural prerequisites.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

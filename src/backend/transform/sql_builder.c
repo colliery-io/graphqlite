@@ -594,9 +594,30 @@ char *sql_builder_to_string(sql_builder *b)
         return NULL;
     }
 
-    /* Need at least SELECT items or FROM clause */
-    if (b->select_count == 0 && dbuf_is_empty(&b->from)) {
+    /* T-0312 (E3): need at least SELECT items, FROM clause, OR raw_output
+     * content. Pure-DML queries (write-only: SET / DELETE / REMOVE /
+     * CREATE without RETURN) populate raw_output but never call
+     * sql_from / sql_select; previously their finalize would return
+     * NULL and fall back to the explicit drain shim in
+     * cypher_transform_query. Now sql_builder_to_string emits
+     * raw_output directly, removing the need for the shim. */
+    if (b->select_count == 0 && dbuf_is_empty(&b->from) &&
+        dbuf_is_empty(&b->raw_output)) {
         return NULL;
+    }
+
+    /* T-0312 (E3): pure-DML path — no SELECT/FROM, only raw_output.
+     * Emit raw_output alone (no SELECT prefix) so prepare_v2 sees a
+     * valid DML statement. */
+    if (b->select_count == 0 && dbuf_is_empty(&b->from)) {
+        dynamic_buffer dml_only; dbuf_init(&dml_only);
+        const char *raw = dbuf_get(&b->raw_output);
+        /* Skip leading ws / stray ';' */
+        while (*raw == ' ' || *raw == '\t' || *raw == '\n' ||
+               *raw == '\r' || *raw == ';') raw++;
+        dbuf_append(&dml_only, raw);
+        b->finalized = true;
+        return dbuf_finish(&dml_only);
     }
 
     dynamic_buffer result;

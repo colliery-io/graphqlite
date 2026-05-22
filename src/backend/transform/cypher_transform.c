@@ -725,15 +725,15 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
         }
     }
 
-    /* T-0311 (E2): finalize at end of cypher_transform_query's clause
-     * loop when a SELECT projection was built (sql_select called via
-     * transform_return_clause). Mirrors the gate added to
-     * transform_single_query_sql so this path also gets the
-     * relocated finalize. Skip for write-only queries (no SELECT) —
-     * the T-0310 raw_output drain path below handles them. */
+    /* T-0311/T-0312: finalize at end of cypher_transform_query's
+     * clause loop. Fires for any builder state — SELECT shape OR
+     * write-only DML (raw_output). sql_builder_to_string handles
+     * both shapes; the legacy raw_output drain shim is no longer
+     * needed (T-0312/E3). */
     if (ctx->unified_builder &&
         (ctx->unified_builder->select_count > 0 ||
-         !dbuf_is_empty(&ctx->unified_builder->from))) {
+         !dbuf_is_empty(&ctx->unified_builder->from) ||
+         !dbuf_is_empty(&ctx->unified_builder->raw_output))) {
         if (finalize_sql_generation(ctx) < 0) {
             ctx->has_error = true;
             ctx->error_message = strdup("Failed to finalize SQL generation");
@@ -747,31 +747,23 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
         goto error;
     }
 
-    /* T-0310: capture raw_output (DML) for the split path. Three
-     * possibilities:
-     *   - sql_buffer empty  → pure DML query, drain into sql_buffer
-     *     and prepare directly (legacy write-only path).
-     *   - sql_buffer non-empty AND DML doesn't reference CTE-bound
-     *     vars → split; pass DML to executor via pre_exec_dml.
-     *   - sql_buffer non-empty AND DML references CTE-bound vars
-     *     (_with_N, _unwind_N) → DON'T split. transform_delete/
-     *     remove emit DML that uses CTE column names in a way that
-     *     isn't valid as standalone SQL (DELETE FROM nodes WHERE
-     *     id = _with_0.n.id is bogus — _with_0 isn't a column). For
-     *     these the legacy behavior (DML appended after SELECT,
-     *     silently dropped by prepare_v2's one-statement limit) is
-     *     what tests expect — rewriting transform_delete/remove to
-     *     emit CTE-aware DML is a separate task.
+    /* T-0310 / T-0312: split DML out of raw_output for mixed
+     * DML+SELECT queries. Pure-DML queries are now handled by
+     * sql_builder_to_string emitting raw_output directly (E3 removed
+     * the legacy drain shim).
+     *
+     * Cases for mixed (raw_output non-empty AND sql_buffer has SELECT):
+     *   - INSERT OR REPLACE in DML → split; pre_exec_dml to executor.
+     *   - Other DML shapes → leave in raw_output; finalize already
+     *     appended a compound SELECT;DML form that prepare_v2 will
+     *     silently truncate.
      */
     char *raw_dml = NULL;
     bool mixed_dml = false;
     if (ctx->unified_builder &&
-        !dbuf_is_empty(&ctx->unified_builder->raw_output)) {
-        if (ctx->sql_size == 0) {
-            const char *raw = dbuf_get(&ctx->unified_builder->raw_output);
-            append_sql(ctx, "%s", raw);
-            dbuf_clear(&ctx->unified_builder->raw_output);
-        } else {
+        !dbuf_is_empty(&ctx->unified_builder->raw_output) &&
+        ctx->sql_size > 0) {
+        {
             const char *raw = dbuf_get(&ctx->unified_builder->raw_output);
             const char *peek = raw;
             while (*peek == ' ' || *peek == '\t' || *peek == '\n' ||
@@ -1039,25 +1031,18 @@ static int transform_single_query_sql(cypher_transform_context *ctx, cypher_quer
         }
     }
 
-    /* T-0311 (E2): finalize at the end of the clause loop when a RETURN
-     * projection has been built (select dbuf non-empty). This replaces
-     * the two mid-flow finalize calls in transform_return.c.
-     *
-     * finalize_sql_generation is `in_union`-aware: it appends to
+    /* T-0311/T-0312: finalize at end of clause loop. Fires for any
+     * builder state — SELECT shape OR write-only DML (raw_output).
+     * finalize_sql_generation is `in_union`-aware: appends to
      * sql_buffer when in_union=true (so left-branch SQL is preserved
-     * across `UNION` separator) and resets+writes when false. We call
-     * unconditionally when there's a SELECT to assemble.
-     *
-     * Skip when no SELECT projection: write-only queries fall through
-     * to the legacy raw_output drain in cypher_transform_query. Our
-     * finalize there would consume raw_output into sql_buffer and the
-     * drain would no-op, but the T-0310 split would then mis-detect
-     * "mixed DML+SELECT" (sql_size > 0 with raw_output content) and
-     * try to re-extract. Gate on `select` non-empty.
-     */
+     * across `UNION` separator) and resets+writes when false.
+     * sql_builder_to_string (T-0312) emits raw_output-only when no
+     * SELECT/FROM is present, removing the need for the legacy drain
+     * shim. */
     if (ctx->unified_builder &&
         (ctx->unified_builder->select_count > 0 ||
-         !dbuf_is_empty(&ctx->unified_builder->from))) {
+         !dbuf_is_empty(&ctx->unified_builder->from) ||
+         !dbuf_is_empty(&ctx->unified_builder->raw_output))) {
         if (finalize_sql_generation(ctx) < 0) {
             ctx->has_error = true;
             ctx->error_message = strdup("Failed to finalize SQL generation");
@@ -1101,16 +1086,9 @@ int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *q
         return -1;
     }
 
-    /* I-0039 Extension A: drain raw_output into sql_buffer if no
-     * RETURN clause triggered finalize. (Same logic as in
-     * cypher_transform_query.) */
-    if (ctx->unified_builder &&
-        !dbuf_is_empty(&ctx->unified_builder->raw_output) &&
-        ctx->sql_size == 0) {
-        const char *raw = dbuf_get(&ctx->unified_builder->raw_output);
-        append_sql(ctx, "%s", raw);
-        dbuf_clear(&ctx->unified_builder->raw_output);
-    }
+    /* T-0312 (E3): raw_output drain shim removed. transform_single_query_sql
+     * already calls finalize at clause-loop end which emits both
+     * SELECT and write-only DML shapes via sql_builder_to_string. */
 
     /* Prepend CTE prefix if we have variable-length relationships */
     prepend_cte_to_sql(ctx);

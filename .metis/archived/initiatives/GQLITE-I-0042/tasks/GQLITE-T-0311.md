@@ -4,14 +4,14 @@ level: task
 title: "E2: relocate finalize_sql_generation to end of transform_single_query_sql"
 short_code: "GQLITE-T-0311"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T12:45:26.021061+00:00
+updated_at: 2026-05-22T13:14:49.460013+00:00
 parent: GQLITE-I-0042
 blocked_by: [GQLITE-T-0313, GQLITE-T-0314, GQLITE-T-0315, GQLITE-T-0316, GQLITE-T-0317]
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -40,6 +40,10 @@ queries, CALL subqueries, MERGE pipelines, and UNION branches all
 expected finalize to have run by the time their post-clause path
 ran. Until those handlers are decoupled, this relocation must not
 ship.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
