@@ -4,14 +4,14 @@ level: initiative
 title: "Executor finalize-sequencing refactor — defer SQL serialization until all clauses transformed"
 short_code: "GQLITE-I-0042"
 created_at: 2026-05-20T14:19:21.169084+00:00
-updated_at: 2026-05-20T22:59:18.500180+00:00
+updated_at: 2026-05-22T00:30:00.000000+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/design"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -33,24 +33,20 @@ per-clause executor handlers (`handle_match_set`, `handle_match_delete`,
 handle_match_set(query):
   1. transform_match_clause(ctx, match)         # populates unified_builder
   2. (transform_return_clause calls finalize    # only when RETURN present)
-  3. transform_set_clause(ctx, set)             # writes DIRECTLY to ctx->sql_buffer via append_sql
+  3. transform_set_clause(ctx, set)             # writes via sql_raw → raw_output
   4. sqlite3_prepare_v2(ctx->sql_buffer, ...)   # executes the assembled SQL
 ```
 
-This worked when both MATCH and SET wrote to `ctx->sql_buffer`. The
-I-0039 migration moved DML emitters (set/delete/remove/create) to
+The I-0039 migration moved DML emitters (set/delete/remove/create) to
 `sql_raw → unified_builder->raw_output`. To keep the existing handlers
-working, we added a "drain" step in `cypher_transform_query` /
-`cypher_transform_generate_sql` that lifts `raw_output` into
-`sql_buffer` before prepare. That works but leaves
-`finalize_sql_generation` being called in TWO places:
+working, a "drain" step in `cypher_transform_query` lifts `raw_output`
+into `sql_buffer` before prepare. The result: `finalize_sql_generation`
+is called in TWO places (mid-flow inside transform_return, and at end
+via the drain), and the SQL-assembly layer has implicit assumptions
+that the I-0039 target ("no append_sql, all output through
+unified_builder") can't honor.
 
-1. Inside `transform_return_clause` (mid-flow, when RETURN is processed)
-2. Effectively at the end via the new drain step
-
-The sequencing assumes finalize-then-append-DML works. To get to the
-final I-0039 target ("no `append_sql` left, all output through
-`unified_builder`"), the executor must change the contract:
+The fix: change the executor contract to
 
 > **All clauses transform first → finalize ONCE → execute.**
 
@@ -61,274 +57,79 @@ in `handle_match_set` and the per-row CALL outer-MATCH in
 
 ## Goals
 
-- **G1**: Every `handle_*` function in `query_dispatch.c` (and its
-  satellites `executor_call_subquery.c`, `executor_merge_pipeline.c`)
-  follows the same contract: transform all clauses → finalize → prepare
-  → execute. No interleaved transform/execute.
-- **G2**: `finalize_sql_generation` becomes idempotent and is called
-  once at the boundary between transform and execute. No transform
-  function calls it internally (`transform_return_clause:483` and
-  `transform_return_clause:674` become caller-side responsibility).
-- **G3**: The `drain raw_output → sql_buffer` shim added during I-0039
-  S5+S6 is removed. `unified_builder` becomes the sole assembly point;
-  `sql_buffer` is filled exactly once by the finalize call.
-- **G4**: Zero TCK regression. Current pass count is the floor.
+- **G1**: Every `handle_*` in `query_dispatch.c` (and the
+  `executor_call_subquery.c`, `executor_merge_pipeline.c` satellites)
+  follows the same contract: transform-all → finalize-once → execute.
+  No interleaved transform/execute.
+- **G2**: `finalize_sql_generation` is idempotent and called once at
+  the transform→execute boundary. No transform function calls it
+  internally.
+- **G3**: The drain shim is removed. `unified_builder` is the sole
+  assembly point; `sql_buffer` is filled exactly once by finalize.
+- **G4**: Zero TCK regression. Current pass count (3468) is the floor.
 
 ## Non-Goals
 
 - Migrating `transform_expression` and its dispatched function
-  transforms (that's GQLITE-I-0043).
+  transforms (that's [[GQLITE-I-0043]]).
 - Removing `ctx->sql_buffer` entirely (depends on I-0043).
-- Changing `sql_builder`'s API.
+- Changing the `sql_builder` API surface (additions are fine).
 
-## Detailed Design
+## Architecture: the SQL-assembly blocker
 
-### Current handler shape (problematic)
+A naive E2 attempt (2026-05-20) crashed TCK 3422 → 854. Root cause:
+multiple call sites (write-only queries, CALL subqueries, MERGE
+pipelines, UNION branches) depend on finalize being called mid-flow.
+A blanket relocate doesn't work in isolation.
 
-`handle_match_set` in `query_dispatch.c:696`:
+Iteration-49 E5 attempt traced a second deeper issue: the SQL-
+assembly layer can't represent "DML preceding SELECT" cleanly today.
+`sqlite3_prepare_v2` only consumes one statement; raw_output and
+SELECT share one buffer; `prepend_cte_to_sql` writes WITH at the
+start of the assembled string. Both architecture fixes are now
+[[GQLITE-T-0310]] (DML/SELECT split at builder boundary).
 
-```c
-if (match_count > 1) {
-    // multi-MATCH: binds via bind_match_clause_into_varmap (prepares
-    // and executes intermediate SQL to capture node IDs!)
-    rc = execute_set_operations(executor, set, ms_vars, result);
-} else {
-    rc = execute_match_set_query(executor, match, set, result);
-}
-// Then if RETURN: re-runs MATCH+RETURN.
-```
+## Decomposition
 
-`bind_match_clause_into_varmap` (in `executor_match.c:780`) does:
-1. Create a fresh transform_context
-2. transform_match_clause
-3. finalize_sql_generation
-4. sqlite3_prepare_v2 + step (reads node IDs back)
-5. cypher_transform_free_context
+This initiative was decomposed into single-task chunks 2026-05-22:
 
-So **each handler is already doing transform+execute per clause**. The
-fix is to consolidate this into a single transform-all-then-execute
-flow.
+  [[GQLITE-T-0310]] — DML/SELECT split at builder boundary
+                     (architectural unblocker for E5/E6)
+  [[GQLITE-T-0297]] — Pre-existing C12 / pre-SET var_map capture (kept)
+  [[GQLITE-T-0311]] — E2: relocate finalize in transform_single_query_sql
+  [[GQLITE-T-0312]] — E3: same in cypher_transform_query + drain removal
+  [[GQLITE-T-0313]] — E4: handle_match_delete two-pass (light fix shipped;
+                     full pending)
+  [[GQLITE-T-0314]] — E5: handle_match_set true two-pass
+                     (Set6 family acceptance)
+  [[GQLITE-T-0315]] — E6: handle_match_remove two-pass
+  [[GQLITE-T-0316]] — E7: handle_call_subquery — hoist per-row transforms
+  [[GQLITE-T-0317]] — E8: handle_match_merge + handle_merge_with_pipeline
+  [[GQLITE-T-0318]] — E9: full TCK regression gate
+  [[GQLITE-T-0319]] — E10: audit bind_match_clause_into_varmap helpers
 
-### Target handler shape
+**E1** (idempotent `sql_builder_to_string` + auto-unfinalize wrapper)
+landed pre-decomposition in commit 3e93054 (2026-05-21).
 
-```c
-int handle_match_set_v2(executor, query, result, flags) {
-    cypher_transform_context *ctx = cypher_transform_create_context(db);
-    transform_single_query_sql(ctx, query);   // all clauses → unified_builder
-    finalize_sql_generation(ctx);             // ONCE
-    prepend_cte_to_sql(ctx);
-
-    sqlite3_stmt *stmt;
-    sqlite3_prepare_v2(db, ctx->sql_buffer, ...);
-    // execute, collect counts
-    sqlite3_finalize(stmt);
-    cypher_transform_free_context(ctx);
-    result->success = true;
-    return 0;
-}
-```
-
-The tricky part: handlers that need INTERMEDIATE result data (e.g.
-`handle_match_set` for the C12 pre-SET var_map capture, or
-`handle_match_delete` for synthesize_delete_return) need to keep their
-intermediate prepare/step. Those become **two-pass** handlers:
-
-```c
-// Pass 1: transform MATCH alone, prepare, step, capture intermediate
-// Pass 2: transform DML+RETURN against captured intermediate, finalize, execute
-```
-
-The two-pass pattern is acceptable because the intermediate result is
-genuinely needed (you can't write MATCH+SET+RETURN as one SQL statement
-that preserves the pre-SET node identity).
-
-### Idempotent finalize
-
-`finalize_sql_generation` currently:
-
-```c
-if (!ctx->in_union) {
-    ctx->sql_size = 0;
-    ctx->sql_buffer[0] = '\0';
-}
-char *assembled = sql_builder_to_string(ctx->unified_builder);
-append_sql(ctx, "%s", assembled);
-```
-
-After being called once, `sql_builder_to_string` returns NULL on the
-second call (because it consumes the typed dbufs). To make idempotent:
-
-- Add a `b->finalized` check: if true, return 0 immediately.
-- Reset the flag in `sql_builder_reset`.
-- Callers that need to re-finalize after additional sql_select calls
-  must explicitly reset.
-
-### Caller-side finalize
-
-Move the two `finalize_sql_generation(ctx)` calls in
-`transform_return.c` (lines 483, 674) up to `transform_single_query_sql`
-or `cypher_transform_query`. transform_return_clause becomes
-purely-additive on unified_builder.
-
-### Drain-shim removal
-
-Once finalize is called at the boundary, the raw_output drain in
-`cypher_transform_query:545` and `cypher_transform_generate_sql:710`
-becomes unnecessary — `sql_builder_to_string` already includes
-raw_output in its output.
-
-## Alternatives Considered
-
-- **Keep current interleaving; just make the drain robust.** Rejected
-  — fragile shim, blocks I-0043, doesn't get us to "no append_sql".
-- **Rewrite the executor entirely (one big handler).** Rejected — too
-  much risk; the per-pattern dispatch already works well.
-- **Per-handler refactor, no shared contract.** Rejected — drifts to
-  N different sequencing models, hard to reason about.
-
-## Implementation Plan
-
-### Phase 1 — Make finalize idempotent
-
-- **E1**: Add `b->finalized` short-circuit in `sql_builder_to_string`.
-  Add reset behavior. Update unit tests for sql_builder.
-
-### Phase 2 — Caller-side finalize
-
-- **E2**: Move the two `finalize_sql_generation` calls from
-  `transform_return.c` to `transform_single_query_sql` (end of clause
-  loop). Verify TCK = 0.
-- **E3**: Move the equivalent calls in `cypher_transform_query` to a
-  single canonical location. Remove the drain shim.
-
-**E2 attempt 2026-05-20 — NOT safe in isolation.** Attempting just E2
-(removing finalize from `transform_return.c` and adding an unconditional
-finalize at end of `transform_single_query_sql`) crashed TCK pass from
-3422 to 854 with widespread "incomplete input" errors. Root cause:
-`transform_single_query_sql` is invoked by multiple contexts — write-
-only queries, CALL subqueries via `executor_call_subquery.c`, MERGE
-pipelines, UNION branches — and not all expect finalize at that
-boundary. A blanket finalize at the end of the clause loop breaks the
-contexts that add to the builder afterward.
-
-**Correct ordering for next session:**
-1. E4 (`handle_match_delete` two-pass) — cleanest pilot
-2. E5 (`handle_match_set` two-pass) — unblocks T-0297
-3. E6 (`handle_match_remove` two-pass)
-4. E7 (`handle_call_subquery`), E8 (MERGE) — most complex, last
-5. THEN E2/E3 — once executors no longer rely on mid-flow finalize,
-   relocating it is safe.
-
-E1 (idempotent `sql_builder_to_string`) is committed and the
-auto-unfinalize wrapper in `finalize_sql_generation` preserves the
-multi-call pattern existing executor handlers depend on.
-
-### E5 (handle_match_set two-pass) — design sketch for next attempt
-
-The Set1 [1] / Set2 [2] family currently fails because:
+## Dependency graph
 
 ```
-MATCH (n:A) WHERE n.name = 'Andres' SET n.name = 'Michael' RETURN n
-                                                            ^
-              re-MATCHes from scratch — but n.name no longer matches WHERE
+T-0310 ──┬─→ T-0314 (E5) ─┐
+         └─→ T-0315 (E6) ─┤
+                          ├─→ T-0311 (E2) ─→ T-0312 (E3) ─→ T-0318 (E9)
+T-0313 (E4) ──────────────┤
+T-0316 (E7) ──────────────┤
+T-0317 (E8) ──────────────┘
+T-0319 (E10) — independent
 ```
 
-`handle_match_set` (query_dispatch.c:696) currently:
-1. Single-MATCH: calls `execute_match_set_query(executor, match, set, result)`.
-   That function transforms MATCH → executes per-row → applies SET per row,
-   discarding each row's `variable_map` after use.
-2. Multi-MATCH: calls `bind_match_clause_into_varmap` for each MATCH (collecting
-   IDs into `ms_vars`), then `execute_set_operations`.
-3. For RETURN: BOTH paths then call `execute_match_return_query(executor,
-   match, ret, result)` — which re-runs the original MATCH + WHERE.
+E10 can land any time. T-0310 is the architectural unblocker.
 
-Two-pass refactor:
+## Completion gate
 
-```c
-// Always pre-capture IDs (Pass 1) — works for both single and multi MATCH
-variable_map *ms_vars = create_variable_map();
-for each MATCH clause:
-    bind_match_clause_into_varmap(executor, clause, ms_vars, result);
-// Pass 2a: SET using captured IDs
-execute_set_operations(executor, set, ms_vars, result);
-// Pass 2b: RETURN by ID, NOT by re-MATCHing the original WHERE
-if (RETURN present):
-    // NEW helper: execute_return_by_var_map(executor, match, ret, ms_vars, result)
-    // — fetch nodes/edges by ID from ms_vars (now reflecting post-SET state)
-    //   and project per the original RETURN
-```
-
-The Pass 2b helper is the new piece. Implementation options:
-- (a) Synthesize a `cypher_match` with `WHERE id(n) IN [<captured>]` and
-  call execute_match_return_query. Requires AST construction for the
-  WHERE which is awkward.
-- (b) Build SQL directly: for each captured ID, fetch from nodes/edges
-  table and emit via the standard projection path. Bypasses the
-  re-MATCH machinery entirely.
-- (c) Extend `execute_match_return_query` with an optional var_map
-  parameter — when provided, inject `<alias>.id IN (...)` into the
-  WHERE and SKIP the original WHERE. Less invasive than (a).
-
-Option (c) seems best. Same pattern should apply to T-0297 (C12 pre-SET
-var_map capture) and to handle_match_delete's Return2 [14] failure
-("Do not fail when returning type of deleted relationships" — needs
-to return pre-DELETE state).
-
-### Cross-type order comparison (T-0308 — separate ticket)
-
-Repeated attempts to add type-class checks to LT/GT/LTE/GTE crashed
-with SIGABRT in WithWhere5 [1]-[4]. Both naive (re-transform operand
-N times in CASE) and capture-string (transform once into temp buffer,
-substitute) approaches crashed. Root cause involves `transform_property_access`
-touching context state (likely `pending_prop_joins` or alias counter)
-that ISN'T captured by ctx->sql_buffer swapping. Needs deeper
-investigation before another attempt.
-
-### Phase 3 — Two-pass handlers
-
-- **E4**: `handle_match_delete` — extract intermediate-MATCH step into
-  a helper; consolidate transform-then-execute for the DELETE phase.
-- **E5**: `handle_match_set` — same. The C12 pre-SET var_map capture
-  becomes Pass 1 (MATCH-only), SET+RETURN becomes Pass 2.
-- **E6**: `handle_match_remove` — same.
-- **E7**: `handle_call_subquery` (executor_call_subquery.c) — already
-  multi-pass; refactor to use the canonical two-pass helpers.
-- **E8**: `handle_match_merge`, `handle_merge_with_pipeline` — same.
-
-### Phase 4 — Verify and clean
-
-- **E9**: Full TCK regression run. Compare baseline pass set
-  byte-for-byte.
-- **E10**: Audit `bind_match_clause_into_varmap` and similar helpers
-  to see if their per-call transform context can be replaced with the
-  caller's now-shared ctx.
-
-## Exit Criteria
-
-- [ ] `finalize_sql_generation` callable safely N times.
-- [ ] No `finalize_sql_generation` calls inside `transform_*_clause`
-      functions; only at the transform/execute boundary.
-- [ ] No `raw_output` drain code in `cypher_transform_query` /
-      `cypher_transform_generate_sql`.
-- [ ] Every `handle_match_*` function follows: transform-all →
-      finalize-once → execute (possibly in two passes for
-      intermediate-data needs).
-- [ ] TCK pass count ≥ baseline at initiative start.
-- [ ] `angreal test unit && angreal test functional` clean.
-
-## Operational Notes
-
-- This initiative is the prerequisite for **GQLITE-I-0043**
-  (transform_expression rewrite). Without idempotent finalize and
-  caller-side sequencing, the expression API rewrite has no clean
-  contract to land against.
-- Two-pass handlers will add a small per-query overhead (one extra
-  transform_context create/free). Acceptable — these are write paths,
-  not read-hot.
-- The C12 pre-SET var_map capture (GQLITE-T-0297) currently lives in
-  a deferred state because the existing single-pass `bind_match_clause`
-  helper can't carry the intermediate state through to RETURN
-  projection. This initiative fixes that by making the two-pass
-  pattern canonical.
-- Estimated total effort: **3–5 days**. Largest risk: handlers with
-  subtle interleavings (e.g. handle_call_subquery, handle_merge_with_pipeline).
+I-0042 transitions to completed when:
+- All sub-tasks (T-0310 through T-0319, plus T-0297) are completed
+  and archived.
+- T-0318 (E9 regression gate) shows pass count ≥ 3468 baseline.
+- No `append_sql` calls remain in `src/backend/` that route through
+  the legacy sql_buffer scratchpad. (Final pass after I-0043 lands.)
