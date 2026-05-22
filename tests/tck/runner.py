@@ -360,6 +360,14 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
                 except ValueParseError:
                     explicit_args.append(part)
 
+    # T-0252: validate arg count against the declared signature.
+    # When the count mismatches (too few or too many), Cypher spec
+    # says the engine raises SyntaxError InvalidNumberOfArguments.
+    # Fall through to backend so the harness can score the expected
+    # error class. (Call1 [7]/[8]/[9]/[10] family.)
+    if args_raw is not None and len(explicit_args) != len(fixture.arg_names):
+        return None
+
     # YIELD/RETURN projection. Build:
     #   - yield_alias_map: {alias_in_query: fixture_column_name}
     #     For `YIELD a AS c, b AS d`, map is {c: a, d: b}.
