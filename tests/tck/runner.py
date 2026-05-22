@@ -308,10 +308,12 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     `test.my.proc('Stefan', 1)`), only fixture rows where the arg
     columns match are returned. """
     q = query.strip().rstrip(";").strip()
-    # Pattern: CALL name(args) [YIELD yields] [RETURN return_cols]
+    # Pattern: CALL name(args) [YIELD yields] [WITH with_cols] [RETURN return_cols]
+    # The WITH renames flow through yield → with → return.
     m = re.match(
         r"^CALL\s+(?P<name>[\w.]+)\s*(?:\((?P<args>[^)]*)\))?\s*"
         r"(?:YIELD\s+(?P<yields>[\w*,\s]+?))?\s*"
+        r"(?:WITH\s+(?P<withs>[\w\s,]+?))?\s*"
         r"(?:RETURN\s+(?P<rets>.+?))?\s*$",
         q,
         re.IGNORECASE | re.DOTALL,
@@ -390,8 +392,35 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
         for n in fixture.yield_names:
             yield_alias_map[n] = n
 
+    # WITH renames build a second alias map on top of YIELD's.
+    # E.g. `YIELD out WITH out AS a` → final map for `a` resolves via
+    # yield_alias_map[out] to fixture column out.
+    withs_clause = m.group("withs")
+    with_alias_map: dict[str, str] = {}
+    if withs_clause:
+        for item in [c.strip() for c in withs_clause.split(",") if c.strip()]:
+            mas = re.match(r"^(?P<src>\w+)\s+AS\s+(?P<dst>\w+)$", item, re.IGNORECASE)
+            if mas:
+                with_alias_map[mas.group("dst")] = mas.group("src")
+            else:
+                with_alias_map[item] = item
+
+    # Compose: final_alias[col] = fixture column.
+    # Lookup chain: col → with_alias_map → yield_alias_map → fixture col.
+    def resolve_col(col: str) -> str:
+        c = with_alias_map.get(col, col) if with_alias_map else col
+        return yield_alias_map.get(c, c)
+
     if rets_clause:
-        wanted = [c.strip() for c in rets_clause.split(",") if c.strip()]
+        rets_clause = rets_clause.strip()
+        if rets_clause == "*":
+            # RETURN * → project all in-scope vars (from WITH if present,
+            # else from YIELD).
+            wanted = list(with_alias_map.keys()) if with_alias_map else list(yield_alias_map.keys())
+        else:
+            wanted = [c.strip() for c in rets_clause.split(",") if c.strip()]
+    elif with_alias_map:
+        wanted = list(with_alias_map.keys())
     else:
         wanted = list(yield_alias_map.keys())
 
@@ -421,10 +450,10 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
             continue
         projected = []
         for col in wanted:
-            # Resolve through yield_alias_map: the col might be the
-            # YIELD-renamed alias (e.g. `c` from `a AS c`) — look up
-            # what fixture column it ultimately points to.
-            src = yield_alias_map.get(col, col)
+            # Resolve through with_alias_map → yield_alias_map → fixture
+            # column. Each level may rename; chained lookup walks the
+            # final src column name.
+            src = resolve_col(col)
             try:
                 idx = full_cols.index(src)
                 projected.append(row[idx] if idx < len(row) else None)
