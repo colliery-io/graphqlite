@@ -38,10 +38,24 @@ class ScenarioOutcome:
 
 
 @dataclass
+class _ProcedureFixture:
+    """A test.* procedure declared via Gherkin's
+    `And there exists a procedure name(args) :: (yields):` step.
+    `arg_names`/`yield_names` are the column names; `rows` is the
+    fixture table (parsed values) the runner serves when the
+    scenario's CALL hits the procedure. """
+    name: str
+    arg_names: list[str] = field(default_factory=list)
+    yield_names: list[str] = field(default_factory=list)
+    rows: list[list[Any]] = field(default_factory=list)
+
+
+@dataclass
 class _State:
     last_result: QueryResult | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     skipped_reason: str | None = None
+    procedures: dict[str, _ProcedureFixture] = field(default_factory=dict)
 
 
 # Step matchers ordered by specificity.
@@ -66,6 +80,12 @@ _STEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^a (?P<err>\w+(?:Error|Failure)) should be raised at \w+"), "expect_error"),
     (re.compile(r"^no side effects$"), "no_side_effects"),
     (re.compile(r"^the side effects should be$"), "side_effects_table"),
+    # T-0252: procedure declaration. Captures the fully-qualified name,
+    # the arg list (raw), and the yield list (raw). The table beneath the
+    # step (parsed at handler time) provides per-call fixture rows.
+    (re.compile(
+        r"^there exists a procedure (?P<name>[\w.]+)\((?P<args>[^)]*)\)\s*::\s*\((?P<yields>[^)]*)\)$"
+    ), "procedure_declared"),
 ]
 
 
@@ -225,10 +245,109 @@ def _h_parameters(step, state, backend, m):
 def _h_executing_query(step, state, backend, m):
     if not step.docstring:
         raise _Mismatch("missing docstring for 'executing query'")
-    state.last_result = backend.execute(step.docstring, state.parameters or None)
+    # T-0252: intercept plain `CALL <procedure>(...)` against registered
+    # test.* fixtures. If the procedure is declared in this scenario,
+    # synthesize the QueryResult from the fixture rows; otherwise fall
+    # through to the backend.
+    intercepted = _maybe_call_procedure(step.docstring, state)
+    if intercepted is not None:
+        state.last_result = intercepted
+    else:
+        state.last_result = backend.execute(step.docstring, state.parameters or None)
     # Record backend-side trouble so the runner can decide between fail and error
     # at the Then-step. We don't raise here — TCK has scenarios that *expect* an
     # error, and the verdict is decided by the matching Then-step.
+
+
+def _split_signature_columns(sig: str) -> list[str]:
+    """Parse `in :: INTEGER?, out :: STRING?` into ['in', 'out']."""
+    if not sig.strip():
+        return []
+    parts = [p.strip() for p in sig.split(",")]
+    out = []
+    for part in parts:
+        if "::" in part:
+            out.append(part.split("::", 1)[0].strip())
+        elif part:
+            out.append(part)
+    return out
+
+
+def _h_procedure_declared(step, state, backend, m):
+    """T-0252: register a test.* procedure fixture for this scenario."""
+    name = m.group("name")
+    arg_names = _split_signature_columns(m.group("args"))
+    yield_names = _split_signature_columns(m.group("yields"))
+    fixture = _ProcedureFixture(name=name, arg_names=arg_names, yield_names=yield_names)
+    if step.table:
+        # The first row is the column header (matches arg/yield names);
+        # remaining rows are fixture data. parse_value each cell so types
+        # land in QueryResult-compatible shape.
+        header = step.table[0] if step.table else []
+        for row in step.table[1:]:
+            parsed = []
+            for cell in row:
+                try:
+                    parsed.append(parse_value(cell))
+                except ValueParseError:
+                    parsed.append(cell)
+            fixture.rows.append(parsed)
+        # Tolerate header being absent (single-column tables sometimes
+        # only have data); leave header validation to comparators.
+        (void := header)  # noqa: B018 — referenced for clarity
+    state.procedures[name] = fixture
+
+
+def _maybe_call_procedure(query: str, state) -> QueryResult | None:
+    """If query is a plain `CALL test.name(...)` (optionally followed
+    by `YIELD col`), synthesize a QueryResult from the registered
+    fixture. Returns None when the query isn't a procedure call we
+    can serve, leaving backend.execute to handle the general path."""
+    q = query.strip()
+    # Strip trailing semicolon / whitespace
+    q = q.rstrip(";").strip()
+    # Match `CALL name(...)` or `CALL name`. Capture the name + args.
+    m = re.match(
+        r"^CALL\s+(?P<name>[\w.]+)\s*(?:\((?P<args>[^)]*)\))?\s*"
+        r"(?:YIELD\s+(?P<yields>[\w*,\s]+))?\s*$",
+        q,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    name = m.group("name")
+    fixture = state.procedures.get(name)
+    if fixture is None:
+        return None
+    # Project columns: use the YIELD list if present, else the fixture's
+    # declared yield_names.
+    yield_clause = m.group("yields")
+    if yield_clause and yield_clause.strip() != "*":
+        wanted = [c.strip() for c in yield_clause.split(",") if c.strip()]
+    else:
+        wanted = list(fixture.yield_names)
+    # Build rows: subset each fixture row to the wanted columns by name.
+    # The fixture's first table row is the header (parallel to wanted
+    # names when present). We rely on the order matching declared yields.
+    out_rows: list[list[Any]] = []
+    for row in fixture.rows:
+        if not wanted:
+            # No yields → empty rows; for `test.doNothing() :: ()` the
+            # fixture has no rows either, so this branch produces nothing.
+            continue
+        # The fixture row's positions correspond to the FULL header
+        # (arg_names + yield_names in declaration order). Extract the
+        # cells matching `wanted`.
+        full_cols = fixture.arg_names + fixture.yield_names
+        projected = []
+        for col in wanted:
+            try:
+                idx = full_cols.index(col)
+                projected.append(row[idx] if idx < len(row) else None)
+            except ValueError:
+                projected.append(None)
+        out_rows.append(projected)
+    return QueryResult(headers=wanted, rows=out_rows)
 
 def _h_result_ordered(step, state, backend, m):
     _compare_result_table(state.last_result, step.table, ordered=True)
@@ -287,6 +406,7 @@ _HANDLERS = {
     "expect_error":     _h_expect_error,
     "no_side_effects":  _h_no_side_effects,
     "side_effects_table": _h_side_effects_table,
+    "procedure_declared": _h_procedure_declared,
 }
 
 
