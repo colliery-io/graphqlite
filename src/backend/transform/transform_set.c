@@ -179,22 +179,35 @@ static int generate_property_update(cypher_transform_context *ctx,
         is_text = true;
     }
 
-    /* Choose the appropriate property table */
+    /* T-0314: choose node vs edge property table based on variable
+     * kind. Pre-T-0314, SET always emitted node_props_* + node_id
+     * even for edge variables — SET on relationships silently wrote
+     * to the wrong table (Set6 [19]/[21] family). */
+    bool is_edge = transform_var_is_edge(ctx->var_ctx, variable);
     const char *prop_table;
-    if (is_json) {
-        prop_table = "node_props_json";
-    } else if (is_integer) {
-        prop_table = "node_props_int";
-    } else if (is_real) {
-        prop_table = "node_props_real";
+    const char *entity_col = is_edge ? "edge_id" : "node_id";
+    if (is_edge) {
+        if (is_json)        prop_table = "edge_props_json";
+        else if (is_integer) prop_table = "edge_props_int";
+        else if (is_real)    prop_table = "edge_props_real";
+        else                 prop_table = "edge_props_text";
     } else {
-        prop_table = "node_props_text";
+        if (is_json)        prop_table = "node_props_json";
+        else if (is_integer) prop_table = "node_props_int";
+        else if (is_real)    prop_table = "node_props_real";
+        else                 prop_table = "node_props_text";
     }
-    
-    /* Capture the value expression's SQL via the transitional helper —
-     * transform_expression still writes through append_sql, so we
-     * swap-capture it into a string and inline-emit via sql_raw. */
+
+    /* T-0314: capture the value expression with typed (non-CAST-to-TEXT)
+     * property lookups. The default RETURN-context lookup wraps integer
+     * properties in CAST AS TEXT — fine for projection but breaks
+     * arithmetic (`r.num + 1` becomes string concat → "1" + "1" = "11"
+     * instead of 2). Borrow the in_comparison flag so transform_property_
+     * access picks the type-preserving branch. */
+    bool saved_in_cmp = ctx->in_comparison;
+    ctx->in_comparison = true;
     char *value_sql = cypher_transform_capture_expression(ctx, value_expr);
+    ctx->in_comparison = saved_in_cmp;
     if (!value_sql) return -1;
 
     char *escaped_prop = escape_sql_string(property_name);
@@ -202,9 +215,9 @@ static int generate_property_update(cypher_transform_context *ctx,
 
     /* Generate INSERT ... SELECT statement using unified builder context. */
     sql_raw(ctx->unified_builder,
-        "INSERT OR REPLACE INTO %s (node_id, key_id, value) SELECT %s.id, "
+        "INSERT OR REPLACE INTO %s (%s, key_id, value) SELECT %s.id, "
         "(SELECT id FROM property_keys WHERE key = '%s'), %s",
-        prop_table, table_alias, escaped_prop, value_sql);
+        prop_table, entity_col, table_alias, escaped_prop, value_sql);
     free(escaped_prop);
     free(value_sql);
 

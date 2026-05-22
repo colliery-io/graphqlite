@@ -4,14 +4,15 @@ level: task
 title: "E5: handle_match_set true two-pass (Set6 family acceptance)"
 short_code: "GQLITE-T-0314"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T00:12:47.008348+00:00
+updated_at: 2026-05-22T01:43:01.026645+00:00
 parent: GQLITE-I-0042
 blocked_by: [GQLITE-T-0310]
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
+
 
 exit_criteria_met: false
 initiative_id: GQLITE-I-0042
@@ -51,6 +52,8 @@ sharing one buffer:
 T-0310 lays out the proposed fix: split DML/SELECT at builder
 boundary; result holder gets a `pre_exec_dml` field; executor runs
 `sqlite3_exec(dml)` before stepping SELECT.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
