@@ -299,17 +299,20 @@ def _h_procedure_declared(step, state, backend, m):
 
 
 def _maybe_call_procedure(query: str, state) -> QueryResult | None:
-    """If query is a plain `CALL test.name(...)` (optionally followed
-    by `YIELD col`), synthesize a QueryResult from the registered
-    fixture. Returns None when the query isn't a procedure call we
-    can serve, leaving backend.execute to handle the general path."""
-    q = query.strip()
-    # Strip trailing semicolon / whitespace
-    q = q.rstrip(";").strip()
-    # Match `CALL name(...)` or `CALL name`. Capture the name + args.
+    """If query is a CALL <proc>(...) [YIELD ...] [RETURN ...] against
+    a registered test.* procedure, synthesize a QueryResult from the
+    fixture rows. Returns None when the query isn't a procedure call
+    we can serve, leaving backend.execute to handle the general path.
+
+    Argument-based filtering: when CALL passes explicit args (e.g.
+    `test.my.proc('Stefan', 1)`), only fixture rows where the arg
+    columns match are returned. """
+    q = query.strip().rstrip(";").strip()
+    # Pattern: CALL name(args) [YIELD yields] [RETURN return_cols]
     m = re.match(
         r"^CALL\s+(?P<name>[\w.]+)\s*(?:\((?P<args>[^)]*)\))?\s*"
-        r"(?:YIELD\s+(?P<yields>[\w*,\s]+))?\s*$",
+        r"(?:YIELD\s+(?P<yields>[\w*,\s]+?))?\s*"
+        r"(?:RETURN\s+(?P<rets>.+?))?\s*$",
         q,
         re.IGNORECASE | re.DOTALL,
     )
@@ -319,26 +322,66 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     fixture = state.procedures.get(name)
     if fixture is None:
         return None
-    # Project columns: use the YIELD list if present, else the fixture's
-    # declared yield_names.
+    # T-0252: CALL <proc> RETURN <cols> without explicit YIELD is a
+    # Cypher syntax error (UndefinedVariable). Fall through to backend
+    # so the harness sees the expected error class.
+    if m.group("rets") and not m.group("yields"):
+        return None
+
+    # Parse explicit args (if any) → list of parsed Python values.
+    args_raw = (m.group("args") or "").strip()
+    explicit_args: list[Any] = []
+    if args_raw:
+        # Naive split on top-level commas (procedures don't take nested
+        # complex types in current TCK).
+        for part in [p.strip() for p in args_raw.split(",")]:
+            if not part:
+                continue
+            # Resolve $param refs against state.parameters.
+            if part.startswith("$"):
+                pname = part[1:]
+                explicit_args.append(state.parameters.get(pname))
+            else:
+                try:
+                    explicit_args.append(parse_value(part))
+                except ValueParseError:
+                    explicit_args.append(part)
+
+    # YIELD/RETURN projection: prefer RETURN cols if present, else
+    # YIELD cols, else the fixture's declared yields.
+    rets_clause = m.group("rets")
     yield_clause = m.group("yields")
-    if yield_clause and yield_clause.strip() != "*":
+    if rets_clause:
+        wanted = [c.strip() for c in rets_clause.split(",") if c.strip()]
+    elif yield_clause and yield_clause.strip() != "*":
         wanted = [c.strip() for c in yield_clause.split(",") if c.strip()]
     else:
         wanted = list(fixture.yield_names)
-    # Build rows: subset each fixture row to the wanted columns by name.
-    # The fixture's first table row is the header (parallel to wanted
-    # names when present). We rely on the order matching declared yields.
+
+    full_cols = fixture.arg_names + fixture.yield_names
     out_rows: list[list[Any]] = []
     for row in fixture.rows:
+        # Argument filter: when CALL passes explicit args, only keep
+        # rows whose arg-column values equal those args (positional).
+        if explicit_args and fixture.arg_names:
+            match = True
+            for i, av in enumerate(explicit_args):
+                if i >= len(fixture.arg_names):
+                    break
+                col_name = fixture.arg_names[i]
+                try:
+                    col_idx = full_cols.index(col_name)
+                except ValueError:
+                    match = False
+                    break
+                if col_idx >= len(row) or row[col_idx] != av:
+                    match = False
+                    break
+            if not match:
+                continue
+        # Skip rows entirely when there are no yields (e.g. doNothing).
         if not wanted:
-            # No yields → empty rows; for `test.doNothing() :: ()` the
-            # fixture has no rows either, so this branch produces nothing.
             continue
-        # The fixture row's positions correspond to the FULL header
-        # (arg_names + yield_names in declaration order). Extract the
-        # cells matching `wanted`.
-        full_cols = fixture.arg_names + fixture.yield_names
         projected = []
         for col in wanted:
             try:
