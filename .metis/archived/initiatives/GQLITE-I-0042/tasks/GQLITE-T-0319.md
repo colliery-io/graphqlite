@@ -75,6 +75,8 @@ This is a cleanup task — TCK-neutral, code-clarity positive.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] Cross-reference every `bind_match_clause_into_varmap` caller
   and every inline MATCH-execute-iterate site.
 - [ ] If shapes have converged: collapse to a single helper. If not:

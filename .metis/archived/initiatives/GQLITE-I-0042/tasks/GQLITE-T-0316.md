@@ -76,6 +76,8 @@ only the inner MATCH and measuring.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] Inner MATCH `match_ctx` (line 352) created ONCE before the
   outer loop, reused per row.
 - [ ] Inner RETURN `ret_ctx` (line 529) — assess after MATCH hoist.

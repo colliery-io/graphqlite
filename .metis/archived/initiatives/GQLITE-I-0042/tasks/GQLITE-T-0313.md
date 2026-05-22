@@ -78,6 +78,8 @@ captures FIRST-row bindings; multi-row DELETE regresses.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [x] `execute_delete_operations` exists with the canonical shape.
 - [x] `bind_match_clause_into_varmap` binds nodes AND edges.
 - [x] Post-DELETE RETURN uses synth-match.

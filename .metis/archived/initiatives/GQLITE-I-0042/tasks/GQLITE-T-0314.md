@@ -120,6 +120,8 @@ boundary; result holder gets a `pre_exec_dml` field; executor runs
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] T-0310 landed.
 - [ ] Set6 [5] — Filtering after SET on nodes — passes
 - [ ] Set6 [7] — Aggregating in WITH after SET on nodes — passes

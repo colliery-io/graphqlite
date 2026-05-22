@@ -73,6 +73,8 @@ T-0311 (E2) — same architectural prerequisites.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] `finalize_sql_generation` call relocated to a single explicit
   site in `cypher_transform_query`.
 - [ ] The `drain raw_output → sql_buffer` block at

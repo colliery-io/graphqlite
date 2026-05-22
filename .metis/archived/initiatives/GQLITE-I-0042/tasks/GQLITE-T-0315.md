@@ -74,6 +74,8 @@ T-0310 — same DML/SELECT split architecture issue as T-0314.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] T-0310 landed.
 - [ ] All Remove tests in TCK still pass (Remove1 through Remove3,
   Remove4 if applicable).

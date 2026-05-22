@@ -49,6 +49,8 @@ ship.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] `finalize_sql_generation` removed from `transform_return.c`.
 - [ ] Single explicit `finalize_sql_generation` call at the end of
   `transform_single_query_sql` (right before

@@ -98,6 +98,8 @@ MERGE+ON CREATE+ON MATCH+SET, MERGE in CALL subquery).
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
 - [ ] `handle_match_merge` transforms MATCH once; per missing row
   emits CREATE via captured var_map.
 - [ ] `handle_merge_with_pipeline` follows the same two-pass shape
