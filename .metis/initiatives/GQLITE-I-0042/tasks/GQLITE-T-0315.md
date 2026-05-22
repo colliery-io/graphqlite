@@ -4,14 +4,15 @@ level: task
 title: "E6: handle_match_remove two-pass refactor"
 short_code: "GQLITE-T-0315"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T00:12:47.008348+00:00
+updated_at: 2026-05-22T12:30:17.839886+00:00
 parent: GQLITE-I-0042
 blocked_by: [GQLITE-T-0310]
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
+
 
 exit_criteria_met: false
 initiative_id: GQLITE-I-0042
@@ -36,6 +37,8 @@ fe3db6d, iteration 30) and parallels the SET light fix.
 ## Blocked by
 
 T-0310 — same DML/SELECT split architecture issue as T-0314.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

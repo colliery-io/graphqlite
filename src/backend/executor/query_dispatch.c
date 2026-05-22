@@ -841,16 +841,100 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
     cypher_remove *remove = find_remove_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+REMOVE via pattern dispatch");
+
+    /* T-0315: detect label-removal items. When REMOVE strips labels,
+     * the post-REMOVE pattern `(n:N)` finds 0 rows (the label is
+     * gone), so a re-MATCH for RETURN returns nothing. The fix is
+     * to RUN the RETURN against the PRE-REMOVE state first, then
+     * execute the REMOVE. Property-only REMOVE preserves the
+     * existing synth-match-without-WHERE path (which already
+     * handles the stale WHERE issue). */
+    bool has_label_remove = false;
+    if (remove && remove->items) {
+        for (int i = 0; i < remove->items->count; i++) {
+            cypher_remove_item *it = (cypher_remove_item*)remove->items->items[i];
+            if (it && it->target && it->target->type == AST_NODE_LABEL_EXPR) {
+                has_label_remove = true;
+                break;
+            }
+        }
+    }
+
     int rc = execute_match_remove_query(executor, match, remove, result);
     if (rc >= 0) {
         result->success = true;
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
             if (ret) {
-                /* Same stale-WHERE issue as MATCH+SET (I-0042 E5/E6 light):
-                 * REMOVE may have stripped a label/property the WHERE was
-                 * filtering on. Synth a match without WHERE so the re-MATCH
-                 * finds the (post-REMOVE) entities by structure. */
+                /* T-0315: when REMOVE strips labels, the synth pattern
+                 * `(n:Label)` would find 0 rows because Label is gone.
+                 * Mutate-then-restore: walk match->pattern, remove
+                 * the to-be-stripped labels from node patterns, run
+                 * the synth re-MATCH, then restore the labels so the
+                 * AST is unchanged after our handler returns.
+                 *
+                 * The variable binding is preserved (we re-match by
+                 * structure without the removed label); RETURN reads
+                 * the CURRENT post-REMOVE state for labels(n) and
+                 * untouched properties alike.
+                 *
+                 * Property REMOVE doesn't need stripping (the WHERE
+                 * is the only stale-state concern, handled by
+                 * passing NULL where in synth match). */
+                typedef struct { ast_list *labels; int idx; ast_node *removed; } stripped_t;
+                stripped_t strip_buf[16];
+                int strip_count = 0;
+                if (has_label_remove && remove && remove->items) {
+                    for (int i = 0; i < remove->items->count && strip_count < 16; i++) {
+                        cypher_remove_item *it = (cypher_remove_item*)remove->items->items[i];
+                        if (!it || !it->target ||
+                            it->target->type != AST_NODE_LABEL_EXPR) continue;
+                        cypher_label_expr *le = (cypher_label_expr*)it->target;
+                        if (!le->expr || le->expr->type != AST_NODE_IDENTIFIER) continue;
+                        const char *var = ((cypher_identifier*)le->expr)->name;
+                        const char *lbl = le->label_name;
+                        if (!var || !lbl) continue;
+                        /* Walk pattern paths. */
+                        if (!match->pattern) continue;
+                        for (int pi = 0; pi < match->pattern->count; pi++) {
+                            cypher_path *path = (cypher_path*)match->pattern->items[pi];
+                            if (!path || !path->elements) continue;
+                            for (int ei = 0; ei < path->elements->count; ei++) {
+                                ast_node *el = path->elements->items[ei];
+                                if (!el || el->type != AST_NODE_NODE_PATTERN) continue;
+                                cypher_node_pattern *np = (cypher_node_pattern*)el;
+                                if (!np->variable || strcmp(np->variable, var) != 0) continue;
+                                if (!np->labels) continue;
+                                /* Find label in np->labels and strip it. */
+                                for (int li = 0; li < np->labels->count; li++) {
+                                    ast_node *lab_node = np->labels->items[li];
+                                    if (!lab_node) continue;
+                                    const char *lab_name = NULL;
+                                    if (lab_node->type == AST_NODE_LITERAL) {
+                                        cypher_literal *lit = (cypher_literal*)lab_node;
+                                        if (lit->literal_type == LITERAL_STRING)
+                                            lab_name = lit->value.string;
+                                    } else if (lab_node->type == AST_NODE_IDENTIFIER) {
+                                        lab_name = ((cypher_identifier*)lab_node)->name;
+                                    }
+                                    if (lab_name && strcmp(lab_name, lbl) == 0 && strip_count < 16) {
+                                        strip_buf[strip_count].labels = np->labels;
+                                        strip_buf[strip_count].idx = li;
+                                        strip_buf[strip_count].removed = lab_node;
+                                        strip_count++;
+                                        /* Remove from list by shifting. */
+                                        for (int sh = li; sh < np->labels->count - 1; sh++) {
+                                            np->labels->items[sh] = np->labels->items[sh + 1];
+                                        }
+                                        np->labels->count--;
+                                        li--; /* Re-check this index */
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 cypher_match *synth = make_cypher_match(match->pattern,
                                                        NULL,
                                                        match->optional,
@@ -858,6 +942,18 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
                 rc = execute_match_return_query(executor,
                     synth ? synth : match, ret, result);
                 if (synth) free(synth);
+
+                /* Restore stripped labels in reverse order. */
+                for (int i = strip_count - 1; i >= 0; i--) {
+                    ast_list *labs = strip_buf[i].labels;
+                    int idx = strip_buf[i].idx;
+                    /* Insert back at original index. */
+                    for (int sh = labs->count; sh > idx; sh--) {
+                        labs->items[sh] = labs->items[sh - 1];
+                    }
+                    labs->items[idx] = strip_buf[i].removed;
+                    labs->count++;
+                }
             }
         }
     }
