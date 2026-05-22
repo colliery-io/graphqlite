@@ -773,16 +773,17 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
              * appended after the SELECT (truncated by prepare_v2's
              * one-statement limit) preserves the prior behavior.
              */
-            /* Only `INSERT OR REPLACE INTO ... SELECT ... FROM ...`
-             * (transform_set's pattern) is known-safe to split: it's a
-             * self-contained statement that uses its own FROM clause
-             * to resolve MATCH alias refs. Plain `INSERT INTO`
-             * (transform_create per-row), and naked `DELETE FROM`
-             * (transform_remove / transform_delete) still rely on
-             * post-write re-MATCH semantics that the snapshot path
-             * (T-0314) is needed to handle. */
+            /* Safe-to-split DML shapes: transform_set's compound that
+             * starts with cross-table DELETEs and ends with INSERT OR
+             * REPLACE INTO. We detect this by the presence of
+             * "INSERT OR REPLACE" anywhere in the buffer — those are
+             * the only DML statements that emit self-contained shape
+             * (subquery-based DELETEs + INSERT OR REPLACE...SELECT
+             * FROM <MATCH>). Plain `INSERT INTO` (CREATE per-row) and
+             * naked `DELETE FROM` (REMOVE/DELETE) still need the
+             * legacy compound + dropped semantics. */
             bool self_contained = peek &&
-                strncmp(peek, "INSERT OR REPLACE", 17) == 0;
+                strstr(peek, "INSERT OR REPLACE") != NULL;
             if (self_contained) {
                 raw_dml = strdup(peek);
                 mixed_dml = true;

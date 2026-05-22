@@ -154,6 +154,16 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
         node_id_ref = node_id_buf;
     }
 
+    /* T-0314: detect edge variables and pick the matching prop tables.
+     * Pre-T-0314, aggregation against edge properties (e.g.
+     * sum(r.num) where r is `()-[r:R]->()`) joined node_props_*,
+     * which never found edge IDs → returned NULL. */
+    bool is_edge_agg = transform_var_is_edge(ctx->var_ctx, id->name);
+    const char *agg_int_table  = is_edge_agg ? "edge_props_int"  : "node_props_int";
+    const char *agg_real_table = is_edge_agg ? "edge_props_real" : "node_props_real";
+    const char *agg_text_table = is_edge_agg ? "edge_props_text" : "node_props_text";
+    const char *agg_id_col     = is_edge_agg ? "edge_id"         : "node_id";
+
     /* Generate unique alias for property joins */
     int join_id = ++ctx->prop_join_counter;
 
@@ -190,12 +200,12 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
         /* Build the JOIN clauses and add to pending buffer */
         char join_sql[2048];
         snprintf(join_sql, sizeof(join_sql),
-                 " LEFT JOIN node_props_int AS %s ON %s.node_id = %s AND %s.key_id = %s"
-                 " LEFT JOIN node_props_real AS %s ON %s.node_id = %s AND %s.key_id = %s"
-                 " LEFT JOIN node_props_text AS %s ON %s.node_id = %s AND %s.key_id = %s",
-                 join_alias_int, join_alias_int, node_id_ref, join_alias_int, pk_subquery,
-                 join_alias_real, join_alias_real, node_id_ref, join_alias_real, pk_subquery,
-                 join_alias_text, join_alias_text, node_id_ref, join_alias_text, pk_subquery);
+                 " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s"
+                 " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s"
+                 " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s",
+                 agg_int_table,  join_alias_int,  join_alias_int,  agg_id_col, node_id_ref, join_alias_int,  pk_subquery,
+                 agg_real_table, join_alias_real, join_alias_real, agg_id_col, node_id_ref, join_alias_real, pk_subquery,
+                 agg_text_table, join_alias_text, join_alias_text, agg_id_col, node_id_ref, join_alias_text, pk_subquery);
 
         add_pending_prop_join(ctx, join_sql);
         CYPHER_DEBUG("Added pending property JOINs for %s aggregation", upper_func);
