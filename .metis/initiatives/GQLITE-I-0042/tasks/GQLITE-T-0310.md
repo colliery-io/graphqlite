@@ -3,16 +3,16 @@ id: i-0042-architecture-split-dml
 level: task
 title: "I-0042 architecture: split DML/SELECT at builder boundary for MATCH+SET+WITH+RETURN"
 short_code: "GQLITE-T-0310"
-created_at: 2026-05-21T20:30:00.000000+00:00
-updated_at: 2026-05-21T20:30:00.000000+00:00
+created_at: 2026-05-21T20:30:00+00:00
+updated_at: 2026-05-22T00:27:43.054103+00:00
 parent: GQLITE-I-0042
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#tech-debt"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -20,6 +20,58 @@ initiative_id: GQLITE-I-0042
 ---
 
 # Split DML / SELECT at the sql_builder boundary
+
+## Status Updates
+
+**2026-05-21 attempt (iter 5)** — Tried the proposed approach: split
+raw_output into `cypher_query_result.pre_exec_dml`, exec it via
+`sqlite3_exec` in `handle_generic_transform` before stepping the
+SELECT. Set6 [5] (`MATCH+SET+WITH+RETURN`) WORKS in isolation —
+SQL is split correctly, UPDATE runs first, SELECT sees post-SET
+state.
+
+**But TCK regressed -14 (3468 → 3454).** Root cause traced:
+
+1. When the DML references CTE-bound variables (e.g. `_with_0.n.id`
+   in a `MATCH+WITH+DELETE+RETURN` query), the DML alone can't
+   resolve the reference — the CTE definition lives in the SELECT's
+   `WITH` prefix.
+2. Attempted fix: copy the CTE prefix to pre_exec_dml. Problem: the
+   "find SELECT keyword" heuristic to identify the prefix boundary
+   matches `SELECT` inside CTE bodies (e.g. `WITH _with_0 AS (SELECT ...) SELECT ...`
+   — the first `SELECT ` is inside the CTE). Lost more scenarios
+   than it fixed (Delete6, Remove4 family).
+3. Prepending the full CTE to the DML changes the INSERT semantics:
+   the INSERT references the CTE in unintended ways (the INSERT's
+   own FROM clause + the CTE's FROM clause can produce ambiguous
+   column refs).
+
+**Deeper architectural assessment:** the `unified_builder` doesn't
+preserve enough structure to cleanly split into (CTE | DML | SELECT)
+trihalves. The pre-existing `ctx->sql_buffer` scratchpad and
+`prepend_cte_to_sql` boundary-prepending pattern blur the line
+between "where does the CTE end and the SELECT body start." A
+proper fix needs one of:
+
+  a. **Restructure the builder** to return all three halves
+     explicitly (`get_cte_prefix`, `get_dml`, `get_select_body`)
+     — the executor composes the final SQL string per half.
+  b. **Stop using `ctx->sql_buffer`** entirely; the builder owns
+     all assembly state. (This is `I-0043` territory.)
+  c. **Track the CTE prefix length** in the builder when
+     `prepend_cte_to_sql` runs, so a downstream splitter knows
+     exactly where the SELECT body starts.
+
+Option (c) is the minimal-risk path but still requires the builder
+to be the sole source of CTE truth. Iter-5 ran out of iteration
+budget; reverted full back to baseline 3468.
+
+**Recommendation for the next attempt:** prototype option (c) —
+add a `cte_prefix_len` field to the builder, set it inside
+`prepend_cte_to_sql`, and use that as the canonical split point.
+The retry should preserve the iter-5 work (the executor exec path
+and the WITH-reset preservation logic) and only swap the
+"find-SELECT-keyword" heuristic for the explicit length.
 
 ## Why this matters
 
