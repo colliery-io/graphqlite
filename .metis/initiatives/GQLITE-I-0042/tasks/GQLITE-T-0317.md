@@ -4,14 +4,15 @@ level: task
 title: "E8: handle_match_merge + handle_merge_with_pipeline two-pass"
 short_code: "GQLITE-T-0317"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T00:12:47.008348+00:00
+updated_at: 2026-05-22T03:14:18.997343+00:00
 parent: GQLITE-I-0042
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
+
 
 exit_criteria_met: false
 initiative_id: GQLITE-I-0042
@@ -29,6 +30,8 @@ Refactor MERGE handlers to the two-pass shape. The I-0042 design
 doc flags this as the "deepest interleaving" — MERGE blends MATCH
 + CREATE per missing row, with multiple variants (MATCH+MERGE,
 MERGE+ON CREATE+ON MATCH+SET, MERGE in CALL subquery).
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
