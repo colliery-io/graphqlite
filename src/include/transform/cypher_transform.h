@@ -72,6 +72,14 @@ struct cypher_transform_context {
 
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;
+
+    /* T-0310: byte length of the CTE prefix that prepend_cte_to_sql
+     * wrote at the start of sql_buffer. Zero if no CTE prefix was
+     * prepended. Used by cypher_transform_query to know where the
+     * SELECT body starts when splitting DML out of raw_output —
+     * the DML half needs the same CTE prefix to resolve any
+     * CTE-bound variable references. */
+    size_t cte_prefix_len;
 };
 
 /* Result structure for executed queries */
@@ -79,11 +87,17 @@ struct cypher_query_result {
     /* Result data */
     sqlite3_stmt *stmt;             /* Prepared statement (for reads) */
     int rows_affected;              /* For write operations */
-    
+
+    /* T-0310: DML to exec BEFORE stepping `stmt`. Owned string. Set
+     * when transform_set/delete/remove emitted into raw_output AND
+     * the query has a trailing read. Executor runs sqlite3_exec on
+     * this then steps stmt. cypher_free_result frees this. */
+    char *pre_exec_dml;
+
     /* Column information */
     char **column_names;
     int column_count;
-    
+
     /* Error information */
     bool has_error;
     char *error_message;

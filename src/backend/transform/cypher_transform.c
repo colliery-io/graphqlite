@@ -502,6 +502,10 @@ void prepend_cte_to_sql(cypher_transform_context *ctx)
     ctx->sql_buffer = new_buffer;
     ctx->sql_size = prefix_len + ctx->sql_size;
     ctx->sql_capacity = new_size;
+    /* T-0310: remember exactly where the CTE prefix ended; needed by
+     * the DML split path to give pre_exec_dml the same CTE prefix
+     * so CTE-bound variable refs (e.g. _with_0.n.id) resolve. */
+    ctx->cte_prefix_len = prefix_len;
 
     dbuf_free(&prefix);
 
@@ -727,19 +731,93 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
         goto error;
     }
 
-    /* I-0039 Extension A: drain raw_output (compound DML from
-     * transform_set/delete/remove) into sql_buffer for paths that
-     * didn't go through transform_return_clause's finalize. */
+    /* T-0310: capture raw_output (DML) for the split path. Three
+     * possibilities:
+     *   - sql_buffer empty  → pure DML query, drain into sql_buffer
+     *     and prepare directly (legacy write-only path).
+     *   - sql_buffer non-empty AND DML doesn't reference CTE-bound
+     *     vars → split; pass DML to executor via pre_exec_dml.
+     *   - sql_buffer non-empty AND DML references CTE-bound vars
+     *     (_with_N, _unwind_N) → DON'T split. transform_delete/
+     *     remove emit DML that uses CTE column names in a way that
+     *     isn't valid as standalone SQL (DELETE FROM nodes WHERE
+     *     id = _with_0.n.id is bogus — _with_0 isn't a column). For
+     *     these the legacy behavior (DML appended after SELECT,
+     *     silently dropped by prepare_v2's one-statement limit) is
+     *     what tests expect — rewriting transform_delete/remove to
+     *     emit CTE-aware DML is a separate task.
+     */
+    char *raw_dml = NULL;
+    bool mixed_dml = false;
     if (ctx->unified_builder &&
-        !dbuf_is_empty(&ctx->unified_builder->raw_output) &&
-        ctx->sql_size == 0) {
-        const char *raw = dbuf_get(&ctx->unified_builder->raw_output);
-        append_sql(ctx, "%s", raw);
-        dbuf_clear(&ctx->unified_builder->raw_output);
+        !dbuf_is_empty(&ctx->unified_builder->raw_output)) {
+        if (ctx->sql_size == 0) {
+            const char *raw = dbuf_get(&ctx->unified_builder->raw_output);
+            append_sql(ctx, "%s", raw);
+            dbuf_clear(&ctx->unified_builder->raw_output);
+        } else {
+            const char *raw = dbuf_get(&ctx->unified_builder->raw_output);
+            const char *peek = raw;
+            while (*peek == ' ' || *peek == '\t' || *peek == '\n' ||
+                   *peek == '\r' || *peek == ';') peek++;
+
+            /* Only split when the DML is self-contained:
+             *   - transform_set emits `INSERT OR REPLACE INTO ... SELECT
+             *     <alias>.id ... FROM nodes AS <alias>` — the FROM
+             *     is part of the INSERT subquery, so this is portable
+             *     across the prepare/exec split.
+             * Other DML shapes (transform_remove's naked DELETE,
+             * transform_delete after WITH) reference MATCH aliases
+             * without a FROM, which only resolves inside the compound
+             * SELECT;DML form. Skip those — the legacy compound
+             * appended after the SELECT (truncated by prepare_v2's
+             * one-statement limit) preserves the prior behavior.
+             */
+            /* Only `INSERT OR REPLACE INTO ... SELECT ... FROM ...`
+             * (transform_set's pattern) is known-safe to split: it's a
+             * self-contained statement that uses its own FROM clause
+             * to resolve MATCH alias refs. Plain `INSERT INTO` is
+             * CREATE's per-row pattern which relies on the wrapping
+             * SELECT's row stream — splitting it changes semantics. */
+            bool self_contained = peek &&
+                strncmp(peek, "INSERT OR REPLACE", 17) == 0;
+            if (self_contained) {
+                raw_dml = strdup(peek);
+                mixed_dml = true;
+                dbuf_clear(&ctx->unified_builder->raw_output);
+            }
+            /* else: leave raw_output in builder. The compound form
+             * appended at finalize remains in sql_buffer; prepare_v2
+             * takes only the SELECT half, DML silently dropped. */
+        }
     }
 
-    /* Prepend CTE prefix if we have variable-length relationships */
+    /* Prepend CTE prefix if we have variable-length relationships.
+     * After this call, ctx->cte_prefix_len holds the length of
+     * the CTE prefix at the start of sql_buffer (0 if none added). */
     prepend_cte_to_sql(ctx);
+
+    /* T-0310: build pre_exec_dml = CTE prefix + DML.
+     * The CTE definitions sit in sql_buffer[0 .. cte_prefix_len); we
+     * copy them in front of the DML so SQLite can resolve CTE-bound
+     * variable references that appear in the DML. */
+    if (mixed_dml && raw_dml) {
+        size_t prefix_len = ctx->cte_prefix_len;
+        if (prefix_len > 0 && prefix_len <= ctx->sql_size) {
+            size_t dml_len = strlen(raw_dml);
+            char *prefixed = malloc(prefix_len + dml_len + 1);
+            if (prefixed) {
+                memcpy(prefixed, ctx->sql_buffer, prefix_len);
+                memcpy(prefixed + prefix_len, raw_dml, dml_len + 1);
+                free(raw_dml);
+                result->pre_exec_dml = prefixed;
+            } else {
+                result->pre_exec_dml = raw_dml;
+            }
+        } else {
+            result->pre_exec_dml = raw_dml;
+        }
+    }
 
     /* Prepare the SQL statement */
     CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
@@ -1156,12 +1234,14 @@ void cypher_free_result(cypher_query_result *result)
     if (result->stmt) {
         sqlite3_finalize(result->stmt);
     }
-    
+
+    free(result->pre_exec_dml);
+
     for (int i = 0; i < result->column_count; i++) {
         free(result->column_names[i]);
     }
     free(result->column_names);
-    
+
     free(result->error_message);
     free(result);
 }

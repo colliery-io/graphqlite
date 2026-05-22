@@ -23,6 +23,49 @@ initiative_id: GQLITE-I-0042
 
 ## Status Updates
 
+**2026-05-21 iter 6 — LANDED (narrow scope).** Option (c) plus
+narrow `INSERT OR REPLACE INTO`-only guard. TCK 3468 → 3469 (+1).
+
+The infrastructure shipped:
+- `sql_builder_take_raw_output` / `sql_builder_has_raw_output` /
+  `sql_builder_clear_raw_output` builder API.
+- `cypher_query_result.pre_exec_dml` field; `cypher_free_result`
+  frees it.
+- `cypher_transform_context.cte_prefix_len` records the CTE prefix
+  size when `prepend_cte_to_sql` runs. The DML split copies that
+  exact prefix onto `pre_exec_dml` so CTE-bound refs resolve.
+- `handle_generic_transform` runs `sqlite3_exec(pre_exec_dml)`
+  before stepping the prepared SELECT.
+- `transform_with_clause` preserves `raw_output` across the
+  `sql_builder_reset` call (was wiping the DML).
+
+The narrowing: only `INSERT OR REPLACE INTO` DML (transform_set's
+pattern — self-contained `INSERT ... SELECT ... FROM ...`) is
+split. Plain `INSERT INTO` (transform_create's per-row pattern)
+and naked `DELETE FROM` (transform_remove / transform_delete) are
+NOT split — they stay in the legacy compound form where prepare_v2
+drops them after the SELECT. This matches baseline behavior for
+Create3 / Remove3 / Delete6.
+
+Gain: Set6 [5] `MATCH+SET+WITH+WHERE+RETURN` now correctly
+applies the SET before the SELECT sees the values.
+
+Acceptance criteria:
+- [x] T-0310 infrastructure landed (builder API + result field +
+  executor exec + WITH preservation + cte_prefix_len).
+- [x] Set6 [5] passes.
+- [ ] Set6 [7], [19], [21] still fail — these have aggregations
+  (`WITH SUM(n.num)` etc.) and other patterns that don't fit the
+  narrow `INSERT OR REPLACE INTO` shape, OR they use REMOVE rather
+  than SET. Need follow-on work to widen the safe-split set:
+  rewrite transform_remove / transform_delete to emit self-contained
+  DML (T-0311 etc.).
+
+T-0310 stays open — infrastructure is in but the safe-split set
+needs to grow. Filed follow-on guidance in I-0042 design.
+
+
+
 **2026-05-21 attempt (iter 5)** — Tried the proposed approach: split
 raw_output into `cypher_query_result.pre_exec_dml`, exec it via
 `sqlite3_exec` in `handle_generic_transform` before stepping the

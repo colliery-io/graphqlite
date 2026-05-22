@@ -628,6 +628,25 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
         return -1;
     }
 
+    /* T-0310: run pre_exec_dml (compound DML from SET/REMOVE/DELETE
+     * that precedes a read) before stepping the prepared SELECT. */
+    if (transform_result->pre_exec_dml) {
+        char *err_msg = NULL;
+        int erc = sqlite3_exec(executor->db, transform_result->pre_exec_dml,
+                               NULL, NULL, &err_msg);
+        if (erc != SQLITE_OK) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "pre-exec DML failed: %s",
+                     err_msg ? err_msg : "unknown");
+            set_result_error(result, buf);
+            if (err_msg) sqlite3_free(err_msg);
+            cypher_free_result(transform_result);
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+        if (err_msg) sqlite3_free(err_msg);
+    }
+
     /* Build results from statement */
     if (transform_result->stmt) {
         /* Bind parameters if provided */

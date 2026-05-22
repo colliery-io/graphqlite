@@ -286,6 +286,13 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         saved_cte_count = ctx->unified_builder->cte_count;
     }
 
+    /* T-0310: preserve raw_output (DML from a prior SET/DELETE/REMOVE)
+     * across the builder reset so MATCH+SET+WITH+... keeps the SET. */
+    char *saved_raw = NULL;
+    if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
+        saved_raw = strdup(dbuf_get(&ctx->unified_builder->raw_output));
+    }
+
     /* Build SELECT columns from WITH items */
     dynamic_buffer col_buf;
     dbuf_init(&col_buf);
@@ -546,6 +553,11 @@ with_star_columns_done:
         dbuf_append(&ctx->unified_builder->cte, saved_cte);
         ctx->unified_builder->cte_count = saved_cte_count;
         free(saved_cte);
+    }
+    /* T-0310: restore raw_output so subsequent clauses keep the DML. */
+    if (saved_raw) {
+        dbuf_append(&ctx->unified_builder->raw_output, saved_raw);
+        free(saved_raw);
     }
 
     /* Add CTE to unified builder */
