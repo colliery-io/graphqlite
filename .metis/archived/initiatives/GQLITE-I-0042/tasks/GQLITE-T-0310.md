@@ -4,15 +4,15 @@ level: task
 title: "I-0042 architecture: split DML/SELECT at builder boundary for MATCH+SET+WITH+RETURN"
 short_code: "GQLITE-T-0310"
 created_at: 2026-05-21T20:30:00+00:00
-updated_at: 2026-05-22T00:27:43.054103+00:00
+updated_at: 2026-05-22T01:40:52.180828+00:00
 parent: GQLITE-I-0042
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
   - "#tech-debt"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -63,6 +63,45 @@ Acceptance criteria:
 
 T-0310 stays open — infrastructure is in but the safe-split set
 needs to grow. Filed follow-on guidance in I-0042 design.
+
+**2026-05-21 iter 7 — widening attempts (REMOVE, edges).** Tried to
+widen the safe-split set to unlock Set6 [7]/[19]/[21] and Remove3:
+
+1. **Rewrote transform_remove** to emit self-contained DELETEs
+   (`DELETE FROM node_props_X WHERE key_id = ... AND node_id IN
+   (SELECT alias.id FROM ... WHERE matchwhere)`). Also extended
+   the guard in cypher_transform_query to accept `DELETE FROM`.
+   Result: Set6 [5] kept, but Remove3 [12]/[14] failed because
+   running REMOVE-label before the post-WITH SELECT changes the
+   label state — the SELECT re-MATCHes `(n:N)` and finds no rows.
+   This is the **post-write re-MATCH semantics** issue (Cypher
+   spec wants WITH-bound IDs preserved across writes); requires
+   the snapshot-id-capture pattern from T-0314 (option (c) in
+   I-0042 doc).
+2. **Set6 [19]/[21] (relationships)** — pre-existing transform_set
+   bug. `generate_property_update` always emits `node_id` and
+   `node_props_*` regardless of whether the variable is a node or
+   edge. SET on relationships writes to the wrong table → no
+   effect → SELECT still sees pre-SET values. Out of T-0310 scope.
+3. **Set6 [7] (aggregation)** — `WITH count(r) AS c` after SET.
+   Same shape as [5] but with aggregation; needs the post-SET
+   read path to work for `count(*)` too. Closer to [19] than to
+   [5] — likely the same re-MATCH issue.
+
+Reverted both widening attempts. T-0310 stays at +1 (Set6 [5]).
+
+**What T-0310 actually unblocks beyond +1:**
+The infrastructure is the prerequisite for:
+- T-0314 (E5: handle_match_set true two-pass) — needs the
+  pre_exec_dml channel to run pre-WITH writes.
+- transform_set edge-aware emission — separate task; once that
+  lands, Set6 [19]/[21] light up via the existing T-0310 path.
+- transform_remove / transform_delete with snapshot-id capture
+  via T-0297/T-0314 — unlocks Remove3 / Delete6 families.
+
+T-0310's job is done: builder API + result.pre_exec_dml + ctx.
+cte_prefix_len + raw_output WITH-preservation + executor exec path.
+Moving to completed.
 
 
 

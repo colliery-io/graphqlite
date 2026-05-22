@@ -776,9 +776,11 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
             /* Only `INSERT OR REPLACE INTO ... SELECT ... FROM ...`
              * (transform_set's pattern) is known-safe to split: it's a
              * self-contained statement that uses its own FROM clause
-             * to resolve MATCH alias refs. Plain `INSERT INTO` is
-             * CREATE's per-row pattern which relies on the wrapping
-             * SELECT's row stream — splitting it changes semantics. */
+             * to resolve MATCH alias refs. Plain `INSERT INTO`
+             * (transform_create per-row), and naked `DELETE FROM`
+             * (transform_remove / transform_delete) still rely on
+             * post-write re-MATCH semantics that the snapshot path
+             * (T-0314) is needed to handle. */
             bool self_contained = peek &&
                 strncmp(peek, "INSERT OR REPLACE", 17) == 0;
             if (self_contained) {
