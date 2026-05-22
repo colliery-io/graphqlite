@@ -4,14 +4,15 @@ level: task
 title: "E7: handle_call_subquery — hoist per-row transforms"
 short_code: "GQLITE-T-0316"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T00:12:47.008348+00:00
+updated_at: 2026-05-22T02:52:41.850261+00:00
 parent: GQLITE-I-0042
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
+
 
 exit_criteria_met: false
 initiative_id: GQLITE-I-0042
@@ -40,6 +41,8 @@ variables.
 
 This is a multi-iteration refactor — the safe first step is hoisting
 only the inner MATCH and measuring.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

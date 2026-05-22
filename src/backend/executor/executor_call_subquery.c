@@ -237,6 +237,57 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
     int accum_col_count = 0;
     char **accum_col_names = NULL;
 
+    /* T-0316 (E7): hoist inner MATCH transform out of the per-outer-
+     * row loop. The inner MATCH AST is the same on every outer row;
+     * its transform produces id_sql that has no outer-row dependency.
+     * Pre-compute the id_sql string per AST_NODE_MATCH clause now;
+     * the inner loop just prepares and steps it per row. */
+    char **inner_match_sql = NULL;
+    int inner_match_count = 0;
+    if (inner_query && inner_query->clauses) {
+        inner_match_sql = calloc(inner_query->clauses->count, sizeof(char*));
+        if (inner_match_sql) {
+            for (int ci = 0; ci < inner_query->clauses->count; ci++) {
+                ast_node *c = inner_query->clauses->items[ci];
+                if (!c || c->type != AST_NODE_MATCH) continue;
+                cypher_match *im = (cypher_match*)c;
+                cypher_transform_context *mctx = cypher_transform_create_context(executor->db);
+                if (!mctx) continue;
+                if (transform_match_clause(mctx, im) == 0) {
+                    sql_builder *sb = mctx->unified_builder;
+                    int vcount = transform_var_count(mctx->var_ctx);
+                    const char *from_s = sql_builder_get_from(sb);
+                    const char *joins_s = sql_builder_get_joins(sb);
+                    const char *where_s = sql_builder_get_where(sb);
+
+                    char buf[4096]; size_t p = 0;
+                    p += snprintf(buf + p, sizeof(buf) - p, "SELECT ");
+                    bool first = true;
+                    for (int vi = 0; vi < vcount; vi++) {
+                        transform_var *tv = transform_var_at(mctx->var_ctx, vi);
+                        if (tv && tv->kind == VAR_KIND_NODE) {
+                            if (!first) p += snprintf(buf + p, sizeof(buf) - p, ", ");
+                            p += snprintf(buf + p, sizeof(buf) - p,
+                                          "%s.id AS \"%s_id\"", tv->table_alias, tv->name);
+                            first = false;
+                        }
+                    }
+                    if (!first) {
+                        if (from_s && from_s[0])
+                            p += snprintf(buf + p, sizeof(buf) - p, " FROM %s", from_s);
+                        if (joins_s && joins_s[0])
+                            p += snprintf(buf + p, sizeof(buf) - p, " %s", joins_s);
+                        if (where_s && where_s[0])
+                            p += snprintf(buf + p, sizeof(buf) - p, " WHERE %s", where_s);
+                        inner_match_sql[ci] = strdup(buf);
+                        inner_match_count++;
+                    }
+                }
+                cypher_transform_free_context(mctx);
+            }
+        }
+    }
+
     while (sqlite3_step(outer_stmt) == SQLITE_ROW) {
         CYPHER_DEBUG("CALL: processing outer row");
 
@@ -346,48 +397,19 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         return -1;
                     }
                 } else if (inner_clause->type == AST_NODE_MATCH) {
-                    /* Execute inner MATCH to resolve variables into scoped_map.
-                     * Iterate ALL rows and execute subsequent clauses for each. */
-                    cypher_match *inner_match = (cypher_match*)inner_clause;
-                    cypher_transform_context *match_ctx = cypher_transform_create_context(executor->db);
-                    if (match_ctx) {
-                        if (transform_match_clause(match_ctx, inner_match) == 0) {
-                            sql_builder *sb = match_ctx->unified_builder;
-                            int vcount = transform_var_count(match_ctx->var_ctx);
-                            const char *from_str = sql_builder_get_from(sb);
-                            const char *joins_str = sql_builder_get_joins(sb);
-                            const char *where_str = sql_builder_get_where(sb);
-
-                            char id_sql[4096];
-                            size_t pos = 0;
-                            pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, "SELECT ");
-                            bool first_col = true;
-                            for (int vi = 0; vi < vcount; vi++) {
-                                transform_var *tv = transform_var_at(match_ctx->var_ctx, vi);
-                                if (tv && tv->kind == VAR_KIND_NODE) {
-                                    if (!first_col) pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, ", ");
-                                    pos += snprintf(id_sql + pos, sizeof(id_sql) - pos,
-                                                    "%s.id AS \"%s_id\"", tv->table_alias, tv->name);
-                                    first_col = false;
-                                }
-                            }
-                            if (first_col) {
-                                cypher_transform_free_context(match_ctx);
-                                continue;
-                            }
-                            if (from_str && from_str[0]) {
-                                pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, " FROM %s", from_str);
-                            }
-                            if (joins_str && joins_str[0]) {
-                                pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, " %s", joins_str);
-                            }
-                            if (where_str && where_str[0]) {
-                                pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, " WHERE %s", where_str);
-                            }
-
-                            CYPHER_DEBUG("CALL inner MATCH SQL: %s", id_sql);
-                            sqlite3_stmt *match_stmt;
-                            if (sqlite3_prepare_v2(executor->db, id_sql, -1, &match_stmt, NULL) == SQLITE_OK) {
+                    /* T-0316: use the pre-built inner MATCH SQL hoisted
+                     * before the outer loop (was: per-row create
+                     * match_ctx + transform_match_clause + build id_sql).
+                     * The MATCH AST is the same across outer rows;
+                     * id_sql has no outer-row dependency. Just prepare
+                     * and step it per row to get the current matched
+                     * IDs (DB state may have changed via per-row SET/
+                     * CREATE so the prepared plan must be fresh). */
+                    const char *id_sql = (inner_match_sql && ci < inner_query->clauses->count) ? inner_match_sql[ci] : NULL;
+                    if (id_sql) {
+                        CYPHER_DEBUG("CALL inner MATCH SQL (hoisted): %s", id_sql);
+                        sqlite3_stmt *match_stmt;
+                        if (sqlite3_prepare_v2(executor->db, id_sql, -1, &match_stmt, NULL) == SQLITE_OK) {
                                 if (executor->params_json) {
                                     bind_params_from_json(match_stmt, executor->params_json);
                                 }
@@ -426,8 +448,6 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                 }
                                 sqlite3_finalize(match_stmt);
                             }
-                        }
-                        cypher_transform_free_context(match_ctx);
                     }
                     /* All post-MATCH clauses handled inside the while loop */
                     break;
@@ -748,6 +768,16 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
 
     sqlite3_finalize(outer_stmt);
     cypher_transform_free_context(ctx);
+
+    /* T-0316: free the hoisted inner MATCH SQL cache. */
+    if (inner_match_sql) {
+        if (inner_query && inner_query->clauses) {
+            for (int ci = 0; ci < inner_query->clauses->count; ci++) {
+                free(inner_match_sql[ci]);
+            }
+        }
+        free(inner_match_sql);
+    }
 
     CYPHER_DEBUG("CALL subquery complete: %d inner rows processed", total_inner_rows);
 
