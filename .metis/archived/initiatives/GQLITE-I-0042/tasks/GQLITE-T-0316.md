@@ -4,14 +4,14 @@ level: task
 title: "E7: handle_call_subquery — hoist per-row transforms"
 short_code: "GQLITE-T-0316"
 created_at: 2026-05-22T00:12:47.008348+00:00
-updated_at: 2026-05-22T02:52:41.850261+00:00
+updated_at: 2026-05-22T02:56:09.654996+00:00
 parent: GQLITE-I-0042
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -19,6 +19,32 @@ initiative_id: GQLITE-I-0042
 ---
 
 # E7: handle_call_subquery — hoist per-row transforms
+
+## Status Updates
+
+**2026-05-21 — partial landing (MATCH hoist).** The inner MATCH
+transform is now ONCE before the outer-row loop, cached per clause
+position in `inner_match_sql[ci]`. Per-row work reduced to
+prepare/step of the cached SQL string. TCK 3477 unchanged
+(refactor, not behavioral). Commit `7c3763c`.
+
+The remaining per-row contexts (`ret_ctx` at ~line 552, `eval_ctx`
+at ~line 686) reference `scoped_map` entries that change per row.
+The SELECT-expression transforms produce stable SQL (the `_cv_N`
+aliases are stable; only the IDs in FROM/WHERE differ). Hoisting
+them needs:
+- Pre-compute the SELECT-expression strings once.
+- Per-row, splice in the current entity IDs via FROM/WHERE.
+
+Doable but not high-leverage — no TCK gain expected, and the per-
+row transform cost in those paths is small compared to MATCH.
+Closing T-0316 with the MATCH hoist as the substantive result.
+
+The structural goal of "single transform contract per handler"
+(G1 in I-0042) is still partially met for CALL — the outer ctx +
+inner MATCH ctx are now single-shot; the RETURN/eval contexts
+remain per-row but that's an optimization rather than a contract
+issue. Filed remaining work as a follow-on if needed.
 
 ## Parent Initiative
 
@@ -41,6 +67,10 @@ variables.
 
 This is a multi-iteration refactor — the safe first step is hoisting
 only the inner MATCH and measuring.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
