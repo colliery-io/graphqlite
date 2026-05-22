@@ -77,7 +77,7 @@ _STEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^the result should be, in order \(ignoring element order for lists\)$"),
      "result_ordered_lists_unordered"),
     (re.compile(r"^the result should be empty$"), "result_empty"),
-    (re.compile(r"^a (?P<err>\w+(?:Error|Failure)) should be raised at \w+"), "expect_error"),
+    (re.compile(r"^a (?P<err>\w+(?:Error|Failure|Missing)) should be raised at \w+"), "expect_error"),
     (re.compile(r"^no side effects$"), "no_side_effects"),
     (re.compile(r"^the side effects should be$"), "side_effects_table"),
     # T-0252: procedure declaration. Captures the fully-qualified name,
