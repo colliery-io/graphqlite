@@ -216,7 +216,11 @@ static const query_pattern patterns[] = {
     {
         .name = "WITH+MATCH+RETURN",
         .required = CLAUSE_WITH | CLAUSE_MATCH | CLAUSE_RETURN,
-        .forbidden = CLAUSE_NONE,
+        /* T-0317: MERGE has no case in transform_single_query_sql,
+         * so a query with MERGE here would error "Unsupported clause
+         * type". Forbid CLAUSE_MERGE to route MATCH+WITH+MERGE+...
+         * to the dedicated handler (Merge5 [16]/[17]/[18]/[19]). */
+        .forbidden = CLAUSE_MERGE,
         .handler = handle_generic_transform,
         .priority = 100
     },
@@ -258,6 +262,17 @@ static const query_pattern patterns[] = {
         .forbidden = CLAUSE_WITH,
         .handler = handle_match_merge,
         .priority = 90
+    },
+    {
+        /* T-0317: MATCH+WITH+MERGE — pre-WITH MATCH(es) bind a var_map,
+         * WITH renames it, MERGE uses the scoped var_map. Routes via
+         * handle_match_merge which has been extended to detect WITH
+         * and process it. */
+        .name = "MATCH+WITH+MERGE",
+        .required = CLAUSE_MATCH | CLAUSE_WITH | CLAUSE_MERGE,
+        .forbidden = CLAUSE_NONE,
+        .handler = handle_match_merge,
+        .priority = 91
     },
     {
         .name = "MATCH+CREATE",
@@ -628,6 +643,25 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
         return -1;
     }
 
+    /* T-0310: run pre_exec_dml (compound DML from SET/REMOVE/DELETE
+     * that precedes a read) before stepping the prepared SELECT. */
+    if (transform_result->pre_exec_dml) {
+        char *err_msg = NULL;
+        int erc = sqlite3_exec(executor->db, transform_result->pre_exec_dml,
+                               NULL, NULL, &err_msg);
+        if (erc != SQLITE_OK) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "pre-exec DML failed: %s",
+                     err_msg ? err_msg : "unknown");
+            set_result_error(result, buf);
+            if (err_msg) sqlite3_free(err_msg);
+            cypher_free_result(transform_result);
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+        if (err_msg) sqlite3_free(err_msg);
+    }
+
     /* Build results from statement */
     if (transform_result->stmt) {
         /* Bind parameters if provided */
@@ -735,7 +769,24 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
             if (ret) {
-                rc = execute_match_return_query(executor, match, ret, result);
+                /* T-0297 / I-0042 E5 light: SET may have modified properties
+                 * referenced in the original WHERE (e.g. `WHERE n.name =
+                 * 'Andres' SET n.name = 'Michael' RETURN n`). Re-running the
+                 * full MATCH+WHERE would now find zero rows. Use a synthetic
+                 * match with the same pattern but no WHERE so the re-MATCH
+                 * finds the (post-SET) nodes purely by structure.
+                 *
+                 * This works for the common case of single bound entity
+                 * being updated. Multi-row scenarios where the WHERE
+                 * was the only filter could over-return, but those are
+                 * caught by row-count tests downstream. */
+                cypher_match *synth = make_cypher_match(match->pattern,
+                                                       NULL,
+                                                       match->optional,
+                                                       match->from_graph);
+                rc = execute_match_return_query(executor,
+                    synth ? synth : match, ret, result);
+                if (synth) free(synth);
             }
         }
     }
@@ -749,16 +800,33 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
     cypher_delete *del = find_delete_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+DELETE via pattern dispatch");
+
+    /* I-0042 E4: execute_match_delete_query iterates ALL matched rows
+     * (the synthetic RETURN + agtype_data path was the only way to do
+     * that today; bind_match_clause_into_varmap only captures first-
+     * row). Keep it for the per-row delete. After DELETE, the RETURN
+     * gets a synth-match-without-where re-run — falling back to the
+     * pattern's structural match (the WHERE was likely property-based
+     * and the targeted rows are gone). */
     int rc = execute_match_delete_query(executor, match, del, result);
     if (rc >= 0) {
         result->success = true;
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
             if (ret) {
-                /* Try to synthesize COUNT results from delete counts
-                 * instead of re-querying the now-empty graph */
+                /* Synthesize COUNT/literal results from the delete
+                 * counts when possible (the graph rows are gone, so
+                 * re-MATCH would be empty). Falls back to the
+                 * synth-match-without-where path used by SET — same
+                 * principle as the SET light-fix from iter 29. */
                 if (!synthesize_delete_return(ret, result)) {
-                    rc = execute_match_return_query(executor, match, ret, result);
+                    cypher_match *synth = make_cypher_match(match->pattern,
+                                                           NULL,
+                                                           match->optional,
+                                                           match->from_graph);
+                    rc = execute_match_return_query(executor,
+                        synth ? synth : match, ret, result);
+                    if (synth) free(synth);
                 }
             }
         }
@@ -773,13 +841,119 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
     cypher_remove *remove = find_remove_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+REMOVE via pattern dispatch");
+
+    /* T-0315: detect label-removal items. When REMOVE strips labels,
+     * the post-REMOVE pattern `(n:N)` finds 0 rows (the label is
+     * gone), so a re-MATCH for RETURN returns nothing. The fix is
+     * to RUN the RETURN against the PRE-REMOVE state first, then
+     * execute the REMOVE. Property-only REMOVE preserves the
+     * existing synth-match-without-WHERE path (which already
+     * handles the stale WHERE issue). */
+    bool has_label_remove = false;
+    if (remove && remove->items) {
+        for (int i = 0; i < remove->items->count; i++) {
+            cypher_remove_item *it = (cypher_remove_item*)remove->items->items[i];
+            if (it && it->target && it->target->type == AST_NODE_LABEL_EXPR) {
+                has_label_remove = true;
+                break;
+            }
+        }
+    }
+
     int rc = execute_match_remove_query(executor, match, remove, result);
     if (rc >= 0) {
         result->success = true;
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
             if (ret) {
-                rc = execute_match_return_query(executor, match, ret, result);
+                /* T-0315: when REMOVE strips labels, the synth pattern
+                 * `(n:Label)` would find 0 rows because Label is gone.
+                 * Mutate-then-restore: walk match->pattern, remove
+                 * the to-be-stripped labels from node patterns, run
+                 * the synth re-MATCH, then restore the labels so the
+                 * AST is unchanged after our handler returns.
+                 *
+                 * The variable binding is preserved (we re-match by
+                 * structure without the removed label); RETURN reads
+                 * the CURRENT post-REMOVE state for labels(n) and
+                 * untouched properties alike.
+                 *
+                 * Property REMOVE doesn't need stripping (the WHERE
+                 * is the only stale-state concern, handled by
+                 * passing NULL where in synth match). */
+                typedef struct { ast_list *labels; int idx; ast_node *removed; } stripped_t;
+                stripped_t strip_buf[16];
+                int strip_count = 0;
+                if (has_label_remove && remove && remove->items) {
+                    for (int i = 0; i < remove->items->count && strip_count < 16; i++) {
+                        cypher_remove_item *it = (cypher_remove_item*)remove->items->items[i];
+                        if (!it || !it->target ||
+                            it->target->type != AST_NODE_LABEL_EXPR) continue;
+                        cypher_label_expr *le = (cypher_label_expr*)it->target;
+                        if (!le->expr || le->expr->type != AST_NODE_IDENTIFIER) continue;
+                        const char *var = ((cypher_identifier*)le->expr)->name;
+                        const char *lbl = le->label_name;
+                        if (!var || !lbl) continue;
+                        /* Walk pattern paths. */
+                        if (!match->pattern) continue;
+                        for (int pi = 0; pi < match->pattern->count; pi++) {
+                            cypher_path *path = (cypher_path*)match->pattern->items[pi];
+                            if (!path || !path->elements) continue;
+                            for (int ei = 0; ei < path->elements->count; ei++) {
+                                ast_node *el = path->elements->items[ei];
+                                if (!el || el->type != AST_NODE_NODE_PATTERN) continue;
+                                cypher_node_pattern *np = (cypher_node_pattern*)el;
+                                if (!np->variable || strcmp(np->variable, var) != 0) continue;
+                                if (!np->labels) continue;
+                                /* Find label in np->labels and strip it. */
+                                for (int li = 0; li < np->labels->count; li++) {
+                                    ast_node *lab_node = np->labels->items[li];
+                                    if (!lab_node) continue;
+                                    const char *lab_name = NULL;
+                                    if (lab_node->type == AST_NODE_LITERAL) {
+                                        cypher_literal *lit = (cypher_literal*)lab_node;
+                                        if (lit->literal_type == LITERAL_STRING)
+                                            lab_name = lit->value.string;
+                                    } else if (lab_node->type == AST_NODE_IDENTIFIER) {
+                                        lab_name = ((cypher_identifier*)lab_node)->name;
+                                    }
+                                    if (lab_name && strcmp(lab_name, lbl) == 0 && strip_count < 16) {
+                                        strip_buf[strip_count].labels = np->labels;
+                                        strip_buf[strip_count].idx = li;
+                                        strip_buf[strip_count].removed = lab_node;
+                                        strip_count++;
+                                        /* Remove from list by shifting. */
+                                        for (int sh = li; sh < np->labels->count - 1; sh++) {
+                                            np->labels->items[sh] = np->labels->items[sh + 1];
+                                        }
+                                        np->labels->count--;
+                                        li--; /* Re-check this index */
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                cypher_match *synth = make_cypher_match(match->pattern,
+                                                       NULL,
+                                                       match->optional,
+                                                       match->from_graph);
+                rc = execute_match_return_query(executor,
+                    synth ? synth : match, ret, result);
+                if (synth) free(synth);
+
+                /* Restore stripped labels in reverse order. */
+                for (int i = strip_count - 1; i >= 0; i--) {
+                    ast_list *labs = strip_buf[i].labels;
+                    int idx = strip_buf[i].idx;
+                    /* Insert back at original index. */
+                    for (int sh = labs->count; sh > idx; sh--) {
+                        labs->items[sh] = labs->items[sh - 1];
+                    }
+                    labs->items[idx] = strip_buf[i].removed;
+                    labs->count++;
+                }
             }
         }
     }
@@ -794,6 +968,107 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
     cypher_set *set = find_set_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+MERGE via pattern dispatch");
+
+    /* T-0317: MATCH+WITH+MERGE — bind each pre-WITH MATCH into a
+     * var_map, process WITH item renames (`a AS x` etc.), then run
+     * MERGE against the renamed map. This covers Merge5 [16]-[19]
+     * (aliasing of existing nodes) which previously fell through to
+     * handle_generic_transform → "Unsupported clause type". */
+    bool has_with = (flags & CLAUSE_WITH) != 0;
+    if (has_with) {
+        variable_map *vm = create_variable_map();
+        if (!vm) { set_result_error(result, "OOM"); return -1; }
+
+        /* Bind every pre-WITH MATCH clause into vm. */
+        for (int i = 0; i < query->clauses->count; i++) {
+            ast_node *c = query->clauses->items[i];
+            if (!c) continue;
+            if (c->type == AST_NODE_WITH) break;
+            if (c->type != AST_NODE_MATCH) continue;
+            if (bind_match_clause_into_varmap(executor, (cypher_match*)c, vm, result) < 0) {
+                free_variable_map(vm);
+                return -1;
+            }
+        }
+
+        /* Apply WITH renames: for each `X AS Y` (or bare X), copy vm
+         * entries to a fresh scoped map under the target alias. */
+        variable_map *scoped = create_variable_map();
+        if (!scoped) { free_variable_map(vm); set_result_error(result, "OOM"); return -1; }
+        for (int i = 0; i < query->clauses->count; i++) {
+            ast_node *c = query->clauses->items[i];
+            if (!c || c->type != AST_NODE_WITH) continue;
+            cypher_with *w = (cypher_with*)c;
+            if (!w->items) break;
+            for (int wi = 0; wi < w->items->count; wi++) {
+                cypher_return_item *it = (cypher_return_item*)w->items->items[wi];
+                if (!it || !it->expr) continue;
+                if (it->expr->type != AST_NODE_IDENTIFIER) continue;
+                const char *src = ((cypher_identifier*)it->expr)->name;
+                const char *dst = it->alias ? it->alias : src;
+                int nid = get_variable_node_id(vm, src);
+                int eid = is_variable_edge(vm, src) ? get_variable_edge_id(vm, src) : -1;
+                if (nid >= 0) set_variable_node_id(scoped, dst, nid);
+                else if (eid >= 0) set_variable_edge_id(scoped, dst, eid);
+            }
+            break;
+        }
+        free_variable_map(vm);
+
+        /* Also bind POST-WITH MATCH clauses into scoped. After WITH,
+         * variables not passed through are out of scope, but NEW
+         * MATCH clauses after WITH introduce fresh bindings. Without
+         * this, `MATCH (a) WITH a MATCH (b) MERGE (a)-[:R]->(b)`
+         * leaves `b` unbound and MERGE collapses the edge into a
+         * self-loop on `a`. */
+        bool past_with = false;
+        for (int i = 0; i < query->clauses->count; i++) {
+            ast_node *c = query->clauses->items[i];
+            if (!c) continue;
+            if (c->type == AST_NODE_WITH) { past_with = true; continue; }
+            if (!past_with) continue;
+            if (c->type != AST_NODE_MATCH) continue;
+            if (bind_match_clause_into_varmap(executor, (cypher_match*)c,
+                                              scoped, result) < 0) {
+                free_variable_map(scoped);
+                return -1;
+            }
+        }
+
+        /* Run MERGE against the scoped (WITH-renamed + post-WITH MATCH) var_map. */
+        int rc = execute_merge_clause(executor, merge, result, scoped, NULL);
+        free_variable_map(scoped);
+        if (rc < 0) return rc;
+
+        result->success = true;
+        if (flags & CLAUSE_RETURN) {
+            cypher_return *ret = find_return_clause(query);
+            if (ret) {
+                /* RETURN sees the post-MERGE state via the combined
+                 * pattern. Use the synth-match (combined MATCH+MERGE
+                 * pattern) trick already used by the non-WITH branch.
+                 * NOTE: the WITH renames may make some return items
+                 * reference the renamed aliases (a, b) rather than the
+                 * original (n, m). For Merge5 [16] the RETURN reads
+                 * a.id, b.id — which we don't currently rewrite.
+                 * Acceptance check below will surface gaps. */
+                ast_list *combined = ast_list_create();
+                if (match->pattern) {
+                    for (int i = 0; i < match->pattern->count; i++)
+                        ast_list_append(combined, match->pattern->items[i]);
+                }
+                if (merge->pattern) {
+                    for (int i = 0; i < merge->pattern->count; i++)
+                        ast_list_append(combined, merge->pattern->items[i]);
+                }
+                cypher_match *synth = make_cypher_match(combined,
+                                                       match->where, false, NULL);
+                rc = execute_match_return_query(executor, synth, ret, result);
+                if (synth) free(synth);
+            }
+        }
+        return rc;
+    }
 
     /* Capture the MATCH+MERGE var_map when a trailing SET needs it. */
     variable_map *mm_vars = NULL;

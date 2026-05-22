@@ -30,28 +30,45 @@ static int evaluate_ast_with_context(
     cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
     if (!ctx) return -1;
 
-    /* Register variables from var_map so property lookups can resolve */
+    /* Register variables from var_map so property lookups can resolve.
+     * T-0314: also register edge variables (was nodes-only). Without
+     * this, MATCH+SET on relationships couldn't evaluate r.num+1 —
+     * the executor's per-row SET path fell over for any edge
+     * arithmetic. */
+    bool added_from = false;
     for (int i = 0; i < var_map->count; i++) {
         variable_mapping *m = &var_map->mappings[i];
+        char alias[64];
+        snprintf(alias, sizeof(alias), "_gql_var_%d", i);
+        char where_cond[128];
+        snprintf(where_cond, sizeof(where_cond), "%s.id = %d", alias, m->entity_id);
         if (m->type == VAR_MAP_TYPE_NODE) {
-            char alias[64];
-            snprintf(alias, sizeof(alias), "_gql_var_%d", i);
             transform_var_register_node(ctx->var_ctx, m->variable, alias, NULL);
             transform_var_set_bound(ctx->var_ctx, m->variable, true);
-
-            /* Add FROM/WHERE for this node */
-            char where_cond[128];
-            snprintf(where_cond, sizeof(where_cond), "%s.id = %d", alias, m->entity_id);
-            if (i == 0) {
+            if (!added_from) {
                 sql_from(ctx->unified_builder, "nodes", alias);
+                added_from = true;
             } else {
                 sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "nodes", alias, NULL);
+            }
+            sql_where(ctx->unified_builder, where_cond);
+        } else if (m->type == VAR_MAP_TYPE_EDGE) {
+            transform_var_register_edge(ctx->var_ctx, m->variable, alias, NULL);
+            transform_var_set_bound(ctx->var_ctx, m->variable, true);
+            if (!added_from) {
+                sql_from(ctx->unified_builder, "edges", alias);
+                added_from = true;
+            } else {
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, "edges", alias, NULL);
             }
             sql_where(ctx->unified_builder, where_cond);
         }
     }
 
-    /* Transform the expression to SQL */
+    /* Transform the expression to SQL. T-0314: pick the type-preserving
+     * (in_comparison) branch so property lookups stay typed — without
+     * this, `r.num + 1` becomes text "1" || "1" = "11" instead of 2. */
+    ctx->in_comparison = true;
     append_sql(ctx, "SELECT ");
     if (transform_expression(ctx, expr) < 0) {
         cypher_transform_free_context(ctx);

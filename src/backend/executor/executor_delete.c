@@ -149,6 +149,53 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
     return 0;
 }
 
+/* I-0042 E4: DELETE operations against a pre-captured variable map.
+ * The caller is responsible for populating var_map (via
+ * bind_match_clause_into_varmap or similar). This function only does
+ * the per-id deletion side — no MATCH execution, no AST mutation, no
+ * synthetic RETURN. Mirrors the shape of execute_set_operations /
+ * execute_remove_operations so handle_match_delete can follow the
+ * same two-pass pattern. */
+int execute_delete_operations(cypher_executor *executor,
+                              cypher_delete *del,
+                              variable_map *var_map,
+                              cypher_result *result)
+{
+    if (!executor || !del || !var_map || !result) return -1;
+    if (!del->items) return 0;
+
+    int deleted_nodes = 0, deleted_edges = 0;
+    for (int i = 0; i < del->items->count; i++) {
+        cypher_delete_item *item = (cypher_delete_item *)del->items->items[i];
+        if (!item || !item->variable) continue;
+
+        /* Try edge first — edges are deleted unconditionally; nodes
+         * honor the DETACH flag and may fail on connected nodes. */
+        if (is_variable_edge(var_map, item->variable)) {
+            int edge_id = get_variable_edge_id(var_map, item->variable);
+            if (edge_id < 0) continue;
+            if (delete_edge_by_id(executor, (int64_t)edge_id) == 0) {
+                deleted_edges++;
+            }
+        } else {
+            int node_id = get_variable_node_id(var_map, item->variable);
+            if (node_id < 0) continue;
+            int rc = delete_node_by_id(executor, (int64_t)node_id, del->detach);
+            if (rc == 0) {
+                deleted_nodes++;
+            } else {
+                set_result_error(result,
+                    "Cannot delete node - it still has relationships");
+                return -1;
+            }
+        }
+    }
+
+    result->nodes_deleted += deleted_nodes;
+    result->relationships_deleted += deleted_edges;
+    return 0;
+}
+
 /* Delete an edge by ID */
 int delete_edge_by_id(cypher_executor *executor, int64_t edge_id)
 {

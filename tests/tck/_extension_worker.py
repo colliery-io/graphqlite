@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import os
+import resource
+import signal
 import sqlite3
 import sys
 import traceback
@@ -31,7 +33,36 @@ from pathlib import Path
 DEFAULT_EXT = Path("build/graphqlite")
 
 
+def _suppress_crash_reporter() -> None:
+    """Stop the OS crash reporter from spawning a dialog for every
+    extension SIGABRT/SIGSEGV. The harness already catches the worker
+    death and records it as `ExtensionCrash`; the kernel-level crash
+    log is just noise (and on macOS it pops a 'graphqlite crashed'
+    notification per scenario, which makes iterative testing painful).
+
+    Two layers of defense:
+    1. Disable core dumps via RLIMIT_CORE — keeps disk + Crash Reporter
+       cycles down.
+    2. Re-raise SIGABRT as exit(134) via a signal handler — when the
+       extension calls abort(), Python catches the signal first and
+       exits cleanly with the conventional 128+SIGABRT code. macOS
+       won't dispatch the abort to Crash Reporter because we already
+       exited."""
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ValueError, OSError):
+        pass
+    def _die(signum, _frame):
+        os._exit(128 + signum)
+    for sig in (signal.SIGABRT, signal.SIGSEGV, signal.SIGBUS, signal.SIGFPE, signal.SIGILL):
+        try:
+            signal.signal(sig, _die)
+        except (ValueError, OSError):
+            pass
+
+
 def main() -> int:
+    _suppress_crash_reporter()
     ext_path = Path(os.environ.get("GQLITE_TCK_EXT", str(DEFAULT_EXT)))
     debug_log = os.environ.get("GQLITE_TCK_DEBUG_LOG")
 
@@ -164,7 +195,39 @@ def _new_conn(ext_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.enable_load_extension(True)
     conn.load_extension(str(ext_path))
+    _install_deterministic_random(conn)
     return conn
+
+
+def _install_deterministic_random(conn: sqlite3.Connection) -> None:
+    """Override SQLite's built-in random() with a deterministic LCG so
+    that TCK scenarios using `rand()` (which transforms to
+    `ABS(RANDOM())/...`) produce the same sequence every run.
+
+    Several openCypher Quantifier and Comprehension scenarios test
+    tautologies of the form `any(P) = NOT all(NOT P)` while feeding
+    `rand()`-shuffled input lists. They're meant to be invariant
+    regardless of input — but a real bug in our implementation
+    surfaces only on certain inputs, so the flake hides it. Making
+    rand() deterministic per-connection turns the flake into a
+    consistent signal: either the test now consistently passes (no
+    real bug for this seed) or consistently fails (and we can
+    investigate the deterministic counterexample).
+
+    Seed is fixed; sequence resets when the harness creates a new
+    connection (i.e. between scenarios). LCG constants from Numerical
+    Recipes — full int64 cycle, no zero output."""
+    state = [0x5DEECE66D9F37C45]  # arbitrary fixed seed
+
+    def _random() -> int:
+        state[0] = (state[0] * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
+        # SQLite's random() returns a signed 64-bit; map our unsigned state
+        # into the signed range so ABS(RANDOM()) behaves as the extension
+        # expects.
+        v = state[0]
+        return v - (1 << 64) if v >= (1 << 63) else v
+
+    conn.create_function("random", 0, _random, deterministic=True)
 
 
 def _named_graph_file(name: str) -> Path | None:

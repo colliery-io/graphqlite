@@ -915,7 +915,7 @@ rel_pattern:
             if (p) p->varlen = (ast_node*)$6;
             $$ = p;
         }
-    /* Bare relationship patterns (no brackets): --, -->, <-- */
+    /* Bare relationship patterns (no brackets): --, -->, <--, <--> */
     | '-' '-' '>'
         {
             $$ = make_rel_pattern_varlen(NULL, NULL, NULL, false, true, NULL);
@@ -923,6 +923,12 @@ rel_pattern:
     | '<' '-' '-'
         {
             $$ = make_rel_pattern_varlen(NULL, NULL, NULL, true, false, NULL);
+        }
+    | '<' '-' '-' '>'
+        {
+            /* Bidirectional bare arrow — equivalent to `--` (any direction).
+             * openCypher accepts <--> as an explicit bidirectional form. */
+            $$ = make_rel_pattern_varlen(NULL, NULL, NULL, false, false, NULL);
         }
     | '-' '-'
         {

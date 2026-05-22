@@ -72,6 +72,14 @@ struct cypher_transform_context {
 
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;
+
+    /* T-0310: byte length of the CTE prefix that prepend_cte_to_sql
+     * wrote at the start of sql_buffer. Zero if no CTE prefix was
+     * prepended. Used by cypher_transform_query to know where the
+     * SELECT body starts when splitting DML out of raw_output —
+     * the DML half needs the same CTE prefix to resolve any
+     * CTE-bound variable references. */
+    size_t cte_prefix_len;
 };
 
 /* Result structure for executed queries */
@@ -79,11 +87,17 @@ struct cypher_query_result {
     /* Result data */
     sqlite3_stmt *stmt;             /* Prepared statement (for reads) */
     int rows_affected;              /* For write operations */
-    
+
+    /* T-0310: DML to exec BEFORE stepping `stmt`. Owned string. Set
+     * when transform_set/delete/remove emitted into raw_output AND
+     * the query has a trailing read. Executor runs sqlite3_exec on
+     * this then steps stmt. cypher_free_result frees this. */
+    char *pre_exec_dml;
+
     /* Column information */
     char **column_names;
     int column_count;
-    
+
     /* Error information */
     bool has_error;
     char *error_message;
@@ -174,6 +188,30 @@ void append_string_literal(cypher_transform_context *ctx, const char *value);
  * sql_buffer. Returns NULL on error; sql_buffer is restored either way.
  * I-0039 transitional helper. */
 char *cypher_transform_capture_expression(cypher_transform_context *ctx, ast_node *expr);
+
+/* I-0043 X1: new expression transform API.
+ *
+ * transform_expression_into() — transform `expr` and append the
+ * resulting SQL into the caller-supplied `out` dynamic_buffer. Does
+ * NOT touch ctx->sql_buffer (the legacy scratchpad). Returns 0 on
+ * success, -1 on error.
+ *
+ * transform_expression_str() — transform `expr` and return the result
+ * as a freshly-allocated NUL-terminated string. Caller frees. Returns
+ * NULL on error.
+ *
+ * Both are transitional and currently delegate to the legacy
+ * scratchpad path (sql_buffer swap, transform_expression, snapshot).
+ * As individual AST cases are migrated under I-0043 X2.x they will be
+ * routed to dynamic_buffer-native emitters; the old
+ * transform_expression body will be deleted in X5. Callers that
+ * want to use the new shape today can adopt these helpers without
+ * waiting for the case-by-case migration. */
+int transform_expression_into(cypher_transform_context *ctx,
+                              ast_node *expr,
+                              dynamic_buffer *out);
+char *transform_expression_str(cypher_transform_context *ctx,
+                               ast_node *expr);
 
 /* Pending property joins for aggregation optimization */
 void add_pending_prop_join(cypher_transform_context *ctx, const char *join_sql);

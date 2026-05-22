@@ -579,6 +579,151 @@ static void test_sql_builder_cte_recursive(void)
     }
 }
 
+/* Test pre_cte additive section (T-0267) */
+static void test_sql_builder_pre_cte_only(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_pre_cte(b, "_props", "SELECT 1", false);
+    CU_ASSERT_EQUAL(b->pre_cte_count, 1);
+    CU_ASSERT(!dbuf_is_empty(&b->pre_cte));
+    /* No leading WITH in the buffer — prepend_cte_to_sql adds it. */
+    CU_ASSERT(strncmp(dbuf_get(&b->pre_cte), "_props AS (SELECT 1)", 20) == 0);
+
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_pre_cte_multiple(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_pre_cte(b, "a", "SELECT 1", false);
+    sql_pre_cte(b, "b", "SELECT 2", false);
+    sql_pre_cte(b, "c", "SELECT 3", false);
+    CU_ASSERT_EQUAL(b->pre_cte_count, 3);
+
+    const char *content = dbuf_get(&b->pre_cte);
+    CU_ASSERT(strstr(content, "a AS (SELECT 1)") != NULL);
+    CU_ASSERT(strstr(content, ", b AS (SELECT 2)") != NULL);
+    CU_ASSERT(strstr(content, ", c AS (SELECT 3)") != NULL);
+
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_pre_cte_recursive(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_pre_cte(b, "p", "SELECT * FROM p", false);
+    CU_ASSERT_FALSE(b->pre_cte_recursive);
+    sql_pre_cte(b, "r", "SELECT 1 UNION SELECT n+1 FROM r WHERE n < 5", true);
+    CU_ASSERT_TRUE(b->pre_cte_recursive);
+
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_pre_cte_reset(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_pre_cte(b, "x", "SELECT 1", true);
+    CU_ASSERT_EQUAL(b->pre_cte_count, 1);
+    CU_ASSERT_TRUE(b->pre_cte_recursive);
+
+    sql_builder_reset(b);
+    CU_ASSERT_EQUAL(b->pre_cte_count, 0);
+    CU_ASSERT_FALSE(b->pre_cte_recursive);
+    CU_ASSERT(dbuf_is_empty(&b->pre_cte));
+
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_pre_cte_to_string_excludes(void)
+{
+    /* pre_cte (like the user CTE buffer) is intentionally NOT included
+     * in sql_builder_to_string output — emission is owned by
+     * prepend_cte_to_sql in the transform layer. Confirm to_string
+     * shows the main SELECT but no WITH. */
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_pre_cte(b, "_props", "SELECT 1", false);
+    sql_select(b, "n.id", NULL);
+    sql_from(b, "nodes", "n");
+
+    char *sql = sql_builder_to_string(b);
+    CU_ASSERT_PTR_NOT_NULL(sql);
+    if (sql) {
+        CU_ASSERT(strstr(sql, "WITH") == NULL);
+        CU_ASSERT(strstr(sql, "SELECT n.id") != NULL);
+        CU_ASSERT(strstr(sql, "FROM nodes") != NULL);
+        free(sql);
+    }
+    sql_builder_free(b);
+}
+
+/* I-0042 E1: idempotent sql_builder_to_string. */
+static void test_sql_builder_to_string_idempotent(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_select(b, "n.id", NULL);
+    sql_from(b, "nodes", "n");
+
+    char *first = sql_builder_to_string(b);
+    CU_ASSERT_PTR_NOT_NULL(first);
+    CU_ASSERT_TRUE(b->finalized);
+
+    /* Second call must return NULL — protects against double-finalize. */
+    char *second = sql_builder_to_string(b);
+    CU_ASSERT_PTR_NULL(second);
+
+    /* After unfinalize, third call emits the same content again. */
+    sql_builder_unfinalize(b);
+    CU_ASSERT_FALSE(b->finalized);
+    char *third = sql_builder_to_string(b);
+    CU_ASSERT_PTR_NOT_NULL(third);
+    if (first && third) {
+        CU_ASSERT_STRING_EQUAL(first, third);
+    }
+
+    free(first); free(third);
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_reset_clears_finalized(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_select(b, "1", NULL);
+    char *s = sql_builder_to_string(b);
+    free(s);
+    CU_ASSERT_TRUE(b->finalized);
+
+    sql_builder_reset(b);
+    CU_ASSERT_FALSE(b->finalized);
+
+    sql_select(b, "2", NULL);
+    char *s2 = sql_builder_to_string(b);
+    CU_ASSERT_PTR_NOT_NULL(s2);
+    if (s2) CU_ASSERT(strstr(s2, "SELECT 2") != NULL);
+    free(s2);
+    sql_builder_free(b);
+}
+
 /* Test reset */
 static void test_sql_builder_reset(void)
 {
@@ -1077,6 +1222,13 @@ int init_sql_builder_suite(void)
     if (!CU_add_test(suite, "sql: GROUP BY", test_sql_builder_group_by)) return -1;
     if (!CU_add_test(suite, "sql: CTE", test_sql_builder_cte)) return -1;
     if (!CU_add_test(suite, "sql: CTE recursive", test_sql_builder_cte_recursive)) return -1;
+    if (!CU_add_test(suite, "sql: pre_cte single", test_sql_builder_pre_cte_only)) return -1;
+    if (!CU_add_test(suite, "sql: pre_cte multiple", test_sql_builder_pre_cte_multiple)) return -1;
+    if (!CU_add_test(suite, "sql: pre_cte recursive flag", test_sql_builder_pre_cte_recursive)) return -1;
+    if (!CU_add_test(suite, "sql: pre_cte reset", test_sql_builder_pre_cte_reset)) return -1;
+    if (!CU_add_test(suite, "sql: pre_cte not in to_string", test_sql_builder_pre_cte_to_string_excludes)) return -1;
+    if (!CU_add_test(suite, "sql: to_string idempotent", test_sql_builder_to_string_idempotent)) return -1;
+    if (!CU_add_test(suite, "sql: reset clears finalized", test_sql_builder_reset_clears_finalized)) return -1;
     if (!CU_add_test(suite, "sql: Reset", test_sql_builder_reset)) return -1;
     if (!CU_add_test(suite, "sql: Empty returns NULL", test_sql_builder_empty_returns_null)) return -1;
     if (!CU_add_test(suite, "sql: Complex query", test_sql_builder_complex)) return -1;

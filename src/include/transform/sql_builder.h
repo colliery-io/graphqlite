@@ -133,6 +133,15 @@ typedef enum {
  * when sql_builder_to_string() is called.
  */
 typedef struct {
+    /* Pre-CTE prepend buffer (T-0267). Holds CTE definitions that
+     * must appear BEFORE any user-written CTEs, e.g. property-join
+     * subqueries currently spliced via the external prepend_cte_to_sql
+     * helper. Format: raw CTE fragments ("name AS (query), ...") with
+     * no leading WITH keyword. sql_builder_to_string emits a single
+     * WITH clause that concatenates pre_cte and cte when either is
+     * non-empty, with pre_cte appearing first. Targeted by T-0268
+     * to absorb pending_prop_joins / prepend_cte_to_sql machinery. */
+    dynamic_buffer pre_cte;
     dynamic_buffer cte;       /* WITH RECURSIVE ... */
     dynamic_buffer select;    /* SELECT columns */
     dynamic_buffer from;      /* FROM table */
@@ -151,6 +160,8 @@ typedef struct {
     char *offset_expr;        /* Raw SQL expression for OFFSET (overrides offset). Owned. */
     int select_count;         /* Number of SELECT expressions */
     int cte_count;            /* Number of CTEs */
+    int pre_cte_count;        /* Number of pre-CTEs (T-0267) */
+    bool pre_cte_recursive;   /* True if any pre_cte was added with recursive=true */
     int where_count;          /* Number of WHERE conditions */
     int group_count;          /* Number of GROUP BY expressions */
     int order_count;          /* Number of ORDER BY expressions */
@@ -175,6 +186,14 @@ void sql_builder_free(sql_builder *b);
  * Clears all clauses but keeps allocated memory.
  */
 void sql_builder_reset(sql_builder *b);
+
+/*
+ * Clear the finalized flag in place (I-0042 E1). Use when the caller
+ * has appended additional state (joins, WHERE conditions, etc.) and
+ * needs to re-emit. Does NOT clear any buffers; sql_builder_to_string
+ * will re-serialize the current state, including the new additions.
+ */
+void sql_builder_unfinalize(sql_builder *b);
 
 /*
  * Add a SELECT expression.
@@ -252,6 +271,18 @@ void sql_limit_expr(sql_builder *b, const char *limit_expr, const char *offset_e
  * recursive: true if this CTE is recursive
  */
 void sql_cte(sql_builder *b, const char *name, const char *query, bool recursive);
+
+/*
+ * Add a pre-CTE definition (T-0267). Pre-CTEs appear in the final SQL
+ * BEFORE any sql_cte() entries, sharing a single WITH clause.
+ * name: CTE name
+ * query: CTE query body
+ * recursive: true to mark the combined WITH as RECURSIVE
+ *
+ * Multiple pre-CTEs are joined with ", ". If recursive is true on any
+ * pre_cte call, the emitted WITH keyword becomes "WITH RECURSIVE".
+ */
+void sql_pre_cte(sql_builder *b, const char *name, const char *query, bool recursive);
 
 /* Append a printf-style formatted string into the raw_output buffer
  * (emitted after the typed SELECT sections in sql_builder_to_string).

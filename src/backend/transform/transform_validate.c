@@ -320,6 +320,178 @@ static int validate_conversion_call(cypher_function_call *func, char **error_mes
     return 0;
 }
 
+/* T-0232 — list/map function arg validation at compile time.
+ * - head/tail/last/reverse/size: require a list (or string for size/reverse);
+ *   reject non-list scalar/map LITERAL.
+ * - keys/values/properties: require map/node/edge; reject scalar/list LITERAL.
+ * - range: integer args only; reject string/decimal/bool literals.
+ * Only fires when args are literals — variable inputs require runtime checks. */
+static int validate_list_map_call(cypher_function_call *func, char **error_message)
+{
+    if (!func || !func->function_name || !func->args || func->args->count == 0) return 0;
+    const char *fname = func->function_name;
+
+    /* head/tail/last/reverse: list literal required. (size and reverse
+     * also accept strings, so they get a softer check.) */
+    bool list_only = (strcasecmp(fname, "head") == 0 ||
+                      strcasecmp(fname, "tail") == 0 ||
+                      strcasecmp(fname, "last") == 0);
+    if (list_only) {
+        ast_node *arg = func->args->items[0];
+        if (arg && arg->type == AST_NODE_LITERAL) {
+            const cypher_literal *lit = (const cypher_literal *)arg;
+            if (lit->literal_type != LITERAL_NULL) {
+                set_error(error_message,
+                    "TypeError: InvalidArgumentType: %s() does not accept argument of type %s",
+                    fname, literal_type_name(arg));
+                return -1;
+            }
+        }
+        if (arg && arg->type == AST_NODE_MAP) {
+            set_error(error_message,
+                "TypeError: InvalidArgumentType: %s() does not accept argument of type Map",
+                fname);
+            return -1;
+        }
+    }
+
+    /* keys/values/properties: map/node/edge required. Reject scalar
+     * literal AND list literal. */
+    bool map_only = (strcasecmp(fname, "keys") == 0 ||
+                     strcasecmp(fname, "values") == 0 ||
+                     strcasecmp(fname, "properties") == 0);
+    if (map_only) {
+        ast_node *arg = func->args->items[0];
+        if (arg && arg->type == AST_NODE_LITERAL) {
+            const cypher_literal *lit = (const cypher_literal *)arg;
+            if (lit->literal_type != LITERAL_NULL) {
+                set_error(error_message,
+                    "TypeError: InvalidArgumentType: %s() does not accept argument of type %s",
+                    fname, literal_type_name(arg));
+                return -1;
+            }
+        }
+        if (arg && arg->type == AST_NODE_LIST) {
+            set_error(error_message,
+                "TypeError: InvalidArgumentType: %s() does not accept argument of type List",
+                fname);
+            return -1;
+        }
+    }
+
+    /* range(): all args must be integer literals (or non-literal expressions
+     * that we can't check statically). Reject string/decimal/bool literals. */
+    if (strcasecmp(fname, "range") == 0) {
+        for (int i = 0; i < func->args->count; i++) {
+            ast_node *arg = func->args->items[i];
+            if (!arg || arg->type != AST_NODE_LITERAL) continue;
+            const cypher_literal *lit = (const cypher_literal *)arg;
+            if (lit->literal_type != LITERAL_INTEGER &&
+                lit->literal_type != LITERAL_NULL) {
+                set_error(error_message,
+                    "TypeError: InvalidArgumentType: range() arguments must be integers (got %s)",
+                    literal_type_name(arg));
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* Detect homogeneously-typed literal lists. Returns the literal type
+ * (LITERAL_STRING / LITERAL_BOOLEAN / LITERAL_INTEGER / LITERAL_DECIMAL)
+ * when every element is a literal of the same type. Returns -1 for
+ * heterogeneous, empty, or non-literal lists. (Used by quantifier
+ * type-mismatch validation: a homogeneously non-numeric list bound to
+ * the iteration variable lets us reject `x % 2` at compile time.) */
+static int list_homogeneous_literal_type(const ast_node *expr)
+{
+    if (!expr || expr->type != AST_NODE_LIST) return -1;
+    const cypher_list *lst = (const cypher_list *)expr;
+    if (!lst->items || lst->items->count == 0) return -1;
+    int common = -1;
+    for (int i = 0; i < lst->items->count; i++) {
+        ast_node *el = lst->items->items[i];
+        if (!el || el->type != AST_NODE_LITERAL) return -1;
+        const cypher_literal *lit = (const cypher_literal *)el;
+        if (lit->literal_type == LITERAL_NULL) continue;  /* nulls don't constrain */
+        if (common == -1) common = lit->literal_type;
+        else if (common != lit->literal_type) return -1;
+    }
+    return common;
+}
+
+/* Walk `expr` looking for uses of `var_name` inside arithmetic
+ * operations (MOD, ADD-other-than-string, SUB, MUL, DIV, POW) that
+ * require numeric operands. If found with a known non-numeric var
+ * type, raise InvalidArgumentType. */
+static int check_numeric_var_misuse(const ast_node *expr,
+                                    const char *var_name,
+                                    int var_literal_type,
+                                    char **error_message)
+{
+    if (!expr) return 0;
+    if (expr->type == AST_NODE_BINARY_OP) {
+        const cypher_binary_op *b = (const cypher_binary_op *)expr;
+        bool is_numeric_op = (b->op_type == BINARY_OP_MOD ||
+                              b->op_type == BINARY_OP_SUB ||
+                              b->op_type == BINARY_OP_MUL ||
+                              b->op_type == BINARY_OP_DIV ||
+                              b->op_type == BINARY_OP_POW);
+        if (is_numeric_op) {
+            /* Check if either side is the iteration variable. */
+            for (int side = 0; side < 2; side++) {
+                ast_node *op = (side == 0) ? b->left : b->right;
+                if (op && op->type == AST_NODE_IDENTIFIER &&
+                    strcmp(((cypher_identifier*)op)->name, var_name) == 0) {
+                    const char *tname = "Unknown";
+                    if (var_literal_type == LITERAL_STRING)  tname = "String";
+                    else if (var_literal_type == LITERAL_BOOLEAN) tname = "Boolean";
+                    set_error(error_message,
+                        "SyntaxError: InvalidArgumentType: arithmetic on `%s` "
+                        "of type %s is not supported (numeric operand required)",
+                        var_name, tname);
+                    return -1;
+                }
+            }
+        }
+        if (check_numeric_var_misuse(b->left, var_name, var_literal_type, error_message) < 0) return -1;
+        return check_numeric_var_misuse(b->right, var_name, var_literal_type, error_message);
+    }
+    if (expr->type == AST_NODE_NOT_EXPR) {
+        return check_numeric_var_misuse(((const cypher_not_expr*)expr)->expr,
+                                        var_name, var_literal_type, error_message);
+    }
+    if (expr->type == AST_NODE_FUNCTION_CALL) {
+        const cypher_function_call *f = (const cypher_function_call *)expr;
+        if (f->args) {
+            for (int i = 0; i < f->args->count; i++) {
+                if (check_numeric_var_misuse(f->args->items[i], var_name,
+                                              var_literal_type, error_message) < 0) return -1;
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/* Validate a list predicate (all/any/none/single): if the list is a
+ * homogeneously non-numeric literal list, the iteration variable's
+ * type is known, and arithmetic ops on it in the predicate are
+ * InvalidArgumentType. (Quantifier1/2/3/4 [15] family.) */
+static int validate_list_predicate_types(const cypher_list_predicate *lp,
+                                         char **error_message)
+{
+    if (!lp || !lp->variable || !lp->predicate) return 0;
+    int t = list_homogeneous_literal_type(lp->list_expr);
+    if (t == LITERAL_STRING || t == LITERAL_BOOLEAN) {
+        if (check_numeric_var_misuse(lp->predicate, lp->variable, t, error_message) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int validate_expr(ast_node *expr, char **error_message)
 {
     if (!expr) return 0;
@@ -332,6 +504,7 @@ static int validate_expr(ast_node *expr, char **error_message)
         case AST_NODE_FUNCTION_CALL: {
             cypher_function_call *func = (cypher_function_call *)expr;
             if (validate_conversion_call(func, error_message) < 0) return -1;
+            if (validate_list_map_call(func, error_message) < 0) return -1;
             if (func->args) {
                 for (int i = 0; i < func->args->count; i++) {
                     if (validate_expr(func->args->items[i], error_message) < 0)
@@ -348,6 +521,34 @@ static int validate_expr(ast_node *expr, char **error_message)
                         return -1;
                 }
             }
+            return 0;
+        }
+        case AST_NODE_LIST_PREDICATE: {
+            cypher_list_predicate *lp = (cypher_list_predicate *)expr;
+            if (validate_list_predicate_types(lp, error_message) < 0) return -1;
+            if (validate_expr(lp->list_expr, error_message) < 0) return -1;
+            if (validate_expr(lp->predicate, error_message) < 0) return -1;
+            return 0;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension *)expr;
+            /* Same type-mismatch check as list predicates: a homogeneously
+             * non-numeric literal list bound to the iteration variable
+             * makes arithmetic on it in WHERE / transform invalid. */
+            if (lc->variable && lc->list_expr) {
+                int t = list_homogeneous_literal_type(lc->list_expr);
+                if (t == LITERAL_STRING || t == LITERAL_BOOLEAN) {
+                    if (lc->where_expr &&
+                        check_numeric_var_misuse(lc->where_expr, lc->variable, t, error_message) < 0)
+                        return -1;
+                    if (lc->transform_expr &&
+                        check_numeric_var_misuse(lc->transform_expr, lc->variable, t, error_message) < 0)
+                        return -1;
+                }
+            }
+            if (validate_expr(lc->list_expr, error_message) < 0) return -1;
+            if (lc->where_expr && validate_expr(lc->where_expr, error_message) < 0) return -1;
+            if (lc->transform_expr && validate_expr(lc->transform_expr, error_message) < 0) return -1;
             return 0;
         }
         case AST_NODE_NULL_CHECK: {
@@ -512,9 +713,67 @@ static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **
     }
 }
 
-/* SKIP / LIMIT must be a non-negative integer constant or a parameter.
- * Expressions referencing variables (e.g. `LIMIT n.count`) and negative
- * literals are rejected at compile time per the openCypher spec. */
+/* True if `expr` contains any free variable reference (identifier or
+ * property access whose base is an identifier). Walks function-call
+ * args, binary ops, list/map literals, etc. Used by validate_skip_limit
+ * to allow constant-valued expressions like `toInteger(ceil(1.7))`. */
+static bool expr_has_var_reference(const ast_node *expr)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER:
+            return true;
+        case AST_NODE_PROPERTY:
+            return true;  /* base is implicitly a var */
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            return expr_has_var_reference(s->expr) ||
+                   expr_has_var_reference(s->index);
+        }
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            return expr_has_var_reference(b->left) ||
+                   expr_has_var_reference(b->right);
+        }
+        case AST_NODE_NOT_EXPR:
+            return expr_has_var_reference(((const cypher_not_expr *)expr)->expr);
+        case AST_NODE_NULL_CHECK:
+            return expr_has_var_reference(((const cypher_null_check *)expr)->expr);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (!f->args) return false;
+            for (int i = 0; i < f->args->count; i++) {
+                if (expr_has_var_reference(f->args->items[i])) return true;
+            }
+            return false;
+        }
+        case AST_NODE_LIST: {
+            const cypher_list *l = (const cypher_list *)expr;
+            if (!l->items) return false;
+            for (int i = 0; i < l->items->count; i++) {
+                if (expr_has_var_reference(l->items->items[i])) return true;
+            }
+            return false;
+        }
+        case AST_NODE_MAP: {
+            const cypher_map *m = (const cypher_map *)expr;
+            if (!m->pairs) return false;
+            for (int i = 0; i < m->pairs->count; i++) {
+                const cypher_map_pair *p = (const cypher_map_pair *)m->pairs->items[i];
+                if (p && expr_has_var_reference(p->value)) return true;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+/* SKIP / LIMIT must be a non-negative integer constant, a parameter, or
+ * a constant expression that doesn't reference variables. Expressions
+ * referencing variables (e.g. `LIMIT n.count`) and negative literals
+ * are rejected at compile time per the openCypher spec.
+ * `LIMIT toInteger(ceil(1.7))` is valid (ReturnSkipLimit2 [6]). */
 static int validate_skip_limit(ast_node *expr, const char *kw, char **error_message)
 {
     if (!expr) return 0;
@@ -539,7 +798,9 @@ static int validate_skip_limit(ast_node *expr, const char *kw, char **error_mess
         return -1;
     }
     if (expr->type == AST_NODE_PARAMETER) return 0;
-    /* Identifiers, property access, function calls, etc. — non-constant. */
+    /* Constant-valued expression (no var reference) is OK; runtime checks
+     * value. References to variables are rejected at compile time. */
+    if (!expr_has_var_reference(expr)) return 0;
     char buf[160];
     snprintf(buf, sizeof(buf),
              "SyntaxError: NonConstantExpression: %s must be a constant integer or parameter",
@@ -573,6 +834,433 @@ static void nset_add(name_set *s, const char *name) {
     s->names[s->count++] = name;
 }
 
+/* Aggregate-ambiguity helpers (Return6 [20], With6 [8] et al).
+ *
+ * Cypher requires that when a RETURN / WITH item contains an aggregate
+ * function inside a larger expression, every non-aggregate part must be
+ * a grouping key — i.e. the expression must consist purely of aggregates
+ * and references to variables that appear as bare items elsewhere in the
+ * projection. Mixing `me.age + count(you.age)` is ambiguous.
+ *
+ * The check below is conservative: if an expression has an aggregate
+ * function somewhere AND there's a free identifier (or property access)
+ * reference outside any aggregate call AND that reference isn't itself
+ * the top-level expression, flag AmbiguousAggregationExpression.
+ */
+static const char *kAggregateNames[] = {
+    "count", "sum", "avg", "min", "max", "collect",
+    "stdev", "stdevp", "percentilecont", "percentiledisc",
+    NULL
+};
+/* Non-deterministic functions whose use inside an aggregate makes the
+ * aggregate's result undefined per the openCypher spec. count(rand())
+ * / sum(timestamp()) / etc. raise NonConstantExpression at compile
+ * time (Return6 [15]). */
+static const char *kNonDeterministicFuncs[] = {
+    "rand", "random",
+    NULL
+};
+static bool ast_func_name_in(const ast_node *expr, const char **names) {
+    if (!expr || expr->type != AST_NODE_FUNCTION_CALL) return false;
+    const cypher_function_call *fc = (const cypher_function_call *)expr;
+    if (!fc->function_name) return false;
+    for (int i = 0; names[i]; i++) {
+        if (strcasecmp(fc->function_name, names[i]) == 0) return true;
+    }
+    return false;
+}
+static bool ast_contains_nondeterministic(const ast_node *expr) {
+    if (!expr) return false;
+    if (ast_func_name_in(expr, kNonDeterministicFuncs)) return true;
+    switch (expr->type) {
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            return ast_contains_nondeterministic(b->left) ||
+                   ast_contains_nondeterministic(b->right);
+        }
+        case AST_NODE_NOT_EXPR:
+            return ast_contains_nondeterministic(((const cypher_not_expr *)expr)->expr);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (f->args) {
+                for (int i = 0; i < f->args->count; i++) {
+                    if (ast_contains_nondeterministic(f->args->items[i])) return true;
+                }
+            }
+            return false;
+        }
+        case AST_NODE_PROPERTY:
+            return ast_contains_nondeterministic(((const cypher_property *)expr)->expr);
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            return ast_contains_nondeterministic(s->expr) ||
+                   ast_contains_nondeterministic(s->index);
+        }
+        default: return false;
+    }
+}
+static bool ast_is_aggregate_func(const ast_node *expr) {
+    if (!expr || expr->type != AST_NODE_FUNCTION_CALL) return false;
+    const cypher_function_call *fc = (const cypher_function_call *)expr;
+    if (!fc->function_name) return false;
+    for (int i = 0; kAggregateNames[i]; i++) {
+        if (strcasecmp(fc->function_name, kAggregateNames[i]) == 0) return true;
+    }
+    return false;
+}
+static bool ast_contains_aggregate(const ast_node *expr) {
+    if (!expr) return false;
+    if (ast_is_aggregate_func(expr)) return true;
+    switch (expr->type) {
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            return ast_contains_aggregate(b->left) || ast_contains_aggregate(b->right);
+        }
+        case AST_NODE_NOT_EXPR:
+            return ast_contains_aggregate(((const cypher_not_expr *)expr)->expr);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (f->args) {
+                for (int i = 0; i < f->args->count; i++) {
+                    if (ast_contains_aggregate(f->args->items[i])) return true;
+                }
+            }
+            return false;
+        }
+        case AST_NODE_PROPERTY:
+            return ast_contains_aggregate(((const cypher_property *)expr)->expr);
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            return ast_contains_aggregate(s->expr) || ast_contains_aggregate(s->index);
+        }
+        default:
+            return false;
+    }
+}
+/* Walk `expr` and gather identifier names referenced OUTSIDE of any
+ * aggregate call. Properties contribute their base identifier name. */
+static void collect_free_var_names(const ast_node *expr, name_set *out) {
+    if (!expr) return;
+    if (ast_is_aggregate_func(expr)) return;  /* inside-agg is fine */
+    if (expr->type == AST_NODE_IDENTIFIER) {
+        nset_add(out, ((const cypher_identifier *)expr)->name);
+        return;
+    }
+    if (expr->type == AST_NODE_PROPERTY) {
+        const cypher_property *p = (const cypher_property *)expr;
+        if (p->expr && p->expr->type == AST_NODE_IDENTIFIER) {
+            nset_add(out, ((const cypher_identifier *)p->expr)->name);
+        } else if (p->expr) {
+            collect_free_var_names(p->expr, out);
+        }
+        return;
+    }
+    switch (expr->type) {
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            collect_free_var_names(b->left, out);
+            collect_free_var_names(b->right, out);
+            return;
+        }
+        case AST_NODE_NOT_EXPR:
+            collect_free_var_names(((const cypher_not_expr *)expr)->expr, out);
+            return;
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (f->args) {
+                for (int i = 0; i < f->args->count; i++) {
+                    collect_free_var_names(f->args->items[i], out);
+                }
+            }
+            return;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            collect_free_var_names(s->expr, out);
+            collect_free_var_names(s->index, out);
+            return;
+        }
+        default: return;
+    }
+}
+/* Gather names introduced as "grouping keys" by a list of return/with
+ * items: a bare identifier item like `RETURN me` or `me AS m`, OR
+ * a bare property item like `RETURN me.age` / `me.age AS age`. The
+ * alias (if present) and the base identifier both count. */
+static void collect_grouping_keys(ast_list *items, name_set *out) {
+    if (!items) return;
+    for (int i = 0; i < items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)items->items[i];
+        if (!it || !it->expr) continue;
+        /* Skip items that ARE aggregates — they aren't grouping keys. */
+        if (ast_is_aggregate_func(it->expr)) continue;
+        if (ast_contains_aggregate(it->expr)) continue;
+        /* Bare identifier or property access -> contributes a grouping key. */
+        if (it->expr->type == AST_NODE_IDENTIFIER) {
+            nset_add(out, ((cypher_identifier *)it->expr)->name);
+        } else if (it->expr->type == AST_NODE_PROPERTY) {
+            const cypher_property *p = (const cypher_property *)it->expr;
+            if (p->expr && p->expr->type == AST_NODE_IDENTIFIER) {
+                nset_add(out, ((cypher_identifier *)p->expr)->name);
+            }
+        }
+        if (it->alias) nset_add(out, it->alias);
+    }
+}
+/* NonConstantExpression: aggregate functions whose argument contains a
+ * non-deterministic call (rand/random/timestamp). Walk the expression
+ * tree and check each aggregate's arguments. Return6 [15]. */
+static int check_nonconstant_in_aggregate(const ast_node *expr,
+                                          char **error_message)
+{
+    if (!expr) return 0;
+    if (ast_is_aggregate_func(expr)) {
+        const cypher_function_call *f = (const cypher_function_call *)expr;
+        if (f->args) {
+            for (int i = 0; i < f->args->count; i++) {
+                if (ast_contains_nondeterministic(f->args->items[i])) {
+                    set_error(error_message,
+                              "SyntaxError: NonConstantExpression: "
+                              "aggregate function `%s` does not accept a non-deterministic "
+                              "expression (rand/random/etc.) as an argument",
+                              f->function_name);
+                    return -1;
+                }
+            }
+        }
+    }
+    /* Recurse into sub-expressions. */
+    switch (expr->type) {
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            if (check_nonconstant_in_aggregate(b->left, error_message) < 0) return -1;
+            return check_nonconstant_in_aggregate(b->right, error_message);
+        }
+        case AST_NODE_NOT_EXPR:
+            return check_nonconstant_in_aggregate(((const cypher_not_expr *)expr)->expr, error_message);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (f->args) {
+                for (int i = 0; i < f->args->count; i++) {
+                    if (check_nonconstant_in_aggregate(f->args->items[i], error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_PROPERTY:
+            return check_nonconstant_in_aggregate(((const cypher_property *)expr)->expr, error_message);
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            if (check_nonconstant_in_aggregate(s->expr, error_message) < 0) return -1;
+            return check_nonconstant_in_aggregate(s->index, error_message);
+        }
+        default: return 0;
+    }
+}
+
+/* AmbiguousAggregationExpression: an expression that mixes an aggregate
+ * call with free variable references that aren't grouping keys. */
+static int check_ambiguous_aggregation(const ast_node *expr,
+                                       const name_set *grouping_keys,
+                                       char **error_message)
+{
+    if (!expr) return 0;
+    /* Nothing to check if the expression itself is bare or a top-level aggregate. */
+    if (ast_is_aggregate_func(expr)) return 0;
+    if (expr->type == AST_NODE_IDENTIFIER) return 0;
+    if (expr->type == AST_NODE_PROPERTY) return 0;
+    if (!ast_contains_aggregate(expr)) return 0;
+    /* Has an aggregate inside a larger expression. Gather free var refs
+     * and check that all of them are grouping keys. */
+    name_set free_vars; nset_init(&free_vars);
+    collect_free_var_names(expr, &free_vars);
+    for (int i = 0; i < free_vars.count; i++) {
+        if (!nset_contains(grouping_keys, free_vars.names[i])) {
+            set_error(error_message,
+                      "SyntaxError: AmbiguousAggregationExpression: "
+                      "`%s` is not a grouping key but is used outside an aggregate function",
+                      free_vars.names[i]);
+            nset_free(&free_vars);
+            return -1;
+        }
+    }
+    nset_free(&free_vars);
+    return 0;
+}
+
+/* Recursive walker for ORDER BY: accept if every non-aggregate free
+ * reference is in `available` or, in property-path form,
+ * `available_props`. Skips inside aggregate calls — but the aggregate
+ * itself must be one whose function name appears in the projection
+ * (passed as `projected_agg_names`); otherwise it's a "new" aggregate
+ * which is invalid in restricted mode. */
+static int order_by_walk_check(const ast_node *expr,
+                               const name_set *available,
+                               const name_set *available_props,
+                               const name_set *projected_agg_names,
+                               char **error_message)
+{
+    if (!expr) return 0;
+    if (ast_is_aggregate_func(expr)) {
+        /* WithOrderBy4 [13]/[14]: ORDER BY introduces a NEW aggregate
+         * not present in the projection. Per spec, ORDER BY in restricted
+         * mode can only re-use projection-aggregates. */
+        const cypher_function_call *fc = (const cypher_function_call *)expr;
+        if (fc->function_name && projected_agg_names &&
+            !nset_contains(projected_agg_names, fc->function_name)) {
+            set_error(error_message,
+                "SyntaxError: UndefinedVariable: ORDER BY introduces aggregate `%s` "
+                "that is not in the projection",
+                fc->function_name);
+            return -1;
+        }
+        return 0;
+    }
+    if (expr->type == AST_NODE_IDENTIFIER) {
+        const char *n = ((const cypher_identifier *)expr)->name;
+        if (!nset_contains(available, n)) {
+            set_error(error_message,
+                      "SyntaxError: UndefinedVariable: `%s` is not defined in this scope "
+                      "(ORDER BY can only reference projected columns when DISTINCT or "
+                      "aggregation is used)", n);
+            return -1;
+        }
+        return 0;
+    }
+    if (expr->type == AST_NODE_PROPERTY) {
+        const cypher_property *p = (const cypher_property *)expr;
+        /* Accept full-path match. */
+        if (p->expr && p->expr->type == AST_NODE_IDENTIFIER && p->property_name) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s.%s",
+                     ((const cypher_identifier *)p->expr)->name, p->property_name);
+            if (nset_contains(available_props, path)) return 0;
+        }
+        /* Otherwise recurse into the base. */
+        return order_by_walk_check(p->expr, available, available_props, projected_agg_names, error_message);
+    }
+    switch (expr->type) {
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            if (order_by_walk_check(b->left, available, available_props, projected_agg_names, error_message) < 0) return -1;
+            return order_by_walk_check(b->right, available, available_props, projected_agg_names, error_message);
+        }
+        case AST_NODE_NOT_EXPR:
+            return order_by_walk_check(((const cypher_not_expr *)expr)->expr, available, available_props, projected_agg_names, error_message);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            if (f->args) {
+                for (int i = 0; i < f->args->count; i++) {
+                    if (order_by_walk_check(f->args->items[i], available, available_props, projected_agg_names, error_message) < 0) return -1;
+                }
+            }
+            return 0;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)expr;
+            if (order_by_walk_check(s->expr, available, available_props, projected_agg_names, error_message) < 0) return -1;
+            return order_by_walk_check(s->index, available, available_props, projected_agg_names, error_message);
+        }
+        default:
+            return 0;
+    }
+}
+
+/* Validate ORDER BY items against a projection. With DISTINCT or any
+ * aggregation in the projection, ORDER BY can only reference projected
+ * columns (aliases or bare identifiers/properties projected). Free
+ * references to pre-projection variables become UndefinedVariable.
+ *
+ * Without DISTINCT or aggregation, pre-projection variables remain
+ * visible — bypass the check.
+ *
+ * Covers ReturnOrderBy2 [13], ReturnOrderBy6 [4]/[5], WithOrderBy4
+ * [13]/[14]/[19], etc.
+ */
+static int validate_order_by_with_projection(ast_list *order_by,
+                                              ast_list *projection,
+                                              bool distinct,
+                                              char **error_message)
+{
+    if (!order_by || !projection) return 0;
+    /* Are we in restricted mode? */
+    bool any_aggregate = false;
+    for (int i = 0; i < projection->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)projection->items[i];
+        if (it && it->expr && ast_contains_aggregate(it->expr)) {
+            any_aggregate = true;
+            break;
+        }
+    }
+    if (!distinct && !any_aggregate) return 0;
+
+    /* Collect names available to ORDER BY in restricted mode:
+     *   - explicit aliases of any projection item
+     *   - bare identifiers (RETURN n -> "n" is available)
+     *
+     * Bare property projections (RETURN a.name) do NOT expose `a` as
+     * a whole — DISTINCT may collapse rows that share a.name but
+     * differ on other a properties, so a.age in ORDER BY is undefined.
+     * They DO expose the specific path: tracked separately in
+     * `available_props` as "base.prop" strings. */
+    name_set available; nset_init(&available);
+    name_set available_props; nset_init(&available_props);
+    /* Aggregate function names that appear at top-level in the
+     * projection. ORDER BY may only repeat aggregates that match
+     * these names; introducing a new aggregate (sum(x) when
+     * projection has min(x)) is invalid. */
+    name_set projected_agg_names; nset_init(&projected_agg_names);
+    /* Storage for synthesized "base.prop" strings — kept alive while
+     * we run the order-by walk, then freed below. */
+    char **prop_storage = NULL;
+    int prop_storage_count = 0;
+    int prop_storage_cap = 0;
+    for (int i = 0; i < projection->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)projection->items[i];
+        if (!it || !it->expr) continue;
+        if (it->alias) nset_add(&available, it->alias);
+        if (it->expr->type == AST_NODE_IDENTIFIER) {
+            nset_add(&available, ((cypher_identifier *)it->expr)->name);
+        } else if (it->expr->type == AST_NODE_PROPERTY) {
+            const cypher_property *p = (const cypher_property *)it->expr;
+            if (p->expr && p->expr->type == AST_NODE_IDENTIFIER && p->property_name) {
+                const char *base = ((cypher_identifier *)p->expr)->name;
+                size_t len = strlen(base) + 1 + strlen(p->property_name) + 1;
+                char *s = malloc(len);
+                if (s) {
+                    snprintf(s, len, "%s.%s", base, p->property_name);
+                    if (prop_storage_count >= prop_storage_cap) {
+                        prop_storage_cap = prop_storage_cap ? prop_storage_cap * 2 : 8;
+                        prop_storage = realloc(prop_storage, prop_storage_cap * sizeof(char*));
+                    }
+                    prop_storage[prop_storage_count++] = s;
+                    nset_add(&available_props, s);
+                }
+            }
+        }
+        /* Catch top-level aggregate calls in the projection — their
+         * function name is what ORDER BY is allowed to reuse. */
+        if (ast_is_aggregate_func(it->expr)) {
+            const cypher_function_call *fc = (const cypher_function_call *)it->expr;
+            if (fc->function_name) nset_add(&projected_agg_names, fc->function_name);
+        }
+    }
+
+    int rc = 0;
+    for (int i = 0; i < order_by->count && rc == 0; i++) {
+        cypher_order_by_item *obi = (cypher_order_by_item *)order_by->items[i];
+        if (!obi || !obi->expr) continue;
+        rc = order_by_walk_check(obi->expr, &available, &available_props,
+                                  &projected_agg_names, error_message);
+    }
+    nset_free(&available);
+    nset_free(&available_props);
+    nset_free(&projected_agg_names);
+    for (int i = 0; i < prop_storage_count; i++) free(prop_storage[i]);
+    free(prop_storage);
+    return rc;
+}
+
 /* Walk a clause's expressions with the given var-type context, also
  * picking up new var bindings from WITH items along the way. */
 static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
@@ -580,6 +1268,9 @@ static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
 {
     if (!ret) return 0;
     if (ret->items) {
+        /* Collect grouping keys for ambiguous-aggregation detection. */
+        name_set grouping_keys; nset_init(&grouping_keys);
+        collect_grouping_keys(ret->items, &grouping_keys);
         /* Duplicate explicit aliases in RETURN are a ColumnNameConflict. */
         name_set seen; nset_init(&seen);
         for (int i = 0; i < ret->items->count; i++) {
@@ -597,6 +1288,7 @@ static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
                 set_error(error_message,
                           "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in RETURN");
                 nset_free(&seen);
+                nset_free(&grouping_keys);
                 return -1;
             }
             if (item->alias) {
@@ -605,17 +1297,26 @@ static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
                               "SyntaxError: ColumnNameConflict: Multiple result columns with the same name `%s`",
                               item->alias);
                     nset_free(&seen);
+                    nset_free(&grouping_keys);
                     return -1;
                 }
                 nset_add(&seen, item->alias);
             }
             if (item->expr) {
-                if (validate_expr(item->expr, error_message) < 0) { nset_free(&seen); return -1; }
-                if (validate_expr_typed(item->expr, vctx, error_message) < 0) { nset_free(&seen); return -1; }
+                if (validate_expr(item->expr, error_message) < 0) { nset_free(&seen); nset_free(&grouping_keys); return -1; }
+                if (validate_expr_typed(item->expr, vctx, error_message) < 0) { nset_free(&seen); nset_free(&grouping_keys); return -1; }
+                if (check_ambiguous_aggregation(item->expr, &grouping_keys, error_message) < 0) {
+                    nset_free(&seen); nset_free(&grouping_keys); return -1;
+                }
+                if (check_nonconstant_in_aggregate(item->expr, error_message) < 0) {
+                    nset_free(&seen); nset_free(&grouping_keys); return -1;
+                }
             }
         }
         nset_free(&seen);
+        nset_free(&grouping_keys);
     }
+    if (validate_order_by_with_projection(ret->order_by, ret->items, ret->distinct, error_message) < 0) return -1;
     if (validate_skip_limit(ret->skip, "SKIP", error_message) < 0) return -1;
     if (validate_skip_limit(ret->limit, "LIMIT", error_message) < 0) return -1;
     return 0;
@@ -626,6 +1327,9 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
 {
     if (!with) return 0;
     if (with->items) {
+        /* Collect grouping keys for ambiguous-aggregation detection. */
+        name_set grouping_keys; nset_init(&grouping_keys);
+        collect_grouping_keys(with->items, &grouping_keys);
         /* Duplicate aliases in WITH are a ColumnNameConflict. */
         name_set seen; nset_init(&seen);
         for (int i = 0; i < with->items->count; i++) {
@@ -640,6 +1344,7 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
                 set_error(error_message,
                           "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in WITH");
                 nset_free(&seen);
+                nset_free(&grouping_keys);
                 return -1;
             }
             /* Every non-identifier expression in WITH must be aliased.
@@ -649,6 +1354,7 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
                 set_error(error_message,
                           "SyntaxError: NoExpressionAlias: every WITH item that is not a bare variable must be aliased");
                 nset_free(&seen);
+                nset_free(&grouping_keys);
                 return -1;
             }
             if (item->alias) {
@@ -657,12 +1363,19 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
                               "SyntaxError: ColumnNameConflict: Multiple result columns with the same name `%s`",
                               item->alias);
                     nset_free(&seen);
+                    nset_free(&grouping_keys);
                     return -1;
                 }
                 nset_add(&seen, item->alias);
             }
-            if (validate_expr(item->expr, error_message) < 0) { nset_free(&seen); return -1; }
-            if (validate_expr_typed(item->expr, vctx_out, error_message) < 0) { nset_free(&seen); return -1; }
+            if (validate_expr(item->expr, error_message) < 0) { nset_free(&seen); nset_free(&grouping_keys); return -1; }
+            if (validate_expr_typed(item->expr, vctx_out, error_message) < 0) { nset_free(&seen); nset_free(&grouping_keys); return -1; }
+            if (check_ambiguous_aggregation(item->expr, &grouping_keys, error_message) < 0) {
+                nset_free(&seen); nset_free(&grouping_keys); return -1;
+            }
+            if (check_nonconstant_in_aggregate(item->expr, error_message) < 0) {
+                nset_free(&seen); nset_free(&grouping_keys); return -1;
+            }
             /* Track the alias's bound type for downstream clauses. */
             if (item->alias) {
                 vctx_register(vctx_out, item->alias,
@@ -670,11 +1383,13 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
             }
         }
         nset_free(&seen);
+        nset_free(&grouping_keys);
     }
     if (with->where) {
         if (validate_expr(with->where, error_message) < 0) return -1;
         if (validate_expr_typed(with->where, vctx_out, error_message) < 0) return -1;
     }
+    if (validate_order_by_with_projection(with->order_by, with->items, with->distinct, error_message) < 0) return -1;
     if (validate_skip_limit(with->skip, "SKIP", error_message) < 0) return -1;
     if (validate_skip_limit(with->limit, "LIMIT", error_message) < 0) return -1;
     return 0;
@@ -685,6 +1400,23 @@ static int validate_match_clause(cypher_match *match, const var_type_ctx *vctx,
 {
     if (!match) return 0;
     if (match->where) {
+        /* Pattern1 [11]: `MATCH (n) WHERE (n) RETURN n`. After paren
+         * stripping the WHERE expression is the bare identifier `n`,
+         * which is a Node — not a valid Boolean predicate. Raise
+         * InvalidArgumentType. */
+        if (match->where->type == AST_NODE_IDENTIFIER) {
+            cypher_identifier *id = (cypher_identifier *)match->where;
+            var_type vt = vctx_lookup(vctx, id->name);
+            if (vt == VTYPE_NODE || vt == VTYPE_EDGE || vt == VTYPE_PATH) {
+                char buf[200];
+                snprintf(buf, sizeof(buf),
+                         "SyntaxError: InvalidArgumentType: Type mismatch: expected Boolean but was %s",
+                         vt == VTYPE_NODE ? "Node" :
+                         vt == VTYPE_EDGE ? "Relationship" : "Path");
+                set_error(error_message, "%s", buf);
+                return -1;
+            }
+        }
         if (validate_expr(match->where, error_message) < 0) return -1;
         if (validate_expr_typed(match->where, vctx, error_message) < 0) return -1;
     }
@@ -757,6 +1489,30 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
     if (expr->type == AST_NODE_EXISTS_EXPR) {
         cypher_exists_expr *ex = (cypher_exists_expr *)expr;
         if (ex->expr_type == EXISTS_TYPE_PATTERN && ex->expr.pattern) {
+            /* Pattern1 [11]: `WHERE (n)` — pattern predicate with a
+             * single-node path (no relationships). openCypher requires
+             * pattern predicates to have at least one relationship;
+             * otherwise the predicate is meaningless ("does n exist?"
+             * but n is already bound by MATCH). Raise InvalidArgumentType. */
+            for (int i = 0; i < ex->expr.pattern->count; i++) {
+                ast_node *path_node = ex->expr.pattern->items[i];
+                if (path_node && path_node->type == AST_NODE_PATH) {
+                    cypher_path *p = (cypher_path *)path_node;
+                    int rel_count = 0;
+                    if (p->elements) {
+                        for (int j = 0; j < p->elements->count; j++) {
+                            ast_node *el = p->elements->items[j];
+                            if (el && el->type == AST_NODE_REL_PATTERN) rel_count++;
+                        }
+                    }
+                    if (rel_count == 0) {
+                        set_error(error_message,
+                                  "SyntaxError: InvalidArgumentType: "
+                                  "pattern predicate in WHERE must contain at least one relationship");
+                        return -1;
+                    }
+                }
+            }
             for (int i = 0; i < ex->expr.pattern->count; i++) {
                 if (validate_where_pattern_vars(ex->expr.pattern->items[i], bound, error_message) < 0) return -1;
             }
@@ -998,20 +1754,31 @@ static int check_undef_in_expr(ast_node *expr, const name_set *bound,
 }
 
 /* Walk every property-map value in a CREATE/MERGE pattern checking for
- * identifier references that aren't bound. Pattern variables being
- * introduced by this same clause are NOT in `bound` yet — that matches
- * Cypher scoping (you can't reference a sibling variable being
- * introduced in the same write clause). */
+ * identifier references that aren't bound. Per openCypher: variables
+ * bound in an earlier path of the same CREATE are in scope for later
+ * paths. We process paths in order and merge each path's bindings
+ * into a local copy of `bound` before validating the next path —
+ * forward references work, backward references don't. (With2 [1],
+ * WithSkipLimit1 [1].) */
 static int validate_write_undef_in_props(ast_list *patterns, const name_set *bound,
                                          const char *kw, char **error_message)
 {
     if (!patterns) return 0;
+    /* Local name set seeded with the inherited bound vars, extended
+     * as we walk each path. */
+    name_set local_bound; nset_init(&local_bound);
+    if (bound) {
+        for (int i = 0; i < bound->count; i++) {
+            if (bound->names[i]) nset_add(&local_bound, bound->names[i]);
+        }
+    }
+    int rc = 0;
     for (int pi = 0; pi < patterns->count; pi++) {
         ast_node *pn = patterns->items[pi];
         if (!pn || pn->type != AST_NODE_PATH) continue;
         cypher_path *p = (cypher_path *)pn;
         if (!p->elements) continue;
-        for (int ei = 0; ei < p->elements->count; ei++) {
+        for (int ei = 0; ei < p->elements->count && rc == 0; ei++) {
             ast_node *el = p->elements->items[ei];
             if (!el) continue;
             ast_node *props = NULL;
@@ -1020,14 +1787,30 @@ static int validate_write_undef_in_props(ast_list *patterns, const name_set *bou
             if (!props || props->type != AST_NODE_MAP) continue;
             cypher_map *m = (cypher_map *)props;
             if (!m->pairs) continue;
-            for (int i = 0; i < m->pairs->count; i++) {
+            for (int i = 0; i < m->pairs->count && rc == 0; i++) {
                 cypher_map_pair *pair = (cypher_map_pair *)m->pairs->items[i];
                 if (!pair || !pair->value) continue;
-                if (check_undef_in_expr(pair->value, bound, kw, error_message) < 0) return -1;
+                if (check_undef_in_expr(pair->value, &local_bound, kw, error_message) < 0) rc = -1;
+            }
+        }
+        /* Now add this path's bindings so later paths can reference them. */
+        if (rc == 0 && p->var_name) nset_add(&local_bound, p->var_name);
+        if (rc == 0) {
+            for (int ei = 0; p->elements && ei < p->elements->count; ei++) {
+                ast_node *el = p->elements->items[ei];
+                if (!el) continue;
+                if (el->type == AST_NODE_NODE_PATTERN) {
+                    cypher_node_pattern *np = (cypher_node_pattern *)el;
+                    if (np->variable) nset_add(&local_bound, np->variable);
+                } else if (el->type == AST_NODE_REL_PATTERN) {
+                    cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+                    if (rp->variable) nset_add(&local_bound, rp->variable);
+                }
             }
         }
     }
-    return 0;
+    nset_free(&local_bound);
+    return rc;
 }
 
 /* Reject NULL literals in CREATE/MERGE property maps. openCypher
@@ -1105,15 +1888,15 @@ static int validate_write_rel_patterns(ast_list *patterns, const char *kw,
                           kw);
                 return -1;
             }
-            /* CREATE/MERGE requires exactly one direction (left XOR right).
-             * Undirected `()-[:T]-()` and bidirectional `()<-[:T]->()`
-             * both error per openCypher. (MERGE-undirected is technically
-             * legal per Cypher 9 spec — matches any direction, defaults
-             * to outgoing on create — but the executor doesn't yet
-             * implement that semantic correctly, and tests that *would*
-             * exercise it currently regress more than the syntax check
-             * helps. Re-enable per-kw once executor supports it.) */
-            if (rp->left_arrow == rp->right_arrow) {
+            /* CREATE requires a single explicit direction.
+             * MERGE allows undirected `()-[:T]-()` per Cypher 9 spec —
+             * match in either direction, default to outgoing if a new
+             * rel must be created. Bidirectional `()<-[:T]->()` is
+             * still rejected for both. */
+            bool undirected = (!rp->left_arrow && !rp->right_arrow);
+            bool bidirectional = (rp->left_arrow && rp->right_arrow);
+            if (bidirectional ||
+                (undirected && strcasecmp(kw, "CREATE") == 0)) {
                 set_error(error_message,
                           "SyntaxError: RequiresDirectedRelationship: %s requires a directed relationship",
                           kw);
@@ -1341,9 +2124,12 @@ int transform_validate_query(cypher_query *query, char **error_message)
             }
             case AST_NODE_MATCH: {
                 cypher_match *m = (cypher_match *)clause;
-                rc = validate_match_clause(m, &vctx, error_message);
+                /* Register the MATCH pattern's variable types BEFORE
+                 * validating its WHERE expression, so type-aware checks
+                 * (e.g. "WHERE n where n is a node") can see n's type. */
                 collect_pattern_names(m->pattern, &bound);
                 register_pattern_kinds(m->pattern, &vctx);
+                rc = validate_match_clause(m, &vctx, error_message);
                 /* WHERE patterns may not introduce fresh variables — every
                  * var in a pattern predicate must already be bound. Run
                  * after collect_pattern_names so the current MATCH's own

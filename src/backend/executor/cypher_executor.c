@@ -36,8 +36,41 @@ static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_valu
         sqlite3_result_null(context);
         return;
     }
-
     int len = sqlite3_value_bytes(argv[0]);
+
+    /* Cypher reverse() is type-overloaded: reverses strings AND lists.
+     * If the value is a JSON array (starts with '['), reverse the
+     * elements via SQLite's json layer rather than treating the value
+     * as a flat text string (which would produce ']2,1[' for
+     * reverse([1,2])). */
+    if (len > 0 && input[0] == '[') {
+        sqlite3 *db = sqlite3_context_db_handle(context);
+        sqlite3_stmt *stmt = NULL;
+        /* Use json_each.rowid to step backwards. Wrap each element
+         * with json() when it's a JSON container so nested arrays/
+         * maps embed instead of being string-quoted. */
+        const char *sql =
+            "SELECT json_group_array("
+            "  CASE WHEN type IN ('array','object') THEN json(value) ELSE value END"
+            ") FROM (SELECT type, value FROM json_each(?1) ORDER BY rowid DESC)";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_value(stmt, 1, argv[0]);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char *out = (const char*)sqlite3_column_text(stmt, 0);
+                if (out) {
+                    sqlite3_result_text(context, out, -1, SQLITE_TRANSIENT);
+                } else {
+                    sqlite3_result_null(context);
+                }
+            } else {
+                sqlite3_result_null(context);
+            }
+            sqlite3_finalize(stmt);
+            return;
+        }
+        /* On prepare failure fall through to text reverse — best effort. */
+    }
+
     char *result = sqlite3_malloc(len + 1);
     if (!result) {
         sqlite3_result_error_nomem(context);

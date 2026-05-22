@@ -77,6 +77,22 @@ static const char *find_aggregating_call(ast_node *expr)
                 if (r) return r;
             }
         }
+    } else if (expr->type == AST_NODE_MAP) {
+        cypher_map *m = (cypher_map*)expr;
+        if (m->pairs) {
+            for (int i = 0; i < m->pairs->count; i++) {
+                cypher_map_pair *mp = (cypher_map_pair*)m->pairs->items[i];
+                if (mp) {
+                    const char *r = find_aggregating_call(mp->value);
+                    if (r) return r;
+                }
+            }
+        }
+    } else if (expr->type == AST_NODE_SUBSCRIPT) {
+        cypher_subscript *s = (cypher_subscript*)expr;
+        const char *r = find_aggregating_call(s->expr);
+        if (r) return r;
+        return find_aggregating_call(s->index);
     }
     return NULL;
 }
@@ -270,6 +286,13 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         saved_cte_count = ctx->unified_builder->cte_count;
     }
 
+    /* T-0310: preserve raw_output (DML from a prior SET/DELETE/REMOVE)
+     * across the builder reset so MATCH+SET+WITH+... keeps the SET. */
+    char *saved_raw = NULL;
+    if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
+        saved_raw = strdup(dbuf_get(&ctx->unified_builder->raw_output));
+    }
+
     /* Build SELECT columns from WITH items */
     dynamic_buffer col_buf;
     dbuf_init(&col_buf);
@@ -350,18 +373,31 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
                     bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
                     const char *id_suffix = (is_projected || alias_is_id) ? "" : ".id";
-                    /* Use COALESCE with all property tables - order int/real first to preserve type */
+                    /* T-0313: edge-aware property lookup. Pre-fix this
+                     * branch always used node_props_* / node_id, breaking
+                     * WITH r.<prop> AS x for edge variables. Unlocks
+                     * Delete6 [12]/[13]/[14] and Remove3 [19]/[21]
+                     * family.
+                     *
+                     * Use COALESCE with all property tables - order
+                     * int/real first to preserve type. */
+                    bool is_edge_var = transform_var_is_edge(ctx->var_ctx, id->name);
+                    const char *p_int = is_edge_var ? "edge_props_int" : "node_props_int";
+                    const char *p_real = is_edge_var ? "edge_props_real" : "node_props_real";
+                    const char *p_text = is_edge_var ? "edge_props_text" : "node_props_text";
+                    const char *p_bool = is_edge_var ? "edge_props_bool" : "node_props_bool";
+                    const char *entity_col = is_edge_var ? "edge_id" : "node_id";
                     dbuf_appendf(&col_buf,
                         "(SELECT COALESCE("
-                        "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = '%s'), "
-                        "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = '%s'), "
-                        "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = '%s'), "
-                        "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = '%s')"
+                        "(SELECT npi.value FROM %s npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.%s = %s%s AND pk.key = '%s'), "
+                        "(SELECT npr.value FROM %s npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.%s = %s%s AND pk.key = '%s'), "
+                        "(SELECT npt.value FROM %s npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.%s = %s%s AND pk.key = '%s'), "
+                        "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %s npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.%s = %s%s AND pk.key = '%s')"
                         ")) AS %s",
-                        alias, id_suffix, prop->property_name,
-                        alias, id_suffix, prop->property_name,
-                        alias, id_suffix, prop->property_name,
-                        alias, id_suffix, prop->property_name,
+                        p_int, entity_col, alias, id_suffix, prop->property_name,
+                        p_real, entity_col, alias, id_suffix, prop->property_name,
+                        p_text, entity_col, alias, id_suffix, prop->property_name,
+                        p_bool, entity_col, alias, id_suffix, prop->property_name,
                         ({ static char _idbuf[128]; sql_ident(_idbuf, sizeof(_idbuf), col_name); }));
                     /* Add the projected column name to GROUP BY (not node id) */
                     if (group_count > 0) {
@@ -464,6 +500,14 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             ctx->sql_size = saved_size;
             strcpy(ctx->sql_buffer, saved_buffer);
             free(saved_buffer);
+
+            /* Check for nested aggregates (e.g. `age + count(x)` or
+             * `{kids: collect(x)}`). Without this, the implicit GROUP BY
+             * isn't emitted and a grouped-aggregate-on-empty produces 1
+             * all-null row instead of 0 rows. (With6 [6]/[7].) */
+            if (find_aggregating_call(item->expr) != NULL) {
+                has_aggregate = true;
+            }
         }
     }
 
@@ -522,6 +566,11 @@ with_star_columns_done:
         dbuf_append(&ctx->unified_builder->cte, saved_cte);
         ctx->unified_builder->cte_count = saved_cte_count;
         free(saved_cte);
+    }
+    /* T-0310: restore raw_output so subsequent clauses keep the DML. */
+    if (saved_raw) {
+        dbuf_append(&ctx->unified_builder->raw_output, saved_raw);
+        free(saved_raw);
     }
 
     /* Add CTE to unified builder */

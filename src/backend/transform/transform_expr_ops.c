@@ -287,14 +287,20 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     }
 
     /* Handle STARTS WITH operator — case-sensitive prefix match.
-     * Spec returns NULL when either operand is not a string. Use the
-     * typeof() guard to gate the substr comparison; otherwise NULL. */
+     * Spec returns NULL when either operand is not a string. List/map
+     * operands look like 'text' via typeof() because they're stored as
+     * JSON — exclude values starting with '[' or '{' so
+     * `[] STARTS WITH []` is null, not a textual match. (String8 [8]) */
     if (binary_op->op_type == BINARY_OP_STARTS_WITH) {
         append_sql(ctx, "(CASE WHEN typeof(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
-        append_sql(ctx, ") = 'text' AND typeof(");
+        append_sql(ctx, ") = 'text' AND substr(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", 1, 1) NOT IN ('[', '{') AND typeof(");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
-        append_sql(ctx, ") = 'text' THEN substr(");
+        append_sql(ctx, ") = 'text' AND substr(");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ", 1, 1) NOT IN ('[', '{') THEN substr(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", 1, length(");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
@@ -306,13 +312,17 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
     }
 
     /* Handle ENDS WITH operator — case-sensitive suffix match.
-     * Same NULL-on-non-string semantics as STARTS WITH. */
+     * Same NULL-on-non-string semantics as STARTS WITH (String9 [8]). */
     if (binary_op->op_type == BINARY_OP_ENDS_WITH) {
         append_sql(ctx, "(CASE WHEN typeof(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
-        append_sql(ctx, ") = 'text' AND typeof(");
+        append_sql(ctx, ") = 'text' AND substr(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", 1, 1) NOT IN ('[', '{') AND typeof(");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
-        append_sql(ctx, ") = 'text' THEN substr(");
+        append_sql(ctx, ") = 'text' AND substr(");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ", 1, 1) NOT IN ('[', '{') THEN substr(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", length(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
@@ -325,17 +335,51 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
-    /* Handle CONTAINS operator - case-sensitive substring match. */
+    /* Handle CONTAINS operator - case-sensitive substring match.
+     * openCypher: non-string operands (numbers, booleans, lists, maps,
+     * nulls) yield NULL. Lists/maps are represented as JSON text here,
+     * so the typeof='text' check alone wasn't enough — exclude values
+     * whose first character is '[' or '{' (json container shape) so
+     * `[] CONTAINS []` returns null, not true. (String10 [8] et al.) */
     if (binary_op->op_type == BINARY_OP_CONTAINS) {
         append_sql(ctx, "(CASE WHEN typeof(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
-        append_sql(ctx, ") = 'text' AND typeof(");
+        append_sql(ctx, ") = 'text' AND substr(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", 1, 1) NOT IN ('[', '{') AND typeof(");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
-        append_sql(ctx, ") = 'text' THEN INSTR(");
+        append_sql(ctx, ") = 'text' AND substr(");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ", 1, 1) NOT IN ('[', '{') THEN INSTR(");
         if (transform_expression(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", ");
         if (transform_expression(ctx, binary_op->right) < 0) return -1;
         append_sql(ctx, ") > 0 ELSE NULL END)");
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
+    /* T-0308: cross-type ordering comparison returns null per the
+     * openCypher spec. Route LT/GT/LTE/GTE through the runtime UDF
+     * `_gql_order_cmp(left, right, op_str)` — that function checks
+     * the SQLite type classes (numeric / text-not-JSON / boolean)
+     * and returns null on mismatch. Each operand is transformed
+     * exactly once, so we don't trip over transform_expression's
+     * side effects (pending_prop_joins / alias counter / etc.). */
+    if (is_order_cmp) {
+        const char *op_sql = NULL;
+        switch (binary_op->op_type) {
+            case BINARY_OP_LT:  op_sql = "<";  break;
+            case BINARY_OP_GT:  op_sql = ">";  break;
+            case BINARY_OP_LTE: op_sql = "<="; break;
+            case BINARY_OP_GTE: op_sql = ">="; break;
+            default: break;
+        }
+        append_sql(ctx, "_gql_order_cmp(");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ", ");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ", '%s')", op_sql);
         ctx->in_comparison = was_in_comparison;
         return 0;
     }

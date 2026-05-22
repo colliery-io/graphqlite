@@ -183,23 +183,31 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                 dynamic_buffer cond;
                                 dbuf_init(&cond);
 
+                                /* T-0307 follow-on: use get_node_id_ref so a
+                                 * WITH-bound node's alias (a column reference
+                                 * like _with_0.a) is used directly instead of
+                                 * appending an invalid `.id` suffix. */
+                                char node_id_ref[256];
+                                snprintf(node_id_ref, sizeof(node_id_ref), "%s",
+                                         get_node_id_ref(ctx, alias, node->variable));
+
                                 if (lit->literal_type == LITERAL_NULL) {
                                     /* Key should not exist on the node (in any scalar table). */
                                     dbuf_appendf(&cond,
                                         "NOT EXISTS(SELECT 1 FROM node_props_text npt "
                                         "JOIN property_keys pk ON npt.key_id = pk.id "
-                                        "WHERE npt.node_id = %s.id AND pk.key = '%s') AND "
+                                        "WHERE npt.node_id = %s AND pk.key = '%s') AND "
                                         "NOT EXISTS(SELECT 1 FROM node_props_int npi "
                                         "JOIN property_keys pk ON npi.key_id = pk.id "
-                                        "WHERE npi.node_id = %s.id AND pk.key = '%s') AND "
+                                        "WHERE npi.node_id = %s AND pk.key = '%s') AND "
                                         "NOT EXISTS(SELECT 1 FROM node_props_real npr "
                                         "JOIN property_keys pk ON npr.key_id = pk.id "
-                                        "WHERE npr.node_id = %s.id AND pk.key = '%s') AND "
+                                        "WHERE npr.node_id = %s AND pk.key = '%s') AND "
                                         "NOT EXISTS(SELECT 1 FROM node_props_bool npb "
                                         "JOIN property_keys pk ON npb.key_id = pk.id "
-                                        "WHERE npb.node_id = %s.id AND pk.key = '%s')",
-                                        alias, pair->key, alias, pair->key,
-                                        alias, pair->key, alias, pair->key);
+                                        "WHERE npb.node_id = %s AND pk.key = '%s')",
+                                        node_id_ref, pair->key, node_id_ref, pair->key,
+                                        node_id_ref, pair->key, node_id_ref, pair->key);
                                 } else {
                                     const char *prop_table = "node_props_text";
                                     char value_sql[128];
@@ -233,8 +241,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     dbuf_appendf(&cond,
                                         "EXISTS(SELECT 1 FROM %s t "
                                         "JOIN property_keys pk ON pk.id = t.key_id "
-                                        "WHERE t.node_id = %s.id AND pk.key = '%s' AND t.value = %s)",
-                                        prop_table, alias, pair->key, value_sql);
+                                        "WHERE t.node_id = %s AND pk.key = '%s' AND t.value = %s)",
+                                        prop_table, node_id_ref, pair->key, value_sql);
                                 }
 
                                 if (!dbuf_is_empty(&cond)) {
@@ -246,6 +254,9 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                 cypher_parameter *param = (cypher_parameter*)pair->value;
                                 dynamic_buffer cond;
                                 dbuf_init(&cond);
+                                char node_id_ref[256];
+                                snprintf(node_id_ref, sizeof(node_id_ref), "%s",
+                                         get_node_id_ref(ctx, alias, node->variable));
 
                                 /* Use OR conditions to check each property type table
                                  * This handles string, int, real, and bool params correctly */
@@ -254,24 +265,24 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     /* String match */
                                     "EXISTS(SELECT 1 FROM node_props_text npt "
                                     "JOIN property_keys pk ON npt.key_id = pk.id "
-                                    "WHERE npt.node_id = %s.id AND pk.key = '%s' AND npt.value = :%s) OR "
+                                    "WHERE npt.node_id = %s AND pk.key = '%s' AND npt.value = :%s) OR "
                                     /* Integer match */
                                     "EXISTS(SELECT 1 FROM node_props_int npi "
                                     "JOIN property_keys pk ON npi.key_id = pk.id "
-                                    "WHERE npi.node_id = %s.id AND pk.key = '%s' AND npi.value = :%s) OR "
+                                    "WHERE npi.node_id = %s AND pk.key = '%s' AND npi.value = :%s) OR "
                                     /* Real match */
                                     "EXISTS(SELECT 1 FROM node_props_real npr "
                                     "JOIN property_keys pk ON npr.key_id = pk.id "
-                                    "WHERE npr.node_id = %s.id AND pk.key = '%s' AND npr.value = :%s) OR "
+                                    "WHERE npr.node_id = %s AND pk.key = '%s' AND npr.value = :%s) OR "
                                     /* Boolean match */
                                     "EXISTS(SELECT 1 FROM node_props_bool npb "
                                     "JOIN property_keys pk ON npb.key_id = pk.id "
-                                    "WHERE npb.node_id = %s.id AND pk.key = '%s' AND npb.value = :%s)"
+                                    "WHERE npb.node_id = %s AND pk.key = '%s' AND npb.value = :%s)"
                                     ")",
-                                    alias, pair->key, param->name,
-                                    alias, pair->key, param->name,
-                                    alias, pair->key, param->name,
-                                    alias, pair->key, param->name);
+                                    node_id_ref, pair->key, param->name,
+                                    node_id_ref, pair->key, param->name,
+                                    node_id_ref, pair->key, param->name,
+                                    node_id_ref, pair->key, param->name);
 
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
@@ -661,6 +672,28 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                             }
                         }
                         need_from_clause = false; /* Don't add nodes table */
+
+                        /* T-0307: when re-binding a WITH-bound variable with
+                         * additional label predicates (e.g. `WITH a1 MATCH
+                         * (a1:X)`), the label check must still be enforced.
+                         * Previously the entire node attach was skipped,
+                         * silently dropping the predicate. Emit each label
+                         * as an EXISTS WHERE condition against node_labels. */
+                        if (has_labels(node)) {
+                            const char *graph_prefix = ctx->current_graph ? ctx->current_graph : "";
+                            for (int li = 0; li < node->labels->count; li++) {
+                                const char *label = get_label_string(node->labels->items[li]);
+                                if (!label) continue;
+                                char *esc_label = escape_sql_string(label);
+                                char where_buf[512];
+                                snprintf(where_buf, sizeof(where_buf),
+                                    "EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s AND label = '%s')",
+                                    graph_prefix, alias,
+                                    esc_label ? esc_label : label);
+                                free(esc_label);
+                                sql_where(ctx->unified_builder, where_buf);
+                            }
+                        }
                     } else {
                         /* Regular variable - reuse alias, check if we need FROM clause */
                         alias = transform_var_get_alias(ctx->var_ctx, node->variable);
@@ -1116,6 +1149,13 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         char cte_name[64];
         snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", rel_index);
 
+        /* T-0309: mark this rel variable as varlen-bound so the RETURN
+         * projector emits a list-of-edges JSON array (and the result
+         * builder skips single-edge re-fetch). */
+        if (rel->variable) {
+            transform_var_set_cte(ctx->var_ctx, rel->variable, cte_name);
+        }
+
         /* Generate the recursive CTE (added to unified builder) */
         if (generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name) < 0) {
             ctx->has_error = true;
@@ -1132,8 +1172,43 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         /* Empty interval `*M..N` with M > N must return zero rows. */
         bool empty_interval = (max_hops >= 0 && min_hops > max_hops);
 
+        /* T-0306 follow-on: when the rel/target variables came from a prior
+         * WITH (alias_is_id), their "alias" is actually a column reference
+         * like `_with_0.rs` — using that as a SQL table alias produces
+         * `CROSS JOIN _varlen_path_1 AS _with_0.rs` which doesn't parse
+         * (SQLite sees `.` as a column accessor). Generate fresh internal
+         * aliases for the JOIN and constrain via WHERE using the column
+         * refs. */
+        /* A bound variable (via WITH) has an alias that's a column ref
+         * like `_with_0.rs` — either alias_is_id=true (node/edge id from
+         * WITH) or kind=VAR_KIND_PROJECTED (scalar projection). Either
+         * way, the alias contains a dot and can't be used as a SQL
+         * table alias. The simplest reliable detection: substring `.`. */
+        bool edge_alias_is_colref = (edge_alias && strchr(edge_alias, '.') != NULL);
+        bool target_alias_is_colref = (target_alias && strchr(target_alias, '.') != NULL);
+        char fresh_cte_alias[64];
+        char fresh_target_alias[64];
+        if (edge_alias_is_colref) {
+            snprintf(fresh_cte_alias, sizeof(fresh_cte_alias),
+                     "_vp_inner_%d", rel_index);
+            edge_alias = fresh_cte_alias;
+        }
+        if (target_alias_is_colref) {
+            snprintf(fresh_target_alias, sizeof(fresh_target_alias),
+                     "_vp_tgt_%d", rel_index);
+        }
+
         /* Join the main query with the CTE result using unified builder */
         sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, edge_alias, NULL);
+
+        /* T-0306 follow-on: skip the target-node JOIN entirely when the
+         * target var is bound via WITH (its column-ref IS the id; no
+         * fresh `nodes AS _with_0.x` is needed and would be invalid SQL
+         * anyway). The WHERE constraint downstream uses the column-ref
+         * directly. */
+        if (target_alias_is_colref) {
+            goto skip_target_node_join;
+        }
 
         /* Add target node to FROM clause - needed for the CTE join */
         bool target_has_properties = (target_node->properties && target_node->properties->type == AST_NODE_MAP);
@@ -1202,6 +1277,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
         }
 
+skip_target_node_join:
         /* Add label constraints for target node if specified */
         if (has_labels(target_node)) {
             const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
@@ -1357,6 +1433,19 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             if (from_str_pre && strstr(from_str_pre, target_alias)) target_already_added = true;
             if (!target_already_added && joins_str_pre && strstr(joins_str_pre, target_alias))
                 target_already_added = true;
+            /* T-0306: when the target's alias is a cross-clause column ref
+             * (e.g. "_with_0.a" from a prior WITH projection), the substring
+             * search above misses it because FROM/JOIN holds only the CTE
+             * name ("_with_0"). Detect WITH-bound variables (VAR_KIND_PROJECTED
+             * or alias_is_id) and treat the target as already-attached so we
+             * don't emit `LEFT JOIN nodes AS _with_0.a ON _with_0.a.id = ...`. */
+            if (!target_already_added && target_node->variable) {
+                transform_var *tv = transform_var_lookup(ctx->var_ctx, target_node->variable);
+                if (tv && (tv->kind == VAR_KIND_PROJECTED ||
+                           transform_var_alias_is_id(ctx->var_ctx, target_node->variable))) {
+                    target_already_added = true;
+                }
+            }
 
             /* Build the edge JOIN condition */
             dynamic_buffer edge_cond;

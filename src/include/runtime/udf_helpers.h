@@ -21,6 +21,9 @@ void gql_to_string_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **a
 void gql_bool_str_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_bool_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 
+/* T-0308: cross-type ordering comparison (returns null on type mismatch). */
+void gql_order_cmp_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+
 /* Order key + namespace/timezone extractors */
 void gql_order_key_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_extract_ns_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
@@ -59,5 +62,9 @@ void gql_percentile_cont_step(sqlite3_context *ctx, int argc, sqlite3_value **ar
 void gql_percentile_cont_final(sqlite3_context *ctx);
 void gql_percentile_disc_step(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_percentile_disc_final(sqlite3_context *ctx);
+
+/* JSON constructors that honor GQL_SUBTYPE_BOOLEAN (T-0304). */
+void gql_list_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_map_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 
 #endif /* RUNTIME_UDF_HELPERS_H */

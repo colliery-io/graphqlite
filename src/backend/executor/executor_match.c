@@ -118,6 +118,14 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
         return -1;
     }
 
+    /* T-0311 (E2): finalize was previously done inside transform_return_clause;
+     * now it's the caller's responsibility. */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
     /* Prepend any CTE (Common Table Expression) for variable-length relationships */
     prepend_cte_to_sql(ctx);
 
@@ -418,6 +426,16 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                             /* Parse the JSON array of element IDs and build path object */
                             result->agtype_data[current_row][col] = build_path_from_ids(executor, ctx, ident->name, value);
                         } else if (ctx && transform_var_is_edge(ctx->var_ctx, ident->name)) {
+                            /* T-0309: varlen-bound edge vars hold a JSON array
+                             * of edge objects (the RETURN projector emitted
+                             * json_group_array). Skip the single-edge
+                             * interpretation; leave the value as the text
+                             * column so the renderer outputs it verbatim. */
+                            transform_var *_evar = transform_var_lookup_edge(ctx->var_ctx, ident->name);
+                            if (_evar && _evar->cte_name && value[0] == '[') {
+                                /* No agtype conversion — text result will be
+                                 * rendered as the JSON array. */
+                            } else
                             /* Check if value is already a JSON object (from new RETURN format) */
                             if (value[0] == '{') {
                                 /* Parse the JSON object directly */
@@ -509,6 +527,13 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
         }
         current_row++;
         first_step_rc = sqlite3_step(stmt);
+    }
+
+    if (first_step_rc != SQLITE_DONE && first_step_rc != SQLITE_ROW) {
+        char err[1024];
+        snprintf(err, sizeof(err), "%s", sqlite3_errmsg(executor->db));
+        set_result_error(result, err);
+        return -1;
     }
 
     if (current_row == 0) {
@@ -773,6 +798,40 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
 
 
 /* Execute MATCH+CREATE query combination */
+
+/*
+ * T-0319 (E10) — bind_match_clause_into_varmap audit:
+ *
+ * The canonical helper for "transform a MATCH clause, prepare the
+ * ID-only SELECT, step it ONCE, populate var_map with the FIRST
+ * matched row's bindings". Used wherever a handler needs to capture
+ * variable bindings without consuming a full agtype-projecting
+ * result.
+ *
+ * Captures BOTH VAR_KIND_NODE and VAR_KIND_EDGE bindings (extended
+ * 2026-05-21 during T-0313 light landing — was nodes-only before).
+ *
+ * Current callers:
+ *   - executor_match.c::execute_match_create_query_with_varmap (multi-MATCH CREATE).
+ *   - query_dispatch.c::handle_match_set (multi-MATCH branch).
+ *   - query_dispatch.c::handle_match_merge (T-0317 MATCH+WITH+MERGE).
+ *
+ * Latent duplicates (functions that build their OWN inline copy
+ * instead of reusing this helper):
+ *   - execute_match_create_query (executor_match.c:949)
+ *   - execute_match_set_query    (executor_set.c:~390)
+ *   - execute_match_remove_query (executor_remove.c:~16)
+ *   - execute_match_merge_query_with_varmap (executor_merge.c:~975)
+ *
+ * Each duplicates the same six-step pattern with subtle variations
+ * (single-row vs all-rows iteration, what to do per row). A clean
+ * consolidation would replace the inline MATCH-transform-then-step
+ * blocks with a callback-based helper, but the variants iterate
+ * differently per-row so the callback signature would be wide.
+ * Marked as low-priority structural cleanup — TCK-neutral work,
+ * better tackled when sql_builder fully replaces the append_sql
+ * scratchpad (post-I-0043).
+ */
 /* Helper: run a single MATCH clause and accumulate its node bindings into var_map.
  * Used by the multi-MATCH path (GQLITE-T-0197) so that
  * MATCH (a) MATCH (b) CREATE|MERGE|SET ... sees bindings from every MATCH,
@@ -811,7 +870,10 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
         int var_count = transform_var_count(ctx->var_ctx);
         for (int i = 0; i < var_count; i++) {
             transform_var *var = transform_var_at(ctx->var_ctx, i);
-            if (var && var->kind == VAR_KIND_NODE) {
+            /* I-0042 E4 prep: also bind edge variables. DELETE/SET
+             * may target edges; without this they'd be missing from
+             * var_map. */
+            if (var && (var->kind == VAR_KIND_NODE || var->kind == VAR_KIND_EDGE)) {
                 if (!first) append_sql(ctx, ", ");
                 append_sql(ctx, "%s.id AS \"%s_id\"", var->table_alias, var->name);
                 first = false;
@@ -849,6 +911,11 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
                 int64_t node_id = sqlite3_column_int64(stmt, col);
                 set_variable_node_id(var_map, var->name, (int)node_id);
                 CYPHER_DEBUG("multi-MATCH bound '%s' -> node %lld", var->name, (long long)node_id);
+                col++;
+            } else if (var && var->kind == VAR_KIND_EDGE) {
+                int64_t edge_id = sqlite3_column_int64(stmt, col);
+                set_variable_edge_id(var_map, var->name, (int)edge_id);
+                CYPHER_DEBUG("multi-MATCH bound '%s' -> edge %lld", var->name, (long long)edge_id);
                 col++;
             }
         }

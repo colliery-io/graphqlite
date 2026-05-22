@@ -71,11 +71,19 @@ static int merge_with_execute_return(cypher_executor *executor,
         return -1;
     }
 
-    /* Transform the RETURN clause (generates SELECT, calls finalize_sql_generation) */
+    /* Transform the RETURN clause (generates SELECT projections) */
     if (transform_return_clause(ctx, ret) < 0) {
         const char *msg = ctx->error_message ? ctx->error_message
                                              : "MERGE+WITH RETURN: failed to transform RETURN clause";
         set_result_error(result, msg);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
+    /* T-0311 (E2): finalize was previously inside transform_return_clause;
+     * now caller-side. */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "MERGE+WITH RETURN: failed to finalize SQL");
         cypher_transform_free_context(ctx);
         return -1;
     }

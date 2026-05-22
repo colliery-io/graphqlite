@@ -222,16 +222,29 @@ When old table is empty, delete it.
 
 ### Phase 1 — Add new API surface
 
-- **X1**: Add `transform_expression_into` (new entry point) +
-  `transform_expression_str` (convenience wrapper) in
-  `transform_return.c`. Initially just delegates to the existing
-  scratchpad-based path.
+- **X1** ✅ (2026-05-21): Added `transform_expression_into(ctx, expr,
+  dynamic_buffer*)` and `transform_expression_str(ctx, expr)` in
+  `src/include/transform/cypher_transform.h` +
+  `src/backend/transform/cypher_transform.c`. Both delegate to the
+  existing `cypher_transform_capture_expression` scratchpad path —
+  zero behavioral change, durable infrastructure. The case-by-case
+  X2 migrations route through these wrappers; X5 deletes the legacy
+  path along with append_sql / sql_buffer / sql_size / sql_capacity.
 
 ### Phase 2 — Migrate cases in transform_expression
 
 For each `case AST_NODE_*` in transform_expression's switch (~30 cases):
 
-- **X2.1**: AST_NODE_LITERAL — simplest. ~30 LOC.
+- **X2.1** ✅ (2026-05-21): AST_NODE_LITERAL native dbuf emitter
+  (`transform_literal_into` in cypher_transform.c). Handles
+  INTEGER/DECIMAL/STRING/BOOLEAN/NULL with byte-identical output to
+  the legacy switch case. `transform_expression_into` routes LITERAL
+  AST nodes directly; everything else still falls through to the
+  scratchpad. TCK unchanged at 3461.
+- **X2.2** ✅ (2026-05-21): AST_NODE_PARAMETER native dbuf emitter
+  (`transform_parameter_into`). Named `$x` → `:x` with
+  `register_parameter` side effect; positional `$` → `?`.
+  Byte-identical to legacy. TCK unchanged.
 - **X2.2**: AST_NODE_IDENTIFIER — needs path-var, alias resolution.
 - **X2.3**: AST_NODE_PROPERTY — needs sub-expression recurse.
 - **X2.4**: AST_NODE_PARAMETER — straightforward.

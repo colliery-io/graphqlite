@@ -95,6 +95,12 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_eq_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* T-0308: ordering comparison with Cypher type-class rules. */
+  rc = sqlite3_create_function(db, "_gql_order_cmp", 3,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_order_cmp_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
                          gql_extract_tz_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
@@ -185,6 +191,19 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_percentile_disc", 2, SQLITE_UTF8, 0,
                          0, gql_percentile_disc_step, gql_percentile_disc_final);
+  if (rc != SQLITE_OK) return rc;
+
+  /* T-0304: JSON array/object constructors that honor GQL_SUBTYPE_BOOLEAN
+   * (and tag their own output with the JSON subtype for proper nesting).
+   * Variadic — nargs = -1. */
+  rc = sqlite3_create_function(db, "_gql_list", -1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_list_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_map", -1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_map_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   return SQLITE_OK;

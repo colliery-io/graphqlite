@@ -179,48 +179,126 @@ static int generate_property_update(cypher_transform_context *ctx,
         is_text = true;
     }
 
-    /* Choose the appropriate property table */
+    /* T-0314: choose node vs edge property table based on variable
+     * kind. Pre-T-0314, SET always emitted node_props_* + node_id
+     * even for edge variables — SET on relationships silently wrote
+     * to the wrong table (Set6 [19]/[21] family). */
+    bool is_edge = transform_var_is_edge(ctx->var_ctx, variable);
     const char *prop_table;
-    if (is_json) {
-        prop_table = "node_props_json";
-    } else if (is_integer) {
-        prop_table = "node_props_int";
-    } else if (is_real) {
-        prop_table = "node_props_real";
+    const char *entity_col = is_edge ? "edge_id" : "node_id";
+    if (is_edge) {
+        if (is_json)        prop_table = "edge_props_json";
+        else if (is_integer) prop_table = "edge_props_int";
+        else if (is_real)    prop_table = "edge_props_real";
+        else                 prop_table = "edge_props_text";
     } else {
-        prop_table = "node_props_text";
+        if (is_json)        prop_table = "node_props_json";
+        else if (is_integer) prop_table = "node_props_int";
+        else if (is_real)    prop_table = "node_props_real";
+        else                 prop_table = "node_props_text";
     }
-    
-    /* Capture the value expression's SQL via the transitional helper —
-     * transform_expression still writes through append_sql, so we
-     * swap-capture it into a string and inline-emit via sql_raw. */
+
+    /* T-0314: capture the value expression with typed (non-CAST-to-TEXT)
+     * property lookups. The default RETURN-context lookup wraps integer
+     * properties in CAST AS TEXT — fine for projection but breaks
+     * arithmetic (`r.num + 1` becomes string concat → "1" + "1" = "11"
+     * instead of 2). Borrow the in_comparison flag so transform_property_
+     * access picks the type-preserving branch. */
+    bool saved_in_cmp = ctx->in_comparison;
+    ctx->in_comparison = true;
     char *value_sql = cypher_transform_capture_expression(ctx, value_expr);
+    ctx->in_comparison = saved_in_cmp;
     if (!value_sql) return -1;
 
     char *escaped_prop = escape_sql_string(property_name);
     if (!escaped_prop) escaped_prop = strdup(property_name ? property_name : "");
 
-    /* Generate INSERT ... SELECT statement using unified builder context. */
+    /* Statement separator before this SET item's emission. */
+    if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
+        sql_raw(ctx->unified_builder, "; ");
+    }
+
+    /* T-0314: emit INSERT OR REPLACE INTO <prop_table> FIRST, while
+     * the value expression's `n.num` lookup can still see the old
+     * value across all typed tables. (Reversing this order — DELETE
+     * other tables first, then INSERT — breaks because the value SQL
+     * reads n.num through COALESCE across all tables, returning NULL
+     * after the DELETE.) Then DELETE the same (entity_id, key_id)
+     * row from every OTHER typed prop table so the next read returns
+     * the just-written value (Set6 [7]/[21] aggregating-after-SET). */
     sql_raw(ctx->unified_builder,
-        "INSERT OR REPLACE INTO %s (node_id, key_id, value) SELECT %s.id, "
+        "INSERT OR REPLACE INTO %s (%s, key_id, value) SELECT %s.id, "
         "(SELECT id FROM property_keys WHERE key = '%s'), %s",
-        prop_table, table_alias, escaped_prop, value_sql);
-    free(escaped_prop);
+        prop_table, entity_col, table_alias, escaped_prop, value_sql);
     free(value_sql);
 
-    /* Add FROM / JOINs / WHERE from unified builder. */
-    if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
-        sql_raw(ctx->unified_builder, " FROM %s", dbuf_get(&ctx->unified_builder->from));
-        if (!dbuf_is_empty(&ctx->unified_builder->joins)) {
-            sql_raw(ctx->unified_builder, " %s", dbuf_get(&ctx->unified_builder->joins));
+    /* Build the post-INSERT DELETE list for the other typed tables. */
+    const char *node_tables[] = {
+        "node_props_text", "node_props_int", "node_props_real",
+        "node_props_bool", "node_props_json", NULL
+    };
+    const char *edge_tables[] = {
+        "edge_props_text", "edge_props_int", "edge_props_real",
+        "edge_props_bool", "edge_props_json", NULL
+    };
+    const char **all_tables = is_edge ? edge_tables : node_tables;
+    const char *from_str = sql_builder_get_from(ctx->unified_builder);
+    const char *joins_str = sql_builder_get_joins(ctx->unified_builder);
+    const char *where_str = sql_builder_get_where(ctx->unified_builder);
+    bool have_from = (from_str && from_str[0]);
+
+    /* We need the INSERT's FROM/JOINs/WHERE to be emitted BEFORE we
+     * append the DELETEs (so the INSERT's SELECT is well-formed).
+     * The caller appends those right after this function returns
+     * (see lines below). Defer DELETE emission until after the
+     * caller-side FROM/JOIN/WHERE block — emit them now by capturing
+     * the strings and appending after a final "; " separator. */
+    dynamic_buffer post_dml;
+    dbuf_init(&post_dml);
+    for (int ti = 0; all_tables[ti]; ti++) {
+        if (strcmp(all_tables[ti], prop_table) == 0) continue;
+        if (!dbuf_is_empty(&post_dml)) {
+            dbuf_append(&post_dml, "; ");
         }
-        if (!dbuf_is_empty(&ctx->unified_builder->where)) {
-            sql_raw(ctx->unified_builder, " WHERE %s", dbuf_get(&ctx->unified_builder->where));
+        dbuf_appendf(&post_dml,
+            "DELETE FROM %s WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s')",
+            all_tables[ti], escaped_prop);
+        if (have_from) {
+            dbuf_appendf(&post_dml,
+                " AND %s IN (SELECT %s.id FROM %s",
+                entity_col, table_alias, from_str);
+            if (joins_str && joins_str[0]) {
+                dbuf_appendf(&post_dml, " %s", joins_str);
+            }
+            if (where_str && where_str[0]) {
+                dbuf_appendf(&post_dml, " WHERE %s", where_str);
+            }
+            dbuf_appendf(&post_dml, ")");
+        }
+    }
+    free(escaped_prop);
+
+    /* Append the INSERT's FROM / JOINs / WHERE so the statement is
+     * one complete SQL unit. */
+    if (have_from) {
+        sql_raw(ctx->unified_builder, " FROM %s", from_str);
+        if (joins_str && joins_str[0]) {
+            sql_raw(ctx->unified_builder, " %s", joins_str);
+        }
+        if (where_str && where_str[0]) {
+            sql_raw(ctx->unified_builder, " WHERE %s", where_str);
         }
     } else {
         /* Fallback for non-builder mode - shouldn't happen after migration */
         sql_raw(ctx->unified_builder, " FROM nodes AS %s", table_alias);
     }
+
+    /* Now emit the post-INSERT cross-table DELETEs. */
+    const char *post = dbuf_get(&post_dml);
+    if (post && *post) {
+        sql_raw(ctx->unified_builder, "; %s", post);
+    }
+    dbuf_free(&post_dml);
 
     CYPHER_DEBUG("Generated property update SQL");
     return 0;

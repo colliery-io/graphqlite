@@ -254,6 +254,7 @@ sql_builder *sql_builder_create(void)
     sql_builder *b = calloc(1, sizeof(sql_builder));
     if (!b) return NULL;
 
+    dbuf_init(&b->pre_cte);
     dbuf_init(&b->cte);
     dbuf_init(&b->select);
     dbuf_init(&b->from);
@@ -267,6 +268,8 @@ sql_builder *sql_builder_create(void)
     b->offset = -1;
     b->select_count = 0;
     b->cte_count = 0;
+    b->pre_cte_count = 0;
+    b->pre_cte_recursive = false;
     b->where_count = 0;
     b->group_count = 0;
     b->order_count = 0;
@@ -282,6 +285,7 @@ void sql_builder_free(sql_builder *b)
 {
     if (!b) return;
 
+    dbuf_free(&b->pre_cte);
     dbuf_free(&b->cte);
     dbuf_free(&b->select);
     dbuf_free(&b->from);
@@ -303,6 +307,7 @@ void sql_builder_reset(sql_builder *b)
 {
     if (!b) return;
 
+    dbuf_clear(&b->pre_cte);
     dbuf_clear(&b->cte);
     dbuf_clear(&b->select);
     dbuf_clear(&b->from);
@@ -318,11 +323,23 @@ void sql_builder_reset(sql_builder *b)
     b->offset = -1;
     b->select_count = 0;
     b->cte_count = 0;
+    b->pre_cte_count = 0;
+    b->pre_cte_recursive = false;
     b->where_count = 0;
     b->group_count = 0;
     b->order_count = 0;
     b->finalized = false;
     b->distinct = false;
+}
+
+/*
+ * Clear the finalized flag (I-0042 E1) so a subsequent call to
+ * sql_builder_to_string emits again. Use when state has been added
+ * after a previous finalize.
+ */
+void sql_builder_unfinalize(sql_builder *b)
+{
+    if (b) b->finalized = false;
 }
 
 /*
@@ -520,6 +537,25 @@ void sql_cte(sql_builder *b, const char *name, const char *query, bool recursive
 }
 
 /*
+ * Add a pre-CTE definition (T-0267). Pre-CTEs appear in the final SQL
+ * before any sql_cte() entries. Stored as raw "name AS (query)"
+ * fragments separated by ", " — sql_builder_to_string is responsible
+ * for emitting the WITH/WITH RECURSIVE keyword and merging with user
+ * CTEs into a single WITH clause.
+ */
+void sql_pre_cte(sql_builder *b, const char *name, const char *query, bool recursive)
+{
+    if (!b || !name || !query) return;
+
+    if (b->pre_cte_count > 0) {
+        dbuf_append(&b->pre_cte, ", ");
+    }
+    dbuf_appendf(&b->pre_cte, "%s AS (%s)", name, query);
+    b->pre_cte_count++;
+    if (recursive) b->pre_cte_recursive = true;
+}
+
+/*
  * Append a printf-formatted fragment into raw_output. Emitted after
  * the typed SELECT sections in sql_builder_to_string. (I-0039 Ext A.)
  */
@@ -544,16 +580,53 @@ char *sql_builder_to_string(sql_builder *b)
 {
     if (!b) return NULL;
 
-    /* Need at least SELECT items or FROM clause */
-    if (b->select_count == 0 && dbuf_is_empty(&b->from)) {
+    /* I-0042 E1: idempotent finalize. Once a builder has been
+     * serialized, subsequent calls return NULL until the builder is
+     * explicitly reset (sql_builder_reset). Callers that legitimately
+     * need to re-serialize after additional state changes must
+     * either:
+     *   1. call sql_builder_reset(b) and rebuild, or
+     *   2. call sql_builder_unfinalize(b) to clear the flag in place.
+     * This protects against accidental double-finalize that would
+     * append the same SQL twice into ctx->sql_buffer via
+     * finalize_sql_generation. */
+    if (b->finalized) {
         return NULL;
+    }
+
+    /* T-0312 (E3): need at least SELECT items, FROM clause, OR raw_output
+     * content. Pure-DML queries (write-only: SET / DELETE / REMOVE /
+     * CREATE without RETURN) populate raw_output but never call
+     * sql_from / sql_select; previously their finalize would return
+     * NULL and fall back to the explicit drain shim in
+     * cypher_transform_query. Now sql_builder_to_string emits
+     * raw_output directly, removing the need for the shim. */
+    if (b->select_count == 0 && dbuf_is_empty(&b->from) &&
+        dbuf_is_empty(&b->raw_output)) {
+        return NULL;
+    }
+
+    /* T-0312 (E3): pure-DML path — no SELECT/FROM, only raw_output.
+     * Emit raw_output alone (no SELECT prefix) so prepare_v2 sees a
+     * valid DML statement. */
+    if (b->select_count == 0 && dbuf_is_empty(&b->from)) {
+        dynamic_buffer dml_only; dbuf_init(&dml_only);
+        const char *raw = dbuf_get(&b->raw_output);
+        /* Skip leading ws / stray ';' */
+        while (*raw == ' ' || *raw == '\t' || *raw == '\n' ||
+               *raw == '\r' || *raw == ';') raw++;
+        dbuf_append(&dml_only, raw);
+        b->finalized = true;
+        return dbuf_finish(&dml_only);
     }
 
     dynamic_buffer result;
     dbuf_init(&result);
 
-    /* NOTE: CTEs are intentionally NOT included here.
-     * They are handled by prepend_cte_to_sql() at the end. */
+    /* NOTE: CTEs (both pre_cte and cte) are intentionally NOT included
+     * here. They are emitted by prepend_cte_to_sql() at the end of
+     * transformation, which fuses pre_cte (T-0267) and the user CTE
+     * buffer into a single WITH clause. */
 
     /* SELECT */
     if (b->distinct) {
@@ -614,9 +687,19 @@ char *sql_builder_to_string(sql_builder *b)
     }
 
     /* Raw-output appendage (I-0039 Extension A) — compound DML
-     * statements emitted by transform_set/delete/remove. */
+     * statements emitted by transform_set/delete/remove. Prefix with
+     * `; ` when both a SELECT body and raw DML are present so the two
+     * statements parse as separate sqlite3 statements (otherwise
+     * `... FROM tableINSERT INTO ...` is a syntax error). */
     if (!dbuf_is_empty(&b->raw_output)) {
-        dbuf_appendf(&result, "%s", dbuf_get(&b->raw_output));
+        const char *raw = dbuf_get(&b->raw_output);
+        /* Skip leading whitespace to test the first meaningful char. */
+        const char *p = raw;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if (!dbuf_is_empty(&result) && *p != ';') {
+            dbuf_append(&result, "; ");
+        }
+        dbuf_append(&result, raw);
     }
 
     b->finalized = true;
