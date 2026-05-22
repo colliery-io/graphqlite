@@ -253,10 +253,40 @@ def _h_executing_query(step, state, backend, m):
     if intercepted is not None:
         state.last_result = intercepted
     else:
-        state.last_result = backend.execute(step.docstring, state.parameters or None)
+        # T-0252 follow-on: when a registered no-yield procedure is
+        # embedded inside a query (e.g. `MATCH (n) CALL test.doNothing()
+        # RETURN n`), strip the CALL invocation so the backend processes
+        # the remaining query. The procedure has no rows/columns to
+        # contribute by design.
+        rewritten = _strip_embedded_noyield_call(step.docstring, state)
+        state.last_result = backend.execute(rewritten, state.parameters or None)
     # Record backend-side trouble so the runner can decide between fail and error
     # at the Then-step. We don't raise here — TCK has scenarios that *expect* an
     # error, and the verdict is decided by the matching Then-step.
+
+
+def _strip_embedded_noyield_call(query: str, state) -> str:
+    """Strip `CALL <registered no-yield proc>(...)` lines from a query.
+    Used for in-query patterns like `MATCH (n) CALL test.doNothing()
+    RETURN n` where the procedure contributes nothing to the result.
+    Leaves the query unchanged if no embedded no-yield CALL matches. """
+    if not state.procedures:
+        return query
+    out = query
+    # Find every CALL <name>([args]) where <name> is a registered
+    # procedure with no declared yields. Remove the CALL clause
+    # (and a trailing newline if present).
+    for name, fixture in state.procedures.items():
+        if fixture.yield_names:
+            continue
+        # Escape dots for regex.
+        esc = re.escape(name)
+        pat = re.compile(
+            rf"\bCALL\s+{esc}\s*(?:\([^)]*\))?\s*",
+            re.IGNORECASE,
+        )
+        out = pat.sub("", out)
+    return out
 
 
 def _split_signature_columns(sig: str) -> list[str]:
