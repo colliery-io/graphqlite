@@ -1222,8 +1222,18 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                      "_vp_tgt_%d", rel_index);
         }
 
-        /* Join the main query with the CTE result using unified builder */
-        sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, edge_alias, NULL);
+        /* Join the main query with the CTE result using unified builder.
+         * T-0261: for OPTIONAL MATCH, use LEFT JOIN with a placeholder
+         * ON `1=1` so that (1) the no-match outer row is preserved and
+         * (2) subsequent constraint emission can use sql_join_append_on
+         * to attach to this JOIN's ON clause (CROSS JOIN has no ON, so
+         * append_on previously produced malformed SQL like
+         * `CROSS JOIN ... AS alias AND (...)`). */
+        if (optional) {
+            sql_join(ctx->unified_builder, SQL_JOIN_LEFT, cte_name, edge_alias, "1=1");
+        } else {
+            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, edge_alias, NULL);
+        }
 
         /* T-0306 follow-on: skip the target-node JOIN entirely when the
          * target var is bound via WITH (its column-ref IS the id; no
@@ -1387,7 +1397,14 @@ skip_target_node_join:
                          edge_alias, cte_name, src_id_ref, tgt_id_ref);
         }
 
-        sql_where(ctx->unified_builder, dbuf_get(&on_cond));
+        /* T-0261: for OPTIONAL, attach varlen constraints to the LEFT
+         * JOIN's ON clause so unmatched outer rows are preserved.
+         * Non-optional uses WHERE (post-CROSS-JOIN filter). */
+        if (optional) {
+            sql_join_append_on(ctx->unified_builder, dbuf_get(&on_cond));
+        } else {
+            sql_where(ctx->unified_builder, dbuf_get(&on_cond));
+        }
         dbuf_free(&on_cond);
 
         return 0; /* Skip the rest of the relationship handling */
