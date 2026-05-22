@@ -1234,6 +1234,35 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             goto skip_target_node_join;
         }
 
+        /* T-0261: also skip when the target alias is already in FROM/
+         * joins (e.g. previously bound by a sibling MATCH clause). The
+         * varlen path otherwise emits a duplicate `CROSS JOIN nodes
+         * AS <alias>` that SQLite rejects with `ambiguous column name`.
+         * Match7 [13]/[20] family. */
+        {
+            const char *from_str = dbuf_get(&ctx->unified_builder->from);
+            const char *joins_str = dbuf_get(&ctx->unified_builder->joins);
+            char needle1[80], needle2[80], suffix[80];
+            snprintf(needle1, sizeof(needle1), " AS %s ", target_alias);
+            snprintf(needle2, sizeof(needle2), " AS %s\n", target_alias);
+            snprintf(suffix, sizeof(suffix), " AS %s", target_alias);
+            size_t slen = strlen(suffix);
+            bool target_in_scope = false;
+            if (from_str) {
+                if (strstr(from_str, needle1) || strstr(from_str, needle2)) target_in_scope = true;
+                size_t flen = strlen(from_str);
+                if (!target_in_scope && flen >= slen &&
+                    strcmp(from_str + flen - slen, suffix) == 0) target_in_scope = true;
+            }
+            if (!target_in_scope && joins_str) {
+                if (strstr(joins_str, needle1) || strstr(joins_str, needle2)) target_in_scope = true;
+                size_t jlen = strlen(joins_str);
+                if (!target_in_scope && jlen >= slen &&
+                    strcmp(joins_str + jlen - slen, suffix) == 0) target_in_scope = true;
+            }
+            if (target_in_scope) goto skip_target_node_join;
+        }
+
         /* Add target node to FROM clause - needed for the CTE join */
         bool target_has_properties = (target_node->properties && target_node->properties->type == AST_NODE_MAP);
         cypher_map *target_prop_map = target_has_properties ? (cypher_map*)target_node->properties : NULL;
