@@ -798,6 +798,40 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
 
 
 /* Execute MATCH+CREATE query combination */
+
+/*
+ * T-0319 (E10) — bind_match_clause_into_varmap audit:
+ *
+ * The canonical helper for "transform a MATCH clause, prepare the
+ * ID-only SELECT, step it ONCE, populate var_map with the FIRST
+ * matched row's bindings". Used wherever a handler needs to capture
+ * variable bindings without consuming a full agtype-projecting
+ * result.
+ *
+ * Captures BOTH VAR_KIND_NODE and VAR_KIND_EDGE bindings (extended
+ * 2026-05-21 during T-0313 light landing — was nodes-only before).
+ *
+ * Current callers:
+ *   - executor_match.c::execute_match_create_query_with_varmap (multi-MATCH CREATE).
+ *   - query_dispatch.c::handle_match_set (multi-MATCH branch).
+ *   - query_dispatch.c::handle_match_merge (T-0317 MATCH+WITH+MERGE).
+ *
+ * Latent duplicates (functions that build their OWN inline copy
+ * instead of reusing this helper):
+ *   - execute_match_create_query (executor_match.c:949)
+ *   - execute_match_set_query    (executor_set.c:~390)
+ *   - execute_match_remove_query (executor_remove.c:~16)
+ *   - execute_match_merge_query_with_varmap (executor_merge.c:~975)
+ *
+ * Each duplicates the same six-step pattern with subtle variations
+ * (single-row vs all-rows iteration, what to do per row). A clean
+ * consolidation would replace the inline MATCH-transform-then-step
+ * blocks with a callback-based helper, but the variants iterate
+ * differently per-row so the callback signature would be wide.
+ * Marked as low-priority structural cleanup — TCK-neutral work,
+ * better tackled when sql_builder fully replaces the append_sql
+ * scratchpad (post-I-0043).
+ */
 /* Helper: run a single MATCH clause and accumulate its node bindings into var_map.
  * Used by the multi-MATCH path (GQLITE-T-0197) so that
  * MATCH (a) MATCH (b) CREATE|MERGE|SET ... sees bindings from every MATCH,
