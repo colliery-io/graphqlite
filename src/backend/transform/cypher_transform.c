@@ -725,6 +725,22 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
         }
     }
 
+    /* T-0311 (E2): finalize at end of cypher_transform_query's clause
+     * loop when a SELECT projection was built (sql_select called via
+     * transform_return_clause). Mirrors the gate added to
+     * transform_single_query_sql so this path also gets the
+     * relocated finalize. Skip for write-only queries (no SELECT) —
+     * the T-0310 raw_output drain path below handles them. */
+    if (ctx->unified_builder &&
+        (ctx->unified_builder->select_count > 0 ||
+         !dbuf_is_empty(&ctx->unified_builder->from))) {
+        if (finalize_sql_generation(ctx) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to finalize SQL generation");
+            goto error;
+        }
+    }
+
     /* Create result structure */
     cypher_query_result *result = calloc(1, sizeof(cypher_query_result));
     if (!result) {
@@ -926,6 +942,11 @@ static int transform_union_sql(cypher_transform_context *ctx, cypher_union *unio
         return -1;
     }
 
+    /* T-0311 (E2): each branch's transform_single_query_sql calls
+     * finalize at its own end (in_union=true makes it append rather
+     * than reset, preserving the left branch + UNION + right). No
+     * combined finalize needed here. */
+
     return 0;
 }
 
@@ -1015,6 +1036,32 @@ static int transform_single_query_sql(cypher_transform_context *ctx, cypher_quer
                 ctx->has_error = true;
                 ctx->error_message = strdup("Unsupported clause type");
                 return -1;
+        }
+    }
+
+    /* T-0311 (E2): finalize at the end of the clause loop when a RETURN
+     * projection has been built (select dbuf non-empty). This replaces
+     * the two mid-flow finalize calls in transform_return.c.
+     *
+     * finalize_sql_generation is `in_union`-aware: it appends to
+     * sql_buffer when in_union=true (so left-branch SQL is preserved
+     * across `UNION` separator) and resets+writes when false. We call
+     * unconditionally when there's a SELECT to assemble.
+     *
+     * Skip when no SELECT projection: write-only queries fall through
+     * to the legacy raw_output drain in cypher_transform_query. Our
+     * finalize there would consume raw_output into sql_buffer and the
+     * drain would no-op, but the T-0310 split would then mis-detect
+     * "mixed DML+SELECT" (sql_size > 0 with raw_output content) and
+     * try to re-extract. Gate on `select` non-empty.
+     */
+    if (ctx->unified_builder &&
+        (ctx->unified_builder->select_count > 0 ||
+         !dbuf_is_empty(&ctx->unified_builder->from))) {
+        if (finalize_sql_generation(ctx) < 0) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to finalize SQL generation");
+            return -1;
         }
     }
 

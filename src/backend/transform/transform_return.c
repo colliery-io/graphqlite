@@ -585,14 +585,12 @@ return_star_done:
             reset_pending_prop_joins(ctx);
         }
 
-        /* Finalize the unified builder into sql_buffer */
-        if (finalize_sql_generation(ctx) < 0) {
-            ctx->has_error = true;
-            ctx->error_message = strdup("Failed to finalize SQL generation");
-            return -1;
-        }
+        /* T-0311 (E2): finalize moved to end of transform_single_query_sql.
+         * External callers (executor_match.c, executor_merge_pipeline.c)
+         * that invoke transform_return_clause directly add their own
+         * explicit finalize. */
 
-        CYPHER_DEBUG("Unified builder path complete, SQL: %s", ctx->sql_buffer);
+        CYPHER_DEBUG("Unified builder path complete (finalize deferred)");
         return 0;
     }
 
@@ -776,14 +774,10 @@ return_star_done:
                 }
             }
 
-            /* Finalize the unified builder into sql_buffer */
-            if (finalize_sql_generation(ctx) < 0) {
-                ctx->has_error = true;
-                ctx->error_message = strdup("Failed to finalize SQL generation");
-                return -1;
-            }
+            /* T-0311 (E2): finalize moved to end of transform_single_query_sql.
+             * External callers add their own explicit finalize. */
 
-            CYPHER_DEBUG("Standalone RETURN complete, SQL: %s", ctx->sql_buffer);
+            CYPHER_DEBUG("Standalone RETURN complete (finalize deferred)");
             return 0;
         }
 

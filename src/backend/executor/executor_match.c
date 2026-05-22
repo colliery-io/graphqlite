@@ -118,6 +118,14 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
         return -1;
     }
 
+    /* T-0311 (E2): finalize was previously done inside transform_return_clause;
+     * now it's the caller's responsibility. */
+    if (finalize_sql_generation(ctx) < 0) {
+        set_result_error(result, "Failed to finalize SQL generation");
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
     /* Prepend any CTE (Common Table Expression) for variable-length relationships */
     prepend_cte_to_sql(ctx);
 
