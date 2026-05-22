@@ -328,16 +328,29 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     if m.group("rets") and not m.group("yields"):
         return None
 
-    # Parse explicit args (if any) → list of parsed Python values.
-    args_raw = (m.group("args") or "").strip()
+    # Parse args. Three cases:
+    # - Explicit: CALL name(a, b)        → use literal values.
+    # - Implicit: CALL name              (no parens) → pull args from
+    #                                       state.parameters by name.
+    # - Empty:    CALL name()            → no filtering.
+    args_raw = m.group("args")  # None if no parens, "" if empty parens
     explicit_args: list[Any] = []
-    if args_raw:
-        # Naive split on top-level commas (procedures don't take nested
-        # complex types in current TCK).
+    if args_raw is None:
+        # Implicit-arg mode: look up each declared arg name in parameters.
+        # If none of the args have matching params, skip filtering.
+        for arg_name in fixture.arg_names:
+            if arg_name in state.parameters:
+                explicit_args.append(state.parameters[arg_name])
+            else:
+                # Missing parameter — fall through to backend; the
+                # expected ParameterMissing error class won't surface
+                # from our synthesizer but the backend will (or won't)
+                # produce something the harness can score.
+                return None
+    elif args_raw.strip():
         for part in [p.strip() for p in args_raw.split(",")]:
             if not part:
                 continue
-            # Resolve $param refs against state.parameters.
             if part.startswith("$"):
                 pname = part[1:]
                 explicit_args.append(state.parameters.get(pname))
