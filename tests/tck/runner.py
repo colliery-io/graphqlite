@@ -347,16 +347,32 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
                 except ValueParseError:
                     explicit_args.append(part)
 
-    # YIELD/RETURN projection: prefer RETURN cols if present, else
-    # YIELD cols, else the fixture's declared yields.
+    # YIELD/RETURN projection. Build:
+    #   - yield_alias_map: {alias_in_query: fixture_column_name}
+    #     For `YIELD a AS c, b AS d`, map is {c: a, d: b}.
+    #     For bare YIELD a, b, map is {a: a, b: b} (identity).
+    #   - wanted: ordered list of column names in the final result.
+    # When RETURN is present, its columns are the final result names
+    # (looked up via yield_alias_map → fixture column → value).
     rets_clause = m.group("rets")
     yield_clause = m.group("yields")
+    yield_alias_map: dict[str, str] = {}
+    if yield_clause and yield_clause.strip() != "*":
+        for item in [c.strip() for c in yield_clause.split(",") if c.strip()]:
+            mas = re.match(r"^(?P<src>\w+)\s+AS\s+(?P<dst>\w+)$", item, re.IGNORECASE)
+            if mas:
+                yield_alias_map[mas.group("dst")] = mas.group("src")
+            else:
+                yield_alias_map[item] = item
+    else:
+        # Bare YIELD * or no YIELD → identity map to all declared yields.
+        for n in fixture.yield_names:
+            yield_alias_map[n] = n
+
     if rets_clause:
         wanted = [c.strip() for c in rets_clause.split(",") if c.strip()]
-    elif yield_clause and yield_clause.strip() != "*":
-        wanted = [c.strip() for c in yield_clause.split(",") if c.strip()]
     else:
-        wanted = list(fixture.yield_names)
+        wanted = list(yield_alias_map.keys())
 
     full_cols = fixture.arg_names + fixture.yield_names
     out_rows: list[list[Any]] = []
@@ -384,8 +400,12 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
             continue
         projected = []
         for col in wanted:
+            # Resolve through yield_alias_map: the col might be the
+            # YIELD-renamed alias (e.g. `c` from `a AS c`) — look up
+            # what fixture column it ultimately points to.
+            src = yield_alias_map.get(col, col)
             try:
-                idx = full_cols.index(col)
+                idx = full_cols.index(src)
                 projected.append(row[idx] if idx < len(row) else None)
             except ValueError:
                 projected.append(None)
