@@ -234,6 +234,82 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                                 continue;
                                         }
                                     }
+                                } else if (pair->value->type == AST_NODE_PROPERTY) {
+                                    /* T-0322: inter-pattern variable reference
+                                     * in CREATE — e.g. `CREATE (a:End {id: 0}),
+                                     * (:Begin {num: a.id})`. The base variable
+                                     * is bound by an EARLIER pattern in this
+                                     * CREATE; look up its entity_id in var_map,
+                                     * then fetch the requested property value
+                                     * from the database. */
+                                    cypher_property *prop_ref = (cypher_property *)pair->value;
+                                    const char *base_var = NULL;
+                                    if (prop_ref->expr &&
+                                        prop_ref->expr->type == AST_NODE_IDENTIFIER) {
+                                        base_var = ((cypher_identifier *)prop_ref->expr)->name;
+                                    }
+                                    if (base_var && prop_ref->property_name && var_map) {
+                                        int base_node_id = get_variable_node_id(var_map, base_var);
+                                        int base_edge_id = (base_node_id < 0)
+                                                              ? get_variable_edge_id(var_map, base_var)
+                                                              : -1;
+                                        bool is_edge = (base_edge_id >= 0);
+                                        int entity_id = is_edge ? base_edge_id : base_node_id;
+                                        if (entity_id >= 0) {
+                                            const char *id_col = is_edge ? "edge_id" : "node_id";
+                                            const char *node_t[] = {"node_props_int",
+                                                "node_props_real", "node_props_text",
+                                                "node_props_bool", NULL};
+                                            const char *edge_t[] = {"edge_props_int",
+                                                "edge_props_real", "edge_props_text",
+                                                "edge_props_bool", NULL};
+                                            const char **tables = is_edge ? edge_t : node_t;
+                                            static int64_t int_buf;
+                                            static double real_buf;
+                                            static int bool_buf;
+                                            static char text_buf[256];
+                                            bool found = false;
+                                            for (int t = 0; tables[t] && !found; t++) {
+                                                char sql[512];
+                                                snprintf(sql, sizeof(sql),
+                                                    "SELECT value FROM %s WHERE %s = %d AND "
+                                                    "key_id = (SELECT id FROM property_keys WHERE key = '%s')",
+                                                    tables[t], id_col, entity_id, prop_ref->property_name);
+                                                sqlite3_stmt *stmt;
+                                                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                                                    if (sqlite3_step(stmt) == SQLITE_ROW) {
+                                                        int st = sqlite3_column_type(stmt, 0);
+                                                        if (st == SQLITE_INTEGER) {
+                                                            if (strstr(tables[t], "_bool")) {
+                                                                bool_buf = sqlite3_column_int(stmt, 0);
+                                                                prop_type = PROP_TYPE_BOOLEAN;
+                                                                prop_value = &bool_buf;
+                                                            } else {
+                                                                int_buf = sqlite3_column_int64(stmt, 0);
+                                                                prop_type = PROP_TYPE_INTEGER;
+                                                                prop_value = &int_buf;
+                                                            }
+                                                            found = true;
+                                                        } else if (st == SQLITE_FLOAT) {
+                                                            real_buf = sqlite3_column_double(stmt, 0);
+                                                            prop_type = PROP_TYPE_REAL;
+                                                            prop_value = &real_buf;
+                                                            found = true;
+                                                        } else if (st == SQLITE_TEXT) {
+                                                            const unsigned char *v = sqlite3_column_text(stmt, 0);
+                                                            if (v) {
+                                                                snprintf(text_buf, sizeof(text_buf), "%s", (const char *)v);
+                                                                prop_type = PROP_TYPE_TEXT;
+                                                                prop_value = text_buf;
+                                                                found = true;
+                                                            }
+                                                        }
+                                                    }
+                                                    sqlite3_finalize(stmt);
+                                                }
+                                            }
+                                        }
+                                    }
                                 } else if (pair->value->type == AST_NODE_FUNCTION_CALL) {
                                     cypher_function_call *func = (cypher_function_call*)pair->value;
                                     property_value func_pv;

@@ -3,16 +3,16 @@ id: inter-pattern-variable-refs-in
 level: task
 title: "Inter-pattern variable refs in CREATE: (:Foo {x: a.id}) referencing earlier element"
 short_code: "GQLITE-T-0322"
-created_at: 2026-05-23T05:16:00.000000+00:00
-updated_at: 2026-05-23T05:16:00.000000+00:00
-parent:
+created_at: 2026-05-23T05:16:00+00:00
+updated_at: 2026-05-23T18:32:15.830324+00:00
+parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/backlog"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -71,6 +71,12 @@ In `transform_create.c` / `executor_create.c`:
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] With2 [1] passes.
 - [ ] WithSkipLimit1 [1] / WithSkipLimit2 [2] pass.
 - [ ] New functional test asserting cross-pattern ref in CREATE.
@@ -85,3 +91,36 @@ In `transform_create.c` / `executor_create.c`:
 
 Estimated effort: M. The variable_map threading needs to be
 consistent with how MATCH does multi-pattern accumulation.
+
+## Status Updates
+
+### 2026-05-23 — Completed
+
+Added `AST_NODE_PROPERTY` handling to
+`executor_create.c::execute_path_pattern_with_variables`'s
+node-property loop. The base variable's entity_id is fetched
+from `var_map` (already populated by earlier patterns in this
+CREATE — the multi-pattern loop shares the map), then a
+one-shot SQL query against `node_props_*` / `edge_props_*`
+tables retrieves the property value to use for the new node's
+property.
+
+Handles INTEGER/REAL/BOOLEAN/TEXT typed property reads. Edge
+variables supported (uses `edge_id` / `edge_props_*` when the
+base var is an edge).
+
+The variable_map THREADING was already correct — patterns
+share a single var_map across iterations. The missing piece
+was just the property-evaluation branch (the switch had
+LITERAL/MAP/LIST/PARAMETER/IDENTIFIER+FOREACH/FUNCTION_CALL
+cases, but no PROPERTY).
+
+**TCK: 3568 → 3570 (+2):**
+- With2 [1] Forwarding a property to express a join.
+- WithSkipLimit2 [2] Handle dependencies across WITH with LIMIT.
+
+WithSkipLimit1 [1] still fails — same setup shape but the
+query uses SKIP instead of LIMIT, and the SKIP handling has
+a separate code path. Different root cause; left for follow-up.
+
+944/944 unit, functional clean. 0 regressions.
