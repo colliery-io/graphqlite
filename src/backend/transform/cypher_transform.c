@@ -120,7 +120,52 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     free(ctx->error_message);
     free(ctx->pending_prop_joins);
 
+    /* T-0320: free defer-pair tracking. */
+    for (int i = 0; i < ctx->optional_defer_pairs_count; i++) {
+        free(ctx->optional_defer_pairs[i].edge_alias);
+        free(ctx->optional_defer_pairs[i].deferred_alias);
+        free(ctx->optional_defer_pairs[i].endpoint_col);
+    }
+    free(ctx->optional_defer_pairs);
+
     free(ctx);
+}
+
+/* T-0320: record an OPTIONAL-MATCH defer pair so the WHERE handler
+ * can rewrite a copy of the WHERE expression and inject it into the
+ * edge's JOIN ON clause (pushing the filter pre-LEFT-JOIN so
+ * non-matching inner rows are excluded). */
+void cypher_transform_record_defer_pair(cypher_transform_context *ctx,
+                                        const char *edge_alias,
+                                        const char *deferred_alias,
+                                        const char *endpoint_col)
+{
+    if (!ctx || !edge_alias || !deferred_alias || !endpoint_col) return;
+    if (ctx->optional_defer_pairs_count >= ctx->optional_defer_pairs_capacity) {
+        int new_cap = ctx->optional_defer_pairs_capacity == 0
+                          ? 4
+                          : ctx->optional_defer_pairs_capacity * 2;
+        void *new_arr = realloc(ctx->optional_defer_pairs,
+                                new_cap * sizeof(*ctx->optional_defer_pairs));
+        if (!new_arr) return;
+        ctx->optional_defer_pairs = new_arr;
+        ctx->optional_defer_pairs_capacity = new_cap;
+    }
+    int i = ctx->optional_defer_pairs_count++;
+    ctx->optional_defer_pairs[i].edge_alias = strdup(edge_alias);
+    ctx->optional_defer_pairs[i].deferred_alias = strdup(deferred_alias);
+    ctx->optional_defer_pairs[i].endpoint_col = strdup(endpoint_col);
+}
+
+void cypher_transform_clear_defer_pairs(cypher_transform_context *ctx)
+{
+    if (!ctx) return;
+    for (int i = 0; i < ctx->optional_defer_pairs_count; i++) {
+        free(ctx->optional_defer_pairs[i].edge_alias);
+        free(ctx->optional_defer_pairs[i].deferred_alias);
+        free(ctx->optional_defer_pairs[i].endpoint_col);
+    }
+    ctx->optional_defer_pairs_count = 0;
 }
 
 /* SQL generation helpers */

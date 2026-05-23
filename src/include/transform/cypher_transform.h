@@ -80,6 +80,24 @@ struct cypher_transform_context {
      * the DML half needs the same CTE prefix to resolve any
      * CTE-bound variable references. */
     size_t cte_prefix_len;
+
+    /* T-0320 helpers (defined in cypher_transform.c). */
+    /* T-0320: OPTIONAL MATCH defer-pair tracking for WHERE rewrite.
+     * Each entry records (edge_alias, deferred_node_alias,
+     * deferred_endpoint_col). At WHERE-handling time, the WHERE
+     * SQL is scanned for references to <deferred_node_alias>.id
+     * and a rewritten copy with the alias replaced by
+     * <edge_alias>.<endpoint_col> is appended to the edge JOIN's
+     * ON clause. This pushes the WHERE filter PRE-LEFT-JOIN so
+     * non-matching inner rows are excluded rather than producing
+     * outer×candidate cartesian rows. */
+    struct {
+        char *edge_alias;          /* owned */
+        char *deferred_alias;      /* owned */
+        char *endpoint_col;        /* "source_id" or "target_id" — owned */
+    } *optional_defer_pairs;
+    int optional_defer_pairs_count;
+    int optional_defer_pairs_capacity;
 };
 
 /* Result structure for executed queries */
@@ -106,6 +124,13 @@ struct cypher_query_result {
 /* Transform context management */
 cypher_transform_context* cypher_transform_create_context(sqlite3 *db);
 void cypher_transform_free_context(cypher_transform_context *ctx);
+
+/* T-0320 helpers — record/clear OPTIONAL-MATCH defer pairs. */
+void cypher_transform_record_defer_pair(cypher_transform_context *ctx,
+                                        const char *edge_alias,
+                                        const char *deferred_alias,
+                                        const char *endpoint_col);
+void cypher_transform_clear_defer_pairs(cypher_transform_context *ctx);
 
 /* Main transform entry point */
 cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cypher_query *query);

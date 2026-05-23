@@ -142,3 +142,42 @@ handler. Touches:
 PR #70 (commit 4ec1219 + 1fdc153 + the older Match4/Match5 fixes)
 has the surface-level fixes that DON'T require this restructure.
 This ticket captures the deeper structural work that does.
+
+## Status Updates
+
+### 2026-05-22 — Partial fix landed in PR #70 (commit 4ecbf2a)
+
+Implemented the deferred-endpoint mechanism. **+4 TCK**:
+- Match7 [3] (unbound source, bound target).
+- Match7 [14] (OPTIONAL+varlen with length predicate).
+- Match7 [19] (mixed non-varlen + varlen with unbound endpoints).
+- WithWhere1 [4] (unbound source filter).
+
+Mechanism:
+- Pre-loop analysis computes `defer_to_rel[i]` flags per element.
+- Iterative pass tracks already-deferred endpoints so multi-rel
+  paths work (rel N+1's endpoint considered available because
+  rel N will emit it).
+- Path-element loop skips deferred nodes (still registers the var
+  for downstream lookup).
+- Rel handler receives `src_deferred` / `tgt_deferred` flags;
+  emits the deferred node LEFT JOIN AFTER the edge/CTE LEFT JOIN
+  with ON tying it to `edge.source_id` / `edge.target_id` (or
+  `cte.start_id` / `cte.end_id` for varlen).
+- Source-already-in-scope check prevents duplicate-alias JOINs
+  when a multi-rel chain reuses an anonymous endpoint.
+
+All "near 'AND': syntax error" failures from the original ticket
+are resolved (count: 3 → 0).
+
+**Remaining out of this fix's scope** (different root causes,
+need separate work):
+- Match7 [12] (varlen rel-uniqueness LOOP edge case).
+- Match7 [9] (OPTIONAL row-multiplication semantics).
+- Match7 [4] (bound-rel reuse in OPTIONAL).
+- Match7 [8]/[27] (OPTIONAL chained with OPTIONAL).
+- Match4 [7], Match9 [9] (bound-rel multi-MATCH).
+- MatchWhere6 family (OPTIONAL MATCH WHERE doesn't filter rows
+  pre-outer-preservation in our impl — needs a different model).
+
+These will need follow-on tickets when picked up.
