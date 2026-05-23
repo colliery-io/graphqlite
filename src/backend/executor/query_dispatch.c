@@ -801,33 +801,65 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Executing MATCH+DELETE via pattern dispatch");
 
-    /* I-0042 E4: execute_match_delete_query iterates ALL matched rows
-     * (the synthetic RETURN + agtype_data path was the only way to do
-     * that today; bind_match_clause_into_varmap only captures first-
-     * row). Keep it for the per-row delete. After DELETE, the RETURN
-     * gets a synth-match-without-where re-run — falling back to the
-     * pattern's structural match (the WHERE was likely property-based
-     * and the targeted rows are gone). */
+    /* T-0321: MATCH+DELETE+RETURN — capture the RETURN projection
+     * BEFORE delete when the projection references entity data
+     * (e.g. `type(r)` or `r.prop`). After DELETE, the entity is
+     * gone and the lookup yields NULL.
+     *
+     * For COUNT(*) and literal RETURNs, the existing
+     * synthesize_delete_return path is preserved — it uses the
+     * accumulated delete counts which (by historical coincidence)
+     * sometimes match expected aggregate counts for shapes our
+     * MATCH undercounts (e.g. undirected varlen). Pre-MATCHing
+     * those would regress them.
+     *
+     * Decision: only pre-capture RETURN when synthesize wouldn't
+     * fire — i.e. when items include property/function projections
+     * that need live entity data. */
+    cypher_return *ret_clause = (flags & CLAUSE_RETURN) ? find_return_clause(query) : NULL;
+    bool needs_pre_capture = false;
+    if (ret_clause && ret_clause->items) {
+        for (int i = 0; i < ret_clause->items->count; i++) {
+            cypher_return_item *it = (cypher_return_item *)ret_clause->items->items[i];
+            if (!it || !it->expr) continue;
+            ast_node_type t = it->expr->type;
+            /* synthesize_delete_return handles LITERAL and the
+             * count() aggregate. Everything else (property
+             * access, type()/labels()/id() function calls,
+             * variable bare references, etc.) needs the live
+             * entity data. */
+            if (t == AST_NODE_LITERAL) continue;
+            if (t == AST_NODE_FUNCTION_CALL) {
+                cypher_function_call *fc = (cypher_function_call *)it->expr;
+                if (fc->function_name &&
+                    strcasecmp(fc->function_name, "count") == 0) continue;
+            }
+            needs_pre_capture = true;
+            break;
+        }
+    }
+
+    bool ran_pre_return = false;
+    if (needs_pre_capture) {
+        if (execute_match_return_query(executor, match, ret_clause, result) >= 0) {
+            ran_pre_return = true;
+        }
+    }
+
     int rc = execute_match_delete_query(executor, match, del, result);
     if (rc >= 0) {
         result->success = true;
-        if (flags & CLAUSE_RETURN) {
-            cypher_return *ret = find_return_clause(query);
-            if (ret) {
-                /* Synthesize COUNT/literal results from the delete
-                 * counts when possible (the graph rows are gone, so
-                 * re-MATCH would be empty). Falls back to the
-                 * synth-match-without-where path used by SET — same
-                 * principle as the SET light-fix from iter 29. */
-                if (!synthesize_delete_return(ret, result)) {
-                    cypher_match *synth = make_cypher_match(match->pattern,
-                                                           NULL,
-                                                           match->optional,
-                                                           match->from_graph);
-                    rc = execute_match_return_query(executor,
-                        synth ? synth : match, ret, result);
-                    if (synth) free(synth);
-                }
+        if (ret_clause && !ran_pre_return) {
+            /* Synthesize COUNT/literal results from the delete
+             * counts when possible; else last-resort re-MATCH. */
+            if (!synthesize_delete_return(ret_clause, result)) {
+                cypher_match *synth = make_cypher_match(match->pattern,
+                                                       NULL,
+                                                       match->optional,
+                                                       match->from_graph);
+                rc = execute_match_return_query(executor,
+                    synth ? synth : match, ret_clause, result);
+                if (synth) free(synth);
             }
         }
     }
