@@ -3,16 +3,16 @@ id: optional-match-sql-emission
 level: task
 title: "OPTIONAL MATCH SQL emission: reorder target-node JOIN before LEFT JOIN varlen + source-via-edge restructure"
 short_code: "GQLITE-T-0320"
-created_at: 2026-05-22T14:30:00.000000+00:00
-updated_at: 2026-05-22T14:30:00.000000+00:00
-parent:
+created_at: 2026-05-22T14:30:00+00:00
+updated_at: 2026-05-23T02:19:26.292674+00:00
+parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/backlog"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -119,6 +119,10 @@ handler. Touches:
 - T-0261's parent initiative I-0043 (transform_expression rewrite)
   may also touch this code; coordinating with that migration
   might be more productive than a standalone fix.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

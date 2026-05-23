@@ -1,6 +1,6 @@
 # Code Index
 
-> Generated: 2026-05-22T18:08:48Z | 73 files | JavaScript, Python, Rust
+> Generated: 2026-05-23T02:15:29Z | 73 files | JavaScript, Python, Rust
 
 ## Project Structure
 
@@ -1478,20 +1478,21 @@
 -  `_h_named_graph` function L219-221 — `def _h_named_graph(step, state, backend, m)`
 -  `_h_having_executed` function L223-226 — `def _h_having_executed(step, state, backend, m)`
 -  `_h_parameters` function L228-243 — `def _h_parameters(step, state, backend, m)`
--  `_h_executing_query` function L245-259 — `def _h_executing_query(step, state, backend, m)`
--  `_split_signature_columns` function L262-273 — `def _split_signature_columns(sig: str) -> list[str]` — Parse `in :: INTEGER?, out :: STRING?` into ['in', 'out'].
--  `_h_procedure_declared` function L276-298 — `def _h_procedure_declared(step, state, backend, m)` — T-0252: register a test.* procedure fixture for this scenario.
--  `_maybe_call_procedure` function L301-463 — `def _maybe_call_procedure(query: str, state) -> QueryResult | None` — If query is a CALL <proc>(...) [YIELD ...] [RETURN ...] against
--  `_h_result_ordered` function L465-467 — `def _h_result_ordered(step, state, backend, m)`
--  `_h_result_any_order` function L469-471 — `def _h_result_any_order(step, state, backend, m)`
--  `_h_result_any_order_lists_unordered` function L473-476 — `def _h_result_any_order_lists_unordered(step, state, backend, m)`
--  `_h_result_ordered_lists_unordered` function L478-481 — `def _h_result_ordered_lists_unordered(step, state, backend, m)`
--  `_h_result_empty` function L483-488 — `def _h_result_empty(step, state, backend, m)`
--  `_h_expect_error` function L490-493 — `def _h_expect_error(step, state, backend, m)`
--  `_h_no_side_effects` function L495-497 — `def _h_no_side_effects(step, state, backend, m)`
--  `_h_side_effects_table` function L499-505 — `def _h_side_effects_table(step, state, backend, m)`
--  `_compare_result_table` function L526-570 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
--  `_rows_equal` function L573-577 — `def _rows_equal(expected: list[Any], actual: list[Any], lists_unordered: bool = ...`
+-  `_h_executing_query` function L245-265 — `def _h_executing_query(step, state, backend, m)`
+-  `_strip_embedded_noyield_call` function L268-289 — `def _strip_embedded_noyield_call(query: str, state) -> str` — Strip `CALL <registered no-yield proc>(...)` lines from a query.
+-  `_split_signature_columns` function L292-303 — `def _split_signature_columns(sig: str) -> list[str]` — Parse `in :: INTEGER?, out :: STRING?` into ['in', 'out'].
+-  `_h_procedure_declared` function L306-328 — `def _h_procedure_declared(step, state, backend, m)` — T-0252: register a test.* procedure fixture for this scenario.
+-  `_maybe_call_procedure` function L331-509 — `def _maybe_call_procedure(query: str, state) -> QueryResult | None` — If query is a CALL <proc>(...) [YIELD ...] [RETURN ...] against
+-  `_h_result_ordered` function L511-513 — `def _h_result_ordered(step, state, backend, m)`
+-  `_h_result_any_order` function L515-517 — `def _h_result_any_order(step, state, backend, m)`
+-  `_h_result_any_order_lists_unordered` function L519-522 — `def _h_result_any_order_lists_unordered(step, state, backend, m)`
+-  `_h_result_ordered_lists_unordered` function L524-527 — `def _h_result_ordered_lists_unordered(step, state, backend, m)`
+-  `_h_result_empty` function L529-534 — `def _h_result_empty(step, state, backend, m)`
+-  `_h_expect_error` function L536-539 — `def _h_expect_error(step, state, backend, m)`
+-  `_h_no_side_effects` function L541-543 — `def _h_no_side_effects(step, state, backend, m)`
+-  `_h_side_effects_table` function L545-551 — `def _h_side_effects_table(step, state, backend, m)`
+-  `_compare_result_table` function L572-616 — `def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N...`
+-  `_rows_equal` function L619-623 — `def _rows_equal(expected: list[Any], actual: list[Any], lists_unordered: bool = ...`
 
 #### tests/tck/values.py
 
