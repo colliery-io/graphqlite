@@ -881,6 +881,12 @@ rel_pattern:
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
             free($5);
         }
+    | '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-' '>'
+        {
+            /* T-0326: keyword-named rel types (CONTAINS/STARTS/ENDS/etc.). */
+            $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
+            free($5);
+        }
     | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-' '>'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, true);
@@ -902,6 +908,12 @@ rel_pattern:
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
             free($6);
         }
+    | '<' '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-'
+        {
+            /* T-0326: keyword-named rel types (CONTAINS/STARTS/ENDS/etc.). */
+            $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
+            free($6);
+        }
     | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($4, $6, (ast_node*)$8, true, false);
@@ -920,6 +932,12 @@ rel_pattern:
         }
     | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-'
         {
+            $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
+            free($5);
+        }
+    | '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-'
+        {
+            /* T-0326: keyword-named rel types (CONTAINS/STARTS/ENDS/etc.). */
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
             free($5);
         }
