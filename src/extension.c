@@ -577,6 +577,15 @@ static void gql_graph_loaded_func(sqlite3_context *context, int argc, sqlite3_va
     }
 }
 
+/* SQLite's `.load <path>` looks up the entry point by name from the
+ * shared library's exported symbol table. On Windows DLLs, only
+ * symbols marked with `__declspec(dllexport)` are exported by
+ * default (or via a .def file or `--export-all-symbols`). Without
+ * this, `.load build/graphqlite` fails with
+ * "The specified procedure could not be found." */
+#if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
+__declspec(dllexport)
+#endif
 int sqlite3_graphqlite_init(
   sqlite3 *db,
   char **pzErrMsg,
