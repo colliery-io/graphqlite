@@ -1833,7 +1833,34 @@ skip_target_node_join:
                     break;
                 }
             }
+            /* Check if the deferred endpoint is already in scope (e.g.
+             * a previous rel handler already emitted it). In that case
+             * the EXISTS shortcut would double-emit the node JOIN.
+             * Fall through to the standard path which correctly
+             * handles the in-scope case. */
+            bool exists_deferred_in_scope = false;
             if (no_user_rel_var && !has_path_var &&
+                ((src_deferred && !tgt_deferred) || (!src_deferred && tgt_deferred))) {
+                const char *def_alias_chk = src_deferred ? source_alias : target_alias;
+                const char *fs0 = dbuf_get(&ctx->unified_builder->from);
+                const char *js0 = dbuf_get(&ctx->unified_builder->joins);
+                char needle[80], suffix[80];
+                snprintf(needle, sizeof(needle), " AS %s ", def_alias_chk);
+                snprintf(suffix, sizeof(suffix), " AS %s", def_alias_chk);
+                size_t slen = strlen(suffix);
+                if (fs0 && (strstr(fs0, needle) ||
+                            (strlen(fs0) >= slen &&
+                             strcmp(fs0 + strlen(fs0) - slen, suffix) == 0))) {
+                    exists_deferred_in_scope = true;
+                }
+                if (!exists_deferred_in_scope && js0 &&
+                    (strstr(js0, needle) ||
+                     (strlen(js0) >= slen &&
+                      strcmp(js0 + strlen(js0) - slen, suffix) == 0))) {
+                    exists_deferred_in_scope = true;
+                }
+            }
+            if (no_user_rel_var && !has_path_var && !exists_deferred_in_scope &&
                 ((src_deferred && !tgt_deferred) || (!src_deferred && tgt_deferred))) {
                 /* Determine the deferred-endpoint alias and direction. */
                 const char *deferred_alias;
