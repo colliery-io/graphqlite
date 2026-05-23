@@ -119,11 +119,15 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
     }
 
     /* Wrap the subquery so a NULL node id (e.g. OPTIONAL MATCH miss)
-     * propagates to NULL rather than an empty list. */
+     * propagates to NULL rather than an empty list. For a non-NULL
+     * node with zero labels, COALESCE the inner aggregate to
+     * `json('[]')` — `json_group_array` over an empty result set
+     * yields NULL in SQLite, but Cypher spec says labels() on a
+     * label-less node returns []. T-0325. */
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
     append_sql(ctx,
         "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
-        "(SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s) END)",
+        "COALESCE((SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s), json('[]')) END)",
         alias, is_projected ? "" : ".id",
         gprefix, alias, is_projected ? "" : ".id");
 

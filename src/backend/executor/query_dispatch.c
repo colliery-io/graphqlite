@@ -1949,6 +1949,78 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                 snprintf(id_str, sizeof(id_str), "%d", node_id);
                 result->data[0][i] = strdup(id_str);
             }
+        } else if (expr && expr->type == AST_NODE_FUNCTION_CALL) {
+            /* T-0325: handle the common entity functions in
+             * CREATE+RETURN — labels(), id(), keys(). Without this,
+             * `CREATE (n) RETURN labels(n)` yielded `?column?: null`.
+             * Build a synthetic column name from the function call
+             * and run a one-shot SQL query to compute the value. */
+            cypher_function_call *fc = (cypher_function_call*)expr;
+            const char *fname = fc->function_name ? fc->function_name : "";
+            const char *var_name = NULL;
+            if (fc->args && fc->args->count == 1 &&
+                fc->args->items[0] &&
+                fc->args->items[0]->type == AST_NODE_IDENTIFIER) {
+                var_name = ((cypher_identifier*)fc->args->items[0])->name;
+            }
+            if (var_name && (strcmp(fname, "labels") == 0 ||
+                             strcmp(fname, "id") == 0 ||
+                             strcmp(fname, "keys") == 0)) {
+                if (!alias) {
+                    free(result->column_names[i]);
+                    char col_name[256];
+                    snprintf(col_name, sizeof(col_name), "%s(%s)", fname, var_name);
+                    result->column_names[i] = strdup(col_name);
+                }
+                int node_id = get_variable_node_id(var_map, var_name);
+                int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
+                bool is_edge = (edge_id >= 0);
+                int entity_id = is_edge ? edge_id : node_id;
+                if (entity_id >= 0) {
+                    char sql[512];
+                    if (strcmp(fname, "labels") == 0 && !is_edge) {
+                        /* json_group_array over an empty result set
+                         * yields NULL; COALESCE to json('[]') for
+                         * the no-label case. */
+                        snprintf(sql, sizeof(sql),
+                            "SELECT COALESCE((SELECT json_group_array(label) "
+                            "FROM node_labels WHERE node_id = %d), json('[]'))",
+                            entity_id);
+                    } else if (strcmp(fname, "id") == 0) {
+                        snprintf(sql, sizeof(sql), "SELECT %d", entity_id);
+                    } else if (strcmp(fname, "keys") == 0) {
+                        const char *id_col = is_edge ? "edge_id" : "node_id";
+                        const char *t = is_edge ? "edge_props" : "node_props";
+                        snprintf(sql, sizeof(sql),
+                            "SELECT COALESCE((SELECT json_group_array(pk.key) "
+                            "FROM (SELECT %s, key_id FROM %s_text WHERE %s = %d "
+                            "UNION SELECT %s, key_id FROM %s_int WHERE %s = %d "
+                            "UNION SELECT %s, key_id FROM %s_real WHERE %s = %d "
+                            "UNION SELECT %s, key_id FROM %s_bool WHERE %s = %d) u "
+                            "JOIN property_keys pk ON pk.id = u.key_id), json('[]'))",
+                            id_col, t, id_col, entity_id,
+                            id_col, t, id_col, entity_id,
+                            id_col, t, id_col, entity_id,
+                            id_col, t, id_col, entity_id);
+                    } else {
+                        sql[0] = '\0';
+                    }
+                    if (sql[0]) {
+                        sqlite3_stmt *stmt;
+                        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                                int sql_type = sqlite3_column_type(stmt, 0);
+                                const unsigned char *val = sqlite3_column_text(stmt, 0);
+                                if (val) {
+                                    result->data[0][i] = strdup((const char*)val);
+                                    result->data_types[0][i] = sql_type;
+                                }
+                            }
+                            sqlite3_finalize(stmt);
+                        }
+                    }
+                }
+            }
         }
     }
 

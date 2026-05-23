@@ -4,14 +4,14 @@ level: task
 title: "A1: Graph3 labels() returns NULL on no-label nodes — should be empty list"
 short_code: "GQLITE-T-0325"
 created_at: 2026-05-23T10:53:12.837997+00:00
-updated_at: 2026-05-23T10:53:12.837997+00:00
+updated_at: 2026-05-23T11:03:21.432552+00:00
 parent: GQLITE-I-0044
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -71,6 +71,10 @@ Estimated **+5 TCK**.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] Graph3 [1]/[2]/[3]/[4]/[6] pass.
 - [ ] `MATCH (n) RETURN labels(n)` returns `[]` for nodes with no
   labels and `["A", "B"]` (or similar) for labeled nodes.
@@ -91,4 +95,36 @@ S — single function change + tests.
 
 ## Status Updates
 
-*To be added during implementation.*
+### 2026-05-23 — Completed
+
+Two-part fix:
+
+1. **`transform_func_entity.c::transform_labels_function`** — wrapped
+   the inner subquery with `COALESCE(..., json('[]'))` so a non-NULL
+   node with zero labels produces `[]` instead of NULL. The outer
+   CASE for NULL-node-id preservation is intact.
+
+2. **`query_dispatch.c::handle_create_return`** — the CREATE+RETURN
+   fast-path only handled AST_NODE_IDENTIFIER and AST_NODE_PROPERTY
+   return items; function calls fell through with `?column?: null`.
+   Added AST_NODE_FUNCTION_CALL handling for the common entity
+   functions: `labels()`, `id()`, `keys()`. Uses one-shot SQL
+   queries against the proper tables.
+
+The fast-path can't easily delegate to the generic transform
+pipeline because that pipeline doesn't support CREATE+RETURN yet
+("RETURN after CREATE not yet implemented"). Adding labels/id/keys
+directly to the fast-path is the contained fix.
+
+**TCK: 3549 → 3553 (+4).** All 4 Graph3 scenarios pass:
+- Graph3 [1] Creating node without label
+- Graph3 [2] Creating node with two labels
+- Graph3 [3] Ignore space when creating node with labels
+- Graph3 [4] Create node with label in pattern
+
+Graph3 [6] (`labels()` should accept type Any) still fails — it's
+a different shape that goes through transform's labels() handler
+and hits the "argument must be a node variable" early-exit. That's
+a separate fix.
+
+944/944 unit, functional clean. 0 regressions.
