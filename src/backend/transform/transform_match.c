@@ -1001,6 +1001,52 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
         }
     }
 
+    /* T-0327: enforce Cypher relationship uniqueness — within a single
+     * MATCH path, each physical edge can appear at most once across
+     * all rel patterns. Collect the edge aliases used by this path
+     * and emit pairwise `e_i.id <> e_j.id` constraints. Without this,
+     * patterns like `(n)-->(k)<--(n)` over a 2-edge graph produced
+     * extra rows by reusing the same edge in both rel slots, and
+     * undirected patterns like `(a)--(b)--(c)` over symmetric data
+     * gave double-count rows. Match6 [10]/[11]/[12]/[13] family.
+     *
+     * Skip rels whose edge alias isn't actually emitted as a table
+     * (varlen CTE, bound-rel column-ref, or T-0320 EXISTS collapse
+     * where the edge is hidden inside an EXISTS subquery — the
+     * alias wouldn't be present in the joins buffer). */
+    {
+        const char *edge_aliases[16];  /* Plenty for any sane path. */
+        int n_edges = 0;
+        const char *js = dbuf_get(&ctx->unified_builder->joins);
+        for (int i = 0; i < path->elements->count && n_edges < 16; i++) {
+            ast_node *el = path->elements->items[i];
+            if (el->type != AST_NODE_REL_PATTERN) continue;
+            cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+            if (r->varlen) continue;  /* Varlen has its own uniqueness via path_ids. */
+            if (r->variable && transform_var_alias_is_id(ctx->var_ctx, r->variable)) continue;
+            if (!r->variable) continue;
+            const char *ea = transform_var_get_alias(ctx->var_ctx, r->variable);
+            if (!ea) continue;
+            /* Confirm the edge is actually emitted as a table in
+             * the joins buffer — `edges AS <alias>` substring. If
+             * not, the edge is implicit (e.g. inside an EXISTS
+             * subquery from the T-0320 collapse) and has no `id`
+             * column to reference. */
+            char needle[80];
+            snprintf(needle, sizeof(needle), "edges AS %s", ea);
+            if (!js || !strstr(js, needle)) continue;
+            edge_aliases[n_edges++] = ea;
+        }
+        for (int i = 0; i < n_edges; i++) {
+            for (int j = i + 1; j < n_edges; j++) {
+                char where_buf[160];
+                snprintf(where_buf, sizeof(where_buf), "%s.id <> %s.id",
+                         edge_aliases[i], edge_aliases[j]);
+                sql_where(ctx->unified_builder, where_buf);
+            }
+        }
+    }
+
     free(defer_to_rel);
     return 0;
 }

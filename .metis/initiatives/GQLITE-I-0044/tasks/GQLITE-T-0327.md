@@ -4,14 +4,14 @@ level: task
 title: "A3: Match6 undirected double-count — each undirected edge matches forward + backward"
 short_code: "GQLITE-T-0327"
 created_at: 2026-05-23T10:54:13.351553+00:00
-updated_at: 2026-05-23T10:54:13.351553+00:00
+updated_at: 2026-05-23T13:39:13.422093+00:00
 parent: GQLITE-I-0044
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -98,6 +98,10 @@ causes like relationship-uniqueness that this won't fix).
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] Match6 [10]/[11]/[12]/[13] pass.
 - [ ] `(a)--(b)` returns the same row count as
   `(a)-->(b) UNION (a)<--(b)` deduplicated, NOT 2×.
@@ -119,4 +123,53 @@ between same nodes is two real edges, both should match).
 
 ## Status Updates
 
-*To be added during implementation.*
+### 2026-05-23 — Completed (different root cause than expected)
+
+**Root cause turned out to be relationship uniqueness, not
+undirected-OR double-count.** Once relationship uniqueness was
+enforced, the Match6 family stopped multiplying rows.
+
+Cypher path uniqueness says each physical edge appears at most
+ONCE within a single MATCH path's bindings. Our transform
+emitted no such constraint, so multi-rel patterns like
+`(n)<-->(k)<-->(n)` could reuse the same edge in both rel slots
+when both directions of an undirected edge "matched". With
+2 physical edges between (a, b) — one forward, one backward —
+the multiplications produced 8 rows instead of 4.
+
+Fix: in `transform_match.c::transform_match_pattern`, after the
+path-element loop, collect the edge aliases from each non-varlen,
+non-bound, non-EXISTS-collapsed rel pattern and emit pairwise
+`edge_i.id <> edge_j.id` constraints to the WHERE.
+
+Edge-alias filter:
+- Skip varlen rels — they have intrinsic uniqueness via
+  `path_ids` in the recursive CTE.
+- Skip bound rels (`transform_var_alias_is_id`) — column refs,
+  not table aliases.
+- Skip T-0320 EXISTS-collapsed rels — the edge isn't joined as
+  a table; the alias has no `.id` column. Detected by checking
+  whether `edges AS <alias>` appears in the joins buffer.
+
+The undirected `(a)--(b)` SINGLE-rel case still returns 2 rows
+for a single edge (one per (a, b) ordering). Per Cypher spec
+that IS correct — they're distinct bindings. The "double-count"
+described in the original objective was actually about the
+MULTI-rel cycle case, not the single-rel case.
+
+**TCK: 3555 → 3565 (+10):**
+- Match3 [15] Mixing directed and undirected pattern parts (set 1).
+- Match3 [16] Mixing directed and undirected pattern parts (set 2).
+- Match6 [8]  Respecting direction when matching non-existent path
+  with multiple directions.
+- Match6 [10] Named path with alternating directed/undirected.
+- Match6 [11] Named path with multiple alternating directed/undirected.
+- Match6 [12] Path with multiple bidirectional relationships.
+- Match6 [13] Path with both directions should respect other directions.
+- Match8 [3]  Matching and disregarding output, then matching again.
+- CountingSubgraphMatches1 [10] / [11] — same multi-direction
+  shape, now correctly dedup'd.
+
+944/944 unit, functional clean. 0 regressions (one initial
+regression for Match7 [7] was fixed by adding the `edges AS`
+substring check before emitting the uniqueness constraint).
