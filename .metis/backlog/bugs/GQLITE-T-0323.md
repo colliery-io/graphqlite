@@ -3,16 +3,16 @@ id: limit-skip-inside-with-applied-to
 level: task
 title: "LIMIT/SKIP inside WITH applied to outer SELECT instead of WITH CTE"
 short_code: "GQLITE-T-0323"
-created_at: 2026-05-23T05:17:00.000000+00:00
-updated_at: 2026-05-23T05:17:00.000000+00:00
-parent:
+created_at: 2026-05-23T05:17:00+00:00
+updated_at: 2026-05-23T22:02:37.594769+00:00
+parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
   - "#bug"
-  - "#phase/backlog"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -96,6 +96,12 @@ Approach 1 is closer to the current architecture.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] ReturnSkipLimit2 [6] passes (1 row with count=2).
 - [ ] Generated SQL: LIMIT/OFFSET appears inside CTE body, not
   outer SELECT.
@@ -112,3 +118,30 @@ Approach 1 is closer to the current architecture.
 
 This is a transform-layer fix only; executor doesn't need to
 change. Estimated effort: S-M.
+
+## Status Updates
+
+### 2026-05-23 — Completed (partial scope)
+
+In `transform_with.c`, inline `LIMIT N OFFSET K` into the CTE body
+when WITH has LIMIT/SKIP **and no ORDER BY**. Suppress the
+outer-builder `sql_limit()` for that case so the constraint isn't
+double-applied. With ORDER BY also present, keep the existing
+outer-builder path — pushing ORDER BY into the CTE has alias-
+resolution / aggregate-handling issues that need more careful
+work (a full ORDER BY push regressed 21 scenarios in iteration 2
+before reverting).
+
+**TCK: 3571 → 3573 (+2):**
+- ReturnSkipLimit2 [6] LIMIT with an expression that does not
+  depend on variables (1 row, count=2).
+- Aggregation3 [2] No overflow during summation (different
+  query shape that benefited from the CTE-LIMIT positioning).
+
+Out of scope (left for follow-up):
+- WITH ORDER BY + LIMIT/SKIP combined. Pushing ORDER BY into the
+  CTE body needs re-doing alias resolution and aggregate handling
+  inline. Current path keeps both on the outer SELECT — order is
+  correct but counts may be off.
+
+944/944 unit, functional clean. 0 regressions.

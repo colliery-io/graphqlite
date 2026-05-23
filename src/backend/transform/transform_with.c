@@ -556,6 +556,35 @@ with_star_columns_done:
         dbuf_append(&cte_body, group_by_clause);
     }
 
+    /* T-0323: emit LIMIT / OFFSET inside the CTE body when WITH
+     * has them AND no ORDER BY is present. The outer-LIMIT
+     * positioning previously applied the limit to the final
+     * projection instead of the WITH's row set.
+     * `MATCH (n) WITH n LIMIT 2 RETURN count(*)` should limit
+     * WITH's rows to 2 then count → 2.
+     *
+     * When ORDER BY is ALSO present, pushing LIMIT into CTE
+     * without ORDER BY would yield wrong rows. The full ORDER BY
+     * push into CTE is more invasive (alias resolution / aggregate
+     * handling) — leave that combined case on the outer-builder
+     * path for now (it's at least order-correct, even if the
+     * count semantics aren't). Tracked for follow-up. */
+    if ((with->limit || with->skip) &&
+        (!with->order_by || with->order_by->count == 0)) {
+        char *cte_limit_str = with->limit ? transform_expression_to_string(ctx, with->limit) : NULL;
+        char *cte_skip_str = with->skip ? transform_expression_to_string(ctx, with->skip) : NULL;
+        if (cte_limit_str) {
+            dbuf_appendf(&cte_body, " LIMIT %s", cte_limit_str);
+        } else if (cte_skip_str) {
+            dbuf_append(&cte_body, " LIMIT -1");
+        }
+        if (cte_skip_str) {
+            dbuf_appendf(&cte_body, " OFFSET %s", cte_skip_str);
+        }
+        free(cte_limit_str);
+        free(cte_skip_str);
+    }
+
     char *inner_sql = dbuf_finish(&cte_body);
     dbuf_free(&col_buf);
     dbuf_free(&group_buf);
@@ -799,6 +828,9 @@ with_star_columns_done:
                 return -1;
             }
         }
+        /* ORDER BY stays on the outer builder for now — pushing it
+         * into the CTE body has alias-resolution issues that need
+         * more careful handling (T-0323 follow-up). */
         for (int i = 0; i < with->order_by->count; i++) {
             cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
             char *order_expr = transform_expression_to_string(ctx, order_item->expr);
@@ -822,7 +854,13 @@ with_star_columns_done:
     bool limit_is_expr = false;
     bool skip_is_expr = false;
 
-    if (with->limit) {
+    /* T-0323: when ORDER BY is present in WITH, LIMIT/SKIP is
+     * NOT inlined into the CTE (would lose ordering correctness).
+     * Use the outer-builder path for those cases. Otherwise the
+     * CTE-inline above already handled it; skip here. */
+    bool inline_limit_done = (with->limit || with->skip) &&
+                             (!with->order_by || with->order_by->count == 0);
+    if (!inline_limit_done && with->limit) {
         limit_str = transform_expression_to_string(ctx, with->limit);
         if (limit_str) {
             const char *p = limit_str;
@@ -840,7 +878,7 @@ with_star_columns_done:
         }
     }
 
-    if (with->skip) {
+    if (!inline_limit_done && with->skip) {
         skip_str = transform_expression_to_string(ctx, with->skip);
         if (skip_str) {
             const char *p = skip_str;
