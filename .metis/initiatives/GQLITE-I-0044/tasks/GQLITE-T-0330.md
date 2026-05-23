@@ -4,14 +4,14 @@ level: task
 title: "B1: Multi-rel OPTIONAL MATCH combined-EXISTS for full-pattern semantics"
 short_code: "GQLITE-T-0330"
 created_at: 2026-05-23T18:05:33.527881+00:00
-updated_at: 2026-05-23T18:05:33.527881+00:00
+updated_at: 2026-05-23T18:17:21.592855+00:00
 parent: GQLITE-I-0044
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -124,6 +124,10 @@ of edge ids satisfies the FULL pattern.
 
 ## Acceptance Criteria
 
+## Acceptance Criteria
+
+## Acceptance Criteria
+
 - [ ] Match7 [8]/[9]/[12]/[27] pass (or at least Match7 [8] + [9];
   [12] is varlen and may need additional work).
 - [ ] Single-rel OPTIONAL MATCH still works (no regression).
@@ -145,4 +149,48 @@ wins, so guard the new path tightly.
 
 ## Status Updates
 
-*To be added during implementation.*
+### 2026-05-23 — Completed
+
+Implemented combined-EXISTS collapse for eligible multi-rel
+OPTIONAL paths in `transform_match.c::transform_match_pattern`:
+
+**Pre-loop eligibility check** (new `path_combined_exists` flag):
+- OPTIONAL MATCH.
+- Path has at least 5 elements (2+ rels).
+- No varlen rels.
+- No user-visible rel variables.
+- No named path captures the pattern.
+- Every INTERMEDIATE node has a user variable (anonymous
+  intermediates fall back to per-rel emission — they can't be
+  referenced as `<alias>.id` inside the combined EXISTS).
+
+**When eligible**, before the path-element loop:
+- Pre-register all node aliases (assigning gen aliases to new vars).
+- Build one EXISTS clause referencing `edges _ce0, _ce1, ...`
+  with per-rel `_cei.source_id = <src>.id AND _cei.target_id = <tgt>.id`
+  conditions, type filters, and pairwise `_cei.id <> _cej.id`
+  uniqueness.
+- For each unbound intermediate node, emit one
+  `LEFT JOIN nodes AS X ON <combined EXISTS>`.
+- Skip per-rel emission and per-node emission for all elements
+  in the path.
+
+**Bug found and fixed**: `get_node_id_ref` returns a static
+buffer. Calling it twice in quick succession (for src and tgt
+IDs) caused the second call to overwrite the first. Fixed by
+copying each result into a stack-local before the next call.
+
+**TCK: 3566 → 3568 (+2):**
+- Match7 [8] Longer pattern with bound nodes without matches.
+- Match7 [9] Longer pattern with bound nodes.
+
+Match7 [27] still fails (chained OPTIONAL MATCH between two
+already-optional entities — separate root cause).
+
+Match7 [12] (varlen optional) still fails — varlen has its own
+emission path that wasn't restructured by this change. Tracked
+in the original initiative status.
+
+944/944 unit, functional clean. 0 regressions (one initial
+regression for Match7 [7] which uses anonymous intermediates
+was fixed by adding the `intermediates_named` eligibility check).

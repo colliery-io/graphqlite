@@ -732,6 +732,66 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
      * correlated through the edge (preserves OPTIONAL semantics:
      * X is null when no edge match). The varlen path uses a
      * separate code path (already restructured for some shapes). */
+    /* T-0330: detect multi-rel OPTIONAL paths eligible for the
+     * combined-EXISTS collapse. Eligibility:
+     *  - OPTIONAL MATCH.
+     *  - 2+ non-varlen rels.
+     *  - No user-visible rel variables (synthetic ones from AGE
+     *    are OK).
+     *  - No named path captures this rel.
+     *  - At least one unbound intermediate node.
+     *
+     * When eligible, emit ONE `LEFT JOIN nodes AS X ON EXISTS(...)`
+     * encoding the FULL chain (and skip all per-rel emissions).
+     * Without this, the intermediate b gets populated by rel1's
+     * EXISTS even when rel2 doesn't match — wrong per Cypher
+     * 'all-or-none' OPTIONAL semantics. */
+    bool path_combined_exists = false;
+    if (optional && path->elements && path->elements->count >= 5) {
+        int n_rels = 0;
+        bool all_eligible = true;
+        bool has_user_rel_var = false;
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (el->type != AST_NODE_REL_PATTERN) continue;
+            cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+            if (r->varlen) { all_eligible = false; break; }
+            if (r->variable &&
+                strncmp(r->variable, "_gql_default_alias_", 19) != 0) {
+                has_user_rel_var = true;
+                break;
+            }
+            n_rels++;
+        }
+        bool has_path_var = false;
+        for (int vi = 0; vi < ctx->var_ctx->count; vi++) {
+            if (ctx->var_ctx->vars[vi].kind == VAR_KIND_PATH) {
+                has_path_var = true;
+                break;
+            }
+        }
+        /* Restrict to paths where every INTERMEDIATE node (between
+         * two rels) has a user variable. Anonymous intermediates
+         * can't be referenced as `<alias>.id` inside the EXISTS
+         * subquery, and the existing per-rel emission handles
+         * them correctly via edge.target_id = edge2.source_id
+         * implicit chains. */
+        bool intermediates_named = true;
+        for (int j = 2; j < path->elements->count - 2; j += 2) {
+            ast_node *el = path->elements->items[j];
+            if (el->type != AST_NODE_NODE_PATTERN) continue;
+            cypher_node_pattern *np = (cypher_node_pattern *)el;
+            if (!np->variable) {
+                intermediates_named = false;
+                break;
+            }
+        }
+        if (all_eligible && !has_user_rel_var && !has_path_var &&
+            n_rels >= 2 && intermediates_named) {
+            path_combined_exists = true;
+        }
+    }
+
     bool *defer_to_rel = NULL;
     if (optional && path->elements && path->elements->count > 0) {
         defer_to_rel = calloc(path->elements->count, sizeof(bool));
@@ -790,7 +850,169 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
         }
     }
 
+    /* T-0330: emit the combined-EXISTS LEFT JOIN for eligible
+     * multi-rel OPTIONAL paths, BEFORE the per-element loop.
+     * Skips the per-rel and per-intermediate-node emissions
+     * inside the loop. */
+    bool *combined_node_skip = NULL;
+    if (path_combined_exists) {
+        combined_node_skip = calloc(path->elements->count, sizeof(bool));
+        if (!combined_node_skip) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Out of memory in path combined-EXISTS");
+            free(defer_to_rel);
+            return -1;
+        }
+        /* Assign aliases to all node positions in the path
+         * (bound vars already have aliases; new vars get registered;
+         * anonymous get synthetic n_<index>). */
+        const char *node_alias[64] = {0};
+        int n_count = path->elements->count;
+        if (n_count > 64) n_count = 64;
+        for (int j = 0; j < n_count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (el->type != AST_NODE_NODE_PATTERN) continue;
+            cypher_node_pattern *np = (cypher_node_pattern *)el;
+            if (np->variable) {
+                const char *al = transform_var_get_alias(ctx->var_ctx, np->variable);
+                if (!al) {
+                    char *gen = get_next_default_alias(ctx);
+                    if (gen) {
+                        const char *lbl = has_labels(np) ? get_label_string(np->labels->items[0]) : NULL;
+                        transform_var_register_node(ctx->var_ctx, np->variable, gen, lbl);
+                        free(gen);
+                        al = transform_var_get_alias(ctx->var_ctx, np->variable);
+                    }
+                }
+                node_alias[j] = al;
+            } else {
+                static char anon_buf[64][32];
+                snprintf(anon_buf[j], sizeof(anon_buf[j]), "n_%d", ctx->anon_node_base + j);
+                node_alias[j] = anon_buf[j];
+            }
+        }
+
+        /* Build combined EXISTS body:
+         *   SELECT 1 FROM edges e_0, edges e_1, ...
+         *   WHERE e_k.src/tgt = node_aliases AND pairwise e_i.id <> e_j.id.
+         * Direction handled per rel (left/right arrow flags). */
+        dynamic_buffer ec; dbuf_init(&ec);
+        dbuf_append(&ec, "EXISTS (SELECT 1 FROM ");
+        int rel_idx = 0;
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (el->type != AST_NODE_REL_PATTERN) continue;
+            if (rel_idx > 0) dbuf_append(&ec, ", ");
+            dbuf_appendf(&ec, "edges _ce%d", rel_idx);
+            rel_idx++;
+        }
+        int total_rels = rel_idx;
+        dbuf_append(&ec, " WHERE ");
+        rel_idx = 0;
+        bool first_cond = true;
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (el->type != AST_NODE_REL_PATTERN) continue;
+            cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+            const char *src_a = node_alias[j - 1];
+            const char *tgt_a = node_alias[j + 1];
+            if (!src_a || !tgt_a) {
+                dbuf_free(&ec);
+                free(combined_node_skip);
+                free(defer_to_rel);
+                /* Degrade: fall back to per-rel emission. */
+                path_combined_exists = false;
+                goto skip_combined_exists;
+            }
+            /* get_node_id_ref returns a static buffer — copy each
+             * result into a local before calling again, otherwise
+             * both src_id and tgt_id alias the same memory. */
+            char src_id[256], tgt_id[256];
+            snprintf(src_id, sizeof(src_id), "%s",
+                     get_node_id_ref(ctx, src_a, NULL));
+            snprintf(tgt_id, sizeof(tgt_id), "%s",
+                     get_node_id_ref(ctx, tgt_a, NULL));
+            if (!first_cond) dbuf_append(&ec, " AND ");
+            first_cond = false;
+            if (r->left_arrow && !r->right_arrow) {
+                /* <-[…]- reversed */
+                dbuf_appendf(&ec,
+                    "(_ce%d.source_id = %s AND _ce%d.target_id = %s)",
+                    rel_idx, tgt_id, rel_idx, src_id);
+            } else if (!r->left_arrow && !r->right_arrow) {
+                /* Undirected */
+                dbuf_appendf(&ec,
+                    "((_ce%d.source_id = %s AND _ce%d.target_id = %s) "
+                    "OR (_ce%d.source_id = %s AND _ce%d.target_id = %s))",
+                    rel_idx, src_id, rel_idx, tgt_id,
+                    rel_idx, tgt_id, rel_idx, src_id);
+            } else {
+                dbuf_appendf(&ec,
+                    "(_ce%d.source_id = %s AND _ce%d.target_id = %s)",
+                    rel_idx, src_id, rel_idx, tgt_id);
+            }
+            if (r->type) {
+                char *esc = escape_sql_string(r->type);
+                dbuf_appendf(&ec, " AND _ce%d.type = '%s'", rel_idx, esc ? esc : r->type);
+                free(esc);
+            }
+            rel_idx++;
+        }
+        /* Pairwise edge-uniqueness. */
+        for (int a = 0; a < total_rels; a++) {
+            for (int b = a + 1; b < total_rels; b++) {
+                dbuf_appendf(&ec, " AND _ce%d.id <> _ce%d.id", a, b);
+            }
+        }
+        dbuf_append(&ec, ")");
+
+        /* Emit the LEFT JOIN for each unbound intermediate node.
+         * Bound endpoints (a, c) are already in scope from prior
+         * MATCH/clause. New intermediate nodes get a LEFT JOIN
+         * nodes AS X ON <combined EXISTS>. */
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (el->type != AST_NODE_NODE_PATTERN) continue;
+            cypher_node_pattern *np = (cypher_node_pattern *)el;
+            /* Bound? (variable existed pre-this-MATCH) */
+            bool bound = false;
+            if (np->variable) {
+                transform_var *v = transform_var_lookup(ctx->var_ctx, np->variable);
+                if (v && transform_var_is_bound(ctx->var_ctx, np->variable)) bound = true;
+            }
+            /* Already in joins/from? */
+            const char *al = node_alias[j];
+            if (al && !bound) {
+                const char *fs = dbuf_get(&ctx->unified_builder->from);
+                const char *js = dbuf_get(&ctx->unified_builder->joins);
+                char needle[80];
+                snprintf(needle, sizeof(needle), " AS %s", al);
+                if ((fs && strstr(fs, needle)) || (js && strstr(js, needle))) {
+                    bound = true;
+                }
+            }
+            if (bound) {
+                combined_node_skip[j] = true;  /* Already in scope, skip path-loop emission. */
+                continue;
+            }
+            /* Unbound intermediate: emit LEFT JOIN nodes AS al ON <ec>. */
+            sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                     get_graph_table(ctx, "nodes"), al, dbuf_get(&ec));
+            combined_node_skip[j] = true;
+        }
+        dbuf_free(&ec);
+    }
+skip_combined_exists:
+
     for (int i = 0; i < path->elements->count; i++) {
+        /* T-0330: skip path-element emission for nodes already
+         * handled by the combined-EXISTS LEFT JOIN, and rel
+         * patterns (which are subsumed by the combined EXISTS). */
+        if (combined_node_skip) {
+            ast_node *el = path->elements->items[i];
+            if (el->type == AST_NODE_REL_PATTERN) continue;
+            if (el->type == AST_NODE_NODE_PATTERN && combined_node_skip[i]) continue;
+        }
         if (defer_to_rel && defer_to_rel[i]) {
             /* T-0320: this node will be emitted by the rel handler
              * via the edge JOIN. Still need to register the variable
@@ -1048,6 +1270,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
     }
 
     free(defer_to_rel);
+    free(combined_node_skip);
     return 0;
 }
 
