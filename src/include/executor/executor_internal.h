@@ -106,6 +106,12 @@ int evaluate_function_call_via_sqlite(cypher_executor *executor,
     cypher_function_call *func_call,
     property_type *out_type, property_value *out_value);
 
+/* T-0328: evaluate an AST expression as a boolean predicate
+ * against a variable_map. Returns 1 (pass), 0 (drop), -1 (error). */
+int executor_eval_predicate(cypher_executor *executor,
+                            ast_node *expr,
+                            variable_map *var_map);
+
 /* SET operations with variable map */
 int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_map *var_map, cypher_result *result);
 int execute_set_items(cypher_executor *executor, ast_list *items, variable_map *var_map, cypher_result *result);

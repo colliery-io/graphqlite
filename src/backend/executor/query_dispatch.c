@@ -2111,6 +2111,48 @@ static int handle_unwind_create_return(cypher_executor *executor, cypher_query *
     g_foreach_ctx = prev_ctx;
     free_foreach_context(ctx);
 
+    /* T-0328: honor intermediate WITH-WHERE between CREATE and
+     * RETURN. For each `WITH … WHERE pred`, filter `maps` by
+     * evaluating `pred` against each map's bindings; drop maps
+     * whose predicate is false/null. CREATE side effects already
+     * happened — only the projected result set is filtered.
+     *
+     * Only handles WITH with a WHERE; aggregating WITH (e.g.
+     * `WITH count(*) AS c`) is out of A4's scope and tracked
+     * under B4. Skip those WITHs silently and let the
+     * downstream projection see the unfiltered maps. */
+    if (query->clauses) {
+        for (int ci = 0; ci < query->clauses->count; ci++) {
+            ast_node *cl = query->clauses->items[ci];
+            if (cl->type != AST_NODE_WITH) continue;
+            cypher_with *w = (cypher_with *)cl;
+            if (!w->where) continue;
+            /* Aggregating WITH — skip; B4 handles that. */
+            bool agg_with = false;
+            if (w->items) {
+                for (int wi = 0; wi < w->items->count; wi++) {
+                    cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                    if (it && aggregating_call_name(it->expr)) {
+                        agg_with = true;
+                        break;
+                    }
+                }
+            }
+            if (agg_with) continue;
+            int kept = 0;
+            for (int mi = 0; mi < n_maps; mi++) {
+                int p = executor_eval_predicate(executor, w->where, maps[mi]);
+                if (p > 0) {
+                    if (kept != mi) maps[kept] = maps[mi];
+                    kept++;
+                } else {
+                    free_variable_map(maps[mi]);
+                }
+            }
+            n_maps = kept;
+        }
+    }
+
     /* SKIP/LIMIT */
     int64_t limit_val = -1, skip_val = 0;
     if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {

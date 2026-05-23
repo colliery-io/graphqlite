@@ -139,6 +139,40 @@ static int evaluate_ast_with_context(
     return 0;
 }
 
+/* T-0328: evaluate `expr` as a boolean predicate against `var_map`.
+ * Public wrapper around the static evaluate_ast_with_context above.
+ * Returns 1 (truthy / pass), 0 (falsy / NULL / drop), or -1 on
+ * transform error. Used by write-path dispatch handlers
+ * (handle_unwind_create_return etc.) to filter the created-row set
+ * by an intermediate WHERE clause. */
+int executor_eval_predicate(cypher_executor *executor,
+                             ast_node *expr,
+                             variable_map *var_map)
+{
+    property_type t;
+    property_value v;
+    int rc = evaluate_ast_with_context(executor, expr, var_map, &t, &v);
+    if (rc < 0) {
+        /* -2 means NULL result — treat as falsy per Cypher
+         * three-valued logic. -1 is a real error. */
+        if (rc == -2) return 0;
+        return -1;
+    }
+    /* Coerce result to bool. Cypher booleans land as INTEGER 0/1
+     * via _gql_bool; integer/real non-zero is truthy; non-empty
+     * text is truthy. */
+    switch (t) {
+        case PROP_TYPE_INTEGER: return v.as_int != 0 ? 1 : 0;
+        case PROP_TYPE_REAL:    return v.as_real != 0.0 ? 1 : 0;
+        case PROP_TYPE_TEXT: {
+            int truth = (v.as_str && v.as_str[0]) ? 1 : 0;
+            free(v.as_str);
+            return truth;
+        }
+        default: return 0;
+    }
+}
+
 /* Evaluate a function call by transforming to SQL and executing via SQLite.
  * Returns 0 on success, -1 on error, -2 for NULL result. */
 int evaluate_function_call_via_sqlite(
