@@ -48,14 +48,25 @@ int transform_count_function(cypher_transform_context *ctx, cypher_function_call
         /* For bare node/edge identifiers, use alias.id instead of the full
          * json_object expression. json_object() never returns NULL even when
          * the underlying row is NULL (from LEFT JOIN / OPTIONAL MATCH),
-         * which causes COUNT to include null rows. */
+         * which causes COUNT to include null rows.
+         *
+         * T-0252 follow-on: varlen-bound vars (e.g. `r` in `MATCH ()-[r*]->()`)
+         * resolve to a recursive-CTE alias whose schema is
+         * (start_id, end_id, depth, ...) — there is no `.id` column.
+         * For those, use `alias.start_id` (every CTE row has a start
+         * so it's never NULL when the row exists). Counts paths. */
         if (arg->type == AST_NODE_IDENTIFIER) {
             cypher_identifier *id = (cypher_identifier*)arg;
             const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
             if (alias) {
                 bool skip = transform_var_is_projected(ctx->var_ctx, id->name) ||
                             transform_var_alias_is_id(ctx->var_ctx, id->name);
-                append_sql(ctx, "%s%s)", alias, skip ? "" : ".id");
+                transform_var *v = transform_var_lookup(ctx->var_ctx, id->name);
+                if (v && v->cte_name) {
+                    append_sql(ctx, "%s.start_id)", alias);
+                } else {
+                    append_sql(ctx, "%s%s)", alias, skip ? "" : ".id");
+                }
                 return 0;
             }
         }
