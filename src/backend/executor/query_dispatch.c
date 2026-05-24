@@ -2282,50 +2282,99 @@ static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *q
         set_result_error(result, "UNWIND+MERGE+RETURN: missing clause");
         return -1;
     }
-    if (unwind->expr->type != AST_NODE_LIST) {
-        set_result_error(result, "UNWIND+MERGE+RETURN requires a list literal");
-        return -1;
-    }
-    cypher_list *list = (cypher_list*)unwind->expr;
-
     set_return_column_names(ret, result);
     int col_count = ret->items->count;
-    if (!list->items || list->items->count == 0) {
-        result->row_count = 0;
-        result->data = NULL;
-        result->data_types = NULL;
-        result->success = true;
-        return 0;
-    }
 
     foreach_context *ctx = create_foreach_context();
     if (!ctx) { set_result_error(result, "Failed to create foreach context"); return -1; }
     foreach_context *prev_ctx = g_foreach_ctx;
     g_foreach_ctx = ctx;
 
-    int cap = list->items->count;
+    /* Initial capacity grows as we iterate. */
+    int cap = 8;
     variable_map **maps = calloc(cap, sizeof(variable_map*));
     int n_maps = 0;
 
-    for (int i = 0; i < list->items->count; i++) {
-        ast_node *item = list->items->items[i];
-        if (item->type != AST_NODE_LITERAL) continue;
-        cypher_literal *lit = (cypher_literal*)item;
-        switch (lit->literal_type) {
-            case LITERAL_INTEGER: set_foreach_binding_int(ctx, unwind->alias, lit->value.integer); break;
-            case LITERAL_STRING: set_foreach_binding_string(ctx, unwind->alias, lit->value.string); break;
-            case LITERAL_DECIMAL: set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal); break;
-            default: continue;
+    cypher_set *set = find_set_clause(query);
+
+    /* Inner per-iteration body: MERGE + optional SET, append to maps[]. */
+    int err_out = 0;
+    #define UMR_RUN_BODY() do { \
+        variable_map *vm = NULL; \
+        if (execute_merge_clause(executor, merge, result, NULL, &vm) < 0) { err_out = -1; break; } \
+        if (set && vm) { (void)execute_set_operations(executor, set, vm, result); } \
+        if (vm) { \
+            if (n_maps == cap) { cap *= 2; maps = realloc(maps, cap * sizeof(variable_map*)); } \
+            maps[n_maps++] = vm; \
+        } \
+    } while (0)
+
+    if (unwind->expr->type == AST_NODE_LIST) {
+        cypher_list *list = (cypher_list*)unwind->expr;
+        if (list->items) {
+            for (int i = 0; i < list->items->count; i++) {
+                ast_node *item = list->items->items[i];
+                if (item->type == AST_NODE_LITERAL) {
+                    cypher_literal *lit = (cypher_literal*)item;
+                    switch (lit->literal_type) {
+                        case LITERAL_INTEGER: set_foreach_binding_int(ctx, unwind->alias, lit->value.integer); break;
+                        case LITERAL_STRING: set_foreach_binding_string(ctx, unwind->alias, lit->value.string); break;
+                        case LITERAL_DECIMAL: set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal); break;
+                        default: continue;
+                    }
+                } else if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
+                    char *js = serialize_ast_to_json(item);
+                    if (!js) continue;
+                    set_foreach_binding_string(ctx, unwind->alias, js);
+                    free(js);
+                } else continue;
+                UMR_RUN_BODY();
+                if (err_out) break;
+            }
         }
-        variable_map *vm = NULL;
-        if (execute_merge_clause(executor, merge, result, NULL, &vm) < 0) {
-            for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
-            free(maps);
-            g_foreach_ctx = prev_ctx;
-            free_foreach_context(ctx);
-            return -1;
+    } else if (unwind->expr->type == AST_NODE_PARAMETER) {
+        cypher_parameter *param = (cypher_parameter*)unwind->expr;
+        if (!executor->params_json) {
+            set_result_error(result, "UNWIND $param requires parameters");
+            free(maps); g_foreach_ctx = prev_ctx; free_foreach_context(ctx); return -1;
         }
-        if (vm) maps[n_maps++] = vm;
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+                 "SELECT value FROM json_each(json_extract(?, '$.%s'))", param->name);
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+            set_result_error(result, "Failed to prepare UNWIND parameter query");
+            free(maps); g_foreach_ctx = prev_ctx; free_foreach_context(ctx); return -1;
+        }
+        sqlite3_bind_text(stmt, 1, executor->params_json, -1, SQLITE_STATIC);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int ct = sqlite3_column_type(stmt, 0);
+            if (ct == SQLITE_TEXT) {
+                set_foreach_binding_string(ctx, unwind->alias,
+                    (const char*)sqlite3_column_text(stmt, 0));
+            } else if (ct == SQLITE_INTEGER) {
+                set_foreach_binding_int(ctx, unwind->alias, sqlite3_column_int64(stmt, 0));
+            } else { continue; }
+            UMR_RUN_BODY();
+            if (err_out) break;
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        set_result_error(result, "UNWIND+MERGE+RETURN requires a list literal or parameter");
+        free(maps); g_foreach_ctx = prev_ctx; free_foreach_context(ctx); return -1;
+    }
+    #undef UMR_RUN_BODY
+    if (err_out) {
+        for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+        free(maps);
+        g_foreach_ctx = prev_ctx;
+        free_foreach_context(ctx);
+        return -1;
+    }
+    if (n_maps == 0) {
+        result->row_count = 0;
+        result->data = NULL;
+        result->data_types = NULL;
     }
 
     g_foreach_ctx = prev_ctx;
