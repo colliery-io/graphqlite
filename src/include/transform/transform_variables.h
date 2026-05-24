@@ -26,7 +26,8 @@ typedef enum {
 typedef enum {
     VAR_PATH_NORMAL,        /* Regular path matching */
     VAR_PATH_SHORTEST,      /* shortestPath() - single shortest path */
-    VAR_PATH_ALL_SHORTEST   /* allShortestPaths() - all paths of minimum length */
+    VAR_PATH_ALL_SHORTEST,  /* allShortestPaths() - all paths of minimum length */
+    VAR_PATH_COMPREHENSION  /* T-0332: emits fully hydrated path JSON for use inside json_group_array */
 } var_path_type;
 
 /* Unified variable structure */

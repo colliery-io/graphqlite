@@ -849,7 +849,76 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                 }
                             }
 
-                            if (has_varlen && varlen_alias) {
+                            if (path_var->path_type == VAR_PATH_COMPREHENSION) {
+                                /* T-0332: pattern comprehension path — emit fully hydrated
+                                 * path JSON ({nodes:[...], rels:[...]}) so it survives nested
+                                 * inside a json_group_array aggregate without needing executor
+                                 * post-processing of list elements. Build using json_object so
+                                 * SQLite quotes/escapes correctly. */
+                                append_sql(ctx, "json_object('nodes', json_array(");
+                                bool first_n = true;
+                                for (int i = 0; i < path_var->path_elements->count; i++) {
+                                    ast_node *element = path_var->path_elements->items[i];
+                                    if (element->type != AST_NODE_NODE_PATTERN) continue;
+                                    cypher_node_pattern *np = (cypher_node_pattern*)element;
+                                    const char *a = np->variable ? transform_var_get_alias(ctx->var_ctx, np->variable) : NULL;
+                                    if (!first_n) append_sql(ctx, ", ");
+                                    first_n = false;
+                                    if (!a) { append_sql(ctx, "null"); continue; }
+                                    append_sql(ctx,
+                                        "json_object("
+                                        "'id', %s.id, "
+                                        "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
+                                        "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                            "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
+                                            "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
+                                            "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
+                                            "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id), "
+                                            "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %s.id AND npj.key_id = pk.id))) "
+                                        "FROM property_keys pk WHERE "
+                                            "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM node_props_int  WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s.id AND key_id = pk.id)"
+                                        "), json('{}'))"
+                                        ")",
+                                        a, a, a, a, a, a, a, a, a, a, a, a);
+                                }
+                                append_sql(ctx, "), 'rels', json_array(");
+                                bool first_r = true;
+                                for (int i = 0; i < path_var->path_elements->count; i++) {
+                                    ast_node *element = path_var->path_elements->items[i];
+                                    if (element->type != AST_NODE_REL_PATTERN) continue;
+                                    cypher_rel_pattern *rp = (cypher_rel_pattern*)element;
+                                    const char *a = rp->variable ? transform_var_get_alias(ctx->var_ctx, rp->variable) : NULL;
+                                    if (!first_r) append_sql(ctx, ", ");
+                                    first_r = false;
+                                    if (!a) { append_sql(ctx, "null"); continue; }
+                                    append_sql(ctx,
+                                        "json_object("
+                                        "'id', %s.id, "
+                                        "'type', %s.type, "
+                                        "'startNode', %s.source_id, "
+                                        "'endNode', %s.target_id, "
+                                        "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                                            "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
+                                            "(SELECT epi.value FROM edge_props_int  epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
+                                            "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
+                                            "(SELECT json(CASE WHEN epb.value THEN 'true' ELSE 'false' END) FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id), "
+                                            "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = %s.id AND epj.key_id = pk.id))) "
+                                        "FROM property_keys pk WHERE "
+                                            "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM edge_props_int  WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id) OR "
+                                            "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = %s.id AND key_id = pk.id)"
+                                        "), json('{}'))"
+                                        ")",
+                                        a, a, a, a, a, a, a, a, a, a, a, a, a, a);
+                                }
+                                append_sql(ctx, "))");
+                            } else if (has_varlen && varlen_alias) {
                                 /* For variable-length paths, use the CTE's path_ids column */
                                 append_sql(ctx, "'[' || %s.path_ids || ']'", varlen_alias);
                             } else {
@@ -1675,7 +1744,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         }
                     }
                     transform_var_register_path(ctx->var_ctx, comp->path_var, NULL,
-                                                path->elements, VAR_PATH_NORMAL);
+                                                path->elements, VAR_PATH_COMPREHENSION);
                 }
 
                 /* Add WHERE clause for joins and constraints */
