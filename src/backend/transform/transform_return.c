@@ -337,8 +337,11 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     snprintf(expr_buf, sizeof(expr_buf), "%s.type", var->table_alias);
                     sql_select(ctx->unified_builder, expr_buf, var->name);
                 } else if (var->kind == VAR_KIND_PROJECTED) {
-                    /* Projected variable - alias IS the value */
-                    sql_select(ctx->unified_builder, var->table_alias, var->name);
+                    /* Projected variable — the source expression (e.g. CTE
+                     * column ref) lives on source_expr; table_alias is NULL.
+                     * T-0333: use get_alias to pick the right one. */
+                    const char *src = transform_var_get_alias(ctx->var_ctx, var->name);
+                    if (src) sql_select(ctx->unified_builder, src, var->name);
                 }
                 added++;
             }
