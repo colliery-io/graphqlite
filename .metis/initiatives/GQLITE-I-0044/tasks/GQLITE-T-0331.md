@@ -4,14 +4,14 @@ level: task
 title: "B2: Cross-type comparison null semantics — 1 < 'a' returns null per Cypher spec"
 short_code: "GQLITE-T-0331"
 created_at: 2026-05-23T18:17:41.906377+00:00
-updated_at: 2026-05-23T18:17:41.906377+00:00
+updated_at: 2026-05-24T14:00:33.352609+00:00
 parent: GQLITE-I-0044
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -26,9 +26,11 @@ initiative_id: GQLITE-I-0044
 
 [[GQLITE-I-0044]]
 
-## Objective **[REQUIRED]**
+## Objective
 
-{Clear statement of what this task accomplishes}
+Per the Cypher spec, ordered comparisons (`<`, `<=`, `>`, `>=`) between values of incompatible types (e.g. number vs string, number vs boolean, string vs boolean) must return `null` rather than coercing via SQLite's native sort order. SQLite happily compares `1 < 'a'` as true because of its type-affinity rules — this disagrees with the TCK.
+
+Implement Cypher-conformant null semantics for cross-type ordered comparisons so that affected TCK scenarios pass.
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
@@ -64,11 +66,17 @@ initiative_id: GQLITE-I-0044
 - **Benefits of Fixing**: {What improves after refactoring}
 - **Risk Assessment**: {Risks of not addressing this}
 
-## Acceptance Criteria **[REQUIRED]**
+## Acceptance Criteria
 
-- [ ] {Specific, testable requirement 1}
-- [ ] {Specific, testable requirement 2}
-- [ ] {Specific, testable requirement 3}
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+- [ ] `1 < 'a'`, `'a' < 1`, `1 < true`, etc. evaluate to `null` (not true/false) in WHERE / RETURN contexts.
+- [ ] Same-type comparisons remain unchanged (no perf or correctness regression).
+- [ ] `null < anything` still returns `null`.
+- [ ] TCK delta: targeted scenarios involving cross-type ordered comparison now pass; no regression elsewhere.
+- [ ] Unit + functional tests added covering the matrix.
 
 ## Test Cases **[CONDITIONAL: Testing Task]**
 
@@ -123,7 +131,13 @@ initiative_id: GQLITE-I-0044
 {Keep for technical tasks, delete for non-technical. Technical details, approach, or important considerations}
 
 ### Technical Approach
-{How this will be implemented}
+Two viable approaches:
+
+1. **`_gql_cmp` SQLite UDF** — register a scalar function `_gql_cmp(a, b)` returning `-1/0/1/null`, then transform `a < b` → `_gql_cmp(a, b) = -1`, etc. Centralizes the semantics but adds UDF dispatch overhead.
+
+2. **Inline CASE** — transform `a < b` → `CASE WHEN typeof(a)=typeof(b) OR (typeof(a) IN ('integer','real') AND typeof(b) IN ('integer','real')) THEN a < b ELSE NULL END`. No UDF needed, but verbose and tricky around stored-as-text JSON values.
+
+Approach 1 is cleaner and matches how we'd add list/path comparison later. Likely path: register UDF in `executor_init`, transform ops in `transform_expr_ops.c`.
 
 ### Dependencies
 {Other tasks or systems this depends on}

@@ -340,17 +340,32 @@ void gql_order_cmp_func(
         if (cmp < 0) cmp = -1;
         else if (cmp > 0) cmp = 1;
     } else {
-        /* Mixed scalar text<->numeric — preserve SQLite native behavior
-         * for now. Pre-T-0308 codepath returned a value (numeric < text
-         * was always true in SQLite); tests like WithWhere5 rely on
-         * this comparison succeeding rather than returning null. */
-        if (l_num && r_text) {
-            cmp = -1;
-        } else if (l_text && r_num) {
-            cmp = 1;
-        } else {
+        /* T-0331: Cross-type ordered comparison returns null per the
+         * Cypher spec (Comparison2 [3], [6]).
+         *
+         * Exception: graphqlite sometimes flows boolean values as the
+         * text 'true'/'false' (no boolean subtype on this value path).
+         * Precedence1 [23]/[26] rely on those still ordering against
+         * numeric-encoded booleans. Treat stringified booleans as 1/0
+         * and let the comparison proceed numerically; otherwise null. */
+        double la = 0.0, lb = 0.0;
+        bool l_resolved = false, r_resolved = false;
+        if (l_num) { la = sqlite3_value_double(argv[0]); l_resolved = true; }
+        else if (l_text) {
+            const char *s = (const char *)sqlite3_value_text(argv[0]);
+            if (s && strcmp(s, "true") == 0)  { la = 1.0; l_resolved = true; }
+            else if (s && strcmp(s, "false") == 0) { la = 0.0; l_resolved = true; }
+        }
+        if (r_num) { lb = sqlite3_value_double(argv[1]); r_resolved = true; }
+        else if (r_text) {
+            const char *s = (const char *)sqlite3_value_text(argv[1]);
+            if (s && strcmp(s, "true") == 0)  { lb = 1.0; r_resolved = true; }
+            else if (s && strcmp(s, "false") == 0) { lb = 0.0; r_resolved = true; }
+        }
+        if (!l_resolved || !r_resolved) {
             sqlite3_result_null(context); return;
         }
+        cmp = (la < lb) ? -1 : (la > lb) ? 1 : 0;
     }
 
     bool result;
