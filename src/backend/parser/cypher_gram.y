@@ -38,7 +38,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * parser can't immediately distinguish a node pattern from a parenthesized
  * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 14
+%expect 15
 %expect-rr 3  /* IDENTIFIER, BQIDENT, END_P in variable_opt */
 
 %union {
@@ -1596,6 +1596,37 @@ pattern_comprehension:
             ast_list *pattern = ast_list_create();
             ast_list_append(pattern, (ast_node*)path);
             $$ = (ast_node*)make_pattern_comprehension(pattern, $10, $12, @1.first_line);
+        }
+    /* T-0332: path-assignment form `[p = (...)-->(...) | expr]` */
+    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' rel_pattern node_pattern '|' expr ']'
+        {
+            cypher_node_pattern *first = make_node_pattern($5, $6, (ast_node*)$7);
+            ast_list *elements = ast_list_create();
+            ast_list_append(elements, (ast_node*)first);
+            ast_list_append(elements, (ast_node*)$9);
+            ast_list_append(elements, (ast_node*)$10);
+            cypher_path *path = make_path(elements);
+
+            ast_list *pattern = ast_list_create();
+            ast_list_append(pattern, (ast_node*)path);
+            cypher_pattern_comprehension *pc = make_pattern_comprehension(pattern, NULL, $12, @1.first_line);
+            pc->path_var = strdup($2);
+            $$ = (ast_node*)pc;
+        }
+    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' rel_pattern node_pattern WHERE expr '|' expr ']'
+        {
+            cypher_node_pattern *first = make_node_pattern($5, $6, (ast_node*)$7);
+            ast_list *elements = ast_list_create();
+            ast_list_append(elements, (ast_node*)first);
+            ast_list_append(elements, (ast_node*)$9);
+            ast_list_append(elements, (ast_node*)$10);
+            cypher_path *path = make_path(elements);
+
+            ast_list *pattern = ast_list_create();
+            ast_list_append(pattern, (ast_node*)path);
+            cypher_pattern_comprehension *pc = make_pattern_comprehension(pattern, $12, $14, @1.first_line);
+            pc->path_var = strdup($2);
+            $$ = (ast_node*)pc;
         }
     ;
 

@@ -1629,13 +1629,23 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
                 /* T-0332: register relationship variables so r.prop / r.type
                  * resolve inside the projection. The rel's alias is
-                 * `_pc_e<rel_index>` matching the FROM-clause emission above. */
+                 * `_pc_e<rel_index>` matching the FROM-clause emission above.
+                 * Also synthesize a variable on anonymous rels when there is
+                 * a path-assignment so the path projection can reference the
+                 * rel's id (otherwise it emits `null` for the rel slot). */
                 {
                     int rel_i = 0;
                     for (int i = 0; i < path->elements->count; i++) {
                         ast_node *element = path->elements->items[i];
                         if (element->type == AST_NODE_REL_PATTERN && i > 0 && i < path->elements->count - 1) {
                             cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+                            if (!rel->variable || !rel->variable[0]) {
+                                if (comp->path_var) {
+                                    char gen[32];
+                                    snprintf(gen, sizeof(gen), "_pc_relv%d", rel_i);
+                                    rel->variable = strdup(gen);
+                                }
+                            }
                             if (rel->variable && rel->variable[0]) {
                                 char alias[32];
                                 snprintf(alias, sizeof(alias), "_pc_e%d", rel_i);
@@ -1644,6 +1654,28 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                             rel_i++;
                         }
                     }
+                }
+
+                /* T-0332: also synthesize variable names on anonymous nodes
+                 * when there is a path-assignment, and register the path. */
+                if (comp->path_var) {
+                    for (int i = 0; i < path->elements->count; i++) {
+                        ast_node *element = path->elements->items[i];
+                        if (element->type == AST_NODE_NODE_PATTERN) {
+                            cypher_node_pattern *np = (cypher_node_pattern*)element;
+                            if (!np->variable || !np->variable[0]) {
+                                int slot = i / 2;
+                                char gen[32];
+                                snprintf(gen, sizeof(gen), "_pc_nv%d", slot);
+                                np->variable = strdup(gen);
+                                char alias[32];
+                                snprintf(alias, sizeof(alias), "_pc_n%d", slot);
+                                transform_var_register_node(ctx->var_ctx, np->variable, alias, NULL);
+                            }
+                        }
+                    }
+                    transform_var_register_path(ctx->var_ctx, comp->path_var, NULL,
+                                                path->elements, VAR_PATH_NORMAL);
                 }
 
                 /* Add WHERE clause for joins and constraints */

@@ -515,6 +515,9 @@ void ast_node_free(ast_node *node)
                 if (comp->collect_expr) {
                     ast_node_free(comp->collect_expr);
                 }
+                if (comp->path_var) {
+                    free(comp->path_var);
+                }
             }
             break;
 
@@ -1309,6 +1312,7 @@ cypher_pattern_comprehension* make_pattern_comprehension(ast_list *pattern, ast_
     comp->pattern = pattern;
     comp->where_expr = where_expr;
     comp->collect_expr = collect_expr;
+    comp->path_var = NULL;
     return comp;
 }
 

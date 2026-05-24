@@ -475,6 +475,7 @@ typedef struct cypher_pattern_comprehension {
     ast_list *pattern;        /* The pattern to match (list of path elements) */
     ast_node *where_expr;     /* Optional filter condition (NULL if not present) */
     ast_node *collect_expr;   /* Expression to collect (NULL returns matched nodes/rels) */
+    char *path_var;           /* T-0332: optional path variable name from `[p = pattern | expr]` (NULL otherwise) */
 } cypher_pattern_comprehension;
 
 /* CASE expression: CASE [operand] WHEN cond THEN val [...] [ELSE val] END
