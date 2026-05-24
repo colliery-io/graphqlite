@@ -145,6 +145,17 @@ Approach 1 is cleaner and matches how we'd add list/path comparison later. Likel
 ### Risk Considerations
 {Technical risks and mitigation strategies}
 
-## Status Updates **[REQUIRED]**
+## Status Updates
 
-*To be added during implementation*
+### 2026-05-24 — Implementation complete
+
+The `_gql_order_cmp` UDF infrastructure was already in place (T-0308). Mixed scalar text↔numeric was deliberately preserving SQLite native coerce-to-text behavior, citing WithWhere5. Replaced with Cypher-conformant null semantics, keeping a stringified-boolean escape hatch so Precedence1 [23]/[26] still pass.
+
+**Change** in `src/backend/runtime/udf_helpers.c` `gql_order_cmp_func`:
+- Mixed text↔numeric → null (was: −1 / +1).
+- Exception: text `'true'`/`'false'` is treated as numeric 1/0 (boolean
+  values flow as text on this path; Precedence1 [23]/[26] depend on it).
+
+**TCK delta**: 3573 → 3577 (+4). Gained: Comparison2 [6] x2, Precedence1 [22] x2. No regressions.
+
+**Tests**: unit 944/944, functional exit 0.
