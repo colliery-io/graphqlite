@@ -26,9 +26,21 @@ initiative_id: GQLITE-I-0044
 
 [[GQLITE-I-0044]]
 
-## Objective **[REQUIRED]**
+## Objective
 
-{Clear statement of what this task accomplishes}
+Implement Pattern Comprehension: `[(n)-->(m) | m.x]` and path-assignment form `[p = (n)-->(m) | p]`. Pattern2 [1]-[11].
+
+## Status (2026-05-24, partial — PR #74)
+
++2 TCK (Pattern2 1/11 → 3/11). Remaining 8 need path-hydration inside list elements.
+
+**Done**:
+- Rel-variable registration in comprehension scope ([5]).
+- Grammar productions for `[p = pattern | expr]` and `WHERE` variant (`%expect` 14→15).
+- AST `cypher_pattern_comprehension.path_var`.
+- Transform: synthesize names on anonymous nodes/rels; register `p` as path variable.
+
+**Remaining**: Path projection inside `json_group_array(...)` emits id-array strings. The executor hydrates via `build_path_from_ids` for top-level columns but doesn't descend into list/agg results. Fix: emit fully-hydrated path JSON inline in the comprehension SQL, mirroring node/edge hydration elsewhere.
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 
