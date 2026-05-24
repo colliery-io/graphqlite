@@ -698,8 +698,32 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
     ctx->anon_node_base = ctx->anon_node_counter;
     ctx->anon_node_counter += path->elements->count;
     
-    /* If path has a variable name, register it as a path variable */
+    /* If path has a variable name, register it as a path variable.
+     * T-0333 (Match6 [5]/[7]/[9]): if the path has a name (e.g.
+     * `MATCH p = (a:L)<--(:M)`), the path projection needs to reference
+     * every element by alias to build the hydrated path. Anonymous
+     * nodes/rels would emit `null` and produce broken `[id,null,null]`
+     * strings. Synthesize names here so the subsequent MATCH-emission
+     * pass registers each one and the path projection can resolve them. */
     if (path->var_name) {
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *np = (cypher_node_pattern*)el;
+                if (!np->variable || !np->variable[0]) {
+                    char gen[48];
+                    snprintf(gen, sizeof(gen), "_pv_n%d_%d", ctx->anon_node_base, j);
+                    np->variable = strdup(gen);
+                }
+            } else if (el->type == AST_NODE_REL_PATTERN) {
+                cypher_rel_pattern *rp = (cypher_rel_pattern*)el;
+                if (!rp->variable || !rp->variable[0]) {
+                    char gen[48];
+                    snprintf(gen, sizeof(gen), "_pv_e%d_%d", ctx->anon_node_base, j);
+                    rp->variable = strdup(gen);
+                }
+            }
+        }
         CYPHER_DEBUG("Registering path variable: %s with %d elements", path->var_name, path->elements->count);
         if (register_path_variable(ctx, path->var_name, path) < 0) {
             /* register_path_variable already set a specific message if it
