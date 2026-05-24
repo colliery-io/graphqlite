@@ -1627,6 +1627,25 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     }
                 }
 
+                /* T-0332: register relationship variables so r.prop / r.type
+                 * resolve inside the projection. The rel's alias is
+                 * `_pc_e<rel_index>` matching the FROM-clause emission above. */
+                {
+                    int rel_i = 0;
+                    for (int i = 0; i < path->elements->count; i++) {
+                        ast_node *element = path->elements->items[i];
+                        if (element->type == AST_NODE_REL_PATTERN && i > 0 && i < path->elements->count - 1) {
+                            cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+                            if (rel->variable && rel->variable[0]) {
+                                char alias[32];
+                                snprintf(alias, sizeof(alias), "_pc_e%d", rel_i);
+                                transform_var_register_edge(ctx->var_ctx, rel->variable, alias, NULL);
+                            }
+                            rel_i++;
+                        }
+                    }
+                }
+
                 /* Add WHERE clause for joins and constraints */
                 append_sql(ctx, " WHERE ");
 
