@@ -100,24 +100,32 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
         return -1;
     }
 
-    /* Build JSON array of node IDs */
-    append_sql(ctx, "json_array(");
-    bool first = true;
-    for (int i = 0; i < path_var->path_elements->count; i++) {
+    /* Collect node aliases in path order. */
+    const char *node_aliases[64];
+    int n_nodes = 0;
+    for (int i = 0; i < path_var->path_elements->count && n_nodes < 64; i++) {
         ast_node *element = path_var->path_elements->items[i];
         if (element->type == AST_NODE_NODE_PATTERN) {
             cypher_node_pattern *node = (cypher_node_pattern*)element;
             if (node->variable) {
                 const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
-                if (node_alias) {
-                    if (!first) append_sql(ctx, ", ");
-                    append_sql(ctx, "%s.id", node_alias);
-                    first = false;
-                }
+                if (node_alias) node_aliases[n_nodes++] = node_alias;
             }
         }
     }
-    append_sql(ctx, ")");
+
+    /* nodes() on a null path (OPTIONAL pattern that didn't match) is null,
+     * not [null,...]. Guard on the first node alias's id (all-or-nothing). */
+    if (n_nodes > 0) {
+        append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_array(", node_aliases[0]);
+        for (int i = 0; i < n_nodes; i++) {
+            if (i > 0) append_sql(ctx, ", ");
+            append_sql(ctx, "%s.id", node_aliases[i]);
+        }
+        append_sql(ctx, ") END)");
+    } else {
+        append_sql(ctx, "json_array()");
+    }
 
     return 0;
 }
