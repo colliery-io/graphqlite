@@ -621,6 +621,40 @@ static void gql_entity_prop_lookup(sqlite3_context *context, int argc,
 void gql_node_prop_func(sqlite3_context *c, int argc, sqlite3_value **argv) {
     gql_entity_prop_lookup(c, argc, argv, false);
 }
+
+/* Static property access on a JSON value of unknown shape: `(expr).key`
+ * where expr yields a node/rel JSON object ({id,labels,properties}) OR a
+ * plain map. For a node/rel shape, regular keys live under $.properties and
+ * the meta keys (id/labels/type/startNode/endNode) at top level; a plain map
+ * uses top-level keys. (Graph6 [4]/[6]/[8].) argv[0]=value, argv[1]=key. */
+void gql_dyn_prop_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(context); return; }
+    if (sqlite3_value_type(argv[0]) == SQLITE_NULL ||
+        sqlite3_value_type(argv[1]) == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    const char *v = (const char*)sqlite3_value_text(argv[0]);
+    if (!v) { sqlite3_result_null(context); return; }
+    const char *vw = skip_ws(v);
+    if (*vw != '{') { sqlite3_result_null(context); return; }  /* not a map/entity */
+    sqlite3 *db = sqlite3_context_db_handle(context);
+    sqlite3_stmt *st = NULL;
+    const char *sql =
+        "SELECT CASE WHEN json_type(?1, '$.properties') IS NOT NULL THEN "
+        "  CASE WHEN ?2 IN ('id','labels','type','startNode','endNode','start','end') "
+        "       THEN json_extract(?1, '$.' || ?2) "
+        "       ELSE json_extract(?1, '$.properties.' || ?2) END "
+        "ELSE json_extract(?1, '$.' || ?2) END";
+    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_value(st, 1, argv[0]);
+        sqlite3_bind_value(st, 2, argv[1]);
+        if (sqlite3_step(st) == SQLITE_ROW)
+            sqlite3_result_value(context, sqlite3_column_value(st, 0));
+        else
+            sqlite3_result_null(context);
+        sqlite3_finalize(st);
+    } else {
+        sqlite3_result_null(context);
+    }
+}
 void gql_edge_prop_func(sqlite3_context *c, int argc, sqlite3_value **argv) {
     gql_entity_prop_lookup(c, argc, argv, true);
 }

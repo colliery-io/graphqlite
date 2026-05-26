@@ -17,6 +17,8 @@ void gql_in_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 /* Dynamic property lookup on a node/edge by runtime key (Graph7). */
 void gql_node_prop_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_edge_prop_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+/* Static property access on a JSON value of unknown shape (Graph6). */
+void gql_dyn_prop_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 /* Cypher-orderability min()/max() aggregates (step + final). */
 void gql_min_step(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_min_final(sqlite3_context *ctx);

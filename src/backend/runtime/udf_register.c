@@ -92,6 +92,9 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   rc = sqlite3_create_function(db, "_gql_edge_prop", 2,
                          SQLITE_UTF8, 0, gql_edge_prop_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
+  rc = sqlite3_create_function(db, "_gql_dyn_prop", 2,
+                         SQLITE_UTF8, 0, gql_dyn_prop_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
 
   /* Cypher-orderability min()/max() aggregates (step + final, no scalar fn). */
   rc = sqlite3_create_function(db, "_gql_min", 1,

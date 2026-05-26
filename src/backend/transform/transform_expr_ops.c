@@ -557,15 +557,19 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return 0;
     }
 
-    /* Handle subscript base: list[0].name → json_extract(list_subscript_sql, '$.name') */
+    /* Handle subscript base: (list[0]).name. The subscript may yield a plain
+     * map OR a node/relationship JSON object (e.g. `WITH [123, n] AS list
+     * RETURN (list[1]).existing`), so route through _gql_dyn_prop which picks
+     * $.properties.<key> for entity-shaped objects and $.<key> for maps.
+     * (Graph6 [4]/[6]/[8].) */
     if (prop->expr->type == AST_NODE_SUBSCRIPT) {
-        append_sql(ctx, "json_extract(");
+        append_sql(ctx, "_gql_dyn_prop(");
         if (transform_expression(ctx, prop->expr) < 0) return -1;
-        append_sql(ctx, ", '$.");
+        append_sql(ctx, ", ");
         { char *esc_prop = escape_sql_string(prop->property_name);
-          append_sql(ctx, "%s", esc_prop ? esc_prop : prop->property_name);
+          append_sql(ctx, "'%s'", esc_prop ? esc_prop : prop->property_name);
           free(esc_prop); }
-        append_sql(ctx, "')");
+        append_sql(ctx, ")");
         return 0;
     }
 
