@@ -217,6 +217,48 @@ static bool fetch_node_prop_double(cypher_executor *executor, int node_id,
     return false;
 }
 
+static bool fetch_edge_prop_int(cypher_executor *executor, int edge_id,
+                                const char *prop_name, int64_t *out) {
+    const char *type_tables[] = {"edge_props_int", "edge_props_real", "edge_props_text", NULL};
+    for (int t = 0; type_tables[t]; t++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT value FROM %s WHERE edge_id = %d AND key_id = "
+            "(SELECT id FROM property_keys WHERE key = '%s')",
+            type_tables[t], edge_id, prop_name);
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            int rc = sqlite3_step(stmt);
+            bool got = false;
+            if (rc == SQLITE_ROW) { *out = sqlite3_column_int64(stmt, 0); got = true; }
+            sqlite3_finalize(stmt);
+            if (got) return true;
+        }
+    }
+    return false;
+}
+
+static bool fetch_edge_prop_double(cypher_executor *executor, int edge_id,
+                                   const char *prop_name, double *out) {
+    const char *type_tables[] = {"edge_props_real", "edge_props_int", NULL};
+    for (int t = 0; type_tables[t]; t++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT value FROM %s WHERE edge_id = %d AND key_id = "
+            "(SELECT id FROM property_keys WHERE key = '%s')",
+            type_tables[t], edge_id, prop_name);
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            int rc = sqlite3_step(stmt);
+            bool got = false;
+            if (rc == SQLITE_ROW) { *out = sqlite3_column_double(stmt, 0); got = true; }
+            sqlite3_finalize(stmt);
+            if (got) return true;
+        }
+    }
+    return false;
+}
+
 /* Compute an aggregate over a list of var_maps for a single RETURN item.
  * Writes a result cell into result->data[0][col_idx]. */
 void project_aggregate_cell(cypher_executor *executor,
@@ -247,8 +289,11 @@ void project_aggregate_cell(cypher_executor *executor,
             if (var_name) {
                 for (int m = 0; m < n_maps; m++) {
                     int nid = get_variable_node_id(maps[m], var_name);
+                    int eid = (nid < 0) ? get_variable_edge_id(maps[m], var_name) : -1;
                     int64_t tmp;
                     if (nid >= 0 && fetch_node_prop_int(executor, nid, prop->property_name, &tmp))
+                        cnt++;
+                    else if (eid >= 0 && fetch_edge_prop_int(executor, eid, prop->property_name, &tmp))
                         cnt++;
                 }
             }
@@ -279,16 +324,21 @@ void project_aggregate_cell(cypher_executor *executor,
     int64_t isum = 0, imin = 0, imax = 0;
     for (int m = 0; m < n_maps; m++) {
         int nid = get_variable_node_id(maps[m], var_name);
-        if (nid < 0) continue;
+        int eid = (nid < 0) ? get_variable_edge_id(maps[m], var_name) : -1;
+        if (nid < 0 && eid < 0) continue;
         int64_t iv;
         double dv;
-        if (fetch_node_prop_int(executor, nid, prop->property_name, &iv)) {
+        bool got_int = (nid >= 0)
+            ? fetch_node_prop_int(executor, nid, prop->property_name, &iv)
+            : fetch_edge_prop_int(executor, eid, prop->property_name, &iv);
+        if (got_int) {
             dv = (double)iv;
-        } else if (fetch_node_prop_double(executor, nid, prop->property_name, &dv)) {
-            all_int = false;
-            iv = (int64_t)dv;
         } else {
-            continue;
+            bool got_dbl = (nid >= 0)
+                ? fetch_node_prop_double(executor, nid, prop->property_name, &dv)
+                : fetch_edge_prop_double(executor, eid, prop->property_name, &dv);
+            if (got_dbl) { all_int = false; iv = (int64_t)dv; }
+            else continue;
         }
         if (seen == 0) {
             isum = iv; imin = iv; imax = iv;
@@ -353,24 +403,32 @@ void project_return_row_from_var_map(cypher_executor *executor,
             }
             if (var_name && prop_name) {
                 int node_id = get_variable_node_id(var_map, var_name);
-                if (node_id >= 0) {
-                    const char *type_tables[] = {
+                int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
+                const char *id_col = node_id >= 0 ? "node_id" : "edge_id";
+                int ent_id = node_id >= 0 ? node_id : edge_id;
+                if (ent_id >= 0) {
+                    const char *node_tables[] = {
                         "node_props_text", "node_props_int",
                         "node_props_real", "node_props_bool", NULL
                     };
+                    const char *edge_tables[] = {
+                        "edge_props_text", "edge_props_int",
+                        "edge_props_real", "edge_props_bool", NULL
+                    };
+                    const char **type_tables = node_id >= 0 ? node_tables : edge_tables;
                     for (int t = 0; type_tables[t]; t++) {
                         char sql[512];
                         snprintf(sql, sizeof(sql),
-                            "SELECT value FROM %s WHERE node_id = %d AND key_id = "
+                            "SELECT value FROM %s WHERE %s = %d AND key_id = "
                             "(SELECT id FROM property_keys WHERE key = '%s')",
-                            type_tables[t], node_id, prop_name);
+                            type_tables[t], id_col, ent_id, prop_name);
                         sqlite3_stmt *stmt;
                         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
                             if (sqlite3_step(stmt) == SQLITE_ROW) {
                                 int sql_type = sqlite3_column_type(stmt, 0);
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
                                 if (val) {
-                                    if (strcmp(type_tables[t], "node_props_bool") == 0) {
+                                    if (strstr(type_tables[t], "_props_bool")) {
                                         result->data[row_idx][i] = strdup(atoi(val) ? "true" : "false");
                                         result->data_types[row_idx][i] = SQLITE_TEXT;
                                     } else {

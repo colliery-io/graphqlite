@@ -638,6 +638,34 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value_free(&pv);
                                     continue;
                                 }
+                            } else if (pair->value->type == AST_NODE_IDENTIFIER && g_foreach_ctx) {
+                                /* foreach/UNWIND binding reference, e.g.
+                                 * `UNWIND [1,2,3] AS x CREATE ()-[r {num: x}]->()`.
+                                 * Mirrors the node-property path above. */
+                                cypher_identifier *id = (cypher_identifier*)pair->value;
+                                foreach_binding *binding = get_foreach_binding(g_foreach_ctx, id->name);
+                                if (binding) {
+                                    switch (binding->literal_type) {
+                                        case LITERAL_STRING:
+                                            prop_type = PROP_TYPE_TEXT;
+                                            prop_value = binding->value.string;
+                                            break;
+                                        case LITERAL_INTEGER:
+                                            prop_type = PROP_TYPE_INTEGER;
+                                            prop_value = &binding->value.integer;
+                                            break;
+                                        case LITERAL_DECIMAL:
+                                            prop_type = PROP_TYPE_REAL;
+                                            prop_value = &binding->value.decimal;
+                                            break;
+                                        case LITERAL_BOOLEAN:
+                                            prop_type = PROP_TYPE_BOOLEAN;
+                                            prop_value = &binding->value.boolean;
+                                            break;
+                                        default:
+                                            continue;
+                                    }
+                                }
                             }
 
                             if (prop_value) {
