@@ -172,24 +172,33 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
         return -1;
     }
 
-    /* Build JSON array of relationship IDs */
-    append_sql(ctx, "json_array(");
-    bool first = true;
-    for (int i = 0; i < path_var->path_elements->count; i++) {
+    /* Collect relationship aliases in path order. */
+    const char *rel_aliases[64];
+    int n_rels = 0;
+    for (int i = 0; i < path_var->path_elements->count && n_rels < 64; i++) {
         ast_node *element = path_var->path_elements->items[i];
         if (element->type == AST_NODE_REL_PATTERN) {
             cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
             if (rel->variable) {
                 const char *rel_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
-                if (rel_alias) {
-                    if (!first) append_sql(ctx, ", ");
-                    append_sql(ctx, "%s.id", rel_alias);
-                    first = false;
-                }
+                if (rel_alias) rel_aliases[n_rels++] = rel_alias;
             }
         }
     }
-    append_sql(ctx, ")");
+
+    /* relationships() on a null path (e.g. an OPTIONAL pattern that didn't
+     * match) is null, not [null]. Guard on the first rel alias's id being
+     * NULL — an OPTIONAL path matches all-or-nothing. (Path2 [3].) */
+    if (n_rels > 0) {
+        append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_array(", rel_aliases[0]);
+        for (int i = 0; i < n_rels; i++) {
+            if (i > 0) append_sql(ctx, ", ");
+            append_sql(ctx, "%s.id", rel_aliases[i]);
+        }
+        append_sql(ctx, ") END)");
+    } else {
+        append_sql(ctx, "json_array()");
+    }
 
     return 0;
 }
