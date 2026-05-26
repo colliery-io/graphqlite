@@ -275,11 +275,11 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
-### 2026-05-26 — Session: +65 TCK (3590 → 3655), 15 commits
+### 2026-05-26 — Session: +69 TCK (3590 → 3659), 16 commits
 
 All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
 zero-regression via full-TCK pass-set diff + unit (944/944) +
-functional. Now **3655 / 3880 = 94.2% executable**.
+functional. Now **3659 / 3880 = 94.3% executable**.
 
 Cluster fixes this session (commit → area → delta):
 - Unwind1 [12] — UNWIND over `collect(node)` → trailing MATCH binds
@@ -312,6 +312,10 @@ Cluster fixes this session (commit → area → delta):
   input-scope var the WITH drops is now emitted INSIDE the CTE body
   (input tables still in FROM), not silently dropped. Narrow trigger
   (expr_refs_dropped_input_var); aggregating ORDER BY exprs excluded. +5
+- Graph7 [1] + Merge6 [3]/[7] + Merge7 [5] — dynamic property lookup
+  `n[expr]` / `n[$key]` on a node/edge via new `_gql_node_prop`/
+  `_gql_edge_prop` EAV-by-runtime-key UDFs. Graph7 [2]/[3] (CREATE+RETURN,
+  executor-evaluated) still open. +4
 - 2 correctness-only commits (+0 TCK): boolean projection through WITH
   renders as JSON boolean; undirected MERGE matches either orientation.
 
