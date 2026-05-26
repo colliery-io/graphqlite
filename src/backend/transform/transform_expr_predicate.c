@@ -293,8 +293,17 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     const char *old_alias = transform_var_get_alias(ctx->var_ctx, pred->variable);
     char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
-    /* Register the predicate variable to map to json_each.value */
-    transform_var_register_projected(ctx->var_ctx, pred->variable, "json_each.value");
+    /* Give this level's json_each a unique alias so nested quantifiers
+     * (e.g. single(x IN ... WHERE none(y IN x ...))) don't shadow each
+     * other — the inner json_each must not capture the outer iteration
+     * variable. Map the predicate variable to "<alias>.value".
+     * (Quantifier6 family.) */
+    char je_alias[32], je_value[40];
+    snprintf(je_alias, sizeof(je_alias), "_je_%d", ctx->quantifier_counter++);
+    snprintf(je_value, sizeof(je_value), "%s.value", je_alias);
+
+    /* Register the predicate variable to map to <alias>.value */
+    transform_var_register_projected(ctx->var_ctx, pred->variable, je_value);
 
     /* `all` keeps the legacy "no FALSE → TRUE, ignore NULL" semantics. The
      * openCypher TCK has an internal conflict here: Quantifier4 [10] expects
@@ -310,7 +319,7 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
             if (saved_alias) free(saved_alias);
             return -1;
         }
-        append_sql(ctx, ") WHERE NOT (");
+        append_sql(ctx, ") AS %s WHERE NOT (", je_alias);
         if (transform_expression(ctx, pred->predicate) < 0) {
             if (saved_alias) free(saved_alias);
             return -1;
@@ -354,7 +363,7 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
             if (saved_alias) free(saved_alias);
             return -1;
         }
-        append_sql(ctx, ")))");
+        append_sql(ctx, ") AS %s))", je_alias);
     }
 
     /* Restore the old alias if we saved one */

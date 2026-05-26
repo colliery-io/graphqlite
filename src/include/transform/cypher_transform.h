@@ -51,6 +51,7 @@ struct cypher_transform_context {
     int unwind_cte_counter;         /* Counter for UNWIND CTE names (_unwind_N) */
     int reduce_counter;             /* Counter for REDUCE CTE names (_reduce_N) */
     int prop_join_counter;          /* Counter for property JOIN aliases */
+    int quantifier_counter;         /* Counter for list-predicate json_each aliases (_je_N) */
     int anon_node_counter;          /* Cumulative counter for anonymous nodes */
     int anon_node_base;             /* Base offset for the current pattern's anon nodes */
 
