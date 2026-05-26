@@ -275,11 +275,11 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
-### 2026-05-26 — Session: +57 TCK (3590 → 3647), 13 commits
+### 2026-05-26 — Session: +60 TCK (3590 → 3650), 14 commits
 
 All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
 zero-regression via full-TCK pass-set diff + unit (944/944) +
-functional. Now **3647 / 3880 = 94.0% executable**.
+functional. Now **3650 / 3880 = 94.1% executable**.
 
 Cluster fixes this session (commit → area → delta):
 - Unwind1 [12] — UNWIND over `collect(node)` → trailing MATCH binds
@@ -305,8 +305,27 @@ Cluster fixes this session (commit → area → delta):
   build_path_from_ids). **This is Phase C / C3 — landed early.** +4
 - List5 [21]/[29]/[31]/[34] — `IN` 3VL for nested-null list elements
   (gql_eq_json for containers, typed SQL `=` for scalars). +4
+- Aggregation2 [9]/[11]/[12] — Cypher-orderability `min()`/`max()` via
+  custom `_gql_min`/`_gql_max` aggregates (order-key total order, type
+  preserved via sqlite3_value_dup). Aggregation2 now 12/12. +3
 - 2 correctness-only commits (+0 TCK): boolean projection through WITH
   renders as JSON boolean; undirected MERGE matches either orientation.
+
+Note: the order-key total order (object < list < text < bool < number
+< null) now powers ORDER BY (_gql_order_key), list `=`/`IN`
+(gql_eq_json), and `min()`/`max()` — a reusable orderability core.
+
+Investigated WithOrderBy2 [21]-[24] (DESC examples) and Merge5 [12]/[13]
+— both NOT the orderability core; both are scope/transform-ordering bugs:
+- WithOrderBy2 [21]-[24]: `WITH a.name AS name ORDER BY a.name + 'C' DESC`
+  — the ORDER BY references input-scope `a`, which the WITH var-ctx reset
+  has discarded, so the ORDER BY is silently DROPPED from the SQL (verified:
+  generated `SELECT name FROM _with_0 LIMIT 2`, no ORDER BY). Fix needs
+  ORDER BY emitted inside the CTE body (input tables still in FROM) with
+  dual-scope resolution (input vars + projected aliases). Risky refactor of
+  a heavily-used path — deferred for a fresh session.
+- Merge5 [12]/[13]: combined synth re-match in handle_match_merge drops
+  inline node properties → undirected double-count.
 
 Remaining leads (root causes documented in agent memory files):
 - **Merge5 [12]/[13]** — combined synth re-match in handle_match_merge
