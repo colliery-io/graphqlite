@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "transform/cypher_transform.h"
 #include "transform/transform_helpers.h"
@@ -1101,13 +1102,23 @@ skip_combined_exists:
                             ctx->error_message = strdup("Failed to get alias for projected variable");
                             return -1;
                         }
-                        /* Extract CTE name from source_expr (e.g., "_with_0.p" -> "_with_0") */
+                        /* Extract CTE name from source_expr (e.g., "_with_0.p" -> "_with_0").
+                         * The alias may be a function-wrapped id reference
+                         * (e.g. "json_extract(_unwind_0.value, '$.id')" for a
+                         * node unwound from collect()); in that case the CTE
+                         * token is the identifier ending at the first '.', so
+                         * scan back from the dot to the start of that token. */
                         char cte_name[64];
                         const char *dot = strchr(alias, '.');
                         if (dot) {
-                            size_t len = dot - alias;
+                            const char *start = dot;
+                            while (start > alias &&
+                                   (isalnum((unsigned char)start[-1]) || start[-1] == '_')) {
+                                start--;
+                            }
+                            size_t len = dot - start;
                             if (len >= sizeof(cte_name)) len = sizeof(cte_name) - 1;
-                            strncpy(cte_name, alias, len);
+                            strncpy(cte_name, start, len);
                             cte_name[len] = '\0';
                         } else {
                             strncpy(cte_name, alias, sizeof(cte_name) - 1);

@@ -57,6 +57,12 @@ struct transform_var {
 
     /* For projected variables */
     char *source_expr;       /* Original expression (for WITH aliasing) */
+
+    /* T-0333 (Unwind1 [12]): when this projected var holds a list-of-nodes
+     * or list-of-edges (e.g. `collect(n) AS bees`), record the inner kind
+     * so a subsequent UNWIND can re-bind elements as nodes/edges instead
+     * of opaque projected scalars. VAR_KIND_PROJECTED = "unknown / scalar". */
+    var_kind list_inner_kind;
 };
 
 /* Variable context - manages all variables during transformation */

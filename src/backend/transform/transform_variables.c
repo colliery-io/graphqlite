@@ -147,6 +147,10 @@ int transform_var_register(transform_var_context *ctx,
     var->declared_in_clause = ctx->current_clause;
     var->is_visible = true;
     var->is_bound = false;
+    /* VAR_KIND_NODE == 0, so the memset above would otherwise tag every list
+     * as a list-of-nodes. Default to PROJECTED ("unknown / scalar"); only an
+     * explicit collect(node|edge) sets this to NODE/EDGE. */
+    var->list_inner_kind = VAR_KIND_PROJECTED;
 
     ctx->count++;
     return 0;

@@ -43,8 +43,23 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
      * in scope so we can carry them through the UNWIND CTE. Without this,
      * `WITH 1 AS a UNWIND [1,2] AS x RETURN a, x` errors out because the
      * UNWIND drops `a` from the var context. */
+    /* T-0333 (Unwind1 [12]): if UNWIND source is an identifier referencing
+     * a list-of-nodes/edges (e.g. `collect(n)`), capture the inner kind
+     * before the var-ctx reset so we can rebind the unwound alias with the
+     * proper kind. */
+    var_kind unwind_inner_kind = VAR_KIND_PROJECTED;
+    if (unwind->expr && unwind->expr->type == AST_NODE_IDENTIFIER) {
+        cypher_identifier *id = (cypher_identifier*)unwind->expr;
+        transform_var *src = transform_var_lookup(ctx->var_ctx, id->name);
+        if (src && (src->list_inner_kind == VAR_KIND_NODE ||
+                    src->list_inner_kind == VAR_KIND_EDGE)) {
+            unwind_inner_kind = src->list_inner_kind;
+        }
+    }
+
     char *carry_names[64];
     char *carry_aliases[64];
+    var_kind carry_kinds[64];
     int carry_count = 0;
     {
         int n = transform_var_count(ctx->var_ctx);
@@ -52,13 +67,24 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             transform_var *v = transform_var_at(ctx->var_ctx, i);
             if (!v || !v->name) continue;
             if (!v->is_visible) continue;
-            if (v->kind != VAR_KIND_PROJECTED) continue;
-            /* Projected vars store the source expression here (e.g.
-             * "_with_0.msg"); table_alias may be NULL for them. */
+            /* T-0333 (Unwind1 [12]): carry projected vars and post-WITH
+             * node/edge vars. Post-WITH node/edge variables hold an
+             * `<cte>.<col>` reference (alias IS the id), so they thread
+             * through identically to a projected scalar. */
+            if (v->kind != VAR_KIND_PROJECTED &&
+                v->kind != VAR_KIND_NODE &&
+                v->kind != VAR_KIND_EDGE) continue;
             const char *alias = v->source_expr ? v->source_expr : v->table_alias;
             if (!alias) continue;
+            /* For post-WITH node/edge vars, table_alias is the id column
+             * reference (alias_is_id is true). For pre-WITH node/edge
+             * vars (just-emitted MATCH), table_alias is the SQL table
+             * alias and we can't carry those through an UNWIND CTE —
+             * skip them. */
+            if ((v->kind == VAR_KIND_NODE || v->kind == VAR_KIND_EDGE) && !v->alias_is_id) continue;
             carry_names[carry_count]   = strdup(v->name);
             carry_aliases[carry_count] = strdup(alias);
+            carry_kinds[carry_count]   = v->kind;
             carry_count++;
         }
     }
@@ -440,14 +466,24 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     /* Clear old variables - UNWIND creates a new scope */
     transform_var_ctx_reset(ctx->var_ctx);
 
-    /* Restore the projected variables we captured pre-reset, now pointing
-     * at the new UNWIND CTE's columns (which we projected through above). */
+    /* Restore the carried variables we captured pre-reset, now pointing
+     * at the new UNWIND CTE's columns. Preserve original kind so post-UNWIND
+     * code paths see nodes/edges as nodes/edges (json-object projection,
+     * property access via id) rather than scalars. */
     for (int i = 0; i < carry_count; i++) {
         if (has_carry) {
             char src[256], _ib[128];
             snprintf(src, sizeof(src), "%s.%s", cte_name,
                      sql_ident(_ib, sizeof(_ib), carry_names[i]));
-            transform_var_register_projected(ctx->var_ctx, carry_names[i], src);
+            if (carry_kinds[i] == VAR_KIND_NODE) {
+                transform_var_register_node(ctx->var_ctx, carry_names[i], src, NULL);
+                transform_var_set_alias_is_id(ctx->var_ctx, carry_names[i], true);
+            } else if (carry_kinds[i] == VAR_KIND_EDGE) {
+                transform_var_register_edge(ctx->var_ctx, carry_names[i], src, NULL);
+                transform_var_set_alias_is_id(ctx->var_ctx, carry_names[i], true);
+            } else {
+                transform_var_register_projected(ctx->var_ctx, carry_names[i], src);
+            }
         }
         free(carry_names[i]);
         free(carry_aliases[i]);
@@ -455,10 +491,30 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     dbuf_free(&carry_cols);
     dbuf_free(&carry_cols_orig);
 
-    /* Register the unwound variable in unified system */
+    /* Register the unwound variable. When the source was a tagged
+     * list-of-nodes/edges, rebind as that kind with alias_is_id so
+     * post-UNWIND MATCH/RETURN treat it as a bound entity (T-0333). */
     char unwind_source[256];
     snprintf(unwind_source, sizeof(unwind_source), "%s.value", cte_name);
-    transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
+    if (unwind_inner_kind == VAR_KIND_NODE || unwind_inner_kind == VAR_KIND_EDGE) {
+        /* collect() hydrates each element to a full JSON object
+         * ({id,labels,properties}), so the unwound value is an object, not a
+         * raw id. Bind the entity's alias to json_extract(value,'$.id') so it
+         * behaves like any other post-WITH alias_is_id entity: edge joins
+         * constrain on the id, RETURN re-hydrates from the DB by id, and
+         * property access resolves through the id. */
+        char id_source[300];
+        snprintf(id_source, sizeof(id_source),
+                 "json_extract(%s.value, '$.id')", cte_name);
+        if (unwind_inner_kind == VAR_KIND_NODE) {
+            transform_var_register_node(ctx->var_ctx, unwind->alias, id_source, NULL);
+        } else {
+            transform_var_register_edge(ctx->var_ctx, unwind->alias, id_source, NULL);
+        }
+        transform_var_set_alias_is_id(ctx->var_ctx, unwind->alias, true);
+    } else {
+        transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
+    }
 
     /* Set up FROM for the outer query — SELECT columns are added by RETURN clause */
     sql_from(ctx->unified_builder, cte_name, NULL);

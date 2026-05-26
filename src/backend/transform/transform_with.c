@@ -610,6 +610,11 @@ with_star_columns_done:
     /* Before reset - save source variable kinds for simple identifiers
      * This preserves node/edge status so property lookups work after WITH */
     var_kind *source_kinds = NULL;
+    /* T-0333 (Unwind1 [12]): for `collect(<node|edge var>) AS x` items, capture
+     * the collected element's kind BEFORE the var-ctx reset (the source var is
+     * wiped by the reset below), so the projection loop can tag list_inner_kind
+     * on x for a downstream UNWIND to rebind elements as nodes/edges. */
+    var_kind *inner_kinds = NULL;
     int saved_var_count = 0;
     char **saved_var_names = NULL;
     var_kind *saved_var_kinds = NULL;
@@ -631,9 +636,11 @@ with_star_columns_done:
         }
     } else if (with->items && with->items->count > 0) {
         source_kinds = calloc(with->items->count, sizeof(var_kind));
+        inner_kinds = calloc(with->items->count, sizeof(var_kind));
         if (source_kinds) {
             for (int i = 0; i < with->items->count; i++) {
                 cypher_return_item *item = (cypher_return_item*)with->items->items[i];
+                if (inner_kinds) inner_kinds[i] = VAR_KIND_PROJECTED;
                 if (item->expr->type == AST_NODE_IDENTIFIER) {
                     cypher_identifier *id = (cypher_identifier*)item->expr;
                     transform_var *var = transform_var_lookup(ctx->var_ctx, id->name);
@@ -644,6 +651,23 @@ with_star_columns_done:
                     }
                 } else {
                     source_kinds[i] = VAR_KIND_PROJECTED;
+                    /* collect(<identifier>) — record the element's kind now,
+                     * while the source var is still in scope. */
+                    if (inner_kinds && item->expr->type == AST_NODE_FUNCTION_CALL) {
+                        cypher_function_call *fc = (cypher_function_call*)item->expr;
+                        if (fc->function_name &&
+                            strcasecmp(fc->function_name, "collect") == 0 &&
+                            fc->args && fc->args->count == 1 &&
+                            fc->args->items[0] &&
+                            fc->args->items[0]->type == AST_NODE_IDENTIFIER) {
+                            cypher_identifier *aid = (cypher_identifier*)fc->args->items[0];
+                            transform_var *src = transform_var_lookup(ctx->var_ctx, aid->name);
+                            if (src && (src->kind == VAR_KIND_NODE ||
+                                        src->kind == VAR_KIND_EDGE)) {
+                                inner_kinds[i] = src->kind;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -737,6 +761,17 @@ with_star_columns_done:
                     CYPHER_DEBUG("WITH: Registered edge variable '%s' -> %s (alias_is_id)", col_name, select_expr);
                 } else {
                     transform_var_register_projected(ctx->var_ctx, col_name, select_expr);
+                    /* T-0333 (Unwind1 [12]): when this WITH item is
+                     * `collect(<node|edge_var>)`, tag the projected var so a
+                     * downstream UNWIND can rebind elements as nodes/edges.
+                     * inner_kinds[i] was captured pre-reset (the source var is
+                     * no longer in scope here). */
+                    if (inner_kinds &&
+                        (inner_kinds[i] == VAR_KIND_NODE ||
+                         inner_kinds[i] == VAR_KIND_EDGE)) {
+                        transform_var *dst = transform_var_lookup(ctx->var_ctx, col_name);
+                        if (dst) dst->list_inner_kind = inner_kinds[i];
+                    }
                     /* Mark vars whose projection is a scalar literal /
                      * scalar expression so MATCH can later reject
                      * `WITH 123 AS n MATCH (n)`. */
@@ -766,6 +801,7 @@ with_star_columns_done:
 
     /* Free saved kinds array */
     free(source_kinds);
+    free(inner_kinds);
 
     /* Handle WHERE clause (applied after projection) — only if the pre-WITH
      * translation didn't succeed (i.e., the WHERE references projected
