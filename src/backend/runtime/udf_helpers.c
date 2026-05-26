@@ -608,29 +608,63 @@ void gql_in_func(
         return;
     }
 
-    /* Build an "element = each element" comparison via json_each. */
+    /* Compare LHS against each collection element using Cypher 3VL equality
+     * (gql_eq_json), not raw SQL `=`. This gives correct results when an
+     * element is a list/map whose own elements include null (e.g.
+     * `[1,2] IN [[1,null]]` → null, `[1,null] IN [[1,null]]` → null). Aggregate
+     * per 3VL: any TRUE → true; else any NULL → null; else false.
+     * (List5 [21]/[29]/[31]/[34].) */
+    const char *lhs = (const char*)sqlite3_value_text(argv[0]);
+    if (!lhs) { sqlite3_result_null(context); return; }
+
     sqlite3 *db = sqlite3_context_db_handle(context);
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(db,
-        "SELECT "
-        "  MAX(CASE WHEN je.value IS NULL THEN 0 WHEN je.value = ?1 THEN 1 ELSE 0 END), "
-        "  MAX(CASE WHEN je.value IS NULL THEN 1 ELSE 0 END) "
-        "FROM json_each(?2) je",
-        -1, &stmt, NULL);
+        "SELECT je.value, je.type FROM json_each(?1) je", -1, &stmt, NULL);
     if (rc != SQLITE_OK) { sqlite3_result_null(context); return; }
-    sqlite3_bind_value(stmt, 1, argv[0]);
-    sqlite3_bind_text(stmt, 2, coll, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, coll, -1, SQLITE_TRANSIENT);
 
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        int matched = sqlite3_column_int(stmt, 0);
-        int has_null = sqlite3_column_int(stmt, 1);
-        if (matched) sqlite3_result_int(context, 1);
-        else if (has_null) sqlite3_result_null(context);
-        else sqlite3_result_int(context, 0);
-    } else {
-        sqlite3_result_null(context);
+    const char *lhs_s = skip_ws(lhs);
+    bool lhs_container = (*lhs_s == '[' || *lhs_s == '{');
+
+    /* For scalar-vs-scalar comparison, replicate SQLite's typed `=` (the
+     * historical behavior: `1 = '1'` is false by storage class, booleans
+     * compare correctly) rather than gql_eq_json's text compare. */
+    sqlite3_stmt *cmp = NULL;
+    sqlite3_prepare_v2(db, "SELECT ?1 = ?2", -1, &cmp, NULL);
+
+    bool any_true = false, any_null = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *etype = (const char*)sqlite3_column_text(stmt, 1);
+        const char *eval  = (const char*)sqlite3_column_text(stmt, 0);
+        if ((etype && strcmp(etype, "null") == 0) || !eval) {
+            any_null = true;   /* comparing against null is indeterminate */
+            continue;
+        }
+        bool elem_container = etype && (strcmp(etype, "array") == 0 ||
+                                        strcmp(etype, "object") == 0);
+        tval t = TVAL_FALSE;
+        if (lhs_container || elem_container) {
+            /* Container on either side: gql_eq_json handles element-wise
+             * equality with null propagation and container-vs-scalar=false. */
+            t = gql_eq_json(lhs, eval);
+        } else if (cmp) {
+            /* Both scalars: typed SQLite equality on the original values. */
+            sqlite3_reset(cmp);
+            sqlite3_bind_value(cmp, 1, argv[0]);
+            sqlite3_bind_value(cmp, 2, sqlite3_column_value(stmt, 0));
+            if (sqlite3_step(cmp) == SQLITE_ROW)
+                t = sqlite3_column_int(cmp, 0) ? TVAL_TRUE : TVAL_FALSE;
+        }
+        if (t == TVAL_TRUE)  any_true = true;
+        else if (t == TVAL_NULL) any_null = true;
     }
+    if (cmp) sqlite3_finalize(cmp);
     sqlite3_finalize(stmt);
+
+    if (any_true)      sqlite3_result_int(context, 1);
+    else if (any_null) sqlite3_result_null(context);
+    else               sqlite3_result_int(context, 0);
 }
 
 /* Strict type-conversion UDFs. Each raises an SQL error (which the harness
