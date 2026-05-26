@@ -612,6 +612,46 @@ agtype_value* create_property_agtype_value(const char* value)
     return agtype_value_create_string(value);
 }
 
+/* Create one path element (vertex or edge) by id, hydrating from the DB. */
+static agtype_value *make_path_element(cypher_executor *executor, int64_t element_id,
+                                       bool make_node, const char *first_label)
+{
+    if (make_node) {
+        return agtype_value_create_vertex_with_properties(executor->db, element_id, first_label);
+    }
+    agtype_value *out = NULL;
+    sqlite3_stmt *edge_stmt;
+    const char *edge_sql = "SELECT source_id, target_id, type FROM edges WHERE id = ?";
+    if (sqlite3_prepare_v2(executor->db, edge_sql, -1, &edge_stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(edge_stmt, 1, element_id);
+        if (sqlite3_step(edge_stmt) == SQLITE_ROW) {
+            int64_t source_id = sqlite3_column_int64(edge_stmt, 0);
+            int64_t target_id = sqlite3_column_int64(edge_stmt, 1);
+            const char *type = (const char*)sqlite3_column_text(edge_stmt, 2);
+            out = agtype_value_create_edge_with_properties(executor->db, element_id, type, source_id, target_id);
+        }
+        sqlite3_finalize(edge_stmt);
+    }
+    return out ? out : agtype_value_create_null();
+}
+
+/* Decide whether path element `elem_index` is a node, and its label hint.
+ * For variable-length paths the element kind alternates by position
+ * (even=node, odd=edge); otherwise it follows the AST element. */
+static bool path_elem_is_node(transform_var *path_var, bool is_varlen,
+                              int elem_index, const char **first_label_out)
+{
+    *first_label_out = NULL;
+    if (is_varlen) return (elem_index % 2) == 0;
+    ast_node *element = path_var->path_elements->items[elem_index];
+    if (element->type == AST_NODE_NODE_PATTERN) {
+        cypher_node_pattern *node = (cypher_node_pattern*)element;
+        *first_label_out = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
+        return true;
+    }
+    return false;  /* rel (or unknown — treated as edge) */
+}
+
 /* Build a path agtype value from JSON array of element IDs */
 agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_context *ctx, const char *path_name, const char *json_ids)
 {
@@ -649,11 +689,39 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
     }
     
     CYPHER_DEBUG("build_path_from_ids: Counted %d IDs in JSON", id_count);
-    
-    if (id_count != path_var->path_elements->count) {
+
+    /* A variable-length path emits an interleaved id array of unbounded
+     * length (node,edge,node,...). Its AST has a fixed element count
+     * (e.g. 3 for (n)-[*]->(x)), so the fixed-count check below does not
+     * apply — instead the element kind alternates by position (even=node,
+     * odd=edge). Detect varlen by a rel element carrying ->varlen. */
+    bool is_varlen = false;
+    int rel_count = 0;
+    for (int e = 0; e < path_var->path_elements->count; e++) {
+        if (path_var->path_elements->items[e]->type == AST_NODE_REL_PATTERN) rel_count++;
+    }
+    /* Only a single-varlen-segment path uses the interleaved elem_ids array
+     * (and thus position-parity hydration). Mixed fixed+varlen paths keep the
+     * legacy AST-indexed behavior. Must match the transform_return projection. */
+    if (rel_count == 1) {
+        for (int e = 0; e < path_var->path_elements->count; e++) {
+            ast_node *el = path_var->path_elements->items[e];
+            if (el->type == AST_NODE_REL_PATTERN && ((cypher_rel_pattern*)el)->varlen) {
+                is_varlen = true;
+                break;
+            }
+        }
+    }
+
+    if (!is_varlen && id_count != path_var->path_elements->count) {
         /* Mismatch between expected elements and actual IDs */
-        CYPHER_DEBUG("build_path_from_ids: Mismatch - expected %d elements, got %d IDs", 
+        CYPHER_DEBUG("build_path_from_ids: Mismatch - expected %d elements, got %d IDs",
                      path_var->path_elements->count, id_count);
+        return agtype_value_create_null();
+    }
+    if (is_varlen && (id_count % 2) == 0) {
+        /* Interleaved path must have an odd count (n,e,n,...,n). */
+        CYPHER_DEBUG("build_path_from_ids: varlen id_count %d not odd", id_count);
         return agtype_value_create_null();
     }
     
@@ -679,43 +747,11 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
             if (id_pos > 0) {
                 id_buffer[id_pos] = '\0';
                 int64_t element_id = atoll(id_buffer);
-                
-                /* Create agtype value based on element type */
-                ast_node *element = path_var->path_elements->items[elem_index];
-                if (element->type == AST_NODE_NODE_PATTERN) {
-                    /* Create vertex */
-                    cypher_node_pattern *node = (cypher_node_pattern*)element;
-                    const char *first_label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
-                    CYPHER_DEBUG("build_path_from_ids: Creating vertex for element %d with ID %lld", elem_index, (long long)element_id);
-                    path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, first_label);
-                    CYPHER_DEBUG("build_path_from_ids: Created vertex %p", (void*)path_elements[elem_index]);
-                } else if (element->type == AST_NODE_REL_PATTERN) {
-                    /* Create edge - need to query for edge details */
-                    CYPHER_DEBUG("build_path_from_ids: Creating edge for element %d with ID %lld", elem_index, (long long)element_id);
-                    sqlite3_stmt *edge_stmt;
-                    const char *edge_sql = "SELECT source_id, target_id, type FROM edges WHERE id = ?";
-                    if (sqlite3_prepare_v2(executor->db, edge_sql, -1, &edge_stmt, NULL) == SQLITE_OK) {
-                        sqlite3_bind_int64(edge_stmt, 1, element_id);
-                        if (sqlite3_step(edge_stmt) == SQLITE_ROW) {
-                            int64_t source_id = sqlite3_column_int64(edge_stmt, 0);
-                            int64_t target_id = sqlite3_column_int64(edge_stmt, 1);
-                            const char *type = (const char*)sqlite3_column_text(edge_stmt, 2);
-                            path_elements[elem_index] = agtype_value_create_edge_with_properties(executor->db, element_id, type, source_id, target_id);
-                            CYPHER_DEBUG("build_path_from_ids: Created edge %p", (void*)path_elements[elem_index]);
-                        } else {
-                            CYPHER_DEBUG("build_path_from_ids: No edge found for ID %lld", (long long)element_id);
-                            path_elements[elem_index] = agtype_value_create_null();
-                        }
-                        sqlite3_finalize(edge_stmt);
-                    } else {
-                        CYPHER_DEBUG("build_path_from_ids: Failed to prepare edge query");
-                        path_elements[elem_index] = agtype_value_create_null();
-                    }
-                } else {
-                    CYPHER_DEBUG("build_path_from_ids: Unknown element type at index %d", elem_index);
-                    path_elements[elem_index] = agtype_value_create_null();
-                }
-                
+
+                const char *first_label = NULL;
+                bool make_node = path_elem_is_node(path_var, is_varlen, elem_index, &first_label);
+                path_elements[elem_index] = make_path_element(executor, element_id, make_node, first_label);
+
                 elem_index++;
                 id_pos = 0;
                 CYPHER_DEBUG("build_path_from_ids: Finished element %d, moving to next", elem_index - 1);
@@ -730,42 +766,10 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
         int64_t element_id = atoll(id_buffer);
         
         CYPHER_DEBUG("build_path_from_ids: Processing final element %d with ID %lld", elem_index, (long long)element_id);
-        
-        /* Create agtype value based on element type */
-        ast_node *element = path_var->path_elements->items[elem_index];
-        if (element->type == AST_NODE_NODE_PATTERN) {
-            /* Create vertex */
-            cypher_node_pattern *node = (cypher_node_pattern*)element;
-            const char *first_label = has_labels(node) ? get_label_string(node->labels->items[0]) : NULL;
-            CYPHER_DEBUG("build_path_from_ids: Creating vertex for element %d with ID %lld", elem_index, (long long)element_id);
-            path_elements[elem_index] = agtype_value_create_vertex_with_properties(executor->db, element_id, first_label);
-            CYPHER_DEBUG("build_path_from_ids: Created vertex %p", (void*)path_elements[elem_index]);
-        } else if (element->type == AST_NODE_REL_PATTERN) {
-            /* Create edge - need to query for edge details */
-            CYPHER_DEBUG("build_path_from_ids: Creating edge for element %d with ID %lld", elem_index, (long long)element_id);
-            sqlite3_stmt *edge_stmt;
-            const char *edge_sql = "SELECT source_id, target_id, type FROM edges WHERE id = ?";
-            if (sqlite3_prepare_v2(executor->db, edge_sql, -1, &edge_stmt, NULL) == SQLITE_OK) {
-                sqlite3_bind_int64(edge_stmt, 1, element_id);
-                if (sqlite3_step(edge_stmt) == SQLITE_ROW) {
-                    int64_t source_id = sqlite3_column_int64(edge_stmt, 0);
-                    int64_t target_id = sqlite3_column_int64(edge_stmt, 1);
-                    const char *type = (const char*)sqlite3_column_text(edge_stmt, 2);
-                    path_elements[elem_index] = agtype_value_create_edge_with_properties(executor->db, element_id, type, source_id, target_id);
-                    CYPHER_DEBUG("build_path_from_ids: Created edge %p", (void*)path_elements[elem_index]);
-                } else {
-                    CYPHER_DEBUG("build_path_from_ids: No edge found for ID %lld", (long long)element_id);
-                    path_elements[elem_index] = agtype_value_create_null();
-                }
-                sqlite3_finalize(edge_stmt);
-            } else {
-                CYPHER_DEBUG("build_path_from_ids: Failed to prepare edge query");
-                path_elements[elem_index] = agtype_value_create_null();
-            }
-        } else {
-            CYPHER_DEBUG("build_path_from_ids: Unknown element type at index %d", elem_index);
-            path_elements[elem_index] = agtype_value_create_null();
-        }
+
+        const char *first_label = NULL;
+        bool make_node = path_elem_is_node(path_var, is_varlen, elem_index, &first_label);
+        path_elements[elem_index] = make_path_element(executor, element_id, make_node, first_label);
         elem_index++;
     }
     

@@ -1207,16 +1207,21 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
      * each node maps to itself with depth=0. */
     if (min_hops == 0) {
         dbuf_appendf(&cte_query,
-            "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',' || n.id || ',' "
+            "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',' || n.id || ',', "
+            "CAST(n.id AS TEXT) "
             "FROM nodes n UNION ALL ");
     }
 
-    /* Base case: direct edges (depth = 1) */
+    /* Base case: direct edges (depth = 1).
+     * elem_ids carries the FULL interleaved path: node,edge,node,...
+     * (path_ids stays node-only for existing consumers). */
     dbuf_appendf(&cte_query,
         "SELECT e.%s, e.%s, 1, "
         "CAST(e.%s || ',' || e.%s AS TEXT), "
-        "','|| e.%s || ',' || e.%s || ','  "
+        "','|| e.%s || ',' || e.%s || ',', "
+        "e.%s || ',' || e.id || ',' || e.%s "
         "FROM edges e",
+        src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col);
@@ -1247,11 +1252,12 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
     dbuf_appendf(&cte_query,
         "SELECT cte.start_id, e.%s, cte.depth + 1, "
         "cte.path_ids || ',' || e.%s, "
-        "cte.visited || e.%s || ',' "
+        "cte.visited || e.%s || ',', "
+        "cte.elem_ids || ',' || e.id || ',' || e.%s "
         "FROM %s cte "
         "JOIN edges e ON e.%s = cte.end_id "
         "WHERE cte.depth >= 1 AND cte.depth < %d",
-        tgt_col, tgt_col, tgt_col,
+        tgt_col, tgt_col, tgt_col, tgt_col,
         cte_name,
         src_col,
         max_hops);
@@ -1283,7 +1289,7 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
     /* Build CTE name with column definitions */
     char cte_full_name[256];
     snprintf(cte_full_name, sizeof(cte_full_name),
-             "%s(start_id, end_id, depth, path_ids, visited)", cte_name);
+             "%s(start_id, end_id, depth, path_ids, visited, elem_ids)", cte_name);
 
     /* Add CTE to unified builder - recursive CTE */
     sql_cte(ctx->unified_builder, cte_full_name, dbuf_get(&cte_query), true);

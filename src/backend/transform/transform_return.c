@@ -835,9 +835,18 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         if (path_var && path_var->path_elements) {
                             CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->path_elements->count);
 
-                            /* Check if this is a variable-length path (shortestPath, etc.) */
+                            /* Check if this is a variable-length path (shortestPath, etc.).
+                             * The interleaved elem_ids path projection only applies
+                             * when the WHOLE path is a single varlen segment; a path
+                             * mixing fixed and varlen rels (Match7 [19]) has parts
+                             * outside this CTE and must keep the legacy behavior. */
                             bool has_varlen = false;
                             const char *varlen_alias = NULL;
+                            int rel_count = 0;
+                            for (int i = 0; i < path_var->path_elements->count; i++) {
+                                if (path_var->path_elements->items[i]->type == AST_NODE_REL_PATTERN)
+                                    rel_count++;
+                            }
                             for (int i = 0; i < path_var->path_elements->count; i++) {
                                 ast_node *element = path_var->path_elements->items[i];
                                 if (element->type == AST_NODE_REL_PATTERN) {
@@ -851,6 +860,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     }
                                 }
                             }
+                            /* Only a single-varlen-segment path uses the interleaved
+                             * elem_ids array; mixed fixed+varlen paths keep the legacy
+                             * path_ids projection (Match7 [19]). */
+                            bool single_varlen = has_varlen && rel_count == 1;
 
                             if (path_var->path_type == VAR_PATH_COMPREHENSION) {
                                 /* T-0332: pattern comprehension path — emit fully hydrated
@@ -922,8 +935,15 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                 }
                                 append_sql(ctx, "))");
                             } else if (has_varlen && varlen_alias) {
-                                /* For variable-length paths, use the CTE's path_ids column */
-                                append_sql(ctx, "'[' || %s.path_ids || ']'", varlen_alias);
+                                /* Single-varlen path: use the CTE's interleaved
+                                 * elem_ids (node,edge,node,...) so the executor
+                                 * hydrates the full path, not just endpoints
+                                 * (Match6 [15]/[16]/[19]/[20]). Mixed fixed+varlen
+                                 * paths keep the legacy node-only path_ids. */
+                                if (single_varlen)
+                                    append_sql(ctx, "'[' || %s.elem_ids || ']'", varlen_alias);
+                                else
+                                    append_sql(ctx, "'[' || %s.path_ids || ']'", varlen_alias);
                             } else {
                                 /* Regular path - build from individual element IDs */
                                 append_sql(ctx, "'[");
