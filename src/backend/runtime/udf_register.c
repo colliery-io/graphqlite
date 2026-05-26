@@ -85,6 +85,17 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_in_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* Cypher-orderability min()/max() aggregates (step + final, no scalar fn). */
+  rc = sqlite3_create_function(db, "_gql_min", 1,
+                         SQLITE_UTF8, 0,
+                         0, gql_min_step, gql_min_final);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_max", 1,
+                         SQLITE_UTF8, 0,
+                         0, gql_max_step, gql_max_final);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_subscript", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_subscript_func, 0, 0);

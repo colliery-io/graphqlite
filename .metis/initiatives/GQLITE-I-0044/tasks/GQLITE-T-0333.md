@@ -37,11 +37,17 @@ Fix WITH/UNWIND scope propagation issues in the write-path / Unwind1 cluster: `R
 **Done**: `RETURN *` expansion now uses `transform_var_get_alias` for projected vars — their `table_alias` is NULL; the column ref lives on `source_expr`. Previously the var was dropped from SELECT and the late `sqlite3_column_name` fallback synthesized the CTE-internal "value" name instead of the user-bound name.
 
 **Remaining**:
-- Unwind1 [12] — `WITH ... UNWIND ... MATCH` empty; second MATCH doesn't join on the carried/unwound vars.
-- Unwind1 [14] — UNWIND + MERGE + SET + RETURN empty; dispatcher path needs SET application + property projection.
-- Unwind1 [6] — CREATE from unwound parameter list.
+- Unwind1 [6] — CREATE from unwound parameter list (tracked separately as T-0183: UNWIND $param write paths).
 
-Each is a separate dispatcher bug.
+## Status (2026-05-26)
+
+Most of B4 landed (on PR `i0044-phase-b2-cross-type-cmp`):
+- Unwind1 [12] **DONE** — `WITH a, collect(b) AS bs UNWIND bs AS b2 MATCH (a)-[:Y]->(b2)`. collect() hydrates elements to JSON objects, so the unwound entity's alias is bound to `json_extract(<cte>.value,'$.id')` and behaves like any post-WITH alias_is_id entity. Also fixed the CTE-name extraction in transform_match to tolerate a function-wrapped id alias, and a latent `list_inner_kind` zero-init bug.
+- Unwind1 [14] **DONE** (earlier in this push) — UNWIND+MERGE+SET+RETURN.
+- Create6 **14/14** — the write-path WITH/WHERE/SKIP/LIMIT + aggregate thread-through:
+  [10]/[11] skip/limit after CREATE rels, [12] WITH-WHERE filter, [13] RETURN-aggregate, [7]/[14] aggregating WITH after CREATE. Required: foreach-binding rel properties in execute_create (had no IDENTIFIER case), edge-aware project_aggregate_cell + project_return_row_from_var_map, and a pure-aggregate-WITH collapse in handle_unwind_create_return.
+
+Cumulative B4 TCK: +2 (Unwind1 [11]/[13]) +1 (Unwind1 [12]) +1 (Unwind1 [14]) +6 (Create6) = ~+10. Remaining is just Unwind1 [6] → T-0183.
 
 ## Backlog Item Details **[CONDITIONAL: Backlog Item]**
 

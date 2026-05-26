@@ -1134,6 +1134,74 @@ void gql_order_key_func(
     sqlite3_result_value(context, argv[0]);
 }
 
+/* --- Cypher-orderability min()/max() aggregates (Aggregation2 [9]/[11]/[12]).
+ * SQLite's native MIN/MAX use storage-class order, which mis-orders mixed-type
+ * and list values. These custom aggregates keep the element whose Cypher
+ * order-key (same total order as _gql_order_key: object < list < text < bool
+ * < number < null) is smallest/largest, ignoring nulls, and return the
+ * original typed value via sqlite3_value_dup so type is preserved. --- */
+
+/* Build a Cypher order-key for any single value into a malloc'd string. */
+static char *okey_for_value(sqlite3 *db, sqlite3_value *v) {
+    char *b = NULL; size_t n = 0, cap = 0;
+    int t = sqlite3_value_type(v);
+    if (t == SQLITE_INTEGER || t == SQLITE_FLOAT) {
+        okey_append(&b, &n, &cap, "7", 1);
+        okey_num(&b, &n, &cap, sqlite3_value_double(v));
+    } else if (t == SQLITE_TEXT) {
+        const char *s = (const char*)sqlite3_value_text(v);
+        const char *sw = s ? skip_ws(s) : "";
+        if (*sw == '[') { okey_append(&b, &n, &cap, "2", 1); okey_encode_list(db, s, &b, &n, &cap); }
+        else if (*sw == '{') { okey_append(&b, &n, &cap, "1", 1); okey_append(&b, &n, &cap, s, strlen(s)); }
+        else if (sqlite3_value_subtype(v) == GQL_SUBTYPE_BOOLEAN && s) {
+            okey_append(&b, &n, &cap, strcmp(s, "true") == 0 ? "61" : "60", 2);
+        } else { okey_append(&b, &n, &cap, "5", 1); if (s) okey_append(&b, &n, &cap, s, strlen(s)); }
+    } else {
+        okey_append(&b, &n, &cap, "9", 1);  /* unknown → sort last */
+    }
+    if (!b) { b = malloc(1); if (b) b[0] = '\0'; }
+    return b;
+}
+
+typedef struct { char *key; sqlite3_value *val; int have; } gql_minmax_acc;
+
+static void gql_minmax_step(sqlite3_context *context, int argc,
+                            sqlite3_value **argv, int is_max) {
+    if (argc != 1) return;
+    if (sqlite3_value_type(argv[0]) == SQLITE_NULL) return;  /* ignore nulls */
+    gql_minmax_acc *a = (gql_minmax_acc*)sqlite3_aggregate_context(context, sizeof(*a));
+    if (!a) return;
+    sqlite3 *db = sqlite3_context_db_handle(context);
+    char *k = okey_for_value(db, argv[0]);
+    if (!k) return;
+    if (!a->have) {
+        a->key = k; a->val = sqlite3_value_dup(argv[0]); a->have = 1;
+        return;
+    }
+    int cmp = strcmp(k, a->key);
+    bool better = is_max ? (cmp > 0) : (cmp < 0);
+    if (better) {
+        free(a->key); a->key = k;
+        sqlite3_value_free(a->val); a->val = sqlite3_value_dup(argv[0]);
+    } else {
+        free(k);
+    }
+}
+
+static void gql_minmax_final(sqlite3_context *context, int is_max) {
+    (void)is_max;
+    gql_minmax_acc *a = (gql_minmax_acc*)sqlite3_aggregate_context(context, 0);
+    if (!a || !a->have) { sqlite3_result_null(context); return; }
+    sqlite3_result_value(context, a->val);
+    free(a->key);
+    sqlite3_value_free(a->val);
+}
+
+void gql_min_step(sqlite3_context *c, int argc, sqlite3_value **argv) { gql_minmax_step(c, argc, argv, 0); }
+void gql_min_final(sqlite3_context *c) { gql_minmax_final(c, 0); }
+void gql_max_step(sqlite3_context *c, int argc, sqlite3_value **argv) { gql_minmax_step(c, argc, argv, 1); }
+void gql_max_final(sqlite3_context *c) { gql_minmax_final(c, 1); }
+
 /* Extract nanosecond portion from ISO datetime string.
  * Input forms: 'YYYY-MM-DDTHH:MM:SS.<digits><tz>?', returns digits zero-padded
  * to 9 places as integer. Returns 0 if no fractional second present. */

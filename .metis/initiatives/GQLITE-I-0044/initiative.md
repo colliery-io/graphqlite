@@ -274,3 +274,45 @@ Phase C is delegated to existing/future initiatives.
 
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
+
+### 2026-05-26 — Session: +57 TCK (3590 → 3647), 13 commits
+
+All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
+zero-regression via full-TCK pass-set diff + unit (944/944) +
+functional. Now **3647 / 3880 = 94.0% executable**.
+
+Cluster fixes this session (commit → area → delta):
+- Unwind1 [12] — UNWIND over `collect(node)` → trailing MATCH binds
+  the unwound entity (collect hydrates to JSON objects; bind alias to
+  `json_extract(value,'$.id')`). **B4.** +1
+- WithOrderBy1 [32] — WITH property projection missing `*_props_json`
+  (list/map props came back NULL). +2
+- Comparison2 [4] — element-wise list ordering in `_gql_order_cmp`;
+  maps/nodes/rels unorderable → null. **extends B2.** +4
+- Quantifier5–8 — unique `json_each` alias so nested quantifiers
+  (`single(x IN .. WHERE none(y IN x ..))`) don't shadow. **B3.** +24
+- list ORDER BY [9]/[10]/[31] (+ ReturnOrderBy1) — order-preserving
+  sort key for JSON lists in `_gql_order_key`. +7
+- Quantifier4 [10] — strict 3VL for `all()` (stale "Precedence1
+  conflict" comment was obsolete). **B3.** +5
+- Create6 [10]-[13] — edge properties in UNWIND+CREATE result path
+  (foreach-binding rel props, edge aggregates, edge prop projection).
+  **B4.** +4
+- Create6 [7]/[14] — aggregating WITH after CREATE (pure-aggregate
+  collapse over per-iteration maps). **B4 — Create6 now 14/14.** +2
+- Match6 [15]/[16]/[19]/[20] — full variable-length named-path
+  hydration (interleaved `elem_ids` CTE column + position-parity
+  build_path_from_ids). **This is Phase C / C3 — landed early.** +4
+- List5 [21]/[29]/[31]/[34] — `IN` 3VL for nested-null list elements
+  (gql_eq_json for containers, typed SQL `=` for scalars). +4
+- 2 correctness-only commits (+0 TCK): boolean projection through WITH
+  renders as JSON boolean; undirected MERGE matches either orientation.
+
+Remaining leads (root causes documented in agent memory files):
+- **Merge5 [12]/[13]** — combined synth re-match in handle_match_merge
+  drops inline node properties → undirected double-count rows.
+- **C3 residual**: Match6 [14] undirected varlen, [17] two-varlen
+  segments in one path.
+- **B5 (T-0332)** still active: Pattern2 [7]/[8]/[11] residual.
+- Temporal (C2, ~43), Comparison2 [3]/[5] (entities-in-lists, NaN),
+  Quantifier9/11 (rand/reverse/concat pipeline).

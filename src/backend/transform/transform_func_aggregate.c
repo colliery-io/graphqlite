@@ -106,12 +106,23 @@ int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_
         return transform_aggregate_with_property(ctx, func_call, prop);
     }
 
-    /* Generate SQL function call - convert to uppercase for SQL compliance */
+    /* min()/max() use Cypher orderability (object < list < text < bool <
+     * number < null), not SQLite's storage-class MIN/MAX — route to the
+     * custom aggregates _gql_min / _gql_max (Aggregation2 [9]/[11]/[12]). */
+    const char *fn = func_call->function_name;
+    bool is_min = (strcasecmp(fn, "min") == 0);
+    bool is_max = (strcasecmp(fn, "max") == 0);
+
     char upper_func[64];
-    strncpy(upper_func, func_call->function_name, sizeof(upper_func) - 1);
-    upper_func[sizeof(upper_func) - 1] = '\0';
-    for (int i = 0; upper_func[i]; i++) {
-        upper_func[i] = toupper(upper_func[i]);
+    if (is_min || is_max) {
+        snprintf(upper_func, sizeof(upper_func), is_min ? "_gql_min" : "_gql_max");
+    } else {
+        /* Generate SQL function call - convert to uppercase for SQL compliance */
+        strncpy(upper_func, func_call->function_name, sizeof(upper_func) - 1);
+        upper_func[sizeof(upper_func) - 1] = '\0';
+        for (int i = 0; upper_func[i]; i++) {
+            upper_func[i] = toupper(upper_func[i]);
+        }
     }
 
     if (func_call->distinct) {

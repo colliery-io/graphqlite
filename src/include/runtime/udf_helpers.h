@@ -14,6 +14,11 @@
 void gql_eq_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_subscript_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_in_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+/* Cypher-orderability min()/max() aggregates (step + final). */
+void gql_min_step(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_min_final(sqlite3_context *ctx);
+void gql_max_step(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_max_final(sqlite3_context *ctx);
 void gql_to_bool_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_to_integer_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_to_float_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
