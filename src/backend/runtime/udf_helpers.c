@@ -583,6 +583,48 @@ void gql_subscript_func(
  *   x    IN coll        -> true if some element equals x, null if no match
  *                          but coll contains null, else false.
  * coll is provided as a JSON array text. */
+/* Dynamic property lookup on a node/edge by runtime key string, e.g.
+ * `n['nam' + 'e']` (Graph7 [1]-[3]). Static string keys are normalized to
+ * property access at transform time; a computed key needs this runtime
+ * EAV lookup. argv[0] = entity id, argv[1] = key text. */
+static void gql_entity_prop_lookup(sqlite3_context *context, int argc,
+                                   sqlite3_value **argv, bool is_edge) {
+    if (argc != 2) { sqlite3_result_null(context); return; }
+    if (sqlite3_value_type(argv[0]) == SQLITE_NULL ||
+        sqlite3_value_type(argv[1]) == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    const char *col = is_edge ? "edge_id" : "node_id";
+    const char *pfx = is_edge ? "edge_props" : "node_props";
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "SELECT COALESCE("
+        "(SELECT value FROM %s_int t JOIN property_keys pk ON t.key_id=pk.id WHERE t.%s=?1 AND pk.key=?2),"
+        "(SELECT value FROM %s_real t JOIN property_keys pk ON t.key_id=pk.id WHERE t.%s=?1 AND pk.key=?2),"
+        "(SELECT value FROM %s_text t JOIN property_keys pk ON t.key_id=pk.id WHERE t.%s=?1 AND pk.key=?2),"
+        "(SELECT CASE WHEN value THEN 'true' ELSE 'false' END FROM %s_bool t JOIN property_keys pk ON t.key_id=pk.id WHERE t.%s=?1 AND pk.key=?2),"
+        "(SELECT json(value) FROM %s_json t JOIN property_keys pk ON t.key_id=pk.id WHERE t.%s=?1 AND pk.key=?2))",
+        pfx, col, pfx, col, pfx, col, pfx, col, pfx, col);
+    sqlite3 *db = sqlite3_context_db_handle(context);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_value(st, 1, argv[0]);
+        sqlite3_bind_value(st, 2, argv[1]);
+        if (sqlite3_step(st) == SQLITE_ROW)
+            sqlite3_result_value(context, sqlite3_column_value(st, 0));
+        else
+            sqlite3_result_null(context);
+        sqlite3_finalize(st);
+    } else {
+        sqlite3_result_null(context);
+    }
+}
+
+void gql_node_prop_func(sqlite3_context *c, int argc, sqlite3_value **argv) {
+    gql_entity_prop_lookup(c, argc, argv, false);
+}
+void gql_edge_prop_func(sqlite3_context *c, int argc, sqlite3_value **argv) {
+    gql_entity_prop_lookup(c, argc, argv, true);
+}
+
 void gql_in_func(
     sqlite3_context *context,
     int argc,

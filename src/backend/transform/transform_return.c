@@ -1265,6 +1265,27 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     }
                 }
 
+                /* Dynamic (non-literal) key on a node/edge variable:
+                 * `n['na'+'me']` / `n[$key]`. Resolve via a runtime EAV
+                 * lookup by key (Graph7 [1]-[3]). The base node/edge isn't a
+                 * JSON object in scope, so _gql_subscript on the hydrated
+                 * object can't find the property. */
+                if (subscript->expr->type == AST_NODE_IDENTIFIER) {
+                    cypher_identifier *bid = (cypher_identifier*)subscript->expr;
+                    transform_var *bv = transform_var_lookup(ctx->var_ctx, bid->name);
+                    if (bv && (bv->kind == VAR_KIND_NODE || bv->kind == VAR_KIND_EDGE)) {
+                        const char *balias = transform_var_get_alias(ctx->var_ctx, bid->name);
+                        bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, bid->name);
+                        append_sql(ctx, "%s(%s%s, ",
+                                   bv->kind == VAR_KIND_EDGE ? "_gql_edge_prop" : "_gql_node_prop",
+                                   balias ? balias : bid->name,
+                                   alias_is_id ? "" : ".id");
+                        if (transform_expression(ctx, subscript->index) < 0) return -1;
+                        append_sql(ctx, ")");
+                        break;
+                    }
+                }
+
                 /* Route through _gql_subscript() which performs runtime
                  * type checking (TypeError for non-list/map values or
                  * mismatched index types) and handles negative indices.
