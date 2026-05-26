@@ -386,18 +386,21 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                     const char *p_real = is_edge_var ? "edge_props_real" : "node_props_real";
                     const char *p_text = is_edge_var ? "edge_props_text" : "node_props_text";
                     const char *p_bool = is_edge_var ? "edge_props_bool" : "node_props_bool";
+                    const char *p_json = is_edge_var ? "edge_props_json" : "node_props_json";
                     const char *entity_col = is_edge_var ? "edge_id" : "node_id";
                     dbuf_appendf(&col_buf,
                         "(SELECT COALESCE("
                         "(SELECT npi.value FROM %s npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.%s = %s%s AND pk.key = '%s'), "
                         "(SELECT npr.value FROM %s npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.%s = %s%s AND pk.key = '%s'), "
                         "(SELECT npt.value FROM %s npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.%s = %s%s AND pk.key = '%s'), "
-                        "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %s npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.%s = %s%s AND pk.key = '%s')"
+                        "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %s npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.%s = %s%s AND pk.key = '%s'), "
+                        "(SELECT npj.value FROM %s npj JOIN property_keys pk ON npj.key_id = pk.id WHERE npj.%s = %s%s AND pk.key = '%s')"
                         ")) AS %s",
                         p_int, entity_col, alias, id_suffix, prop->property_name,
                         p_real, entity_col, alias, id_suffix, prop->property_name,
                         p_text, entity_col, alias, id_suffix, prop->property_name,
                         p_bool, entity_col, alias, id_suffix, prop->property_name,
+                        p_json, entity_col, alias, id_suffix, prop->property_name,
                         ({ static char _idbuf[128]; sql_ident(_idbuf, sizeof(_idbuf), col_name); }));
                     /* Add the projected column name to GROUP BY (not node id) */
                     if (group_count > 0) {

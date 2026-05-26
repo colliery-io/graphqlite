@@ -643,6 +643,7 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
         return -1;
     }
 
+
     /* T-0310: run pre_exec_dml (compound DML from SET/REMOVE/DELETE
      * that precedes a read) before stepping the prepared SELECT. */
     if (transform_result->pre_exec_dml) {
