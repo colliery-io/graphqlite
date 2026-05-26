@@ -98,6 +98,10 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
         for (int vi = 0; vi < var_count; vi++) {
             transform_var *var = transform_var_at(ctx->var_ctx, vi);
             if (!var || !var->is_visible || !var->name) continue;
+            /* RETURN * exposes only user-named variables, not synthetic
+             * aliases for anonymous nodes/rels (With1 [1]/[2]). */
+            if (strncmp(var->name, "_gql_default_alias_", 19) == 0 ||
+                strncmp(var->name, "__unnamed_rel_", 14) == 0) continue;
             /* Create an identifier node referencing this variable */
             ast_node *id_node = (ast_node*)make_identifier(strdup(var->name), -1);
             if (id_node) {
