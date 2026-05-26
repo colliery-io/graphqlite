@@ -275,11 +275,11 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
-### 2026-05-26 — Session: +60 TCK (3590 → 3650), 14 commits
+### 2026-05-26 — Session: +65 TCK (3590 → 3655), 15 commits
 
 All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
 zero-regression via full-TCK pass-set diff + unit (944/944) +
-functional. Now **3650 / 3880 = 94.1% executable**.
+functional. Now **3655 / 3880 = 94.2% executable**.
 
 Cluster fixes this session (commit → area → delta):
 - Unwind1 [12] — UNWIND over `collect(node)` → trailing MATCH binds
@@ -308,6 +308,10 @@ Cluster fixes this session (commit → area → delta):
 - Aggregation2 [9]/[11]/[12] — Cypher-orderability `min()`/`max()` via
   custom `_gql_min`/`_gql_max` aggregates (order-key total order, type
   preserved via sqlite3_value_dup). Aggregation2 now 12/12. +3
+- WithOrderBy2 [21]-[24] + WithOrderBy4 [8] — ORDER BY referencing an
+  input-scope var the WITH drops is now emitted INSIDE the CTE body
+  (input tables still in FROM), not silently dropped. Narrow trigger
+  (expr_refs_dropped_input_var); aggregating ORDER BY exprs excluded. +5
 - 2 correctness-only commits (+0 TCK): boolean projection through WITH
   renders as JSON boolean; undirected MERGE matches either orientation.
 
@@ -317,15 +321,10 @@ Note: the order-key total order (object < list < text < bool < number
 
 Investigated WithOrderBy2 [21]-[24] (DESC examples) and Merge5 [12]/[13]
 — both NOT the orderability core; both are scope/transform-ordering bugs:
-- WithOrderBy2 [21]-[24]: `WITH a.name AS name ORDER BY a.name + 'C' DESC`
-  — the ORDER BY references input-scope `a`, which the WITH var-ctx reset
-  has discarded, so the ORDER BY is silently DROPPED from the SQL (verified:
-  generated `SELECT name FROM _with_0 LIMIT 2`, no ORDER BY). Fix needs
-  ORDER BY emitted inside the CTE body (input tables still in FROM) with
-  dual-scope resolution (input vars + projected aliases). Risky refactor of
-  a heavily-used path — deferred for a fresh session.
+- WithOrderBy2 [21]-[24] + WithOrderBy4 [8]: FIXED (commit 6bc2736) — ORDER BY
+  on a dropped input-scope var now emitted inside the CTE body.
 - Merge5 [12]/[13]: combined synth re-match in handle_match_merge drops
-  inline node properties → undirected double-count.
+  inline node properties → undirected double-count. (still open)
 
 Remaining leads (root causes documented in agent memory files):
 - **Merge5 [12]/[13]** — combined synth re-match in handle_match_merge
