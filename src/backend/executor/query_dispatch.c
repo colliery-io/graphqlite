@@ -2186,6 +2186,80 @@ static int handle_unwind_create_return(cypher_executor *executor, cypher_query *
         }
     }
 
+    /* B4: aggregating WITH between CREATE and RETURN, e.g.
+     *   UNWIND [..] AS x CREATE (n {num:x}) WITH sum(n.num) AS s RETURN s
+     * When the WITH is pure-aggregate (every item is an aggregate, no
+     * grouping keys) it collapses the per-iteration maps to one row. Compute
+     * each WITH aggregate across `maps`, then satisfy RETURN by resolving its
+     * references to the WITH aliases. (Create6 [7]/[14].) */
+    {
+        cypher_with *agg_w = NULL;
+        if (query->clauses) {
+            for (int ci = 0; ci < query->clauses->count; ci++) {
+                ast_node *cl = query->clauses->items[ci];
+                if (cl->type != AST_NODE_WITH) continue;
+                cypher_with *w = (cypher_with *)cl;
+                bool has_agg = false, has_key = false;
+                if (w->items) {
+                    for (int wi = 0; wi < w->items->count; wi++) {
+                        cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                        if (it && aggregating_call_name(it->expr)) has_agg = true;
+                        else has_key = true;
+                    }
+                }
+                if (has_agg && !has_key) { agg_w = w; break; }
+            }
+        }
+        if (agg_w) {
+            int wn = agg_w->items->count;
+            char **wvals = calloc(wn, sizeof(char*));
+            int *wtypes = calloc(wn, sizeof(int));
+            const char **walias = calloc(wn, sizeof(char*));
+            for (int wi = 0; wi < wn; wi++) {
+                cypher_return_item *it = (cypher_return_item *)agg_w->items->items[wi];
+                walias[wi] = it->alias;
+                cypher_result tmp;
+                memset(&tmp, 0, sizeof(tmp));
+                tmp.data = malloc(sizeof(char**));
+                tmp.data[0] = calloc(1, sizeof(char*));
+                tmp.data_types = malloc(sizeof(int*));
+                tmp.data_types[0] = calloc(1, sizeof(int));
+                project_aggregate_cell(executor, it, maps, n_maps, &tmp, 0);
+                wvals[wi] = tmp.data[0][0];
+                wtypes[wi] = tmp.data_types[0][0];
+                free(tmp.data[0]); free(tmp.data);
+                free(tmp.data_types[0]); free(tmp.data_types);
+            }
+            result->row_count = 1;
+            result->data = malloc(sizeof(char**));
+            result->data_types = malloc(sizeof(int*));
+            result->data[0] = malloc(col_count * sizeof(char*));
+            result->data_types[0] = calloc(col_count, sizeof(int));
+            for (int i = 0; i < col_count; i++) {
+                cypher_return_item *rit = (cypher_return_item *)ret->items->items[i];
+                result->data[0][i] = NULL;
+                const char *ref = NULL;
+                if (rit->expr && rit->expr->type == AST_NODE_IDENTIFIER)
+                    ref = ((cypher_identifier *)rit->expr)->name;
+                if (ref) {
+                    for (int wi = 0; wi < wn; wi++) {
+                        if (walias[wi] && strcmp(walias[wi], ref) == 0) {
+                            result->data[0][i] = wvals[wi] ? strdup(wvals[wi]) : NULL;
+                            result->data_types[0][i] = wtypes[wi];
+                            break;
+                        }
+                    }
+                }
+            }
+            for (int wi = 0; wi < wn; wi++) free(wvals[wi]);
+            free(wvals); free(wtypes); free(walias);
+            for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+            free(maps);
+            result->success = true;
+            return 0;
+        }
+    }
+
     /* SKIP/LIMIT */
     int64_t limit_val = -1, skip_val = 0;
     if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
