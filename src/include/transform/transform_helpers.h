@@ -30,4 +30,10 @@ bool has_labels(cypher_node_pattern *node);
  * keyword. Returns `buf`. Always populates `buf` (raw name or "name"). */
 const char *sql_ident(char *buf, size_t buflen, const char *name);
 
+/* True if `expr` evaluates to a Cypher boolean (comparison, AND/OR/NOT/XOR,
+ * IS NULL, quantifier, EXISTS, boolean literal). Used to wrap projections in
+ * _gql_bool_str so the result renders as a JSON boolean. Defined in
+ * transform_return.c. */
+bool ast_yields_boolean(ast_node *expr);
+
 #endif /* TRANSFORM_HELPERS_H */

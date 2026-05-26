@@ -494,10 +494,25 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 return -1;
             }
 
-            /* Append to column buffer */
+            /* Boolean-valued projections (comparisons, AND/OR/NOT, quantifiers,
+             * IS NULL, ...) must carry the boolean subtype so a downstream
+             * RETURN of this column renders as a JSON boolean, not 1/0. Wrap the
+             * already-transformed SQL in _gql_bool_str(CASE ...), reusing the
+             * captured text (no second transform — that would double its
+             * side effects). Otherwise `WITH (a = b) AS r RETURN r` returned 1
+             * instead of true (Quantifier9/11 [3]/[4]/[5] family). */
             { char _idbuf[128];
-              dbuf_appendf(&col_buf, "(%s) AS %s", ctx->sql_buffer,
-                           sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
+              const char *expr_sql = ctx->sql_buffer;
+              if (ast_yields_boolean(item->expr)) {
+                  dbuf_appendf(&col_buf,
+                      "(_gql_bool_str(CASE WHEN (%s) IS NULL THEN NULL WHEN (%s) THEN 1 ELSE 0 END)) AS %s",
+                      expr_sql, expr_sql,
+                      sql_ident(_idbuf, sizeof(_idbuf), col_name));
+              } else {
+                  dbuf_appendf(&col_buf, "(%s) AS %s", expr_sql,
+                               sql_ident(_idbuf, sizeof(_idbuf), col_name));
+              }
+            }
 
             /* Restore sql_buffer */
             ctx->sql_size = saved_size;

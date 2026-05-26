@@ -51,7 +51,7 @@ const char* get_pending_prop_joins(cypher_transform_context *ctx)
  * predicate at the top-of-RETURN-item wrap site below. Used when
  * emitting list/map values so booleans inside literals get tagged
  * with GQL_SUBTYPE_BOOLEAN (T-0304). */
-static bool ast_yields_boolean(ast_node *expr)
+bool ast_yields_boolean(ast_node *expr)
 {
     if (!expr) return false;
     if (expr->type == AST_NODE_NOT_EXPR ||
