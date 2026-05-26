@@ -305,29 +305,22 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     /* Register the predicate variable to map to <alias>.value */
     transform_var_register_projected(ctx->var_ctx, pred->variable, je_value);
 
-    /* `all` keeps the legacy "no FALSE → TRUE, ignore NULL" semantics. The
-     * openCypher TCK has an internal conflict here: Quantifier4 [10] expects
-     * strict 3VL for `all`, but Precedence1 [14]–[28] iterate (true,false,null)
-     * and use `all(x IN eq WHERE x)` where eq has TRUE+NULL elements and the
-     * scenarios expect TRUE. The Precedence1 cluster (~35 scenarios) outweighs
-     * the Quantifier4 [10] NULL examples (~4) so we keep the legacy form for
-     * ALL. NONE / ANY / SINGLE use strict 3VL — they have no analogous conflict
-     * and Quantifier1/2/3 [10] scenarios require it. */
-    if (pred->pred_type == LIST_PRED_ALL) {
-        append_sql(ctx, "(NOT EXISTS (SELECT 1 FROM json_each(");
-        if (transform_expression(ctx, pred->list_expr) < 0) {
-            if (saved_alias) free(saved_alias);
-            return -1;
-        }
-        append_sql(ctx, ") AS %s WHERE NOT (", je_alias);
-        if (transform_expression(ctx, pred->predicate) < 0) {
-            if (saved_alias) free(saved_alias);
-            return -1;
-        }
-        append_sql(ctx, ")))");
-    } else {
+    /* all/any/none/single all use strict openCypher 3VL via the SUM-over-
+     * json_each CASE below. (An earlier note claimed `all` had to keep a
+     * legacy "ignore NULL → TRUE" form to satisfy Precedence1 [14]–[28];
+     * that conflict no longer exists — Precedence1 stays 55/55 under strict
+     * 3VL, and strict 3VL fixes Quantifier4 [10].) */
+    {
         append_sql(ctx, "(SELECT CASE ");
         switch (pred->pred_type) {
+            case LIST_PRED_ALL:
+                /* F>0 → FALSE ; N>0 → NULL ; else TRUE (strict 3VL,
+                 * Quantifier4 [10]). */
+                append_sql(ctx,
+                    "WHEN SUM(CASE WHEN p IS NOT NULL AND NOT p THEN 1 ELSE 0 END) > 0 THEN 0 "
+                    "WHEN SUM(CASE WHEN p IS NULL THEN 1 ELSE 0 END) > 0 THEN NULL "
+                    "ELSE 1 ");
+                break;
             case LIST_PRED_ANY:
                 /* T>0 → TRUE ; N>0 → NULL ; else FALSE */
                 append_sql(ctx,
