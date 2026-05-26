@@ -332,6 +332,14 @@ Investigated WithOrderBy2 [21]-[24] (DESC examples) and Merge5 [12]/[13]
   on a dropped input-scope var now emitted inside the CTE body.
 - Merge5 [12]/[13]: combined synth re-match in handle_match_merge drops
   inline node properties → undirected double-count. (still open)
+- Undirected variable-length (Match9 [1]/[3], Match6 [14], Pattern1 [10]/[17]/
+  [18], Delete4): tried making generate_varlen_cte bidirectional (both edge
+  orientations) — gets the row COUNT closer but the outer undirected endpoint
+  matching then double-counts (regressed Delete4 [2]); reverted. The CTE
+  bidirectional traversal AND the outer endpoint-pattern emission must be made
+  consistent together (dedupe one against the other). Not a CTE-only fix.
+- With1 [4] / Match9 [9]: path variable forwarded through WITH ("no such
+  column: p"); OPTIONAL varlen named path returns [] instead of null.
 
 Remaining leads (root causes documented in agent memory files):
 - **Merge5 [12]/[13]** — combined synth re-match in handle_match_merge
