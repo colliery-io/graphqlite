@@ -170,6 +170,60 @@ static int validate_identifiers_in_scope(cypher_transform_context *ctx, ast_node
     return validate_identifiers_in_scope_ex(ctx, expr, NULL, 0);
 }
 
+/* True if `expr` references a variable that is live in the CURRENT (input)
+ * scope but is NOT among `proj` (the WITH's projected output names) — i.e. a
+ * variable the WITH discards. Such an ORDER BY can only be evaluated inside
+ * the WITH CTE (where the input tables are still in FROM), not on the outer
+ * SELECT over the CTE. (WithOrderBy2 [21]-[24].) Mirrors the walk of
+ * validate_identifiers_in_scope_ex. */
+static bool expr_refs_dropped_input_var(cypher_transform_context *ctx, ast_node *expr,
+                                        char **proj, int proj_count)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER: {
+            cypher_identifier *id = (cypher_identifier*)expr;
+            if (!id->name) return false;
+            if (!transform_var_lookup(ctx->var_ctx, id->name)) return false; /* not input-scope */
+            for (int i = 0; i < proj_count; i++)
+                if (proj[i] && strcmp(proj[i], id->name) == 0) return false;  /* survives WITH */
+            return true;
+        }
+        case AST_NODE_PROPERTY:
+            return expr_refs_dropped_input_var(ctx, ((cypher_property*)expr)->expr, proj, proj_count);
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *b = (cypher_binary_op*)expr;
+            return expr_refs_dropped_input_var(ctx, b->left, proj, proj_count) ||
+                   expr_refs_dropped_input_var(ctx, b->right, proj, proj_count);
+        }
+        case AST_NODE_NOT_EXPR:
+            return expr_refs_dropped_input_var(ctx, ((cypher_not_expr*)expr)->expr, proj, proj_count);
+        case AST_NODE_NULL_CHECK:
+            return expr_refs_dropped_input_var(ctx, ((cypher_null_check*)expr)->expr, proj, proj_count);
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call*)expr;
+            if (fc->args)
+                for (int i = 0; i < fc->args->count; i++)
+                    if (expr_refs_dropped_input_var(ctx, fc->args->items[i], proj, proj_count)) return true;
+            return false;
+        }
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list*)expr;
+            if (l->items)
+                for (int i = 0; i < l->items->count; i++)
+                    if (expr_refs_dropped_input_var(ctx, l->items->items[i], proj, proj_count)) return true;
+            return false;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript*)expr;
+            return expr_refs_dropped_input_var(ctx, s->expr, proj, proj_count) ||
+                   expr_refs_dropped_input_var(ctx, s->index, proj, proj_count);
+        }
+        default:
+            return false;
+    }
+}
+
 /*
  * Transform an expression to a dynamically allocated string.
  * Uses a temporary buffer to capture output, then returns the result.
@@ -574,21 +628,60 @@ with_star_columns_done:
         dbuf_append(&cte_body, group_by_clause);
     }
 
+    /* WithOrderBy2 [21]-[24]: when the WITH's ORDER BY references an input
+     * variable that the WITH drops (e.g. `WITH a.name AS name ORDER BY
+     * a.name + 'C' DESC`), the outer SELECT over the CTE cannot resolve it,
+     * so the ORDER BY was silently dropped. Emit it INSIDE the CTE body —
+     * transformed in the still-live input scope, where the input tables are
+     * in FROM (projected aliases also resolve there). Only triggers for that
+     * specific case; ORDER BY over projected columns keeps the outer path. */
+    bool order_pushed_to_cte = false;
+    if (with->order_by && with->order_by->count > 0 && !with->pass_all && with->items) {
+        char *proj_names[128]; int proj_n = 0;
+        for (int i = 0; i < with->items->count && proj_n < 128; i++) {
+            cypher_return_item *it = (cypher_return_item*)with->items->items[i];
+            const char *nm = it->alias;
+            if (!nm && it->expr && it->expr->type == AST_NODE_IDENTIFIER)
+                nm = ((cypher_identifier*)it->expr)->name;
+            else if (!nm && it->expr && it->expr->type == AST_NODE_PROPERTY)
+                nm = ((cypher_property*)it->expr)->property_name;
+            if (nm) proj_names[proj_n++] = (char*)nm;
+        }
+        bool needs = false, has_agg_order = false;
+        for (int i = 0; i < with->order_by->count; i++) {
+            cypher_order_by_item *oi = (cypher_order_by_item*)with->order_by->items[i];
+            if (find_aggregating_call(oi->expr)) has_agg_order = true;
+            if (expr_refs_dropped_input_var(ctx, oi->expr, proj_names, proj_n)) needs = true;
+        }
+        /* Aggregating ORDER BY exprs (e.g. ORDER BY count(x) + 1) interact with
+         * the WITH's GROUP BY and must stay on the outer path. (WithOrderBy4 [16].) */
+        if (has_agg_order) needs = false;
+        if (needs) {
+            dbuf_append(&cte_body, " ORDER BY ");
+            for (int i = 0; i < with->order_by->count; i++) {
+                cypher_order_by_item *oi = (cypher_order_by_item*)with->order_by->items[i];
+                if (i > 0) dbuf_append(&cte_body, ", ");
+                char *oe = transform_expression_to_string(ctx, oi->expr);
+                dbuf_appendf(&cte_body, "_gql_order_key(%s)%s", oe ? oe : "NULL",
+                             oi->descending ? " DESC" : "");
+                free(oe);
+            }
+            order_pushed_to_cte = true;
+        }
+    }
+
     /* T-0323: emit LIMIT / OFFSET inside the CTE body when WITH
-     * has them AND no ORDER BY is present. The outer-LIMIT
-     * positioning previously applied the limit to the final
-     * projection instead of the WITH's row set.
+     * has them AND no ORDER BY is present (or the ORDER BY was just pushed
+     * into the CTE above). The outer-LIMIT positioning previously applied
+     * the limit to the final projection instead of the WITH's row set.
      * `MATCH (n) WITH n LIMIT 2 RETURN count(*)` should limit
      * WITH's rows to 2 then count → 2.
      *
-     * When ORDER BY is ALSO present, pushing LIMIT into CTE
-     * without ORDER BY would yield wrong rows. The full ORDER BY
-     * push into CTE is more invasive (alias resolution / aggregate
-     * handling) — leave that combined case on the outer-builder
-     * path for now (it's at least order-correct, even if the
-     * count semantics aren't). Tracked for follow-up. */
+     * When ORDER BY is present on the OUTER path (not pushed into the CTE),
+     * pushing LIMIT into the CTE without ORDER BY would yield wrong rows —
+     * leave that combined case on the outer-builder path. */
     if ((with->limit || with->skip) &&
-        (!with->order_by || with->order_by->count == 0)) {
+        ((!with->order_by || with->order_by->count == 0) || order_pushed_to_cte)) {
         char *cte_limit_str = with->limit ? transform_expression_to_string(ctx, with->limit) : NULL;
         char *cte_skip_str = with->skip ? transform_expression_to_string(ctx, with->skip) : NULL;
         if (cte_limit_str) {
@@ -882,15 +975,17 @@ with_star_columns_done:
                 return -1;
             }
         }
-        /* ORDER BY stays on the outer builder for now — pushing it
-         * into the CTE body has alias-resolution issues that need
-         * more careful handling (T-0323 follow-up). */
-        for (int i = 0; i < with->order_by->count; i++) {
-            cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
-            char *order_expr = transform_expression_to_string(ctx, order_item->expr);
-            if (order_expr) {
-                sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
-                free(order_expr);
+        /* ORDER BY normally stays on the outer builder (over the CTE).
+         * If it referenced a dropped input variable it was already emitted
+         * inside the CTE body above (order_pushed_to_cte) — skip here. */
+        if (!order_pushed_to_cte) {
+            for (int i = 0; i < with->order_by->count; i++) {
+                cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
+                char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                if (order_expr) {
+                    sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                    free(order_expr);
+                }
             }
         }
     }
@@ -913,7 +1008,8 @@ with_star_columns_done:
      * Use the outer-builder path for those cases. Otherwise the
      * CTE-inline above already handled it; skip here. */
     bool inline_limit_done = (with->limit || with->skip) &&
-                             (!with->order_by || with->order_by->count == 0);
+                             ((!with->order_by || with->order_by->count == 0) ||
+                              order_pushed_to_cte);
     if (!inline_limit_done && with->limit) {
         limit_str = transform_expression_to_string(ctx, with->limit);
         if (limit_str) {
