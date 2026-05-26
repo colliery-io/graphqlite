@@ -275,13 +275,14 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
-### 2026-05-26 — Session: +71 TCK (3590 → 3661), 17 commits
+### 2026-05-26 — Session: +74 TCK (3590 → 3664), 18 commits
 
 All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
 zero-regression via full-TCK pass-set diff + unit (944/944) +
-functional. Now **3661 / 3880 = 94.4% executable**.
-(+ Graph6 [4]/[8]: `(list[1]).prop` via `_gql_dyn_prop` — node/rel-shaped
-JSON reads `$.properties.<key>`, plain maps read `$.<key>`.)
+functional. Now **3664 / 3880 = 94.4% executable**.
+(+ Graph6 [4]/[8]: `(list[1]).prop` via `_gql_dyn_prop`. + With1 [1]/[2] +
+WithSkipLimit2 [3]: RETURN * excludes synthetic `_gql_default_alias_` /
+`__unnamed_rel_` aliases — only user-named variables.)
 
 Cluster fixes this session (commit → area → delta):
 - Unwind1 [12] — UNWIND over `collect(node)` → trailing MATCH binds
