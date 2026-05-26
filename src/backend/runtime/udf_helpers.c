@@ -921,6 +921,72 @@ static int parse_tz(const char *p, int *consumed) {
     return sign * (hh*60 + mm);
 }
 
+/* --- Order-preserving sort-key encoding for JSON lists (WithOrderBy1
+ * [9]/[10]/[31]). Cypher orders lists element-wise, shorter-prefix first.
+ * SQLite ORDER BY needs a scalar key whose BINARY (byte) comparison matches
+ * that order, so we encode each list element into a token whose lexicographic
+ * byte order matches Cypher orderability. --- */
+static void okey_append(char **b, size_t *n, size_t *cap, const char *s, size_t slen) {
+    if (*n + slen + 1 > *cap) {
+        size_t nc = (*cap ? *cap : 64);
+        while (nc < *n + slen + 1) nc *= 2;
+        char *nb = realloc(*b, nc);
+        if (!nb) return;
+        *b = nb; *cap = nc;
+    }
+    memcpy(*b + *n, s, slen); *n += slen; (*b)[*n] = '\0';
+}
+
+/* IEEE-754 order-preserving transform: map a double to a uint64 whose
+ * unsigned order matches numeric order, then emit as fixed-width hex. */
+static void okey_num(char **b, size_t *n, size_t *cap, double d) {
+    uint64_t bits; memcpy(&bits, &d, sizeof(bits));
+    if (bits & 0x8000000000000000ULL) bits = ~bits;      /* negative */
+    else bits |= 0x8000000000000000ULL;                  /* positive */
+    char hex[20];
+    snprintf(hex, sizeof(hex), "%016llX", (unsigned long long)bits);
+    okey_append(b, n, cap, hex, 16);
+}
+
+static void okey_encode_list(sqlite3 *db, const char *json,
+                             char **b, size_t *n, size_t *cap) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT value, type FROM json_each(?1)",
+                           -1, &st, NULL) != SQLITE_OK) return;
+    sqlite3_bind_text(st, 1, json, -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        okey_append(b, n, cap, "\x02", 1);   /* element marker (> terminator) */
+        const char *type = (const char*)sqlite3_column_text(st, 1);
+        if (!type) { okey_append(b, n, cap, "9", 1); continue; }
+        /* Leading digit = cross-type group order; constant within a type so
+         * same-typed elements compare by their payload. Per Cypher
+         * orderability (ascending): map/object < list < string < boolean
+         * < number < null (WithOrderBy1 [9]/[10]). */
+        if (strcmp(type, "object") == 0) {
+            okey_append(b, n, cap, "1", 1);
+            const char *sub = (const char*)sqlite3_column_text(st, 0);
+            okey_append(b, n, cap, sub ? sub : "{}", sub ? strlen(sub) : 2);
+        } else if (strcmp(type, "array") == 0) {
+            okey_append(b, n, cap, "2", 1);
+            const char *sub = (const char*)sqlite3_column_text(st, 0);
+            okey_encode_list(db, sub ? sub : "[]", b, n, cap);
+        } else if (strcmp(type, "text") == 0) {
+            okey_append(b, n, cap, "5", 1);
+            const char *tv = (const char*)sqlite3_column_text(st, 0);
+            okey_append(b, n, cap, tv ? tv : "", tv ? strlen(tv) : 0);
+        } else if (strcmp(type, "true") == 0 || strcmp(type, "false") == 0) {
+            okey_append(b, n, cap, strcmp(type, "true") == 0 ? "6T" : "6F", 2);
+        } else if (strcmp(type, "integer") == 0 || strcmp(type, "real") == 0) {
+            okey_append(b, n, cap, "7", 1);
+            okey_num(b, n, cap, sqlite3_column_double(st, 0));
+        } else { /* null sorts last */
+            okey_append(b, n, cap, "9", 1);
+        }
+    }
+    sqlite3_finalize(st);
+    okey_append(b, n, cap, "\x01", 1);   /* terminator (< element marker) */
+}
+
 void gql_order_key_func(
     sqlite3_context *context,
     int argc,
@@ -934,6 +1000,19 @@ void gql_order_key_func(
     }
     const char *s = (const char*)sqlite3_value_text(argv[0]);
     if (!s) { sqlite3_result_null(context); return; }
+
+    /* JSON list → order-preserving element-wise key. */
+    if (s[0] == '[') {
+        char *buf = NULL; size_t n = 0, cap = 0;
+        okey_encode_list(sqlite3_context_db_handle(context), s, &buf, &n, &cap);
+        if (buf) {
+            sqlite3_result_text(context, buf, (int)n, SQLITE_TRANSIENT);
+            free(buf);
+        } else {
+            sqlite3_result_value(context, argv[0]);
+        }
+        return;
+    }
 
     size_t slen = strlen(s);
 
