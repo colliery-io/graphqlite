@@ -341,6 +341,28 @@ Investigated WithOrderBy2 [21]-[24] (DESC examples) and Merge5 [12]/[13]
 - With1 [4] / Match9 [9]: path variable forwarded through WITH ("no such
   column: p"); OPTIONAL varlen named path returns [] instead of null.
 
+#### Next-session priorities (clean wins are exhausted; these are the tail)
+Remaining 164 fails + 48 errors cluster into heavy interrelated areas:
+1. **Variable-length variants** (~12+): undirected (Match9 [1]/[3], Match6
+   [14], Pattern1 [10]/[17]/[18]), multi-segment / two-varlen-in-one-path
+   (Match6 [17]), mixed fixed+varlen chains returning empty (Match5 [25]/[26]/
+   [28], Match4 [4]/[5]). All touch generate_varlen_cte + the outer
+   endpoint/rel emission together. The elem_ids interleaved column (added this
+   session) is the foundation; the matching/dedupe is the remaining work.
+2. **Temporal** (~40: Temporal2/3/6/8/10) — week/quarter date construction,
+   timezone-name normalization, Duration type+arithmetic. Own initiative (C2).
+3. **NaN** (Comparison1 [8], Comparison2 [5]) — 0.0/0.0 is SQLite NULL; needs a
+   NaN sentinel threaded through division + comparison + ordering. Invasive.
+4. **Niche**: Merge5 [12]/[13] (combined-pattern property drop), Merge1 [13]
+   (path bound to MERGE), EXISTS{} subqueries (T-0139, unimplemented),
+   path-through-WITH (With1 [4]).
+Verification recipe for every change: `angreal test unit` + `angreal test
+functional` + full `angreal test tck`, then diff the pass-set against the prior
+run (script: print status+feature+scenario per record, comm -13/-23). SQL dump:
+temp `getenv("GQLITE_DUMP_SQL")` fopen in handle_generic_transform (generic
+path) or execute_match_return_query (MATCH+RETURN path). `angreal dev clean`
+after any function-signature change (incremental builds corrupt).
+
 Remaining leads (root causes documented in agent memory files):
 - **Merge5 [12]/[13]** — combined synth re-match in handle_match_merge
   drops inline node properties → undirected double-count rows.
