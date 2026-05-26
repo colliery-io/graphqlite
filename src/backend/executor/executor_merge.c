@@ -274,10 +274,20 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     param_binding bindings[MAX_BINDINGS];
     int bind_count = 0;
 
-    /* source_id and target_id are integers from our own code, safe to interpolate */
-    offset += snprintf(sql + offset, sizeof(sql) - offset,
-                       "SELECT e.id FROM edges e WHERE e.source_id = %d AND e.target_id = %d",
-                       source_id, target_id);
+    /* source_id and target_id are integers from our own code, safe to interpolate.
+     * For an undirected pattern (a)-[r]-(b) the existing edge may run either
+     * way, so match both orientations (Merge5 [12]/[13]). */
+    bool undirected = rel_pattern && !rel_pattern->left_arrow && !rel_pattern->right_arrow;
+    if (undirected) {
+        offset += snprintf(sql + offset, sizeof(sql) - offset,
+                           "SELECT e.id FROM edges e WHERE ((e.source_id = %d AND e.target_id = %d)"
+                           " OR (e.source_id = %d AND e.target_id = %d))",
+                           source_id, target_id, target_id, source_id);
+    } else {
+        offset += snprintf(sql + offset, sizeof(sql) - offset,
+                           "SELECT e.id FROM edges e WHERE e.source_id = %d AND e.target_id = %d",
+                           source_id, target_id);
+    }
 
     /* Add type filter if specified - use parameter binding */
     if (type && bind_count < MAX_BINDINGS) {
