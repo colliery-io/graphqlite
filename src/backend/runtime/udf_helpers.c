@@ -266,6 +266,100 @@ void gql_eq_func(
     else sqlite3_result_int(context, t == TVAL_TRUE ? 1 : 0);
 }
 
+/* Cypher ordered comparison of two values rendered as JSON-element text,
+ * with the element's json_type. Returns:
+ *   -1, 0, 1  ordinary comparison result
+ *   -2        undefined (null result — cross-type, null operand, or an
+ *             unorderable type such as a map/object reached during compare)
+ * Recurses into arrays element-wise per the Cypher list-ordering rules:
+ * compare pairwise; the first decisive element wins; if all compared
+ * elements are equal, the shorter list sorts first. A null/undefined
+ * element comparison propagates only once it is actually reached. */
+static int gql_cmp_json_vals(sqlite3 *db,
+                             const char *ja, const char *jta,
+                             const char *jb, const char *jtb);
+
+/* Compare two JSON array texts element-wise. */
+static int gql_cmp_json_arrays(sqlite3 *db, const char *aa, const char *ab) {
+    sqlite3_stmt *st = NULL;
+    int la = 0, lb = 0;
+    if (sqlite3_prepare_v2(db, "SELECT json_array_length(?1), json_array_length(?2)",
+                           -1, &st, NULL) != SQLITE_OK) return -2;
+    sqlite3_bind_text(st, 1, aa, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, ab, -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        la = sqlite3_column_int(st, 0);
+        lb = sqlite3_column_int(st, 1);
+    }
+    sqlite3_finalize(st);
+
+    int n = la < lb ? la : lb;
+    for (int i = 0; i < n; i++) {
+        char qa[96], qb[96];
+        snprintf(qa, sizeof(qa), "$[%d]", i);
+        snprintf(qb, sizeof(qb), "$[%d]", i);
+        sqlite3_stmt *es = NULL;
+        if (sqlite3_prepare_v2(db,
+                "SELECT json_extract(?1, ?3), json_type(?1, ?3), "
+                "json_extract(?2, ?4), json_type(?2, ?4)",
+                -1, &es, NULL) != SQLITE_OK) return -2;
+        sqlite3_bind_text(es, 1, aa, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(es, 2, ab, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(es, 3, qa, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(es, 4, qb, -1, SQLITE_TRANSIENT);
+        int c = -2;
+        if (sqlite3_step(es) == SQLITE_ROW) {
+            const char *va  = (const char*)sqlite3_column_text(es, 0);
+            const char *ta  = (const char*)sqlite3_column_text(es, 1);
+            const char *vb  = (const char*)sqlite3_column_text(es, 2);
+            const char *tb  = (const char*)sqlite3_column_text(es, 3);
+            /* For nested arrays, json_extract returns the sub-array text. */
+            char *va_dup = va ? strdup(va) : NULL;
+            char *ta_dup = ta ? strdup(ta) : NULL;
+            char *vb_dup = vb ? strdup(vb) : NULL;
+            char *tb_dup = tb ? strdup(tb) : NULL;
+            sqlite3_finalize(es);
+            c = gql_cmp_json_vals(db, va_dup, ta_dup, vb_dup, tb_dup);
+            free(va_dup); free(ta_dup); free(vb_dup); free(tb_dup);
+        } else {
+            sqlite3_finalize(es);
+        }
+        if (c != 0) return c;  /* decisive (or -2 undefined) */
+    }
+    /* All compared elements equal — shorter list sorts first. */
+    if (la == lb) return 0;
+    return la < lb ? -1 : 1;
+}
+
+static int gql_cmp_json_vals(sqlite3 *db,
+                             const char *ja, const char *jta,
+                             const char *jb, const char *jtb) {
+    if (!jta || !jtb) return -2;                  /* missing */
+    if (strcmp(jta, "null") == 0 || strcmp(jtb, "null") == 0) return -2;
+
+    bool a_num = (strcmp(jta, "integer") == 0 || strcmp(jta, "real") == 0);
+    bool b_num = (strcmp(jtb, "integer") == 0 || strcmp(jtb, "real") == 0);
+    if (a_num && b_num) {
+        double da = ja ? atof(ja) : 0.0, dbv = jb ? atof(jb) : 0.0;
+        return (da < dbv) ? -1 : (da > dbv) ? 1 : 0;
+    }
+    bool a_bool = (strcmp(jta, "true") == 0 || strcmp(jta, "false") == 0);
+    bool b_bool = (strcmp(jtb, "true") == 0 || strcmp(jtb, "false") == 0);
+    if (a_bool && b_bool) {
+        int ia = (strcmp(jta, "true") == 0), ib = (strcmp(jtb, "true") == 0);
+        return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+    }
+    if (strcmp(jta, "text") == 0 && strcmp(jtb, "text") == 0) {
+        int c = strcmp(ja ? ja : "", jb ? jb : "");
+        return (c < 0) ? -1 : (c > 0) ? 1 : 0;
+    }
+    if (strcmp(jta, "array") == 0 && strcmp(jtb, "array") == 0) {
+        return gql_cmp_json_arrays(db, ja ? ja : "[]", jb ? jb : "[]");
+    }
+    /* Anything else (object/map/entity, or cross-type) is unorderable. */
+    return -2;
+}
+
 /* T-0308: Cypher ordering comparison with type-class check.
  *   _gql_order_cmp(left, right, op_str)
  *     op_str in {"<", ">", "<=", ">="}
@@ -311,21 +405,46 @@ void gql_order_cmp_func(
      * clearest cross-type case (list vs scalar, map vs scalar) and
      * matches what TCK Comparison2 [3] enforces. */
     bool l_json = false, r_json = false;
+    bool l_list = false, r_list = false, l_obj = false, r_obj = false;
     if (l_text) {
         const char *s = (const char *)sqlite3_value_text(argv[0]);
-        if (s && (s[0] == '[' || s[0] == '{')) l_json = true;
+        if (s && s[0] == '[') { l_json = true; l_list = true; }
+        else if (s && s[0] == '{') { l_json = true; l_obj = true; }
     }
     if (r_text) {
         const char *s = (const char *)sqlite3_value_text(argv[1]);
-        if (s && (s[0] == '[' || s[0] == '{')) r_json = true;
+        if (s && s[0] == '[') { r_json = true; r_list = true; }
+        else if (s && s[0] == '{') { r_json = true; r_obj = true; }
     }
     if (l_json != r_json) {
         /* container vs scalar — null per Cypher type lattice. */
         sqlite3_result_null(context); return;
     }
+    /* Maps / nodes / relationships / paths (JSON objects) have no ordering
+     * relation in Cypher — any ordered comparison involving one is null.
+     * (Comparison2 [3].) */
+    if (l_obj || r_obj) { sqlite3_result_null(context); return; }
 
     const char *op = (const char *)sqlite3_value_text(argv[2]);
     if (!op) { sqlite3_result_null(context); return; }
+
+    /* Two lists — element-wise comparison with null propagation and the
+     * shorter-prefix-sorts-first rule (Comparison2 [4]). */
+    if (l_list && r_list) {
+        sqlite3 *db = sqlite3_context_db_handle(context);
+        int c = gql_cmp_json_arrays(db,
+                    (const char *)sqlite3_value_text(argv[0]),
+                    (const char *)sqlite3_value_text(argv[1]));
+        if (c == -2) { sqlite3_result_null(context); return; }
+        bool result;
+        if      (strcmp(op, "<")  == 0) result = (c < 0);
+        else if (strcmp(op, ">")  == 0) result = (c > 0);
+        else if (strcmp(op, "<=") == 0) result = (c <= 0);
+        else if (strcmp(op, ">=") == 0) result = (c >= 0);
+        else { sqlite3_result_null(context); return; }
+        sqlite3_result_int(context, result ? 1 : 0);
+        return;
+    }
 
     int cmp = 0;
     if (l_num && r_num) {
