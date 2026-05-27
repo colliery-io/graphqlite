@@ -57,6 +57,7 @@ bool ast_yields_boolean(ast_node *expr)
     if (expr->type == AST_NODE_NOT_EXPR ||
         expr->type == AST_NODE_NULL_CHECK ||
         expr->type == AST_NODE_LIST_PREDICATE ||
+        expr->type == AST_NODE_LABEL_EXPR ||
         expr->type == AST_NODE_EXISTS_EXPR) return true;
     if (expr->type == AST_NODE_LITERAL &&
         ((cypher_literal*)expr)->literal_type == LITERAL_BOOLEAN) return true;

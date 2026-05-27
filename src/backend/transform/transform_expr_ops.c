@@ -42,13 +42,30 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
         ctx->error_message = strdup(error);
         return -1;
     }
-    
-    /* Generate SQL to check if the node has the specified label */
-    /* This checks if there's a record in node_labels table with this node_id and label */
-    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ", alias);
-    append_string_literal(ctx, label_expr->label_name);
-    append_sql(ctx, ")");
-    
+
+    /* Determine the entity's id reference. For post-WITH / projected vars the
+     * alias IS the id; for a fresh MATCH node/edge it is alias.id. */
+    transform_var *var = transform_var_lookup(ctx->var_ctx, id->name);
+    bool is_edge = var && var->kind == VAR_KIND_EDGE;
+    bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name) ||
+                       (var && var->kind == VAR_KIND_PROJECTED);
+    char idref[256];
+    snprintf(idref, sizeof(idref), "%s%s", alias, alias_is_id ? "" : ".id");
+
+    /* Label/type predicate with Cypher 3VL: a null entity yields null, not
+     * false (Graph5 [5]); on a relationship `r:T` checks the edge TYPE, not
+     * node labels (Graph5 [2]). */
+    append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL WHEN ", idref);
+    if (is_edge) {
+        append_sql(ctx, "(SELECT type FROM edges WHERE id = %s) = ", idref);
+        append_string_literal(ctx, label_expr->label_name);
+    } else {
+        append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s AND label = ", idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, ")");
+    }
+    append_sql(ctx, " THEN 1 ELSE 0 END)");
+
     return 0;
 }
 
