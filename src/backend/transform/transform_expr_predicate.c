@@ -19,6 +19,155 @@
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
 
+/* I-0047 P1: emit the rel-type predicate (bare boolean, no connector)
+ * for a varlen EXISTS-pattern subquery. Returns true if a predicate was
+ * appended. */
+static bool ep_append_type_pred(cypher_transform_context *ctx,
+                                cypher_rel_pattern *rel)
+{
+    if (rel->type) {
+        append_sql(ctx, "e.type = ");
+        append_string_literal(ctx, rel->type);
+        return true;
+    } else if (rel->types && rel->types->count > 0) {
+        append_sql(ctx, "(");
+        for (int t = 0; t < rel->types->count; t++) {
+            if (t > 0) append_sql(ctx, " OR ");
+            append_sql(ctx, "e.type = ");
+            const char *tn = get_label_string(rel->types->items[t]);
+            append_string_literal(ctx, tn ? tn : "");
+        }
+        append_sql(ctx, ")");
+        return true;
+    }
+    return false;
+}
+
+/* I-0047 P1: handle the `(a)-[*..]-(b)` shape inside a WHERE existential
+ * pattern predicate (Pattern1 [10]/[17]/[18]). The legacy emitter below
+ * treats every relationship as a single fixed hop, ignoring `rel->varlen`.
+ * For a path of exactly [node, varlen-rel, node] where the left node is
+ * bound in the outer scope, emit a correlated recursive-CTE reachability
+ * check instead. Returns true if handled (caller appends the closing ")").
+ *
+ * Mirrors generate_varlen_cte's traversal: directed honors arrows,
+ * undirected walks both orientations; node-based cycle prevention. Only
+ * start/end/depth/visited columns are needed for an existence test. */
+static bool emit_exists_varlen_path(cypher_transform_context *ctx, cypher_path *path)
+{
+    if (!path->elements || path->elements->count != 3) return false;
+    ast_node *e0 = path->elements->items[0];
+    ast_node *e1 = path->elements->items[1];
+    ast_node *e2 = path->elements->items[2];
+    if (e0->type != AST_NODE_NODE_PATTERN ||
+        e1->type != AST_NODE_REL_PATTERN ||
+        e2->type != AST_NODE_NODE_PATTERN) return false;
+
+    cypher_rel_pattern *rel = (cypher_rel_pattern*)e1;
+    if (!rel->varlen) return false;
+
+    cypher_node_pattern *lnode = (cypher_node_pattern*)e0;
+    cypher_node_pattern *rnode = (cypher_node_pattern*)e2;
+
+    /* Inline endpoint property maps aren't modelled here — bail so we
+     * don't silently ignore them (preserves pre-I-0047 behavior for that
+     * shape rather than emitting a wrong-but-different result). */
+    if (lnode->properties || rnode->properties) return false;
+
+    /* Left endpoint must be bound in the outer scope to correlate. */
+    const char *lalias = lnode->variable
+        ? transform_var_get_alias(ctx->var_ctx, lnode->variable) : NULL;
+    if (!lalias) return false;
+    const char *ralias = rnode->variable
+        ? transform_var_get_alias(ctx->var_ctx, rnode->variable) : NULL;
+
+    cypher_varlen_range *range = (cypher_varlen_range*)rel->varlen;
+    int min_hops = range->min_hops >= 0 ? range->min_hops : 1;
+    int max_hops = range->max_hops > 0 ? range->max_hops : 100;
+
+    const char *src_col = "source_id", *tgt_col = "target_id";
+    if (rel->left_arrow && !rel->right_arrow) { src_col = "target_id"; tgt_col = "source_id"; }
+    bool undirected = (!rel->left_arrow && !rel->right_arrow);
+
+    char cte[32];
+    snprintf(cte, sizeof(cte), "_epv_%d", ctx->cte_count++);
+
+    append_sql(ctx, "WITH RECURSIVE %s(start_id, end_id, depth, visited) AS (", cte);
+
+    /* Zero-hop base (only for *0..N): each node maps to itself. */
+    if (min_hops == 0) {
+        append_sql(ctx, "SELECT n.id, n.id, 0, ',' || n.id || ',' FROM nodes n UNION ALL ");
+    }
+
+    /* Depth-1 base case. */
+    append_sql(ctx, "SELECT e.%s, e.%s, 1, ',' || e.%s || ',' || e.%s || ',' FROM edges e",
+               src_col, tgt_col, src_col, tgt_col);
+    if (rel->type || (rel->types && rel->types->count > 0)) {
+        append_sql(ctx, " WHERE ");
+        ep_append_type_pred(ctx, rel);
+    }
+    if (undirected) {
+        append_sql(ctx, " UNION ALL SELECT e.%s, e.%s, 1, ',' || e.%s || ',' || e.%s || ',' FROM edges e",
+                   tgt_col, src_col, tgt_col, src_col);
+        if (rel->type || (rel->types && rel->types->count > 0)) {
+            append_sql(ctx, " WHERE ");
+            ep_append_type_pred(ctx, rel);
+        }
+    }
+
+    /* Recursive step. */
+    append_sql(ctx, " UNION ALL ");
+    if (undirected) {
+        const char *other = "(CASE WHEN e.source_id = cte.end_id THEN e.target_id ELSE e.source_id END)";
+        append_sql(ctx,
+            "SELECT cte.start_id, %s, cte.depth + 1, cte.visited || %s || ',' "
+            "FROM %s cte JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
+            "WHERE cte.depth >= 1 AND cte.depth < %d "
+            "AND cte.visited NOT LIKE '%%,' || CAST(%s AS TEXT) || ',%%'",
+            other, other, cte, max_hops, other);
+    } else {
+        append_sql(ctx,
+            "SELECT cte.start_id, e.%s, cte.depth + 1, cte.visited || e.%s || ',' "
+            "FROM %s cte JOIN edges e ON e.%s = cte.end_id "
+            "WHERE cte.depth >= 1 AND cte.depth < %d "
+            "AND cte.visited NOT LIKE '%%,' || CAST(e.%s AS TEXT) || ',%%'",
+            tgt_col, tgt_col, cte, src_col, max_hops, tgt_col);
+    }
+    if (rel->type || (rel->types && rel->types->count > 0)) {
+        append_sql(ctx, " AND ");
+        ep_append_type_pred(ctx, rel);
+    }
+
+    append_sql(ctx, ") SELECT 1 FROM %s WHERE %s.start_id = %s.id", cte, cte, lalias);
+    if (ralias) {
+        append_sql(ctx, " AND %s.end_id = %s.id", cte, ralias);
+    }
+    if (min_hops >= 0) append_sql(ctx, " AND %s.depth >= %d", cte, min_hops);
+    append_sql(ctx, " AND %s.depth <= %d", cte, max_hops);
+
+    /* Honor endpoint label constraints against the CTE's start/end ids
+     * (e.g. `(a)-[:T*]->(b:MissingLabel)`). */
+    if (has_labels(lnode)) {
+        for (int j = 0; j < lnode->labels->count; j++) {
+            const char *lbl = get_label_string(lnode->labels->items[j]);
+            if (!lbl) continue;
+            append_sql(ctx, " AND EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.start_id AND label = ", cte);
+            append_string_literal(ctx, lbl);
+            append_sql(ctx, ")");
+        }
+    }
+    if (has_labels(rnode)) {
+        for (int j = 0; j < rnode->labels->count; j++) {
+            const char *lbl = get_label_string(rnode->labels->items[j]);
+            if (!lbl) continue;
+            append_sql(ctx, " AND EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.end_id AND label = ", cte);
+            append_string_literal(ctx, lbl);
+            append_sql(ctx, ")");
+        }
+    }
+    return true;
+}
+
 /* Transform EXISTS expression */
 int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
 {
@@ -50,6 +199,16 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                 if (pattern->type == AST_NODE_PATH) {
                     cypher_path *path = (cypher_path*)pattern;
+
+                    /* I-0047 P1: variable-length rel inside the predicate
+                     * (`(a)-[*..]-(b)`) needs a recursive reachability CTE,
+                     * not the single-hop join the legacy emitter below
+                     * produces. Handle that shape first; fall through
+                     * otherwise. */
+                    if (emit_exists_varlen_path(ctx, path)) {
+                        append_sql(ctx, ")");
+                        return 0;
+                    }
 
                     /* Simple pattern like (n)-[r]->(m) */
                     if (path->elements && path->elements->count >= 1) {

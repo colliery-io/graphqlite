@@ -173,3 +173,34 @@ distinct, non-trivial sub-feature separate from the top-level MATCH CTE just
 landed. Scoped as the next P1 sub-task (this emitter is also where undirected
 fixed predicates already work, so the bidirectional logic can be shared). Not
 attempted in this increment.
+
+### 2026-05-27 — EXISTS-predicate varlen landed; +3 more, zero regressions
+
+Added `emit_exists_varlen_path` (`transform_expr_predicate.c`): a guarded branch
+in the `AST_NODE_PATH` EXISTS emitter that handles the `[node, varlen-rel, node]`
+shape with an inline correlated recursive CTE
+(`EXISTS (WITH RECURSIVE _epv_N(start_id, end_id, depth, visited) AS (…)
+SELECT 1 … WHERE start_id = <left>.id [AND end_id = <right>.id] AND depth
+BETWEEN min AND max)`). Same bidirectional traversal as the MATCH CTE
+(directed honors arrows; undirected walks both orientations; node-based cycle
+prevention). The left endpoint must be outer-bound to correlate; the right is
+bound when it's an outer var, else free (the `(n)-[*]-()` anon case).
+
+Endpoint **label** constraints are honored against the CTE's start/end ids
+(`(a)-[:T*]->(b:MissingLabel)`); inline endpoint **properties** bail to the
+legacy emitter (unchanged pre-existing behavior, no new regression).
+
+First pass regressed MatchWhere4 [2] / WithWhere4 [2] ("disjunctive multi-part
+predicates including patterns") because the helper ignored the `:MissingLabel`
+endpoint label → the EXISTS wrongly matched. Adding endpoint-label handling
+fixed both back to passing.
+
+**Verification:** full TCK pass-set diff vs. the P1-core baseline →
+newly passing Pattern1 [10]/[17]/[18], **zero regressions**. 3687 → **3690**.
+Unit 944/944, functional clean.
+
+**P1 status:** undirected varlen now correct in both the top-level MATCH CTE
+and WHERE EXISTS-pattern predicates. Session total for T-0334: **+6**
+(Match9 [1]/[3], Delete4 [1], Pattern1 [10]/[17]/[18]). Remaining acceptance
+items (Match6 [14] multi-segment, Match6 [17] zero-length named path) belong to
+P2 ([[GQLITE-T-0335]]) / P4 ([[GQLITE-T-0337]]).
