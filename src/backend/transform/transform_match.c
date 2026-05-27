@@ -1556,18 +1556,41 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
         /* Get proper node id reference (handles projected variables from WITH) */
         const char *node_id = get_node_id_ref(ctx, alias, node->variable);
 
-        for (int i = 0; i < node->labels->count; i++) {
-            const char *label = get_label_string(node->labels->items[i]);
-            if (label) {
-                char nl_alias[64];
-                snprintf(nl_alias, sizeof(nl_alias), "_nl_%s_%d", alias, i);
-                dbuf_init(&on_cond);
-                { char *esc_label = escape_sql_string(label);
-                  dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
-                               nl_alias, node_id, nl_alias, esc_label ? esc_label : label);
-                  free(esc_label); }
-                sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "node_labels"), nl_alias, dbuf_get(&on_cond));
-                dbuf_free(&on_cond);
+        if (optional) {
+            /* I-0047 P3: an OPTIONAL node's label constraint must be inlined
+             * into the node's own LEFT JOIN ON (as a correlated EXISTS), not
+             * emitted as a separate INNER node_labels join. An INNER join
+             * drops the preserved anchor row whenever the optional pattern
+             * doesn't match (e.g. a second `OPTIONAL MATCH (b:Missing)` after
+             * a null-seeded first optional). The first-node-no-FROM path above
+             * already inlines; this covers every other optional node. */
+            for (int i = 0; i < node->labels->count; i++) {
+                const char *label = get_label_string(node->labels->items[i]);
+                if (!label) continue;
+                char *esc_label = escape_sql_string(label);
+                char cond[512];
+                /* sql_join_append_on prepends " AND " itself. */
+                snprintf(cond, sizeof(cond),
+                    "EXISTS (SELECT 1 FROM %s WHERE node_id = %s AND label = '%s')",
+                    get_graph_table(ctx, "node_labels"), node_id,
+                    esc_label ? esc_label : label);
+                free(esc_label);
+                sql_join_append_on(ctx->unified_builder, cond);
+            }
+        } else {
+            for (int i = 0; i < node->labels->count; i++) {
+                const char *label = get_label_string(node->labels->items[i]);
+                if (label) {
+                    char nl_alias[64];
+                    snprintf(nl_alias, sizeof(nl_alias), "_nl_%s_%d", alias, i);
+                    dbuf_init(&on_cond);
+                    { char *esc_label = escape_sql_string(label);
+                      dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
+                                   nl_alias, node_id, nl_alias, esc_label ? esc_label : label);
+                      free(esc_label); }
+                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "node_labels"), nl_alias, dbuf_get(&on_cond));
+                    dbuf_free(&on_cond);
+                }
             }
         }
     }
