@@ -100,3 +100,28 @@ execution harness:
   WITH null-var binding issue.
 - **Match7 [12]**: varlen optional row count (exp 4 got 3).
 - **Match7 [27]**: correlated optional between optionally-matched entities.
+
+### 2026-05-27 — Bound-rel reverse OPTIONAL: attempted, reverted (needs deeper change)
+
+Root cause confirmed for Match7 [4] / MatchWhere6 [5]
+(`MATCH (a1)-[r]->() WITH r,a1 LIMIT 1 OPTIONAL MATCH (a1)<-[r]-(b2)`): the
+bound-rel handler (`transform_match.c`, `rel_is_bound` branch) emits the
+endpoint constraints (`a1 = r.target AND b2 = r.source`) via `sql_where`. For
+OPTIONAL these belong in the fresh target node's LEFT JOIN ON — as WHERE they
+filter the anchor row away (a1=A ≠ r.target=B → 0 rows instead of 1 with b2
+null).
+
+Two attempts to redirect the constraint to the LEFT JOIN ON
+(`sql_join_append_on`) **both regressed** other bound-rel-OPTIONAL shapes
+(Match7 errors): `sql_join_append_on` appends to *the last emitted join*, which
+is not reliably the target node's LEFT JOIN — other shapes (both endpoints
+bound, target bound, or extra joins between) get a malformed `... ON ... AND
+<cond>` tail or attach to the wrong join. Even a narrow guard
+(`src in scope && tgt fresh`, dot-in-alias heuristic) still mis-targeted.
+
+**Conclusion:** the constraint must be emitted *as part of* the target node's
+LEFT JOIN ON at the moment that join is created (e.g. generate_node_match
+returns/accepts a pending-ON, or the bound-rel handler emits the target node
+join itself with the constraint inline), not appended post-hoc. That's a deeper
+plumbing change than a `sql_where`→`append_on` swap. Reverted to preserve the
+clean +9 state; left for a focused follow-up.
