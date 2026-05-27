@@ -275,6 +275,20 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
+### 2026-05-27 — Remaining deep tail decomposed into Phase-C initiatives
+
+The deep remainder (Phase C) is now broken out into three sibling initiatives
+so I-0044 can close at the conformance-push level. Each carries the per-cluster
+root causes from this push and reuses the cores landed here:
+- [[GQLITE-I-0046]] Temporal & Duration Type Completeness (C2) — ~30 scenarios.
+- [[GQLITE-I-0047]] Pattern & Path Matching Completeness (B1 + C3) — ~15-18.
+- [[GQLITE-I-0048]] Collection & Comparability Semantics — ~15-20.
+New-language features (EXISTS{}, label disjunction) remain in [[GQLITE-I-0045]];
+pattern-comprehension lowering residual stays in task GQLITE-T-0332.
+I-0044 hit 94.9% executable (3684/3880, +135 from the 91.5% v0.5.0 baseline /
++94 this session) — its Phase-A/B goals (≥+40) are met; the 95% target's last
+points live in the C-initiatives above.
+
 ### 2026-05-26 — Post-temporal clusters: +4 (3680 → 3684, 94.9%)
 - Set1 [6]/[7]: CREATE+SET+RETURN now runs SET (the CREATE+RETURN dispatch
   swallowed it); + `*_props_json` added to the CREATE+RETURN and
