@@ -998,8 +998,9 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                             /* Post-WITH node/edge - alias IS the id value */
                             if (transform_var_is_edge(ctx->var_ctx, id->name)) {
                                 /* Edge that passed through WITH - build relationship object */
-                                /* Note: After WITH, we only have the id, not type/source/target */
-                                append_sql(ctx, "json_object("
+                                /* Note: After WITH, we only have the id, not type/source/target.
+                                 * Guard for NULL (OPTIONAL miss carried across WITH). */
+                                append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE json_object("
                                     "'id', %s, "
                                     "'type', (SELECT type FROM edges WHERE id = %s), "
                                     "'startNodeId', (SELECT source_id FROM edges WHERE id = %s), "
@@ -1017,13 +1018,17 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                         "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s AND key_id = pk.id) OR "
                                         "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = %s AND key_id = pk.id)"
                                     "), json('{}'))"
-                                ")",
-                                alias, alias, alias, alias,
+                                ") END)",
+                                alias, alias, alias, alias, alias,
                                 alias, alias, alias, alias, alias,
                                 alias, alias, alias, alias, alias);
                             } else {
-                                /* Node that passed through WITH - build node object using id directly */
-                                append_sql(ctx, "json_object("
+                                /* Node that passed through WITH - build node object using id directly.
+                                 * Guard for NULL (the id column can be NULL when the value came
+                                 * through an OPTIONAL MATCH miss carried across WITH, e.g.
+                                 * Match7 [27]); otherwise json_object('id', NULL, …) renders a
+                                 * bogus non-null node instead of SQL NULL. */
+                                append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE json_object("
                                     "'id', %s, "
                                     "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s), json('[]')), "
                                     "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
@@ -1039,8 +1044,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                         "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s AND key_id = pk.id) OR "
                                         "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s AND key_id = pk.id)"
                                     "), json('{}'))"
-                                ")",
-                                alias, alias,
+                                ") END)",
+                                alias, alias, alias,
                                 alias, alias, alias, alias, alias,
                                 alias, alias, alias, alias, alias);
                             }
