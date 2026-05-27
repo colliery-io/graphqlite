@@ -2955,9 +2955,10 @@ void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
                 if (strlen(tz_main + 1) >= 4) sscanf(tz_main + 1, "%2d%2d", &oh, &om);
                 else sscanf(tz_main + 1, "%d", &oh);
             }
-            snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d%s", tz_main[0], oh, om, bracket ? bracket : "");
-        } else if (*tz == '[') {
-            snprintf(tz_out, sizeof(tz_out), "%s", tz);
+            /* A `time` value carries only the numeric offset — the named-zone
+             * bracket (e.g. [Europe/Stockholm], already resolved to the offset)
+             * is dropped (only datetime keeps the zone name). Temporal3 [3]. */
+            snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d", tz_main[0], oh, om);
         }
     }
 
