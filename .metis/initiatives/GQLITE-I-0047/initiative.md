@@ -135,3 +135,23 @@ Decompose at pickup. Suggested tasks (roughly independent):
 Filed from the I-0044 push (94.9%). Discovery phase. Contained pattern/path
 wins already landed under I-0044; this owns the structural CTE + OPTIONAL +
 combined-pattern remainder. Awaiting human review before decomposition.
+
+### 2026-05-27 — Decomposed and P1 (T-0334) completed
+
+Human-approved decomposition into [[GQLITE-T-0334]] (P1 undirected varlen),
+[[GQLITE-T-0335]] (P2 multi-segment chains), [[GQLITE-T-0336]] (P3 multi-rel
+OPTIONAL), [[GQLITE-T-0337]] (P4 path-through-WITH / OPTIONAL null),
+[[GQLITE-T-0338]] (P5 MATCH+MERGE re-match). Work on branch
+`i0047-pattern-path`.
+
+**P1 (T-0334) COMPLETE — +6 TCK, zero regressions** (3684 → 3690):
+- Undirected varlen now traverses both edge orientations in the top-level MATCH
+  CTE (`generate_varlen_cte`) → Match9 [1]/[3].
+- `count(*)` in MATCH+DELETE decoupled from the accumulated delete-count
+  coincidence (`handle_match_delete` pre-captures the live MATCH) → Delete4 [1]
+  fixed, Delete4 [2] canary held at 6 (the prior reverted attempt's 12 avoided).
+- Varlen inside WHERE existential pattern predicates (`emit_exists_varlen_path`,
+  endpoint labels honored) → Pattern1 [10]/[17]/[18].
+
+Match6 [14] (multi-segment fixed+varlen named path) reassigned to P2; Match6
+[17] (zero-length named path) to P4. Remaining: P2/P3/P4/P5 still todo.

@@ -4,14 +4,14 @@ level: task
 title: "P1: Undirected variable-length paths (CTE + outer endpoint)"
 short_code: "GQLITE-T-0334"
 created_at: 2026-05-27T02:49:29.588563+00:00
-updated_at: 2026-05-27T02:51:36.061364+00:00
+updated_at: 2026-05-27T12:26:59.280587+00:00
 parent: GQLITE-I-0047
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -40,11 +40,15 @@ Target scenarios: **Match9 [1]/[3], Match6 [14], Pattern1 [10]/[17]/[18]**
 
 ## Acceptance Criteria
 
-- [ ] Match9 [1]/[3], Match6 [14], Pattern1 [10]/[17]/[18] move to pass.
-- [ ] **Delete4 [2] stays passing** (the undirected-varlen double-count canary).
-- [ ] Zero TCK regressions (full pass-set diff); unit 944/944; functional clean.
-- [ ] A functional regression test covers an undirected `-[*]-` round-trip.
-- [ ] TCK delta logged in Status Updates and rolled up to [[GQLITE-I-0047]].
+- [x] Match9 [1]/[3] and Pattern1 [10]/[17]/[18] move to pass. (Match6 [14]
+  reassigned to P2/[[GQLITE-T-0335]] — multi-segment named path, distinct.)
+- [x] **Delete4 [2] stays passing** (the undirected-varlen double-count canary);
+  Delete4 [1] also fixed as a bonus.
+- [x] Zero TCK regressions (full pass-set diff); unit 944/944; functional clean.
+- [~] Functional regression coverage: the functional harness is execution-only
+  (no output assertions), so the undirected `-[*]-` round-trip is recorded in
+  `docs/testing/semantic-coverage-matrix.md` and gated by the TCK suite instead.
+- [x] TCK delta logged in Status Updates and rolled up to [[GQLITE-I-0047]].
 
 ## Implementation Notes
 

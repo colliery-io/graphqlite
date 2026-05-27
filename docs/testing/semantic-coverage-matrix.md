@@ -186,7 +186,15 @@ TCK harness (`angreal test tck`, full pass-set diff, zero regressions; unit
   undercounted; with the MATCH now correct it would have over-counted. Fixes
   Delete4 [1] (single-hop undirected, +1 bonus) and keeps Delete4 [2] correct.
 
-Net TCK delta: +3 (Match9 [1], Match9 [3], Delete4 [1]), zero regressions.
-Remaining I-0047 P1 targets (Pattern1 [10]/[17]/[18] undirected varlen inside
-WHERE `EXISTS`-pattern predicates; Match6 [14]/[17] multi-segment / zero-length
-named paths) are distinct generators tracked under GQLITE-T-0334 / P2 / P4.
+- **`MATCH (n) WHERE (n)-[:R*..]-(m)` (varlen inside a WHERE existential
+  pattern predicate)** — the `AST_NODE_PATH` EXISTS emitter
+  (`transform_expr_predicate.c`) previously treated every rel as a single fixed
+  hop, ignoring `rel->varlen`. New `emit_exists_varlen_path` emits a correlated
+  recursive-CTE reachability check (same bidirectional traversal as the MATCH
+  CTE; endpoint labels honored; inline endpoint properties fall back). Fixes
+  Pattern1 [10]/[17]/[18].
+
+Net TCK delta: +6 (Match9 [1]/[3], Delete4 [1], Pattern1 [10]/[17]/[18]), zero
+regressions. Remaining I-0047 targets Match6 [14] (multi-segment fixed+varlen
+named path) and Match6 [17] (zero-length named path) are distinct generators
+tracked under P2 (GQLITE-T-0335) / P4 (GQLITE-T-0337).
