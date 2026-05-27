@@ -216,3 +216,19 @@ failures turned out **not** to be a path-matching bug — multi-segment
 fixed+varlen chains already match correctly. They fail because their setup
 (`MATCH (d:D) CREATE …`) only processes the first matched row — a write-path
 multiplicity bug filed as GQLITE-T-0339, out of this initiative's scope.
+
+## Coverage update (2026-05-27) — I-0047 P3: OPTIONAL MATCH row preservation
+
+GQLITE-T-0336 (partial). Verified via the TCK harness (full pass-set diff,
+zero regressions; unit 944/944; functional clean):
+
+- **OPTIONAL node label constraints no longer drop the preserved anchor row.**
+  An OPTIONAL node's label was emitted as an INNER `node_labels` join (for
+  varlen-deferred targets and for every non-first optional node), which inner-
+  joins away the NULL-seed row when the optional doesn't match. Labels now fold
+  into the node's LEFT JOIN ON as a correlated EXISTS. Fixes Match7 [15]
+  (OPTIONAL varlen + nulls) and Aggregation5 [2] (OPTIONAL MATCH + collect).
+
+Remaining OPTIONAL work (multi-rel combined-EXISTS join ordering, bound-rel
+reverse optional, chained-OPTIONAL null-var binding, varlen optional counts) is
+tracked under GQLITE-T-0336.

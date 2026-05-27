@@ -69,4 +69,34 @@ predicates that reference OPTIONAL-bound vars still null-propagate correctly.
 
 ## Status Updates
 
-*To be added during implementation*
+### 2026-05-27 — P3 triage + two OPTIONAL row-preservation fixes (+2)
+
+P3 is several distinct OPTIONAL-MATCH bugs, not one. Triaged via SQL-dump +
+execution harness:
+
+**Landed (+2, zero regressions, 3691 → 3693):**
+1. **OPTIONAL + varlen anchor preservation** (commit 6b45ff7) — for
+   `OPTIONAL MATCH (a)-[:T*]->(c:Label)` with a deferred target, the target
+   label was an INNER `node_labels` join (referencing the not-yet-joined
+   target) and the varlen start/depth constraints landed on it. Now the label
+   folds into the deferred target's LEFT JOIN ON as an EXISTS. → Match7 [15].
+2. **OPTIONAL node labels inline into LEFT JOIN ON** (commit 1b2c218) —
+   `generate_node_match` emitted every non-first OPTIONAL node's label as an
+   INNER join, dropping the anchor row (e.g. a second `OPTIONAL MATCH
+   (b:Missing)`). Now appended to the node's LEFT JOIN ON as EXISTS.
+   → Aggregation5 [2]; unblocks chained-OPTIONAL row preservation generally.
+
+**Remaining P3 (each a distinct, deeper bug — not yet done):**
+- **MatchWhere6 [7]** (the canonical "ON clause references tables to its
+  right"): multi-rel OPTIONAL emits the full-pattern combined-EXISTS onto
+  *each* unbound endpoint's LEFT JOIN, so the first references aliases joined
+  later. Needs a **derived-table** rewrite (LEFT JOIN a subquery that
+  materializes the whole (x,y,z) pattern, keyed to the anchor) — sizable.
+- **Match7 [4]** / **MatchWhere6 [5]**: bound rel `r` reused in a reverse
+  OPTIONAL (`OPTIONAL MATCH (a1)<-[r]-(b2)`) → 0 rows (should preserve a1,r
+  with b2 null).
+- **Match7 [21]**: chained `OPTIONAL…OPTIONAL…WITH…OPTIONAL` now yields the
+  right row count but binds the null vars to node id 0 instead of null — a
+  WITH null-var binding issue.
+- **Match7 [12]**: varlen optional row count (exp 4 got 3).
+- **Match7 [27]**: correlated optional between optionally-matched entities.
