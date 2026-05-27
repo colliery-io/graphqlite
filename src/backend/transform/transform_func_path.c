@@ -180,6 +180,41 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
         return -1;
     }
 
+    /* Variable-length rel in the path: its edge ids live in the varlen CTE's
+     * interleaved elem_ids (node,edge,node,... — edges at odd positions), not
+     * in a single `.id` column. Build the rel-id list from there.
+     * (Path2 [1]/[2].) */
+    for (int i = 0; i < path_var->path_elements->count; i++) {
+        ast_node *element = path_var->path_elements->items[i];
+        if (element->type == AST_NODE_REL_PATTERN &&
+            ((cypher_rel_pattern*)element)->varlen) {
+            cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
+            const char *alias = rel->variable ?
+                transform_var_get_alias(ctx->var_ctx, rel->variable) : NULL;
+            if (alias) {
+                append_sql(ctx,
+                    "(SELECT json_group_array(json_object("
+                    "'id', e.id, 'type', e.type, 'startNode', e.source_id, 'endNode', e.target_id, "
+                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
+                      "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = e.id AND ept.key_id = pk.id), "
+                      "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = e.id AND epi.key_id = pk.id), "
+                      "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = e.id AND epr.key_id = pk.id), "
+                      "(SELECT json(CASE WHEN epb.value THEN 'true' ELSE 'false' END) FROM edge_props_bool epb WHERE epb.edge_id = e.id AND epb.key_id = pk.id), "
+                      "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = e.id AND epj.key_id = pk.id))) "
+                      "FROM property_keys pk WHERE "
+                        "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = e.id AND key_id = pk.id) OR "
+                        "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = e.id AND key_id = pk.id) OR "
+                        "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = e.id AND key_id = pk.id) OR "
+                        "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = e.id AND key_id = pk.id) OR "
+                        "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = e.id AND key_id = pk.id)"
+                      "), json('{}'))) ORDER BY je.key) "
+                    "FROM json_each('[' || %s.elem_ids || ']') je JOIN edges e ON e.id = je.value "
+                    "WHERE (je.key %% 2) = 1)", alias);
+                return 0;
+            }
+        }
+    }
+
     /* Collect relationship aliases in path order. */
     const char *rel_aliases[64];
     int n_rels = 0;
