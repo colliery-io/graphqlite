@@ -275,10 +275,12 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
-### 2026-05-26 — Session: +79 TCK (3590 → 3669, 94.6%), 24 commits
-(+ Graph5 [2]/[5]: label/type predicate 3VL — r:T checks edge type, null→null,
-AST_NODE_LABEL_EXPR added to ast_yields_boolean. Grammar gap remains: `:A&B`
-conjunctive label expression, Graph5 [4].)
+### 2026-05-26 — Session: +82 TCK (3590 → 3672, 94.6%), 26 commits
+(+ Precedence2 [4]/[5]: unary minus on non-literal operands materialized as
+0 - expr — `-(3^2)` was dropping the negation. Precedence2 26/26.
++ Graph5 [2]/[5]: label/type predicate 3VL — r:T checks edge type, null→null,
+AST_NODE_LABEL_EXPR added to ast_yields_boolean. Grammar gap remains: conjunctive
+label expression :A&B, Graph5 [4].)
 
 ### 2026-05-26 — Session: +77 TCK (3590 → 3667), 22 commits
 
