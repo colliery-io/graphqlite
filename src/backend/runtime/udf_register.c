@@ -151,6 +151,9 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_duration_parse_iso_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  rc = sqlite3_create_function(db, "_gql_duration_field", 2, SQLITE_UTF8, 0,
+                         gql_duration_field_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_temporal_field", 2, SQLITE_UTF8, 0,
                          gql_temporal_field_func, 0, 0);
   if (rc != SQLITE_OK) return rc;

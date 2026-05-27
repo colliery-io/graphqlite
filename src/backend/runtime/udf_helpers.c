@@ -2675,6 +2675,44 @@ void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value *
  *
  * Returns NULL on parse failure or unknown field.
  */
+/* Duration component accessors (Temporal5 [7]). All derive from the normalized
+ * {months, days, seconds, nanosecondsOfSecond}. argv[0]=duration JSON,
+ * argv[1]=field. */
+void gql_duration_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc != 2 || sqlite3_value_type(argv[0]) == SQLITE_NULL ||
+        sqlite3_value_type(argv[1]) == SQLITE_NULL) { sqlite3_result_null(ctx); return; }
+    const char *j = (const char*)sqlite3_value_text(argv[0]);
+    const char *f = (const char*)sqlite3_value_text(argv[1]);
+    if (!j || !f) { sqlite3_result_null(ctx); return; }
+    long long m  = dur_field_ll(j, "months");
+    long long da = dur_field_ll(j, "days");
+    long long s  = dur_field_ll(j, "seconds");
+    long long ns = dur_field_ll(j, "nanosecondsOfSecond");
+    long long r;
+    if      (!strcmp(f, "years"))                r = m / 12;
+    else if (!strcmp(f, "quarters"))             r = m / 3;
+    else if (!strcmp(f, "months"))               r = m;
+    else if (!strcmp(f, "monthsOfYear"))         r = m % 12;
+    else if (!strcmp(f, "monthsOfQuarter"))      r = m % 3;
+    else if (!strcmp(f, "quartersOfYear"))       r = (m / 3) % 4;
+    else if (!strcmp(f, "weeks"))                r = da / 7;
+    else if (!strcmp(f, "days"))                 r = da;
+    else if (!strcmp(f, "daysOfWeek"))           r = da % 7;
+    else if (!strcmp(f, "hours"))                r = s / 3600;
+    else if (!strcmp(f, "minutes"))              r = s / 60;
+    else if (!strcmp(f, "minutesOfHour"))        r = (s / 60) % 60;
+    else if (!strcmp(f, "seconds"))              r = s;
+    else if (!strcmp(f, "secondsOfMinute"))      r = s % 60;
+    else if (!strcmp(f, "milliseconds"))         r = s * 1000LL + ns / 1000000LL;
+    else if (!strcmp(f, "millisecondsOfSecond")) r = ns / 1000000LL;
+    else if (!strcmp(f, "microseconds"))         r = s * 1000000LL + ns / 1000LL;
+    else if (!strcmp(f, "microsecondsOfSecond")) r = ns / 1000LL;
+    else if (!strcmp(f, "nanoseconds"))          r = s * 1000000000LL + ns;
+    else if (!strcmp(f, "nanosecondsOfSecond"))  r = ns;
+    else { sqlite3_result_null(ctx); return; }
+    sqlite3_result_int64(ctx, r);
+}
+
 void gql_temporal_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc != 2) { sqlite3_result_null(ctx); return; }
     const char *s = (const char*)sqlite3_value_text(argv[0]);
@@ -2756,6 +2794,7 @@ void gql_temporal_field_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
     }
     if (p.has_tz) {
         if (strcmp(field, "offsetMinutes") == 0) { sqlite3_result_int(ctx, p.tz_offset_min); return; }
+        if (strcmp(field, "offsetSeconds") == 0) { sqlite3_result_int(ctx, p.tz_offset_min * 60); return; }
         if (strcmp(field, "offset") == 0 || strcmp(field, "timezone") == 0) {
             char buf[16];
             int oh = p.tz_offset_min / 60;

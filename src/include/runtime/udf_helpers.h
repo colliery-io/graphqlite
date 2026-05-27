@@ -56,6 +56,7 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
 void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_temporal_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_duration_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_normalize_date_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);

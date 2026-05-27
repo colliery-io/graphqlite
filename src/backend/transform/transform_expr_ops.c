@@ -675,10 +675,17 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         /* json_extract raises 'malformed JSON' on non-JSON inputs (e.g. a
          * temporal string like '1984-10-11'), so guard with json_valid. */
         { char *esc_prop = escape_sql_string(prop->property_name);
-          append_sql(ctx, "CASE WHEN json_valid(%s) THEN json_extract(%s, '$.%s')"
-                          " ELSE _gql_temporal_field(%s, '%s') END",
-                     alias, alias, esc_prop ? esc_prop : prop->property_name,
-                     alias, esc_prop ? esc_prop : prop->property_name);
+          const char *pn = esc_prop ? esc_prop : prop->property_name;
+          /* Duration JSON (carries an "_iso8601" key) → derived-component
+           * accessor; other JSON → json_extract; temporal string → field
+           * parser. (Temporal5 [7].) */
+          append_sql(ctx,
+              "CASE WHEN json_valid(%s) AND instr(%s, '\"_iso8601\"') > 0 THEN _gql_duration_field(%s, '%s')"
+              " WHEN json_valid(%s) THEN json_extract(%s, '$.%s')"
+              " ELSE _gql_temporal_field(%s, '%s') END",
+              alias, alias, alias, pn,
+              alias, alias, pn,
+              alias, pn);
           free(esc_prop); }
         return 0;
     }
