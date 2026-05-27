@@ -1833,6 +1833,18 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
         }
     }
 
+    /* Run any SET clauses between CREATE and RETURN against the created
+     * bindings, in document order (CREATE (a {..}) SET a.x = .. RETURN a.x).
+     * Previously the CREATE+RETURN handler ignored SET entirely. (Set1 [6]/[7].) */
+    for (int i = 0; var_map && query->clauses && i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (clause->type != AST_NODE_SET) continue;
+        if (execute_set_operations(executor, (cypher_set *)clause, var_map, result) < 0) {
+            free_variable_map(var_map);
+            return -1;
+        }
+    }
+
     if (!var_map || var_map->count == 0 || !ret || !ret->items) {
         result->success = true;
         if (var_map) free_variable_map(var_map);
@@ -1927,11 +1939,11 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                     /* Query each property type table for the value */
                     const char *node_tables[] = {
                         "node_props_text", "node_props_int",
-                        "node_props_real", "node_props_bool", NULL
+                        "node_props_real", "node_props_bool", "node_props_json", NULL
                     };
                     const char *edge_tables[] = {
                         "edge_props_text", "edge_props_int",
-                        "edge_props_real", "edge_props_bool", NULL
+                        "edge_props_real", "edge_props_bool", "edge_props_json", NULL
                     };
                     const char **type_tables = is_edge ? edge_tables : node_tables;
                     const char *id_col = is_edge ? "edge_id" : "node_id";

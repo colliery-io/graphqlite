@@ -409,11 +409,11 @@ void project_return_row_from_var_map(cypher_executor *executor,
                 if (ent_id >= 0) {
                     const char *node_tables[] = {
                         "node_props_text", "node_props_int",
-                        "node_props_real", "node_props_bool", NULL
+                        "node_props_real", "node_props_bool", "node_props_json", NULL
                     };
                     const char *edge_tables[] = {
                         "edge_props_text", "edge_props_int",
-                        "edge_props_real", "edge_props_bool", NULL
+                        "edge_props_real", "edge_props_bool", "edge_props_json", NULL
                     };
                     const char **type_tables = node_id >= 0 ? node_tables : edge_tables;
                     for (int t = 0; type_tables[t]; t++) {
