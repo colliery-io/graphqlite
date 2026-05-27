@@ -156,6 +156,9 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left '^'
 %left IN IS
 %left '.' '['
+/* Unary -/+ bind tightest among arithmetic: `-3^2` = (-3)^2 = 9
+ * (Precedence2 [4]). Negation of a non-literal is materialized as 0 - expr
+ * in the '-' expr production. */
 %right UNARY_MINUS UNARY_PLUS
 
 %%
@@ -1202,12 +1205,16 @@ expr:
                 lit->value.decimal = -lit->value.decimal;
                 $$ = $2;
             } else {
-                /* For other types, we'd need a unary minus node */
-                $$ = $2;
+                /* Non-numeric literal: negate as 0 - lit. */
+                $$ = (ast_node*)make_binary_op(BINARY_OP_SUB,
+                        (ast_node*)make_integer_literal(0, @1.first_line), $2, @1.first_line);
             }
         } else {
-            /* For non-literals, we'd need a unary minus expression node */
-            $$ = $2;
+            /* Non-literal operand (e.g. -3^2, -x, -(a+b)): build a real
+             * negation as 0 - expr; previously the negation was silently
+             * dropped. (Precedence2 [4]/[5].) */
+            $$ = (ast_node*)make_binary_op(BINARY_OP_SUB,
+                    (ast_node*)make_integer_literal(0, @1.first_line), $2, @1.first_line);
         }
     }
     | expr '+' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_ADD, $1, $3, @2.first_line); }
