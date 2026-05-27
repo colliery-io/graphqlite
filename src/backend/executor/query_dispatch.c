@@ -807,16 +807,21 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
      * (e.g. `type(r)` or `r.prop`). After DELETE, the entity is
      * gone and the lookup yields NULL.
      *
-     * For COUNT(*) and literal RETURNs, the existing
-     * synthesize_delete_return path is preserved — it uses the
-     * accumulated delete counts which (by historical coincidence)
-     * sometimes match expected aggregate counts for shapes our
-     * MATCH undercounts (e.g. undirected varlen). Pre-MATCHing
-     * those would regress them.
+     * I-0047 P1: `count(*)` is pre-captured too. It must reflect the
+     * number of MATCHED rows, which `execute_match_return_query`
+     * computes directly. The legacy `synthesize_delete_return` path
+     * derived `count` from the accumulated *delete* count
+     * (nodes_deleted + rels_deleted, with no endpoint dedup), which
+     * only coincidentally matched the expected aggregate for shapes
+     * our MATCH undercounted (e.g. undirected varlen, where 3 directed
+     * rows × 2 deleted endpoints == the 6 rows real Cypher matches).
+     * Now that undirected varlen traverses both orientations (the
+     * MATCH row count is correct), that coincidence would over-count
+     * (6 rows × 2 == 12) — so count() goes through the live MATCH.
      *
-     * Decision: only pre-capture RETURN when synthesize wouldn't
-     * fire — i.e. when items include property/function projections
-     * that need live entity data. */
+     * Literal RETURNs still use synthesize_delete_return (its
+     * total_deleted row multiplier is left as-is); only count() and
+     * entity-data projections pre-capture. */
     cypher_return *ret_clause = (flags & CLAUSE_RETURN) ? find_return_clause(query) : NULL;
     bool needs_pre_capture = false;
     if (ret_clause && ret_clause->items) {
@@ -824,17 +829,11 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
             cypher_return_item *it = (cypher_return_item *)ret_clause->items->items[i];
             if (!it || !it->expr) continue;
             ast_node_type t = it->expr->type;
-            /* synthesize_delete_return handles LITERAL and the
-             * count() aggregate. Everything else (property
-             * access, type()/labels()/id() function calls,
-             * variable bare references, etc.) needs the live
-             * entity data. */
+            /* synthesize_delete_return handles bare LITERAL rows.
+             * Everything else (count() aggregate, property access,
+             * type()/labels()/id() function calls, variable bare
+             * references, etc.) needs the live pre-delete MATCH. */
             if (t == AST_NODE_LITERAL) continue;
-            if (t == AST_NODE_FUNCTION_CALL) {
-                cypher_function_call *fc = (cypher_function_call *)it->expr;
-                if (fc->function_name &&
-                    strcasecmp(fc->function_name, "count") == 0) continue;
-            }
             needs_pre_capture = true;
             break;
         }

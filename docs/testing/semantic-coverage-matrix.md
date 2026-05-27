@@ -165,3 +165,28 @@ Cross-cutting read-back semantics (orderability total order over
 node/rel/list/map/scalar, list `=`/`IN`, `min`/`max`) also landed; their
 remaining deep tail is tracked in initiatives [[GQLITE-I-0046]] /
 [[GQLITE-I-0047]] / [[GQLITE-I-0048]].
+
+## Coverage update (2026-05-27) — I-0047 P1: undirected variable-length paths
+
+GQLITE-T-0334 (initiative [[GQLITE-I-0047]]). Verified through the openCypher
+TCK harness (`angreal test tck`, full pass-set diff, zero regressions; unit
+944/944; functional clean):
+
+- **`MATCH (a)-[*]-(b)` (undirected variable-length)** now traverses *both*
+  edge orientations. `generate_varlen_cte` previously emitted only the
+  `source_id → target_id` direction, so an undirected varlen MATCH undercounted
+  (3 directed rows where openCypher matches 6). The recursive CTE base case now
+  UNIONs both orientations and the recursive step advances to the edge's *other*
+  endpoint (`source_id = end OR target_id = end`); the outer endpoint binding
+  stays directional. Fixes Match9 [1]/[3].
+- **`MATCH … DETACH DELETE a,b RETURN count(*)`** — `count()` is now computed
+  from the live pre-delete MATCH (`handle_match_delete` pre-capture) instead of
+  the accumulated delete count. The old delete-count path only *coincidentally*
+  matched the expected aggregate for undirected-varlen shapes the MATCH
+  undercounted; with the MATCH now correct it would have over-counted. Fixes
+  Delete4 [1] (single-hop undirected, +1 bonus) and keeps Delete4 [2] correct.
+
+Net TCK delta: +3 (Match9 [1], Match9 [3], Delete4 [1]), zero regressions.
+Remaining I-0047 P1 targets (Pattern1 [10]/[17]/[18] undirected varlen inside
+WHERE `EXISTS`-pattern predicates; Match6 [14]/[17] multi-segment / zero-length
+named paths) are distinct generators tracked under GQLITE-T-0334 / P2 / P4.

@@ -1202,6 +1202,34 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         src_col = "target_id";
         tgt_col = "source_id";
     }
+    /* Undirected (`-[*]-` / `--`): traverse both edge orientations.
+     * Each undirected walk is emitted once per direction (matching
+     * openCypher's both-orientation semantics, e.g. Match9 [1]/[3]),
+     * while the outer endpoint binding stays directional
+     * (`start_id = a.id AND end_id = b.id`). */
+    bool undirected = (!rel->left_arrow && !rel->right_arrow);
+
+    /* Build the relationship-type predicate once as a bare boolean
+     * expression (no WHERE/AND prefix), reused across base orientations
+     * and the recursive step. Empty when no type constraint. */
+    dynamic_buffer tpred;
+    dbuf_init(&tpred);
+    if (rel->type) {
+        char *esc = escape_sql_string(rel->type);
+        dbuf_appendf(&tpred, "e.type = '%s'", esc ? esc : rel->type);
+        free(esc);
+    } else if (rel->types && rel->types->count > 0) {
+        dbuf_append(&tpred, "(");
+        for (int t = 0; t < rel->types->count; t++) {
+            if (t > 0) dbuf_append(&tpred, " OR ");
+            cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
+            char *esc = escape_sql_string(type_lit->value.string);
+            dbuf_appendf(&tpred, "e.type = '%s'", esc ? esc : type_lit->value.string);
+            free(esc);
+        }
+        dbuf_append(&tpred, ")");
+    }
+    bool have_tpred = (dbuf_len(&tpred) > 0);
 
     /* Zero-hop base case (only when explicitly requested via *0..N):
      * each node maps to itself with depth=0. */
@@ -1225,66 +1253,73 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col);
+    if (have_tpred) dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred));
 
-    /* Add type constraint if specified */
-    if (rel->type) {
-        { char *esc = escape_sql_string(rel->type);
-          dbuf_appendf(&cte_query, " WHERE e.type = '%s'", esc ? esc : rel->type);
-          free(esc); }
-    } else if (rel->types && rel->types->count > 0) {
-        dbuf_append(&cte_query, " WHERE (");
-        for (int t = 0; t < rel->types->count; t++) {
-            if (t > 0) {
-                dbuf_append(&cte_query, " OR ");
-            }
-            cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
-            { char *esc = escape_sql_string(type_lit->value.string);
-              dbuf_appendf(&cte_query, "e.type = '%s'", esc ? esc : type_lit->value.string);
-              free(esc); }
-        }
-        dbuf_append(&cte_query, ")");
+    /* Undirected: emit the reverse-orientation base case too, so each
+     * edge seeds a walk in both directions. */
+    if (undirected) {
+        dbuf_appendf(&cte_query,
+            " UNION ALL "
+            "SELECT e.%s, e.%s, 1, "
+            "CAST(e.%s || ',' || e.%s AS TEXT), "
+            "','|| e.%s || ',' || e.%s || ',', "
+            "e.%s || ',' || e.id || ',' || e.%s "
+            "FROM edges e",
+            tgt_col, src_col,
+            tgt_col, src_col,
+            tgt_col, src_col,
+            tgt_col, src_col);
+        if (have_tpred) dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred));
     }
 
     /* Recursive case — only recurse from depth >= 1 rows. The depth=0
      * base case is for self-bind (zero-hop); recursing from it would
      * duplicate edges already emitted by the depth=1 base case. */
     dbuf_append(&cte_query, " UNION ALL ");
-    dbuf_appendf(&cte_query,
-        "SELECT cte.start_id, e.%s, cte.depth + 1, "
-        "cte.path_ids || ',' || e.%s, "
-        "cte.visited || e.%s || ',', "
-        "cte.elem_ids || ',' || e.id || ',' || e.%s "
-        "FROM %s cte "
-        "JOIN edges e ON e.%s = cte.end_id "
-        "WHERE cte.depth >= 1 AND cte.depth < %d",
-        tgt_col, tgt_col, tgt_col, tgt_col,
-        cte_name,
-        src_col,
-        max_hops);
-
-    /* Add cycle detection */
-    dbuf_appendf(&cte_query,
-        " AND cte.visited NOT LIKE '%%,' || CAST(e.%s AS TEXT) || ',%%'",
-        tgt_col);
+    if (undirected) {
+        /* Undirected step: join any edge incident to the current end
+         * node and advance to its OTHER endpoint. The "other endpoint"
+         * is `target_id` when we entered via `source_id`, else
+         * `source_id`. Node-based cycle prevention (matches the
+         * directed path's behavior). */
+        const char *other =
+            "(CASE WHEN e.source_id = cte.end_id THEN e.target_id ELSE e.source_id END)";
+        dbuf_appendf(&cte_query,
+            "SELECT cte.start_id, %s, cte.depth + 1, "
+            "cte.path_ids || ',' || %s, "
+            "cte.visited || %s || ',', "
+            "cte.elem_ids || ',' || e.id || ',' || %s "
+            "FROM %s cte "
+            "JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
+            "WHERE cte.depth >= 1 AND cte.depth < %d",
+            other, other, other, other,
+            cte_name,
+            max_hops);
+        dbuf_appendf(&cte_query,
+            " AND cte.visited NOT LIKE '%%,' || CAST(%s AS TEXT) || ',%%'",
+            other);
+    } else {
+        dbuf_appendf(&cte_query,
+            "SELECT cte.start_id, e.%s, cte.depth + 1, "
+            "cte.path_ids || ',' || e.%s, "
+            "cte.visited || e.%s || ',', "
+            "cte.elem_ids || ',' || e.id || ',' || e.%s "
+            "FROM %s cte "
+            "JOIN edges e ON e.%s = cte.end_id "
+            "WHERE cte.depth >= 1 AND cte.depth < %d",
+            tgt_col, tgt_col, tgt_col, tgt_col,
+            cte_name,
+            src_col,
+            max_hops);
+        /* Add cycle detection */
+        dbuf_appendf(&cte_query,
+            " AND cte.visited NOT LIKE '%%,' || CAST(e.%s AS TEXT) || ',%%'",
+            tgt_col);
+    }
 
     /* Add type constraint to recursive case */
-    if (rel->type) {
-        { char *esc = escape_sql_string(rel->type);
-          dbuf_appendf(&cte_query, " AND e.type = '%s'", esc ? esc : rel->type);
-          free(esc); }
-    } else if (rel->types && rel->types->count > 0) {
-        dbuf_append(&cte_query, " AND (");
-        for (int t = 0; t < rel->types->count; t++) {
-            if (t > 0) {
-                dbuf_append(&cte_query, " OR ");
-            }
-            cypher_literal *type_lit = (cypher_literal*)rel->types->items[t];
-            { char *esc = escape_sql_string(type_lit->value.string);
-              dbuf_appendf(&cte_query, "e.type = '%s'", esc ? esc : type_lit->value.string);
-              free(esc); }
-        }
-        dbuf_append(&cte_query, ")");
-    }
+    if (have_tpred) dbuf_appendf(&cte_query, " AND %s", dbuf_get(&tpred));
+    dbuf_free(&tpred);
 
     /* Build CTE name with column definitions */
     char cte_full_name[256];

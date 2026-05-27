@@ -4,14 +4,14 @@ level: initiative
 title: "Pattern & Path Matching Completeness"
 short_code: "GQLITE-I-0047"
 created_at: 2026-05-27T02:26:42.947075+00:00
-updated_at: 2026-05-27T02:26:42.947075+00:00
+updated_at: 2026-05-27T02:51:33.491805+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -110,6 +110,14 @@ Decompose at pickup. Suggested tasks (roughly independent):
 3. **T: Multi-rel OPTIONAL combined-EXISTS** (P3).
 4. **T: Path variable through WITH / OPTIONAL null** (P4).
 5. **T: MATCH+MERGE re-match property preservation** (P5).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
