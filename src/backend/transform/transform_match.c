@@ -1886,22 +1886,47 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         }
 
 skip_target_node_join:
-        /* Add label constraints for target node if specified */
+        /* Add label constraints for target node if specified.
+         *
+         * I-0047 P3: for OPTIONAL + varlen with a DEFERRED target
+         * (`OPTIONAL MATCH (a)-[:T*]->(c:Label)` where c is unbound), the
+         * target is LEFT-joined later via `c.id = cte.end_id`. Emitting the
+         * label as a separate INNER node_labels join here (a) references the
+         * not-yet-joined target alias and (b) drops the anchor row when the
+         * optional doesn't match. Instead, fold the label into the deferred
+         * target's LEFT JOIN ON as a correlated EXISTS (built below). */
+        char deferred_tgt_label_cond[512] = "";
         if (has_labels(target_node)) {
             const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
 
-            for (int i = 0; i < target_node->labels->count; i++) {
-                const char *label = get_label_string(target_node->labels->items[i]);
-                if (label) {
-                    char nl_alias[64];
-                    snprintf(nl_alias, sizeof(nl_alias), "_nl_%s_%d", target_alias, i);
-                    dbuf_init(&on_cond);
-                    { char *esc_label = escape_sql_string(label);
-                      dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
-                                   nl_alias, target_id, nl_alias, esc_label ? esc_label : label);
-                      free(esc_label); }
-                    sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "node_labels"), nl_alias, dbuf_get(&on_cond));
-                    dbuf_free(&on_cond);
+            if (optional && tgt_deferred) {
+                for (int i = 0; i < target_node->labels->count; i++) {
+                    const char *label = get_label_string(target_node->labels->items[i]);
+                    if (!label) continue;
+                    char *esc_label = escape_sql_string(label);
+                    char one[256];
+                    snprintf(one, sizeof(one),
+                        " AND EXISTS (SELECT 1 FROM %s WHERE node_id = %s AND label = '%s')",
+                        get_graph_table(ctx, "node_labels"), target_id,
+                        esc_label ? esc_label : label);
+                    free(esc_label);
+                    strncat(deferred_tgt_label_cond, one,
+                            sizeof(deferred_tgt_label_cond) - strlen(deferred_tgt_label_cond) - 1);
+                }
+            } else {
+                for (int i = 0; i < target_node->labels->count; i++) {
+                    const char *label = get_label_string(target_node->labels->items[i]);
+                    if (label) {
+                        char nl_alias[64];
+                        snprintf(nl_alias, sizeof(nl_alias), "_nl_%s_%d", target_alias, i);
+                        dbuf_init(&on_cond);
+                        { char *esc_label = escape_sql_string(label);
+                          dbuf_appendf(&on_cond, "%s.node_id = %s AND %s.label = '%s'",
+                                       nl_alias, target_id, nl_alias, esc_label ? esc_label : label);
+                          free(esc_label); }
+                        sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "node_labels"), nl_alias, dbuf_get(&on_cond));
+                        dbuf_free(&on_cond);
+                    }
                 }
             }
         }
@@ -2013,9 +2038,10 @@ skip_target_node_join:
                         (strlen(js0) >= slen &&
                          strcmp(js0 + strlen(js0) - slen, suffix) == 0))) already = true;
             if (!already) {
-                char tgt_cond[256];
+                char tgt_cond[768];
                 snprintf(tgt_cond, sizeof(tgt_cond),
-                         "%s.id = %s.end_id", target_alias, edge_alias);
+                         "%s.id = %s.end_id%s", target_alias, edge_alias,
+                         deferred_tgt_label_cond);
                 sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
                          get_graph_table(ctx, "nodes"), target_alias, tgt_cond);
             }

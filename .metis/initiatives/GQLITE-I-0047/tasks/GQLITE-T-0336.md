@@ -4,14 +4,14 @@ level: task
 title: "P3: Multi-rel OPTIONAL MATCH combined-EXISTS join ordering"
 short_code: "GQLITE-T-0336"
 created_at: 2026-05-27T02:49:35.864661+00:00
-updated_at: 2026-05-27T02:49:35.864661+00:00
+updated_at: 2026-05-27T13:49:25.624884+00:00
 parent: GQLITE-I-0047
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -34,6 +34,8 @@ combined-EXISTS shape rather than chained LEFT JOINs.
 
 Target scenarios: **MatchWhere6 [5]/[7], Match7, Match4 [7]**. Residual of
 I-0044's B1 (T-0320 / T-0330).
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
