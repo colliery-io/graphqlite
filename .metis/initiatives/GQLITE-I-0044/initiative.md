@@ -275,6 +275,29 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
+### 2026-05-26 — Temporal cluster: +8 (3672 → 3680, 94.8%)
+Took the temporal cluster (biggest, ~40 fails). Landed the CONTAINED parts:
+- Temporal5 [4]: `_gql_temporal_field` offsetSeconds (= offsetMinutes*60).
+- Temporal5 [7]: duration component accessors — new `_gql_duration_field`
+  computes years/quarters/weeks/hours/...Of... from normalized
+  {months,days,seconds,nanosecondsOfSecond}; routed via the `_iso8601` key.
+- Temporal6 [6] (all 5): ISO duration round-trip — the parser carried sub-day
+  seconds into days (PT-1.999S→-1d23h59m58s) and mis-rounded negative
+  fractional seconds (+0.5 const). Delegate to emit_duration_json + round
+  half-away-from-zero. Temporal6 17/17.
+- Temporal3 [3] ex16: time value drops resolved named-zone bracket.
+Temporal REMAINING (deep — genuine Phase C / own initiative):
+- Duration fractional composition + multiply/divide + between + DST
+  (Temporal8 [2]-[7] example-3 fractional, Temporal10) — needs the exact
+  Neo4j fractional-cascade & carry algorithm. Division reverse-engineering
+  attempted, not cracked (months→days→seconds carry with avg-month days).
+- Calendar week/quarter date construction (Temporal3 [1]).
+- Named-tz resolution at `time({timezone:'Name'})` construction (Temporal3 [3]
+  17/19): construction keeps `[Name]` with no offset; needs named_tz_offset
+  exposed as a UDF and called from the time() construction in
+  transform_func_temporal.c (~line 282-296). `_gql_time_compose` then inherits it.
+- Temporal2 parsing edge cases.
+
 ### 2026-05-26 — Session: +82 TCK (3590 → 3672, 94.6%), 26 commits
 (+ Precedence2 [4]/[5]: unary minus on non-literal operands materialized as
 0 - expr — `-(3^2)` was dropping the negation. Precedence2 26/26.
