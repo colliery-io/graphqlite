@@ -229,6 +229,16 @@ zero regressions; unit 944/944; functional clean):
   into the node's LEFT JOIN ON as a correlated EXISTS. Fixes Match7 [15]
   (OPTIONAL varlen + nulls) and Aggregation5 [2] (OPTIONAL MATCH + collect).
 
-Remaining OPTIONAL work (multi-rel combined-EXISTS join ordering, bound-rel
-reverse optional, chained-OPTIONAL null-var binding, varlen optional counts) is
-tracked under GQLITE-T-0336.
+- **Variable-length paths now enforce relationship-uniqueness, not
+  node-uniqueness.** `(s)-[:REL]->(b)-[:LOOP]->(b)` is a valid varlen path (two
+  distinct edges) even though it revisits `b`; the CTE previously blocked node
+  revisits. Fixes Match7 [12].
+- **WITH-projected NULL node/edge variables render as SQL NULL in RETURN.** A
+  node/edge bound via OPTIONAL and carried across WITH, when NULL, was projected
+  as a bogus `{id:null,…}` object; the post-WITH projection now guards with
+  `CASE WHEN id IS NULL THEN NULL`. Fixes Match7 [21], [27].
+
+P3 net: +5 (Match7 [12]/[15]/[21]/[27], Aggregation5 [2]). Remaining OPTIONAL
+work (multi-rel combined-EXISTS join ordering → derived-table rewrite;
+bound-rel reverse optional → deferred-constraint plumbing) tracked under
+GQLITE-T-0336.

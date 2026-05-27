@@ -156,6 +156,22 @@ OPTIONAL), [[GQLITE-T-0337]] (P4 path-through-WITH / OPTIONAL null),
 Match6 [14] (multi-segment fixed+varlen named path) reassigned to P2; Match6
 [17] (zero-length named path) to P4. Remaining: P2/P3/P4/P5 still todo.
 
+### 2026-05-27 — P2 done (+1), P3 substantial progress (+5); session +12
+
+- **P2 ([[GQLITE-T-0335]], done):** varlen relationship property predicate
+  (Match4 [5]). Disproved the multi-segment premise (chains already match);
+  filed MATCH+CREATE first-row-only write-path bug as [[GQLITE-T-0339]].
+- **P3 ([[GQLITE-T-0336]], partial +5):** OPTIONAL row-preservation (Match7
+  [15], Aggregation5 [2]); varlen relationship-uniqueness (Match7 [12]);
+  null-guard for WITH-projected NULL node/edge in RETURN (Match7 [21], [27]).
+  Match7 now 30/31. Remaining: bound-rel reverse OPTIONAL (Match7 [4],
+  MatchWhere6 [5] — needs deferred-constraint plumbing) and MatchWhere6 [7]
+  (multi-rel combined-EXISTS → derived-table rewrite).
+
+**Session total: 3684 → 3696 (+12), zero regressions, unit 944/944, functional
+clean.** Branch `i0047-pattern-path`. Still todo: P4 ([[GQLITE-T-0337]]),
+P5 ([[GQLITE-T-0338]]), the two deferred P3 refactors, and [[GQLITE-T-0339]].
+
 ### 2026-05-27 — P2 (T-0335) completed; premise corrected
 
 Investigation overturned P2's premise: **multi-segment / mixed fixed+varlen

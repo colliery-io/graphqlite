@@ -125,3 +125,33 @@ returns/accepts a pending-ON, or the bound-rel handler emits the target node
 join itself with the constraint inline), not appended post-hoc. That's a deeper
 plumbing change than a `sql_where`→`append_on` swap. Reverted to preserve the
 clean +9 state; left for a focused follow-up.
+
+### 2026-05-27 — Two more P3 wins (+2 → P3 total +5); bound-rel reverse re-confirmed deferred
+
+3. **Variable-length relationship-uniqueness** (commit eaf19b4) — the varlen
+   CTE's `visited` column tracked node ids and blocked node revisits, but
+   openCypher requires *relationship* uniqueness (each edge once; nodes may
+   repeat). `visited` now tracks edge ids; the cycle predicate forbids reusing
+   an edge. So `(s)-[:REL]->(b)-[:LOOP]->(b)` (two edges, b revisited) is now a
+   valid path. → Match7 [12]. Zero regressions (full diff).
+4. **Null-guard WITH-projected node/edge RETURN projection** (commit cbf0026) —
+   a node/edge bound via OPTIONAL and carried across WITH, when NULL, was
+   projected as `json_object('id', <col>, …)` → a bogus `{id:null,…}` instead
+   of SQL NULL. The `alias_is_id` (post-WITH) projection path lacked the
+   `CASE WHEN id IS NULL THEN NULL` guard the direct-alias path already has.
+   Added it to both node and edge post-WITH projections. → Match7 [21], [27].
+   Zero regressions.
+
+**Bound-rel reverse OPTIONAL — third attempt, reverted again.** Added a *safe*
+guard (redirect to ON only when the joins tail is verifiably the target's
+`LEFT JOIN … AS <tgt> ON 1=1`). It never fires for the failing case because
+the relationship handler runs in the path loop *before* the target node's
+LEFT JOIN is emitted — so at constraint-emission time there is no target join
+to attach to. Confirms the fix must *defer* the bound-rel endpoint constraint
+until the target node join is created (or have that join carry a pending ON).
+Reverted; needs the deeper deferral plumbing.
+
+**P3 net this initiative: +5** (Match7 [12]/[15]/[21]/[27], Aggregation5 [2]).
+**Remaining (deeper refactors, deferred):** Match7 [4] / MatchWhere6 [5]
+(bound-rel reverse — deferred-constraint plumbing); MatchWhere6 [7]
+(multi-rel combined-EXISTS → derived-table rewrite).
