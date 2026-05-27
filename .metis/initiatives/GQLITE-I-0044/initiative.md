@@ -275,6 +275,13 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
+### 2026-05-26 — Post-temporal clusters: +4 (3680 → 3684, 94.9%)
+- Set1 [6]/[7]: CREATE+SET+RETURN now runs SET (the CREATE+RETURN dispatch
+  swallowed it); + `*_props_json` added to the CREATE+RETURN and
+  project_return_row_from_var_map property reads (list/map props were null).
+- Graph7 [2]/[3]: CREATE+RETURN now projects general expressions (subscript,
+  binary op, list/map) via new public executor_eval_value() wrapper.
+
 ### 2026-05-26 — Temporal cluster: +8 (3672 → 3680, 94.8%)
 Took the temporal cluster (biggest, ~40 fails). Landed the CONTAINED parts:
 - Temporal5 [4]: `_gql_temporal_field` offsetSeconds (= offsetMinutes*60).
