@@ -172,6 +172,20 @@ Match6 [14] (multi-segment fixed+varlen named path) reassigned to P2; Match6
 clean.** Branch `i0047-pattern-path`. Still todo: P4 ([[GQLITE-T-0337]]),
 P5 ([[GQLITE-T-0338]]), the two deferred P3 refactors, and [[GQLITE-T-0339]].
 
+### 2026-05-27 — P5 ([[GQLITE-T-0338]]) root-caused; deferred (AST-mutation/SET entanglement)
+
+Merge5 [12]/[13] (undirected MERGE re-match doubling) traced to an **AST
+mutation gotcha**: `generate_node_match` nulls `first_pair->key` to mark an
+inline property consumed, so the MATCH+MERGE RETURN re-match (which
+re-transforms the same AST) loses the `{id:…}` filters → undirected double
+match. The "stop mutating" fix works (+2) but **regresses Set4/Set5** (the SET
+path depends on the same mutation). Proper fix = a coordinated transform
+refactor (non-destructive consumed-marker, or deep-copy patterns in
+`handle_match_merge`). Deferred with full analysis in the task.
+
+P3/P5 deeper refactors now clearly enumerated as follow-ups; no further TCK
+movement this round (net stays +12, zero regressions).
+
 ### 2026-05-27 — P2 (T-0335) completed; premise corrected
 
 Investigation overturned P2's premise: **multi-segment / mixed fixed+varlen
