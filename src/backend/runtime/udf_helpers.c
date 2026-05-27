@@ -2638,29 +2638,16 @@ void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value *
     double total_seconds_d = frac_days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds;
     long long total_secs = (long long)total_seconds_d;
     double frac_secs = total_seconds_d - total_secs;
-    long long total_ns_from_secs = (long long)(frac_secs * 1e9 + 0.5);
+    /* Round half away from zero — the constant +0.5 truncated negative
+     * fractional seconds the wrong way (PT-1.999S → -1.998999999S). */
+    long long total_ns_from_secs = (long long)(frac_secs * 1e9 + (frac_secs >= 0 ? 0.5 : -0.5));
     long long total_ns = total_secs * 1000000000LL + total_ns_from_secs;
-    long long DAY_NS = 86400LL * 1000000000LL;
-    long long extra_days = total_ns / DAY_NS;
-    long long residue_ns = total_ns - extra_days * DAY_NS;
-    if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
-    total_days += extra_days;
-
-    char iso[160];
-    format_iso_duration((int)total_months, (int)total_days, residue_ns, iso, sizeof(iso));
-    long long seconds_field, nanos_field;
-    if (residue_ns >= 0) {
-        seconds_field = residue_ns / 1000000000LL;
-        nanos_field = residue_ns - seconds_field * 1000000000LL;
-    } else {
-        seconds_field = -(((-residue_ns) + 999999999LL) / 1000000000LL);
-        nanos_field = residue_ns - seconds_field * 1000000000LL;
-    }
-    char json[512];
-    snprintf(json, sizeof(json),
-        "{\"_iso8601\":\"%s\",\"months\":%d,\"days\":%lld,\"seconds\":%lld,\"nanosecondsOfSecond\":%lld}",
-        iso, total_months, total_days, seconds_field, nanos_field);
-    sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+    /* Durations keep days and the sub-day time part as independent signed
+     * components — do NOT carry sub-day seconds into days (a day is not always
+     * 86400s, and PT-1.999S must stay a time duration, not -1 day + 23:59:58).
+     * emit_duration_json applies the same floor-normalization as the
+     * duration(map) path, so ISO round-trips equal the original. (Temporal6 [6].) */
+    emit_duration_json(ctx, total_months, total_days, total_ns);
     (void)inputs; (void)vals;
 }
 
