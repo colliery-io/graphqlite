@@ -1070,11 +1070,10 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                         "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = e.id AND key_id = pk.id) OR "
                                         "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = e.id AND key_id = pk.id)"
                                       "), json('{}'))"
-                                  ")) "
-                                  "FROM edges e WHERE e.id IN ("
-                                    "SELECT CAST(value AS INTEGER) FROM json_each('[' || %s.path_ids || ']')"
-                                  ") ORDER BY instr(',' || %s.path_ids || ',', ',' || e.id || ','))",
-                                  alias, alias);
+                                  ") ORDER BY je.key) "
+                                  "FROM json_each('[' || %s.elem_ids || ']') je "
+                                  "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1)",
+                                  alias);
                                 goto edge_alias_projection_done;
                             }
                             /* Edge variable - return full relationship object,
