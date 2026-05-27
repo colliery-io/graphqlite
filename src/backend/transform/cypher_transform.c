@@ -1268,11 +1268,19 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
     }
     bool have_tpred = (dbuf_len(&tpred) > 0);
 
+    /* The `visited` column tracks traversed EDGE ids (not node ids):
+     * openCypher variable-length semantics require RELATIONSHIP uniqueness
+     * (each edge used at most once) while nodes MAY repeat — e.g.
+     * `(s)-[:REL]->(b)-[:LOOP]->(b)` is a valid 2-hop path (two distinct
+     * edges) even though it revisits b. Node-based cycle prevention wrongly
+     * dropped such paths (Match7 [12]). Edge ids are finite so traversal
+     * still terminates. */
+
     /* Zero-hop base case (only when explicitly requested via *0..N):
-     * each node maps to itself with depth=0. */
+     * each node maps to itself with depth=0 and no traversed edges. */
     if (min_hops == 0) {
         dbuf_appendf(&cte_query,
-            "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',' || n.id || ',', "
+            "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',', "
             "CAST(n.id AS TEXT) "
             "FROM nodes n UNION ALL ");
     }
@@ -1283,10 +1291,9 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
     dbuf_appendf(&cte_query,
         "SELECT e.%s, e.%s, 1, "
         "CAST(e.%s || ',' || e.%s AS TEXT), "
-        "','|| e.%s || ',' || e.%s || ',', "
+        "',' || e.id || ',', "
         "e.%s || ',' || e.id || ',' || e.%s "
         "FROM edges e",
-        src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col);
@@ -1299,10 +1306,9 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             " UNION ALL "
             "SELECT e.%s, e.%s, 1, "
             "CAST(e.%s || ',' || e.%s AS TEXT), "
-            "','|| e.%s || ',' || e.%s || ',', "
+            "',' || e.id || ',', "
             "e.%s || ',' || e.id || ',' || e.%s "
             "FROM edges e",
-            tgt_col, src_col,
             tgt_col, src_col,
             tgt_col, src_col,
             tgt_col, src_col);
@@ -1324,34 +1330,33 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         dbuf_appendf(&cte_query,
             "SELECT cte.start_id, %s, cte.depth + 1, "
             "cte.path_ids || ',' || %s, "
-            "cte.visited || %s || ',', "
+            "cte.visited || e.id || ',', "
             "cte.elem_ids || ',' || e.id || ',' || %s "
             "FROM %s cte "
             "JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
             "WHERE cte.depth >= 1 AND cte.depth < %d",
-            other, other, other, other,
+            other, other, other,
             cte_name,
             max_hops);
-        dbuf_appendf(&cte_query,
-            " AND cte.visited NOT LIKE '%%,' || CAST(%s AS TEXT) || ',%%'",
-            other);
+        /* Relationship-uniqueness: don't reuse an edge already on the path. */
+        dbuf_append(&cte_query,
+            " AND cte.visited NOT LIKE '%,' || CAST(e.id AS TEXT) || ',%'");
     } else {
         dbuf_appendf(&cte_query,
             "SELECT cte.start_id, e.%s, cte.depth + 1, "
             "cte.path_ids || ',' || e.%s, "
-            "cte.visited || e.%s || ',', "
+            "cte.visited || e.id || ',', "
             "cte.elem_ids || ',' || e.id || ',' || e.%s "
             "FROM %s cte "
             "JOIN edges e ON e.%s = cte.end_id "
             "WHERE cte.depth >= 1 AND cte.depth < %d",
-            tgt_col, tgt_col, tgt_col, tgt_col,
+            tgt_col, tgt_col, tgt_col,
             cte_name,
             src_col,
             max_hops);
-        /* Add cycle detection */
-        dbuf_appendf(&cte_query,
-            " AND cte.visited NOT LIKE '%%,' || CAST(e.%s AS TEXT) || ',%%'",
-            tgt_col);
+        /* Relationship-uniqueness: don't reuse an edge already on the path. */
+        dbuf_append(&cte_query,
+            " AND cte.visited NOT LIKE '%,' || CAST(e.id AS TEXT) || ',%'");
     }
 
     /* Add type constraint to recursive case */
