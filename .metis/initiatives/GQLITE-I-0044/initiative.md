@@ -275,13 +275,17 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
-### 2026-05-26 — Session: +75 TCK (3590 → 3665), 20 commits
+### 2026-05-26 — Session: +77 TCK (3590 → 3667), 22 commits
 
 All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
 zero-regression via full-TCK pass-set diff + unit (944/944) +
-functional. Now **3665 / 3880 = 94.5% executable**.
-(+ Path2 [3]: relationships()/nodes() on a null OPTIONAL path return null,
-not [null]. Reverted an undirected-varlen attempt that regressed Delete4 [2].)
+functional. Now **3667 / 3880 = 94.5% executable**.
+(+ Path2 [3]: relationships()/nodes() on null OPTIONAL path → null.
++ Path2 [1]/[2]: relationships() on a variable-length path — build the
+rel-object list from the CTE's elem_ids (edges at odd positions). Path2 3/3.
+Also fixed the RETURN <varlen rel var> projection to use elem_ids not the
+buggy node-only path_ids. Reverted an undirected-varlen CTE attempt that
+regressed Delete4 [2].)
 (+ Graph6 [4]/[8]: `(list[1]).prop` via `_gql_dyn_prop`. + With1 [1]/[2] +
 WithSkipLimit2 [3]: RETURN * excludes synthetic `_gql_default_alias_` /
 `__unnamed_rel_` aliases — only user-named variables.)
