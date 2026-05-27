@@ -1209,9 +1209,11 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
      * (`start_id = a.id AND end_id = b.id`). */
     bool undirected = (!rel->left_arrow && !rel->right_arrow);
 
-    /* Build the relationship-type predicate once as a bare boolean
-     * expression (no WHERE/AND prefix), reused across base orientations
-     * and the recursive step. Empty when no type constraint. */
+    /* Build the per-edge predicate once as a bare boolean expression (no
+     * WHERE/AND prefix), reused across base orientations and the recursive
+     * step. Folds together the relationship type constraint AND any inline
+     * relationship property predicates (`[:T* {k: v}]`), all referencing the
+     * base/recursive edge alias `e`. Empty when neither is present. */
     dynamic_buffer tpred;
     dbuf_init(&tpred);
     if (rel->type) {
@@ -1228,6 +1230,41 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             free(esc);
         }
         dbuf_append(&tpred, ")");
+    }
+    /* Inline rel property predicates: every edge along the varlen path must
+     * carry the given properties (Match4 [5] `[:WORKED_WITH* {year:1988}]`). */
+    if (rel->properties && rel->properties->type == AST_NODE_MAP) {
+        cypher_map *m = (cypher_map*)rel->properties;
+        if (m->pairs) {
+            for (int pi = 0; pi < m->pairs->count; pi++) {
+                cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[pi];
+                if (!pair->key || !pair->value || pair->value->type != AST_NODE_LITERAL) continue;
+                cypher_literal *lit = (cypher_literal*)pair->value;
+                const char *tbl = NULL;
+                char val_buf[256] = "";
+                switch (lit->literal_type) {
+                    case LITERAL_STRING: tbl = "edge_props_text";
+                        { char *esc = escape_sql_string(lit->value.string);
+                          snprintf(val_buf, sizeof(val_buf), "'%s'", esc ? esc : lit->value.string);
+                          free(esc); } break;
+                    case LITERAL_INTEGER: tbl = "edge_props_int";
+                        snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
+                    case LITERAL_DECIMAL: tbl = "edge_props_real";
+                        snprintf(val_buf, sizeof(val_buf), "%.17g", lit->value.decimal); break;
+                    case LITERAL_BOOLEAN: tbl = "edge_props_bool";
+                        snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
+                    default: continue;
+                }
+                if (!tbl) continue;
+                if (dbuf_len(&tpred) > 0) dbuf_append(&tpred, " AND ");
+                char *esc_key = escape_sql_string(pair->key);
+                dbuf_appendf(&tpred,
+                    "EXISTS (SELECT 1 FROM %s ep JOIN property_keys pk ON ep.key_id = pk.id "
+                    "WHERE ep.edge_id = e.id AND pk.key = '%s' AND ep.value = %s)",
+                    tbl, esc_key ? esc_key : pair->key, val_buf);
+                free(esc_key);
+            }
+        }
     }
     bool have_tpred = (dbuf_len(&tpred) > 0);
 

@@ -198,3 +198,21 @@ Net TCK delta: +6 (Match9 [1]/[3], Delete4 [1], Pattern1 [10]/[17]/[18]), zero
 regressions. Remaining I-0047 targets Match6 [14] (multi-segment fixed+varlen
 named path) and Match6 [17] (zero-length named path) are distinct generators
 tracked under P2 (GQLITE-T-0335) / P4 (GQLITE-T-0337).
+
+## Coverage update (2026-05-27) — I-0047 P2: varlen relationship-property predicate
+
+GQLITE-T-0335. Verified via the TCK harness (full pass-set diff, zero
+regressions; unit 944/944; functional clean):
+
+- **`MATCH (a)-[:T* {k: v}]->(b)` (inline relationship property predicate on a
+  variable-length rel)** — `generate_varlen_cte`'s per-edge filter now folds in
+  inline rel property predicates (an `edge_props_*` EXISTS per `{k: v}` pair)
+  alongside the type constraint, applied to every edge in the base and
+  recursive steps. Previously the property map was ignored, so the path matched
+  regardless of edge properties. Fixes Match4 [5] (+1).
+
+Investigation note: the Match5 [25]/[26]/[28]/[29] "multi-segment chain"
+failures turned out **not** to be a path-matching bug — multi-segment
+fixed+varlen chains already match correctly. They fail because their setup
+(`MATCH (d:D) CREATE …`) only processes the first matched row — a write-path
+multiplicity bug filed as GQLITE-T-0339, out of this initiative's scope.

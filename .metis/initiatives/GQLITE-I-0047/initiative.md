@@ -155,3 +155,18 @@ OPTIONAL), [[GQLITE-T-0337]] (P4 path-through-WITH / OPTIONAL null),
 
 Match6 [14] (multi-segment fixed+varlen named path) reassigned to P2; Match6
 [17] (zero-length named path) to P4. Remaining: P2/P3/P4/P5 still todo.
+
+### 2026-05-27 — P2 (T-0335) completed; premise corrected
+
+Investigation overturned P2's premise: **multi-segment / mixed fixed+varlen
+chains already match correctly** (verified on clean graphs). The Match5
+[25]/[26]/[28]/[29] failures are a **MATCH+CREATE write-path bug** (only the
+first matched row's CREATE runs) — filed as backlog [[GQLITE-T-0339]], out of
+this initiative's pattern-matching scope; that cluster + Match4 [4] are blocked
+on it.
+
+The genuine in-scope P2 fix landed: `generate_varlen_cte` now applies inline
+**relationship property predicates** (`[:T* {k:v}]`) to every edge in the path.
+**+1** (Match4 [5]), zero regressions, 3690 → **3691**. Match4 [7] (bound rel in
+multi-varlen path) and [8] (`-[rs*]->` bound rel-list) deferred as niche varlen
+features. Session running total for I-0047: **+7**.
