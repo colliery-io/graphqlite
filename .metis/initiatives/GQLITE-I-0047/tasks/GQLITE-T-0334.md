@@ -157,3 +157,19 @@ Human chose the full two-part fix. Both landed:
 
 Committing the +3 verified increment; P1 residual (EXISTS-predicate varlen)
 continues next on the same branch.
+
+### 2026-05-27 — P1 residual scoped: varlen in WHERE EXISTS-pattern predicates
+
+Traced Pattern1 [10]/[17]/[18]. The WHERE pattern-predicate emitter
+(`transform_expr_predicate.c:51+`, the `AST_NODE_PATH` EXISTS branch) only
+handles **fixed single-hop** relationships: it emits one `edges AS eN` table
+per rel and joins `eN.source_id/target_id` to the node aliases, with **no
+handling of `rel->varlen`**. So `MATCH (n) WHERE (n)-[:REL1*2]-()` collapses the
+`*2` to a single REL1 edge match → returns A,B,D instead of B,D.
+
+Fixing this means emitting (or referencing) a recursive varlen CTE *inside* the
+EXISTS subquery and binding the outer node to its `start_id`/`end_id` — a
+distinct, non-trivial sub-feature separate from the top-level MATCH CTE just
+landed. Scoped as the next P1 sub-task (this emitter is also where undirected
+fixed predicates already work, so the bidirectional logic can be shared). Not
+attempted in this increment.
