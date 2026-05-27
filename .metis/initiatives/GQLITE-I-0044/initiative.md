@@ -275,6 +275,11 @@ Phase C is delegated to existing/future initiatives.
 Filed at v0.5.0 baseline (3549 / 3880 = 91.5%). Discovery phase
 — awaiting human review before decomposing into tasks.
 
+### 2026-05-26 — Session: +79 TCK (3590 → 3669, 94.6%), 24 commits
+(+ Graph5 [2]/[5]: label/type predicate 3VL — r:T checks edge type, null→null,
+AST_NODE_LABEL_EXPR added to ast_yields_boolean. Grammar gap remains: `:A&B`
+conjunctive label expression, Graph5 [4].)
+
 ### 2026-05-26 — Session: +77 TCK (3590 → 3667), 22 commits
 
 All on PR branch `i0044-phase-b2-cross-type-cmp`, each verified
