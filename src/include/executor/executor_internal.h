@@ -112,6 +112,12 @@ int executor_eval_predicate(cypher_executor *executor,
                             ast_node *expr,
                             variable_map *var_map);
 
+/* Evaluate an AST expression against a variable_map and return its value.
+ * Returns 0 (value in out params), -1 (error), -2 (NULL). */
+int executor_eval_value(cypher_executor *executor, ast_node *expr,
+                        variable_map *var_map, property_type *out_type,
+                        property_value *out_value);
+
 /* SET operations with variable map */
 int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_map *var_map, cypher_result *result);
 int execute_set_items(cypher_executor *executor, ast_list *items, variable_map *var_map, cypher_result *result);

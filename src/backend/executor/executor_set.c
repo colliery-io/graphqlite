@@ -173,6 +173,15 @@ int executor_eval_predicate(cypher_executor *executor,
     }
 }
 
+/* Public value-returning evaluator: evaluate `expr` against `var_map` and
+ * return its value via out params. Returns 0 (value), -1 (error), -2 (NULL).
+ * Used by CREATE+RETURN to project general expressions. */
+int executor_eval_value(cypher_executor *executor, ast_node *expr,
+                        variable_map *var_map, property_type *out_type,
+                        property_value *out_value) {
+    return evaluate_ast_with_context(executor, expr, var_map, out_type, out_value);
+}
+
 /* Evaluate a function call by transforming to SQL and executing via SQLite.
  * Returns 0 on success, -1 on error, -2 for NULL result. */
 int evaluate_function_call_via_sqlite(

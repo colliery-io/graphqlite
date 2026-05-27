@@ -2066,6 +2066,27 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                     }
                 }
             }
+        } else if (expr) {
+            /* Any other expression (binary op, subscript like n['na'+'e'],
+             * list/map literal, ...) — evaluate against the created bindings.
+             * (Graph7 [2]/[3], RETURN a.numbers + [..], etc.) */
+            property_type pt; property_value pv; property_value_init(&pv);
+            int erc = executor_eval_value(executor, expr, var_map, &pt, &pv);
+            if (erc == 0) {
+                if (pt == PROP_TYPE_INTEGER) {
+                    char b[32]; snprintf(b, sizeof(b), "%lld", (long long)pv.as_int);
+                    result->data[0][i] = strdup(b);
+                    result->data_types[0][i] = SQLITE_INTEGER;
+                } else if (pt == PROP_TYPE_REAL) {
+                    char b[64]; snprintf(b, sizeof(b), "%g", pv.as_real);
+                    result->data[0][i] = strdup(b);
+                    result->data_types[0][i] = SQLITE_FLOAT;
+                } else if (pv.as_str) {
+                    result->data[0][i] = strdup(pv.as_str);
+                    result->data_types[0][i] = SQLITE_TEXT;
+                }
+            }
+            property_value_free(&pv);
         }
     }
 
