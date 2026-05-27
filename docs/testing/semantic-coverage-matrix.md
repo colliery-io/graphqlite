@@ -141,3 +141,27 @@ This matrix ships with the GQLITE-I-0035 initiative. Task breakdown:
 - **GQLITE-T-0202** — Fill ON MATCH SET + `SET n +=` on rel gaps.
 - **GQLITE-T-0203** — Fill multi-hop `(a)-[r1]->(b)-[r2]->(c)` read-back gaps.
 - **GQLITE-T-0204** — CI lint: require matrix diff on transform/executor PRs.
+
+---
+
+## Coverage update (2026-05-26) — I-0044 Phase-B conformance push
+
+This PR (#73) lands the I-0044 TCK push (94.9% executable). Round-trip cells
+that flipped from broken/GAP to covered, verified through the openCypher TCK
+harness (`angreal test tck`, full pass-set diff, zero regressions) rather than
+new per-cell functional SQL:
+
+- **`CREATE (n {k: LIST/JSON})` → read-back `n.k`** — list/map literal write
+  now round-trips (previously silently NULL). Backed by the new `*_props_json`
+  property columns in `query_dispatch.c` / `executor_result_project.c`.
+- **`CREATE … RETURN n` with SET-clause + general-expression values** —
+  `handle_create_return` runs the SET loop and an `executor_eval_value`
+  fallback, so computed properties round-trip in the same statement.
+- **`MATCH+MERGE … RETURN`** — handles map/param values and SET, including
+  relationship-variable property read-back (`fetch_edge_prop_*`).
+- **`UNWIND … MERGE … RETURN`** — pure-aggregate WITH collapse + edge cells.
+
+Cross-cutting read-back semantics (orderability total order over
+node/rel/list/map/scalar, list `=`/`IN`, `min`/`max`) also landed; their
+remaining deep tail is tracked in initiatives [[GQLITE-I-0046]] /
+[[GQLITE-I-0047]] / [[GQLITE-I-0048]].
