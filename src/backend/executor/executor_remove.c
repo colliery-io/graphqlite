@@ -209,10 +209,10 @@ int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, 
         if (is_edge) {
             entity_id = get_variable_edge_id(var_map, var_id->name);
             if (entity_id < 0) {
-                char error[256];
-                snprintf(error, sizeof(error), "Unbound edge variable in REMOVE: %s", var_id->name);
-                set_result_error(result, error);
-                return -1;
+                /* Cypher semantics: REMOVE on a null/unbound variable is a no-op
+                 * (Remove1 [6]). Matches the parallel node behavior below. */
+                CYPHER_DEBUG("REMOVE on null/unbound edge variable '%s' (no-op)", var_id->name);
+                continue;
             }
 
             /* Delete the property from the edge */
@@ -226,10 +226,12 @@ int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, 
         } else {
             entity_id = get_variable_node_id(var_map, var_id->name);
             if (entity_id < 0) {
-                char error[256];
-                snprintf(error, sizeof(error), "Unbound variable in REMOVE: %s", var_id->name);
-                set_result_error(result, error);
-                return -1;
+                /* Cypher semantics: REMOVE on a null/unbound variable is a no-op.
+                 * Also covers the case where an OPTIONAL-bound edge variable falls
+                 * through to the node path because is_variable_edge() returns false
+                 * for absent entries (Remove1 [6]). */
+                CYPHER_DEBUG("REMOVE on null/unbound variable '%s' (no-op)", var_id->name);
+                continue;
             }
 
             /* Delete the property from the node */

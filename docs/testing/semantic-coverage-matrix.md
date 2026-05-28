@@ -332,3 +332,18 @@ regressions; unit 944/944; functional clean):
   the LEFT JOIN ON level to preserve the anchor row (deferred). Cross-varlen
   disjointness is also deferred (no failing scenario requires it). Fixes
   Match4 [7].
+
+## Coverage update (2026-05-28) — REMOVE on null/unbound variable is a no-op
+
+`executor_remove.c`. Verified via the TCK harness (3705 -> 3706, zero
+regressions; unit 944/944; functional clean):
+
+- **REMOVE on a null variable yields no side effect** (matches Cypher semantics
+  and SET parity). `MATCH (n) OPTIONAL MATCH (n)-[r]->() REMOVE r.num` previously
+  errored with `"Unbound variable in REMOVE: r"` because `is_variable_edge()`
+  returns false for absent map entries (the OPTIONAL preserves the row but
+  doesn't bind `r`), so the rel fell through to the node path's `entity_id < 0`
+  error. Both `entity_id < 0` branches in `execute_remove_operations` now log a
+  debug line and `continue`, treating the REMOVE item as a no-op. The existing
+  "property not found on this entity" path was already silent — this aligns
+  null-variable behavior with that. Fixes Remove1 [6].
