@@ -242,3 +242,17 @@ P3 net: +5 (Match7 [12]/[15]/[21]/[27], Aggregation5 [2]). Remaining OPTIONAL
 work (multi-rel combined-EXISTS join ordering → derived-table rewrite;
 bound-rel reverse optional → deferred-constraint plumbing) tracked under
 GQLITE-T-0336.
+
+## Coverage update (2026-05-27) — I-0047 P4: forward a path variable through WITH
+
+GQLITE-T-0337. Verified via the TCK harness (rigorous pass-set diff vs prior
+HEAD, zero regressions; unit 944/944; functional clean):
+
+- **`MATCH p = (…) WITH p … RETURN p` now carries the path across the WITH
+  boundary.** WITH's item loop bypassed `transform_expression` (which hydrates
+  path vars), so a forwarded path emitted a bare `p` column → "no such column".
+  WITH now emits the path-hydration SQL `AS p`, preserves the path metadata
+  across the scope reset, and re-registers `p` as a path var on the CTE column;
+  RETURN emits that column directly and the executor hydrates it. Fixes
+  With1 [4]. Match9 [9] (OPTIONAL varlen named path → null) remains under
+  GQLITE-T-0337.

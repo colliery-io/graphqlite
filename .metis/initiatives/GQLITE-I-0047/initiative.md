@@ -186,6 +186,15 @@ refactor (non-destructive consumed-marker, or deep-copy patterns in
 P3/P5 deeper refactors now clearly enumerated as follow-ups; no further TCK
 movement this round (net stays +12, zero regressions).
 
+### 2026-05-27 — P4 ([[GQLITE-T-0337]]) partial: path-through-WITH (+1, session +13)
+
+`MATCH p=… WITH p RETURN p` (With1 [4]) now forwards the path across WITH:
+WITH emits the path-hydration SQL and re-registers `p` as a path var on the CTE
+column; RETURN/executor hydrate it. Tightly scoped (path-through-WITH only),
+**zero regressions** (rigorous pass-set diff), unit 944/944, functional clean.
+Match9 [9] (OPTIONAL varlen named path → null) remains. **Session total: +13
+(3684 → 3697).**
+
 ### 2026-05-27 — P2 (T-0335) completed; premise corrected
 
 Investigation overturned P2's premise: **multi-segment / mixed fixed+varlen

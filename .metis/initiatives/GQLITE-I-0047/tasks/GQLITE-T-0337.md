@@ -97,3 +97,30 @@ null) is a further case layered on the same path-through-WITH plumbing plus
 P3's OPTIONAL-null handling.
 
 Left failing; analysis captured for the focused follow-up.
+
+### 2026-05-27 — With1 [4] FIXED (+1); the refactor turned out to be tractable
+
+The path-projection logic already lives in `transform_expression` (the
+`AST_NODE_IDENTIFIER` path branch) — no extraction needed. The real gap was
+that `transform_with.c`'s item loop has its **own** identifier projection that
+bypassed `transform_expression`, so path vars fell through to a bare column.
+
+Implemented:
+- **transform_with.c**: path-var WITH items now emit their hydration SQL (via
+  `transform_expression_to_string`) `AS <col>`. Path metadata (`path_elements`
+  + `path_type`) is preserved across the var-ctx reset (new parallel arrays)
+  and the output is re-registered as a path var whose `table_alias` is the CTE
+  column.
+- **transform_return.c**: the path projection emits that CTE column directly
+  when the path var is projected (`table_alias` contains a `.`) instead of
+  rebuilding from out-of-scope element aliases; the executor still hydrates the
+  stored text into a path object via the preserved `path_elements`.
+
+Scoped tightly: non-path WITH items and non-projected RETURN paths fall through
+unchanged. **Verified: +1 (With1 [4]), zero regressions** (rigorous pass-set
+diff vs HEAD~1), unit 944/944, functional clean. Commit ce… (P4).
+
+**Remaining: Match9 [9]** (`OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r,x,p`) —
+an OPTIONAL **variable-length named path** that must return null when unmatched.
+Layers path-through-WITH/projection on top of P3's OPTIONAL-varlen-null and the
+varlen elem_ids hydration; deferred as a distinct follow-up.
