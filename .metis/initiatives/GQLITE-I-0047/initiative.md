@@ -204,6 +204,22 @@ Match9 [9]), zero regressions. **Session total: +14 (3684 → 3698).** Remaining
 deferred refactors: P3 bound-rel-reverse, P3 multi-rel combined-EXISTS, P5
 (AST-mutation/SET), and write-path [[GQLITE-T-0339]].
 
+### 2026-05-28 — Branch pushed; P3 bound-rel reverse FIXED on top (+1, session +15)
+
+Branch `i0047-pattern-path` pushed; **PR #76** opened. The earlier +14 push is
+fully green on CI (build-and-test, coverage gate, all platforms × Python
+matrix, Rust, Windows, tck-conformance).
+
+On top, the bound-rel reverse OPTIONAL (Match7 [4]) landed via a deferred-flush
+mechanism: a new `ctx->pending_optional_on` stash + a flush onto the last LEFT
+JOIN's ON after the path loop, guarded to fire only when exactly one endpoint
+is in outer scope. **+1, zero regressions** (full pass-set diff vs HEAD). 3698 →
+**3699**.
+
+**Session total: +15 (3684 → 3699).** Remaining deferred: MatchWhere6 [5]/[7]
+(both-endpoints-fresh / multi-rel combined-EXISTS → derived-table rewrite); P5;
+T-0339.
+
 ### 2026-05-27 — P2 (T-0335) completed; premise corrected
 
 Investigation overturned P2's premise: **multi-segment / mixed fixed+varlen
