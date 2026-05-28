@@ -799,8 +799,23 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
 {
     cypher_match *match = find_match_clause(query);
     cypher_delete *del = find_delete_clause(query);
+    cypher_create *cre = find_create_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+DELETE via pattern dispatch");
+
+    /* T-0339 (part 3): MATCH+DELETE+CREATE — handle_match_delete previously
+     * dropped the CREATE clause entirely. Run CREATE first (per matched row,
+     * via execute_multi_match_create_query which iterates every row) using
+     * the live pre-delete bindings; then proceed with the delete. The new
+     * relationships/nodes from CREATE don't depend on the entities being
+     * deleted, so this ordering preserves Cypher semantics for the in-scope
+     * scenarios (Match5 [26] setup: rewires (a)-[r]->(b) by creating
+     * (b)-[:LIKES]->(a) and deleting r). */
+    if (cre) {
+        if (execute_multi_match_create_query(executor, query, cre, result, NULL) < 0) {
+            return -1;
+        }
+    }
 
     /* T-0321: MATCH+DELETE+RETURN — capture the RETURN projection
      * BEFORE delete when the projection references entity data
