@@ -1331,6 +1331,72 @@ skip_combined_exists:
                 sql_where(ctx->unified_builder, where_buf);
             }
         }
+
+        /* T-0339 follow-up: extend path-wide rel-uniqueness across varlen
+         * segments — each varlen's `visited` (the comma-separated edge ids
+         * it traversed) must not include any non-varlen rel id used by the
+         * same path. Without this, `MATCH …()-[r]-()-[*0..1]-(m)` would
+         * count varlen paths that re-use the bound r (Match4 [7]: 84 → 32).
+         * Cross-varlen disjointness is a further refinement; not yet
+         * implemented (no current TCK scenario depends on it). */
+        const char *varlen_aliases[16];
+        int n_varlen = 0;
+        if (js) {
+            const char *p = js;
+            while ((p = strstr(p, "_varlen_path_")) != NULL && n_varlen < 16) {
+                const char *as = strstr(p, " AS ");
+                if (!as) break;
+                as += 4;
+                const char *end = as;
+                while (*end && (isalnum((unsigned char)*end) || *end == '_')) end++;
+                if (end > as) {
+                    /* dup the alias substring into a small static pool so
+                     * its lifetime spans the WHERE emission. */
+                    static char pool[16][80];
+                    static int pool_idx = 0;
+                    int slot = pool_idx++ % 16;
+                    size_t alen = (size_t)(end - as);
+                    if (alen >= sizeof(pool[slot])) alen = sizeof(pool[slot]) - 1;
+                    memcpy(pool[slot], as, alen);
+                    pool[slot][alen] = '\0';
+                    varlen_aliases[n_varlen++] = pool[slot];
+                }
+                p = end;
+            }
+        }
+        /* Emit as a WHERE constraint, ONLY when the current path is NOT
+         * optional. For OPTIONAL MATCH a WHERE constraint on the varlen
+         * filters the preserved-anchor row when the varlen unexpectedly
+         * matched something (Match7 [19]); a proper ON-level filter requires
+         * deeper join-builder work and is deferred. */
+        if (!optional) {
+            for (int vi = 0; vi < n_varlen; vi++) {
+                for (int ei = 0; ei < n_edges; ei++) {
+                    char where_buf[320];
+                    snprintf(where_buf, sizeof(where_buf),
+                        "%s.visited NOT LIKE '%%,' || CAST(%s.id AS TEXT) || ',%%'",
+                        varlen_aliases[vi], edge_aliases[ei]);
+                    sql_where(ctx->unified_builder, where_buf);
+                }
+            }
+            for (int vi = 0; vi < n_varlen; vi++) {
+                for (int i = 0; i < path->elements->count; i++) {
+                    ast_node *el = path->elements->items[i];
+                    if (el->type != AST_NODE_REL_PATTERN) continue;
+                    cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+                    if (r->varlen) continue;
+                    if (!r->variable) continue;
+                    if (!transform_var_alias_is_id(ctx->var_ctx, r->variable)) continue;
+                    const char *colref = transform_var_get_alias(ctx->var_ctx, r->variable);
+                    if (!colref) continue;
+                    char where_buf[320];
+                    snprintf(where_buf, sizeof(where_buf),
+                        "%s.visited NOT LIKE '%%,' || CAST(%s AS TEXT) || ',%%'",
+                        varlen_aliases[vi], colref);
+                    sql_where(ctx->unified_builder, where_buf);
+                }
+            }
+        }
     }
 
     free(defer_to_rel);
