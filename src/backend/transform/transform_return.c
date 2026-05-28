@@ -837,7 +837,16 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         CYPHER_DEBUG("Processing path variable '%s' in RETURN", id->name);
                         /* This is a path variable - generate JSON with element IDs */
                         transform_var *path_var = transform_var_lookup_path(ctx->var_ctx, id->name);
-                        if (path_var && path_var->path_elements) {
+                        /* I-0047 P4: a path forwarded through WITH has its
+                         * table_alias set to the CTE column holding the already-
+                         * hydrated path text (a `_with_N.p` column ref). Emit that
+                         * column directly — the element aliases used to rebuild
+                         * the path are out of scope in the outer query. The
+                         * executor still hydrates it via path_elements (With1 [4]). */
+                        if (path_var && path_var->table_alias &&
+                            strchr(path_var->table_alias, '.') != NULL) {
+                            append_sql(ctx, "%s", path_var->table_alias);
+                        } else if (path_var && path_var->path_elements) {
                             CYPHER_DEBUG("Found path variable metadata for '%s' with %d elements", id->name, path_var->path_elements->count);
 
                             /* Check if this is a variable-length path (shortestPath, etc.).

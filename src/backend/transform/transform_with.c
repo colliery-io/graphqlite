@@ -396,6 +396,29 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         /* Get the expression as SQL */
         if (item->expr->type == AST_NODE_IDENTIFIER) {
             cypher_identifier *id = (cypher_identifier*)item->expr;
+            /* I-0047 P4: a path variable has no table alias; emit its
+             * hydration SQL (transform_expression handles path vars, building
+             * `'[' || …ids… ']'`) AS the column so the path survives the WITH
+             * boundary. Without this it fell through to a bare `p` column →
+             * "no such column: p" (With1 [4]). The post-CTE registration maps
+             * the path var to a projected `_with_N.p` for the outer scope. */
+            if (transform_var_is_path(ctx->var_ctx, id->name)) {
+                const char *col_name = item->alias ? item->alias : id->name;
+                char *psql = transform_expression_to_string(ctx, item->expr);
+                char idbuf[128];
+                if (psql && psql[0]) {
+                    dbuf_appendf(&col_buf, "%s AS %s", psql,
+                                 sql_ident(idbuf, sizeof(idbuf), col_name));
+                    if (group_count > 0) dbuf_append(&group_buf, ", ");
+                    dbuf_append(&group_buf, psql);
+                    group_count++;
+                } else {
+                    dbuf_appendf(&col_buf, "'[]' AS %s",
+                                 sql_ident(idbuf, sizeof(idbuf), col_name));
+                }
+                free(psql);
+                continue;
+            }
             const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
             if (alias) {
                 /* Determine column name */
@@ -729,6 +752,12 @@ with_star_columns_done:
     int saved_var_count = 0;
     char **saved_var_names = NULL;
     var_kind *saved_var_kinds = NULL;
+    /* I-0047 P4: preserve path-variable metadata (elements + type) across the
+     * var-ctx reset so a forwarded path var (`MATCH p=… WITH p …`) can be
+     * re-registered as a path pointing at the CTE column, and the executor
+     * still hydrates the stored text into a path object (With1 [4]). */
+    ast_list **saved_path_elems = NULL;
+    var_path_type *saved_path_types = NULL;
 
     if (with->pass_all) {
         /* WITH * - save all visible variable names and kinds */
@@ -748,6 +777,8 @@ with_star_columns_done:
     } else if (with->items && with->items->count > 0) {
         source_kinds = calloc(with->items->count, sizeof(var_kind));
         inner_kinds = calloc(with->items->count, sizeof(var_kind));
+        saved_path_elems = calloc(with->items->count, sizeof(ast_list*));
+        saved_path_types = calloc(with->items->count, sizeof(var_path_type));
         if (source_kinds) {
             for (int i = 0; i < with->items->count; i++) {
                 cypher_return_item *item = (cypher_return_item*)with->items->items[i];
@@ -757,6 +788,10 @@ with_star_columns_done:
                     transform_var *var = transform_var_lookup(ctx->var_ctx, id->name);
                     if (var) {
                         source_kinds[i] = var->kind;
+                        if (var->kind == VAR_KIND_PATH && saved_path_elems) {
+                            saved_path_elems[i] = var->path_elements;
+                            saved_path_types[i] = var->path_type;
+                        }
                     } else {
                         source_kinds[i] = VAR_KIND_PROJECTED;
                     }
@@ -862,7 +897,17 @@ with_star_columns_done:
                            sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
 
                 var_kind kind = source_kinds ? source_kinds[i] : VAR_KIND_PROJECTED;
-                if (kind == VAR_KIND_NODE) {
+                if (kind == VAR_KIND_PATH) {
+                    /* I-0047 P4: re-register the forwarded path as a path var
+                     * whose table_alias is the CTE column holding the already-
+                     * hydrated path text. transform_expression's path branch
+                     * emits that column directly (it has a '.') and the
+                     * executor hydrates it via the preserved path_elements. */
+                    transform_var_register_path(ctx->var_ctx, col_name, select_expr,
+                                                saved_path_elems ? saved_path_elems[i] : NULL,
+                                                saved_path_types ? saved_path_types[i] : VAR_PATH_NORMAL);
+                    CYPHER_DEBUG("WITH: Registered path variable '%s' -> %s", col_name, select_expr);
+                } else if (kind == VAR_KIND_NODE) {
                     transform_var_register_node(ctx->var_ctx, col_name, select_expr, NULL);
                     transform_var_set_alias_is_id(ctx->var_ctx, col_name, true);
                     CYPHER_DEBUG("WITH: Registered node variable '%s' -> %s (alias_is_id)", col_name, select_expr);
@@ -913,6 +958,8 @@ with_star_columns_done:
     /* Free saved kinds array */
     free(source_kinds);
     free(inner_kinds);
+    free(saved_path_elems);
+    free(saved_path_types);
 
     /* Handle WHERE clause (applied after projection) — only if the pre-WITH
      * translation didn't succeed (i.e., the WHERE references projected
