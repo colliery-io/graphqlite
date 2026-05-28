@@ -4,14 +4,14 @@ level: task
 title: "P4: Named path through WITH / OPTIONAL varlen null"
 short_code: "GQLITE-T-0337"
 created_at: 2026-05-27T02:49:38.770497+00:00
-updated_at: 2026-05-27T20:32:50.670781+00:00
+updated_at: 2026-05-28T01:42:08.412157+00:00
 parent: GQLITE-I-0047
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -37,13 +37,11 @@ Target scenarios: **With1 [4], Match9 [9]**.
 
 ## Acceptance Criteria
 
-## Acceptance Criteria
-
-- [ ] With1 [4] and Match9 [9] move to pass.
-- [ ] `MATCH p=... WITH p RETURN p` projects the path through the WITH boundary.
-- [ ] OPTIONAL varlen named path with no match returns null, not `[]`.
-- [ ] Zero TCK regressions; unit 944/944; functional clean.
-- [ ] TCK delta logged here and rolled up to [[GQLITE-I-0047]].
+- [x] With1 [4] and Match9 [9] move to pass.
+- [x] `MATCH p=... WITH p RETURN p` projects the path through the WITH boundary.
+- [x] OPTIONAL varlen named path with no match returns null, not `[]`.
+- [x] Zero TCK regressions; unit 944/944; functional clean.
+- [x] TCK delta logged here and rolled up to [[GQLITE-I-0047]].
 
 ## Implementation Notes
 
@@ -120,7 +118,18 @@ Scoped tightly: non-path WITH items and non-projected RETURN paths fall through
 unchanged. **Verified: +1 (With1 [4]), zero regressions** (rigorous pass-set
 diff vs HEAD~1), unit 944/944, functional clean. Commit ce… (P4).
 
-**Remaining: Match9 [9]** (`OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r,x,p`) —
-an OPTIONAL **variable-length named path** that must return null when unmatched.
-Layers path-through-WITH/projection on top of P3's OPTIONAL-varlen-null and the
-varlen elem_ids hydration; deferred as a distinct follow-up.
+### 2026-05-27 — Match9 [9] FIXED (+1); P4 COMPLETE
+
+`OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r, x, p` returned `r=[]` on the
+no-match row (x=C) instead of `r=null`. The varlen edge-list projection
+(`SELECT json_group_array(…) FROM json_each('[' || alias.elem_ids || ']')`)
+yields `'[]'` when `elem_ids` is NULL (OPTIONAL miss): `json_each(NULL)` → 0
+rows → `json_group_array()` returns an empty array, not NULL. Wrapped the
+projection in `CASE WHEN alias.elem_ids IS NULL THEN NULL ELSE (…) END`
+(commit 9ee353c). The path `p` and node `x` columns were already correct.
+
+**Verified: +1 (Match9 [9]), zero regressions** (full pass-set diff), unit
+944/944, functional clean.
+
+**P4 (T-0337) COMPLETE: +2** (With1 [4] path-through-WITH; Match9 [9] OPTIONAL
+varlen named-path null).

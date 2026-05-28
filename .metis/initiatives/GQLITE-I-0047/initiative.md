@@ -195,6 +195,15 @@ column; RETURN/executor hydrate it. Tightly scoped (path-through-WITH only),
 Match9 [9] (OPTIONAL varlen named path → null) remains. **Session total: +13
 (3684 → 3697).**
 
+### 2026-05-27 — P4 ([[GQLITE-T-0337]]) COMPLETE: +2 (session +14)
+
+Match9 [9] also fixed: the OPTIONAL varlen relationship list returned `[]`
+instead of NULL on a no-match (`json_group_array` over `json_each(NULL)` yields
+`'[]'`); wrapped in a `CASE WHEN elem_ids IS NULL` guard. P4 done (With1 [4] +
+Match9 [9]), zero regressions. **Session total: +14 (3684 → 3698).** Remaining
+deferred refactors: P3 bound-rel-reverse, P3 multi-rel combined-EXISTS, P5
+(AST-mutation/SET), and write-path [[GQLITE-T-0339]].
+
 ### 2026-05-27 — P2 (T-0335) completed; premise corrected
 
 Investigation overturned P2's premise: **multi-segment / mixed fixed+varlen

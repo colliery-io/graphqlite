@@ -254,5 +254,11 @@ HEAD, zero regressions; unit 944/944; functional clean):
   WITH now emits the path-hydration SQL `AS p`, preserves the path metadata
   across the scope reset, and re-registers `p` as a path var on the CTE column;
   RETURN emits that column directly and the executor hydrates it. Fixes
-  With1 [4]. Match9 [9] (OPTIONAL varlen named path → null) remains under
-  GQLITE-T-0337.
+  With1 [4].
+- **OPTIONAL variable-length relationship list returns NULL (not `[]`) on a
+  no-match.** The varlen edge-list projection used `json_group_array` over
+  `json_each('[' || elem_ids || ']')`, which yields `'[]'` when `elem_ids` is
+  NULL (OPTIONAL miss). Wrapped it in `CASE WHEN elem_ids IS NULL THEN NULL`.
+  Fixes Match9 [9].
+
+P4 (GQLITE-T-0337) complete: +2 (With1 [4], Match9 [9]).
