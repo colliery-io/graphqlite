@@ -340,6 +340,37 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         }
                                     }
                                     property_value_free(&func_pv);
+                                } else {
+                                    /* GQLITE-T-0339 (part 2): general expression
+                                     * (e.g. `d.name + '0'` where d is a MATCH-bound
+                                     * node). Evaluate via executor_eval_value with
+                                     * the current var_map so property access and
+                                     * arithmetic/concatenation resolve. */
+                                    property_value gen_pv;
+                                    property_value_init(&gen_pv);
+                                    int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv);
+                                    if (erc == 0) {
+                                        static int64_t gen_int_buf;
+                                        static double gen_real_buf;
+                                        static int gen_bool_buf;
+                                        if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
+                                            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, gen_pv.as_str) == 0) {
+                                                result->properties_set++;
+                                            }
+                                            property_value_free(&gen_pv);
+                                            continue;
+                                        } else if (prop_type == PROP_TYPE_INTEGER) {
+                                            gen_int_buf = gen_pv.as_int;
+                                            prop_value = &gen_int_buf;
+                                        } else if (prop_type == PROP_TYPE_REAL) {
+                                            gen_real_buf = gen_pv.as_real;
+                                            prop_value = &gen_real_buf;
+                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                            gen_bool_buf = gen_pv.as_bool;
+                                            prop_value = &gen_bool_buf;
+                                        }
+                                    }
+                                    property_value_free(&gen_pv);
                                 }
 
                                 if (prop_value) {
@@ -521,6 +552,34 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         }
                                     }
                                     property_value_free(&func_pv2);
+                                } else {
+                                    /* GQLITE-T-0339 (part 2): general expression
+                                     * referencing MATCH-bound vars (e.g. `d.name + '0'`). */
+                                    property_value gen_pv2;
+                                    property_value_init(&gen_pv2);
+                                    int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv2);
+                                    if (erc == 0) {
+                                        static int64_t gen_int_buf2;
+                                        static double gen_real_buf2;
+                                        static int gen_bool_buf2;
+                                        if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
+                                            if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, gen_pv2.as_str) == 0) {
+                                                result->properties_set++;
+                                            }
+                                            property_value_free(&gen_pv2);
+                                            continue;
+                                        } else if (prop_type == PROP_TYPE_INTEGER) {
+                                            gen_int_buf2 = gen_pv2.as_int;
+                                            prop_value = &gen_int_buf2;
+                                        } else if (prop_type == PROP_TYPE_REAL) {
+                                            gen_real_buf2 = gen_pv2.as_real;
+                                            prop_value = &gen_real_buf2;
+                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                            gen_bool_buf2 = gen_pv2.as_bool;
+                                            prop_value = &gen_bool_buf2;
+                                        }
+                                    }
+                                    property_value_free(&gen_pv2);
                                 }
 
                                 if (prop_value) {
