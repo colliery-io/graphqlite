@@ -2472,7 +2472,21 @@ skip_target_node_join:
                 }
             }
 
-            sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "edges"), edge_alias, dbuf_get(&edge_cond));
+            /* T-0339 follow-up: skip the edges join if this alias is already
+             * in scope from a prior MATCH clause (Match4 [7]). Same-pattern
+             * re-use is now caught at validate-time
+             * (RelationshipUniquenessViolation, Match3 [29]). */
+            {
+                const char *fs0 = dbuf_get(&ctx->unified_builder->from);
+                const char *js0 = dbuf_get(&ctx->unified_builder->joins);
+                char needle[80];
+                snprintf(needle, sizeof(needle), "AS %s", edge_alias);
+                bool already = (fs0 && strstr(fs0, needle)) ||
+                               (js0 && strstr(js0, needle));
+                if (!already) {
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "edges"), edge_alias, dbuf_get(&edge_cond));
+                }
+            }
             dbuf_free(&edge_cond);
 
             /* T-0320: emit deferred source-node LEFT JOIN tied through
@@ -2548,8 +2562,19 @@ skip_target_node_join:
                 }
             }
         } else {
-            /* Non-optional: use CROSS JOIN for edges (will be filtered by WHERE) */
-            sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "edges"), edge_alias, NULL);
+            /* Non-optional: use CROSS JOIN for edges (will be filtered by WHERE).
+             * T-0339 follow-up: skip if this alias is already in scope from
+             * a prior MATCH clause (Match4 [7]). Same-pattern re-use is
+             * caught at validate-time (Match3 [29]). */
+            const char *fs0 = dbuf_get(&ctx->unified_builder->from);
+            const char *js0 = dbuf_get(&ctx->unified_builder->joins);
+            char needle[80];
+            snprintf(needle, sizeof(needle), "AS %s", edge_alias);
+            bool already = (fs0 && strstr(fs0, needle)) ||
+                           (js0 && strstr(js0, needle));
+            if (!already) {
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "edges"), edge_alias, NULL);
+            }
         }
     }
     

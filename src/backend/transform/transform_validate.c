@@ -1934,6 +1934,40 @@ static int validate_write_no_null_props(ast_list *patterns, const char *kw,
 /* CREATE / MERGE must use a single explicit relationship type, no
  * multi-type (`[:T1|T2]`), and no variable-length range. MATCH allows
  * all of those — this validator is only for writes. */
+/* T-0339 follow-up: a relationship variable may not be re-used within the
+ * same MATCH pattern. `MATCH (a)-[r]->()-[r]->(a)` is a SyntaxError —
+ * "RelationshipUniquenessViolation" (Match3 [29]). Cross-clause re-use
+ * (`MATCH …-[r]-… MATCH …-[r]-…`) is allowed (binding-then-reuse). */
+static int validate_rel_uniqueness_in_match(ast_list *patterns, char **error_message)
+{
+    if (!patterns) return 0;
+    name_set seen; nset_init(&seen);
+    for (int pi = 0; pi < patterns->count; pi++) {
+        ast_node *pn = patterns->items[pi];
+        if (!pn || pn->type != AST_NODE_PATH) continue;
+        cypher_path *p = (cypher_path *)pn;
+        if (!p->elements) continue;
+        for (int ei = 0; ei < p->elements->count; ei++) {
+            ast_node *el = p->elements->items[ei];
+            if (!el || el->type != AST_NODE_REL_PATTERN) continue;
+            cypher_rel_pattern *rp = (cypher_rel_pattern *)el;
+            if (!rp->variable) continue;
+            if (nset_contains(&seen, rp->variable)) {
+                set_error(error_message,
+                          "SyntaxError: RelationshipUniquenessViolation: "
+                          "Cannot use the same relationship variable `%s` "
+                          "for multiple patterns",
+                          rp->variable);
+                nset_free(&seen);
+                return -1;
+            }
+            nset_add(&seen, rp->variable);
+        }
+    }
+    nset_free(&seen);
+    return 0;
+}
+
 static int validate_write_rel_patterns(ast_list *patterns, const char *kw,
                                        char **error_message)
 {
@@ -2190,6 +2224,10 @@ int transform_validate_query(cypher_query *query, char **error_message)
             }
             case AST_NODE_MATCH: {
                 cypher_match *m = (cypher_match *)clause;
+                /* T-0339 follow-up: a relationship variable may not appear
+                 * twice within the SAME MATCH pattern (Match3 [29]). */
+                rc = validate_rel_uniqueness_in_match(m->pattern, error_message);
+                if (rc != 0) break;
                 /* Register the MATCH pattern's variable types BEFORE
                  * validating its WHERE expression, so type-aware checks
                  * (e.g. "WHERE n where n is a node") can see n's type. */
