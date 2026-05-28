@@ -14,6 +14,25 @@
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
+/* I-0047 P3: accumulate a bound-rel OPTIONAL endpoint constraint to be flushed
+ * onto the last LEFT JOIN's ON after the path loop (see pending_optional_on). */
+static void transform_ctx_append_pending_optional_on(cypher_transform_context *ctx,
+                                                     const char *cond)
+{
+    if (!ctx || !cond || !cond[0]) return;
+    if (!ctx->pending_optional_on) {
+        ctx->pending_optional_on = strdup(cond);
+        return;
+    }
+    size_t old_len = strlen(ctx->pending_optional_on);
+    size_t add_len = strlen(cond) + 6; /* " AND " + NUL */
+    char *grown = realloc(ctx->pending_optional_on, old_len + add_len);
+    if (!grown) return;
+    strcat(grown, " AND ");
+    strcat(grown, cond);
+    ctx->pending_optional_on = grown;
+}
+
 static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional);
 static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias, bool optional);
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
@@ -678,6 +697,16 @@ handle_where_clause:
         } else if (ctx->sql_buffer) {
             ctx->sql_buffer[0] = '\0';
         }
+    }
+
+    /* I-0047 P3: flush any stashed bound-rel OPTIONAL endpoint constraint onto
+     * the last LEFT JOIN's ON (the fresh target node's join, now emitted).
+     * Runs whether or not a WHERE clause was present (Match7 [4],
+     * MatchWhere6 [5]). */
+    if (ctx->pending_optional_on) {
+        sql_join_append_on(ctx->unified_builder, ctx->pending_optional_on);
+        free(ctx->pending_optional_on);
+        ctx->pending_optional_on = NULL;
     }
 
     /* Clear current graph after MATCH processing */
@@ -2114,7 +2143,27 @@ skip_target_node_join:
                 snprintf(cond, sizeof(cond), "%s = %s AND %s = %s",
                          src_id_ref, src_subq, tgt_id_ref, tgt_subq);
             }
-            sql_where(ctx->unified_builder, cond);
+            /* I-0047 P3: for OPTIONAL MATCH the bound-rel endpoint constraints
+             * are part of the optional pattern; emitting them as WHERE filters
+             * the preserved anchor row (Match7 [4], MatchWhere6 [5]: a bound
+             * rel reused in the reverse direction). Stash them to flush onto
+             * the target node's LEFT JOIN ON after the path loop. Guard: this
+             * only works when exactly *one* endpoint is fresh (the other in
+             * outer scope from a prior clause). If both are fresh, the first
+             * is CROSS-joined and over-produces (Match7 [5]); if both are
+             * bound, there's no fresh LEFT JOIN to attach to. */
+            bool src_in_scope = source_node->variable && (
+                transform_var_is_bound(ctx->var_ctx, source_node->variable) ||
+                transform_var_alias_is_id(ctx->var_ctx, source_node->variable));
+            bool tgt_in_scope = target_node->variable && (
+                transform_var_is_bound(ctx->var_ctx, target_node->variable) ||
+                transform_var_alias_is_id(ctx->var_ctx, target_node->variable));
+            bool exactly_one_fresh = (src_in_scope != tgt_in_scope);
+            if (optional && exactly_one_fresh) {
+                transform_ctx_append_pending_optional_on(ctx, cond);
+            } else {
+                sql_where(ctx->unified_builder, cond);
+            }
 
             /* If the new pattern specifies a relationship type, enforce it
              * against the bound edge's type. `MATCH ()-[r:T]->() WITH r

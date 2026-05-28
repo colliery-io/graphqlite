@@ -119,6 +119,7 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     free(ctx->sql_buffer);
     free(ctx->error_message);
     free(ctx->pending_prop_joins);
+    free(ctx->pending_optional_on);
 
     /* T-0320: free defer-pair tracking. */
     for (int i = 0; i < ctx->optional_defer_pairs_count; i++) {

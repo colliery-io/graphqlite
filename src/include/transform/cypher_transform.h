@@ -59,7 +59,14 @@ struct cypher_transform_context {
     char *pending_prop_joins;
     size_t pending_prop_joins_len;
     size_t pending_prop_joins_cap;
-    
+
+    /* I-0047 P3: bound-rel endpoint constraint for an OPTIONAL MATCH, stashed
+     * by the rel handler and flushed onto the last LEFT JOIN's ON after the
+     * path loop (when the fresh target node's join exists). Emitting it inline
+     * as WHERE would filter the preserved anchor row (Match7 [4],
+     * MatchWhere6 [5]: a bound rel reused in the reverse direction). Owned. */
+    char *pending_optional_on;
+
     /* Query type tracking */
     enum {
         QUERY_TYPE_UNKNOWN,
