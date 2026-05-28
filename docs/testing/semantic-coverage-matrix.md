@@ -317,3 +317,18 @@ functional clean):
   already-joined alias was the masquerading SyntaxError that Match3 [29]
   relied on; the validator above is now the explicit check. Match4 [7] no
   longer errors (still fails on a distinct over-counting bug, follow-up).
+
+## Coverage update (2026-05-28) — path-wide rel-uniqueness across varlen and bound rels
+
+`transform_match.c`. Verified via the TCK harness (full pass-set diff, zero
+regressions; unit 944/944; functional clean):
+
+- **Varlen segments may not re-use a path's bound non-varlen relationship.** The
+  existing path-wide rel-uniqueness block already paired non-varlen edge aliases
+  (`e_i.id <> e_j.id`). It now also enforces `<varlen>.visited NOT LIKE
+  '%,<bound_rel.id>,%'` against each non-varlen rel in the same path — both
+  table-aliased (`<alias>.id`) and post-WITH (`_with_0.r`) forms. The constraint
+  is only emitted for **non-OPTIONAL** paths; OPTIONAL needs the constraint at
+  the LEFT JOIN ON level to preserve the anchor row (deferred). Cross-varlen
+  disjointness is also deferred (no failing scenario requires it). Fixes
+  Match4 [7].
