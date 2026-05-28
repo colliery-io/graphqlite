@@ -955,27 +955,196 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
         set_result_error(result, "Failed to create variable map");
         return -1;
     }
-
-    for (int i = 0; i < query->clauses->count; i++) {
-        ast_node *clause = query->clauses->items[i];
-        if (!clause || clause->type != AST_NODE_MATCH) continue;
-        if (bind_match_clause_into_varmap(executor, (cypher_match*)clause, var_map, result) < 0) {
-            free_variable_map(var_map);
-            return -1;
-        }
-    }
-
     if (!create->pattern) {
         set_result_error(result, "No pattern in CREATE clause");
         free_variable_map(var_map);
         return -1;
     }
-    for (int i = 0; i < create->pattern->count; i++) {
-        ast_node *pattern = create->pattern->items[i];
-        if (pattern->type == AST_NODE_PATH) {
-            if (execute_path_pattern_with_variables(executor, (cypher_path*)pattern, result, var_map) < 0) {
+
+    /* Count MATCH clauses to detect the single-MATCH case (the common shape). */
+    int match_count = 0;
+    cypher_match *single_match = NULL;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (c && c->type == AST_NODE_MATCH) {
+            match_count++;
+            if (!single_match) single_match = (cypher_match*)c;
+        }
+    }
+
+    /* GQLITE-T-0339: legacy code took only the first matched row (a hard-coded
+     * `break` in bind_match_clause_into_varmap), so MATCH (d:D) CREATE (e:E)
+     * created exactly one `e` regardless of how many D nodes existed. For the
+     * single-MATCH case run the MATCH inline, materialize ALL matched rows
+     * into memory (executing CREATE during sqlite3_step invalidates the
+     * iterating SELECT — observed: only the first row processed), then
+     * iterate the captured rows running EVERY CREATE clause's patterns per
+     * row. A fresh row_vm per row keeps CREATE-introduced bindings (e, g, …)
+     * from bleeding across rows. Multi-MATCH keeps the legacy first-row
+     * behavior (a separate, larger fix). */
+    if (match_count == 1 && single_match) {
+        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+        if (!ctx) {
+            set_result_error(result, "Failed to create transform context");
+            free_variable_map(var_map);
+            return -1;
+        }
+        if (transform_match_clause(ctx, single_match) < 0) {
+            set_result_error(result, ctx && ctx->error_message ? ctx->error_message : "Failed to transform MATCH");
+            cypher_transform_free_context(ctx);
+            free_variable_map(var_map);
+            return -1;
+        }
+        if (finalize_sql_generation(ctx) < 0) {
+            set_result_error(result, "Failed to finalize SQL generation");
+            cypher_transform_free_context(ctx);
+            free_variable_map(var_map);
+            return -1;
+        }
+        /* Replace SELECT * with explicit node/edge id selection. */
+        char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
+        if (select_pos) {
+            char *after_star = select_pos + strlen("SELECT *");
+            char *temp = strdup(after_star);
+            ctx->sql_size = select_pos + strlen("SELECT ") - ctx->sql_buffer;
+            ctx->sql_buffer[ctx->sql_size] = '\0';
+            bool first_col = true;
+            int vcount = transform_var_count(ctx->var_ctx);
+            for (int i = 0; i < vcount; i++) {
+                transform_var *var = transform_var_at(ctx->var_ctx, i);
+                if (var && (var->kind == VAR_KIND_NODE || var->kind == VAR_KIND_EDGE)) {
+                    if (!first_col) append_sql(ctx, ", ");
+                    append_sql(ctx, "%s.id AS \"%s_id\"", var->table_alias, var->name);
+                    first_col = false;
+                }
+            }
+            append_sql(ctx, " %s", temp);
+            free(temp);
+        }
+        sqlite3_stmt *stmt = NULL;
+        int rc_prep = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+        if (rc_prep != SQLITE_OK) {
+            char err[512];
+            snprintf(err, sizeof(err), "MATCH SQL prepare failed: %s", sqlite3_errmsg(executor->db));
+            set_result_error(result, err);
+            cypher_transform_free_context(ctx);
+            free_variable_map(var_map);
+            return -1;
+        }
+        if (executor->params_json && bind_params_from_json(stmt, executor->params_json) < 0) {
+            set_result_error(result, "Failed to bind query parameters");
+            sqlite3_finalize(stmt);
+            cypher_transform_free_context(ctx);
+            free_variable_map(var_map);
+            return -1;
+        }
+        /* Materialize all matched rows BEFORE any CREATE. */
+        int vcount2 = transform_var_count(ctx->var_ctx);
+        int rows_cap = 16, rows_n = 0;
+        int64_t **row_ids = malloc(rows_cap * sizeof(int64_t*));
+        if (!row_ids) {
+            set_result_error(result, "OOM (row id buffer)");
+            sqlite3_finalize(stmt);
+            cypher_transform_free_context(ctx);
+            free_variable_map(var_map);
+            return -1;
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (rows_n == rows_cap) {
+                rows_cap *= 2;
+                int64_t **g = realloc(row_ids, rows_cap * sizeof(int64_t*));
+                if (!g) {
+                    set_result_error(result, "OOM (row grow)");
+                    for (int k = 0; k < rows_n; k++) free(row_ids[k]);
+                    free(row_ids);
+                    sqlite3_finalize(stmt);
+                    cypher_transform_free_context(ctx);
+                    free_variable_map(var_map);
+                    return -1;
+                }
+                row_ids = g;
+            }
+            row_ids[rows_n] = malloc(vcount2 * sizeof(int64_t));
+            int col = 0;
+            for (int i = 0; i < vcount2; i++) {
+                transform_var *var = transform_var_at(ctx->var_ctx, i);
+                if (var && (var->kind == VAR_KIND_NODE || var->kind == VAR_KIND_EDGE)) {
+                    row_ids[rows_n][i] = sqlite3_column_int64(stmt, col++);
+                } else {
+                    row_ids[rows_n][i] = -1;
+                }
+            }
+            rows_n++;
+        }
+        sqlite3_finalize(stmt);
+
+        /* Now run CREATEs per row with a fresh var_map (the placeholder is
+         * discarded since the loop builds replacements). */
+        free_variable_map(var_map);
+        var_map = NULL;
+        for (int r = 0; r < rows_n; r++) {
+            variable_map *row_vm = create_variable_map();
+            if (!row_vm) {
+                set_result_error(result, "Failed to create row var_map");
+                for (int k = 0; k < rows_n; k++) free(row_ids[k]);
+                free(row_ids);
+                cypher_transform_free_context(ctx);
+                if (var_map) free_variable_map(var_map);
+                return -1;
+            }
+            for (int i = 0; i < vcount2; i++) {
+                transform_var *var = transform_var_at(ctx->var_ctx, i);
+                if (!var) continue;
+                if (var->kind == VAR_KIND_NODE) {
+                    set_variable_node_id(row_vm, var->name, (int)row_ids[r][i]);
+                } else if (var->kind == VAR_KIND_EDGE) {
+                    set_variable_edge_id(row_vm, var->name, (int)row_ids[r][i]);
+                }
+            }
+            /* Every CREATE clause's patterns for this row. */
+            for (int ci = 0; ci < query->clauses->count; ci++) {
+                ast_node *cclause = query->clauses->items[ci];
+                if (!cclause || cclause->type != AST_NODE_CREATE) continue;
+                cypher_create *cc = (cypher_create*)cclause;
+                if (!cc->pattern) continue;
+                for (int i = 0; i < cc->pattern->count; i++) {
+                    ast_node *pattern = cc->pattern->items[i];
+                    if (pattern->type == AST_NODE_PATH) {
+                        if (execute_path_pattern_with_variables(executor, (cypher_path*)pattern, result, row_vm) < 0) {
+                            free_variable_map(row_vm);
+                            for (int k = 0; k < rows_n; k++) free(row_ids[k]);
+                            free(row_ids);
+                            cypher_transform_free_context(ctx);
+                            if (var_map) free_variable_map(var_map);
+                            return -1;
+                        }
+                    }
+                }
+            }
+            if (var_map) free_variable_map(var_map);
+            var_map = row_vm;
+        }
+        for (int k = 0; k < rows_n; k++) free(row_ids[k]);
+        free(row_ids);
+        cypher_transform_free_context(ctx);
+        if (!var_map) var_map = create_variable_map(); /* no matched rows */
+    } else {
+        /* Multi-MATCH (or zero-MATCH) legacy path: first-row-only binding. */
+        for (int i = 0; i < query->clauses->count; i++) {
+            ast_node *clause = query->clauses->items[i];
+            if (!clause || clause->type != AST_NODE_MATCH) continue;
+            if (bind_match_clause_into_varmap(executor, (cypher_match*)clause, var_map, result) < 0) {
                 free_variable_map(var_map);
                 return -1;
+            }
+        }
+        for (int i = 0; i < create->pattern->count; i++) {
+            ast_node *pattern = create->pattern->items[i];
+            if (pattern->type == AST_NODE_PATH) {
+                if (execute_path_pattern_with_variables(executor, (cypher_path*)pattern, result, var_map) < 0) {
+                    free_variable_map(var_map);
+                    return -1;
+                }
             }
         }
     }
