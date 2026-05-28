@@ -205,6 +205,72 @@ static const char *var_type_name(var_type t) {
 static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **error_message);
 static int validate_expr(ast_node *expr, char **error_message);
 
+/* GQLITE-T-0339 follow-up: does this expression tree contain any pattern
+ * (AST_NODE_PATH or EXISTS_TYPE_PATTERN), at any depth? openCypher forbids
+ * pattern expressions in the SET RHS — `SET n.p = head(nodes((n)-[:R]->())).foo`
+ * must be a compile-time SyntaxError (Pattern1 [24]). Recursive variant of the
+ * shallow check the RETURN/WITH validators already do. */
+static bool expr_contains_path_pattern(const ast_node *e)
+{
+    if (!e) return false;
+    if (e->type == AST_NODE_PATH) return true;
+    if (e->type == AST_NODE_EXISTS_EXPR) {
+        const cypher_exists_expr *ee = (const cypher_exists_expr *)e;
+        if (ee->expr_type == EXISTS_TYPE_PATTERN) return true;
+    }
+    switch (e->type) {
+        case AST_NODE_NOT_EXPR: {
+            const cypher_not_expr *n = (const cypher_not_expr *)e;
+            return expr_contains_path_pattern(n->expr);
+        }
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)e;
+            return expr_contains_path_pattern(b->left) ||
+                   expr_contains_path_pattern(b->right);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)e;
+            if (f->args) {
+                for (int i = 0; i < f->args->count; i++) {
+                    if (expr_contains_path_pattern(f->args->items[i])) return true;
+                }
+            }
+            return false;
+        }
+        case AST_NODE_PROPERTY: {
+            const cypher_property *p = (const cypher_property *)e;
+            return expr_contains_path_pattern(p->expr);
+        }
+        case AST_NODE_LIST: {
+            const cypher_list *l = (const cypher_list *)e;
+            if (l->items) {
+                for (int i = 0; i < l->items->count; i++) {
+                    if (expr_contains_path_pattern(l->items->items[i])) return true;
+                }
+            }
+            return false;
+        }
+        case AST_NODE_LIST_PREDICATE: {
+            const cypher_list_predicate *lp = (const cypher_list_predicate *)e;
+            return expr_contains_path_pattern(lp->list_expr) ||
+                   expr_contains_path_pattern(lp->predicate);
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            const cypher_list_comprehension *lc = (const cypher_list_comprehension *)e;
+            return expr_contains_path_pattern(lc->list_expr) ||
+                   expr_contains_path_pattern(lc->where_expr) ||
+                   expr_contains_path_pattern(lc->transform_expr);
+        }
+        case AST_NODE_SUBSCRIPT: {
+            const cypher_subscript *s = (const cypher_subscript *)e;
+            return expr_contains_path_pattern(s->expr) ||
+                   expr_contains_path_pattern(s->index);
+        }
+        default:
+            return false;
+    }
+}
+
 static int validate_not_expr(cypher_not_expr *not_expr, char **error_message)
 {
     if (!not_expr || !not_expr->expr) return 0;
@@ -2163,6 +2229,14 @@ int transform_validate_query(cypher_query *query, char **error_message)
                         if (it->property && it->property->type == AST_NODE_PROPERTY) {
                             cypher_property *pr = (cypher_property *)it->property;
                             if (pr->expr && check_undef_in_expr(pr->expr, &bound, "SET", error_message) < 0) { rc = -1; break; }
+                        }
+                        /* Pattern1 [24]: a pattern expression is not a valid
+                         * RHS in SET — recursive check (the pattern can be
+                         * nested inside function calls and property access). */
+                        if (it->expr && expr_contains_path_pattern(it->expr)) {
+                            set_error(error_message,
+                                      "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in SET");
+                            rc = -1; break;
                         }
                         /* A *property*-target SET (n.prop = value) rejects
                          * a list-of-maps RHS (Set1 [10]) because the
