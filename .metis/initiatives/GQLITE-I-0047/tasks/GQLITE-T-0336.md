@@ -155,3 +155,29 @@ Reverted; needs the deeper deferral plumbing.
 **Remaining (deeper refactors, deferred):** Match7 [4] / MatchWhere6 [5]
 (bound-rel reverse — deferred-constraint plumbing); MatchWhere6 [7]
 (multi-rel combined-EXISTS → derived-table rewrite).
+### 2026-05-28 — Bound-rel reverse OPTIONAL FIXED (+1: Match7 [4])
+
+Reattempted with the **deferred-flush** approach the prior analysis pointed to.
+Added `ctx->pending_optional_on` (header struct field): the bound-rel handler
+stashes its endpoint constraint there for OPTIONAL, and `transform_match_clause`
+flushes it via `sql_join_append_on` after the path loop (so the fresh target
+node's LEFT JOIN exists). Guarded to fire only when **exactly one** endpoint
+is in outer scope and the other is fresh — both-fresh CROSS-multiplies the
+early endpoint (caught Match7 [5] regressing before the guard).
+
+**Verified: +1 (Match7 [4]), zero regressions** (full pass-set diff vs HEAD,
+done by rebuilding HEAD in-place via stash/clean rebuild). Unit 944/944,
+functional clean.
+
+**MatchWhere6 [5] not fixed**: both endpoints fresh (a2, b2) + a WHERE
+correlation `a1 = a2`; the guard correctly skips it (both-fresh case). It
+needs the derived-table approach (same as MatchWhere6 [7]).
+
+Note: adding `pending_optional_on` to the struct required `angreal dev clean`
+(per the project's struct/enum change rule — incremental builds leave stale
+objects with old layout, observed during dev as a catastrophic regression
+recovered with a clean rebuild).
+
+**T-0336 net so far: +6** (Match7 [4]/[12]/[15]/[21]/[27], Aggregation5 [2]).
+Remaining P3: MatchWhere6 [5]/[7] (multi-rel/both-fresh combined-EXISTS →
+derived-table rewrite).
