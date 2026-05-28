@@ -262,3 +262,26 @@ HEAD, zero regressions; unit 944/944; functional clean):
   Fixes Match9 [9].
 
 P4 (GQLITE-T-0337) complete: +2 (With1 [4], Match9 [9]).
+
+## Coverage update (2026-05-28) — T-0339: MATCH+CREATE multi-row + general expressions
+
+GQLITE-T-0339 (backlog bug). Verified via the TCK harness (full pass-set diff,
+zero regressions; unit 944/944; functional clean):
+
+- **`MATCH … CREATE …` now runs the CREATE for every matched row.** The
+  legacy single-MATCH path took only the first matched row (hard-coded
+  `break` in `bind_match_clause_into_varmap`). Now `execute_multi_match_create_query`
+  materializes all matched rows into memory BEFORE running CREATE (running
+  CREATE inside `sqlite3_step` invalidates the iterating SELECT), allocates a
+  fresh `var_map` per row so CREATE-introduced bindings don't bleed across
+  rows, and iterates every CREATE clause's patterns per row.
+- **`CREATE (n {prop: <expr>})` evaluates general expressions** referencing
+  MATCH-bound variables (e.g. `{name: d.name + '0'}`). Previously the prop
+  handler only knew LITERAL / FUNCTION_CALL / MAP/LIST / PARAMETER values; a
+  general-expression fallback now calls `executor_eval_value` with the current
+  `var_map`.
+
+Together these fix Match5 [25]/[28]/[29] (the setups that build a per-D `E`
+layer with computed names). Multi-MATCH MATCH+CREATE keeps the legacy
+first-row behavior pending a separate fix. Match5 [26] (MATCH+DELETE+CREATE
+setup) and Match4 [4] (UNWIND/collect setup) need distinct follow-ups.
