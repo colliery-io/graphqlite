@@ -290,3 +290,15 @@ first-row behavior pending a separate fix.
 first (per matched row via `execute_multi_match_create_query`) with the live
 pre-delete bindings, then proceeds with the delete. Fixes Match5 [26].
 Match4 [4] (UNWIND/collect setup) needs a distinct follow-up.
+
+## Coverage update (2026-05-28) — validate: pattern expressions in SET RHS
+
+`transform_validate.c`. Verified via the TCK harness (zero regressions; unit
+944/944; functional clean):
+
+- **A path pattern on the SET RHS is now a compile-time `SyntaxError`**
+  (e.g. `SET n.prop = head(nodes(head((n)-[:REL]->()))).foo`). The existing
+  RETURN/WITH validators do only a top-level type check; a path can be nested
+  inside function calls / property access / subscripts. New recursive helper
+  `expr_contains_path_pattern` walks the expression tree and the SET validator
+  invokes it. Fixes Pattern1 [24].
