@@ -283,5 +283,10 @@ zero regressions; unit 944/944; functional clean):
 
 Together these fix Match5 [25]/[28]/[29] (the setups that build a per-D `E`
 layer with computed names). Multi-MATCH MATCH+CREATE keeps the legacy
-first-row behavior pending a separate fix. Match5 [26] (MATCH+DELETE+CREATE
-setup) and Match4 [4] (UNWIND/collect setup) need distinct follow-ups.
+first-row behavior pending a separate fix.
+
+**Part 3 — `MATCH … DELETE … CREATE …` now runs the CREATE.**
+`handle_match_delete` dropped the CREATE clause entirely. It now runs CREATE
+first (per matched row via `execute_multi_match_create_query`) with the live
+pre-delete bindings, then proceeds with the delete. Fixes Match5 [26].
+Match4 [4] (UNWIND/collect setup) needs a distinct follow-up.
