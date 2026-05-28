@@ -302,3 +302,18 @@ Match4 [4] (UNWIND/collect setup) needs a distinct follow-up.
   inside function calls / property access / subscripts. New recursive helper
   `expr_contains_path_pattern` walks the expression tree and the SET validator
   invokes it. Fixes Pattern1 [24].
+
+## Coverage update (2026-05-28) — validate+match: rel-uniqueness + dedupe edges-table emission
+
+Architectural correctness fix (zero TCK delta; zero regressions; unit 944/944;
+functional clean):
+
+- **New `validate_rel_uniqueness_in_match` validator** — a relationship
+  variable may not appear twice within the same MATCH pattern
+  (`MATCH (a)-[r]->()-[r]->(a)` → `SyntaxError:
+  RelationshipUniquenessViolation`). Cross-clause re-use is allowed
+  (binding-then-reuse) and unchanged.
+- **Dedupe `edges AS <alias>` emission across MATCH clauses** — re-emitting an
+  already-joined alias was the masquerading SyntaxError that Match3 [29]
+  relied on; the validator above is now the explicit check. Match4 [7] no
+  longer errors (still fails on a distinct over-counting bug, follow-up).
