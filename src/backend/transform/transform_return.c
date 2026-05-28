@@ -1066,7 +1066,15 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                              * edge JSON per id, in path order. */
                             transform_var *evar = transform_var_lookup_edge(ctx->var_ctx, id->name);
                             if (evar && evar->cte_name) {
+                                /* I-0047 P4: guard for an OPTIONAL varlen miss.
+                                 * When the path didn't match, the CTE alias's
+                                 * elem_ids is NULL; json_each(NULL) yields no
+                                 * rows and json_group_array() returns '[]' (an
+                                 * empty array), but openCypher wants NULL for an
+                                 * unmatched OPTIONAL relationship list
+                                 * (Match9 [9]). */
                                 append_sql(ctx,
+                                  "(CASE WHEN %s.elem_ids IS NULL THEN NULL ELSE "
                                   "(SELECT json_group_array(json_object("
                                     "'id', e.id, "
                                     "'type', e.type, "
@@ -1087,8 +1095,8 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                       "), json('{}'))"
                                   ") ORDER BY je.key) "
                                   "FROM json_each('[' || %s.elem_ids || ']') je "
-                                  "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1)",
-                                  alias);
+                                  "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1) END)",
+                                  alias, alias);
                                 goto edge_alias_projection_done;
                             }
                             /* Edge variable - return full relationship object,
