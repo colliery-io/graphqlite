@@ -457,3 +457,25 @@ clean):
   Falls through untouched when the other operand isn't a compile-time literal.
   NaN flowing through a variable (ReturnOrderBy1 [11]/[12], Comparison2 [3])
   needs the full cross-type total-ordering comparator and is deferred.
+
+## Coverage update (2026-05-29) — UNWIND of a list containing bound entities
+
+`transform_unwind.c`. Verified via the TCK harness (3721 -> 3721 pass; 4
+scenarios move error -> fail; rigorous full pass-set diff: zero regressions;
+unit 944/944; functional clean):
+
+- **`MATCH ... UNWIND [n, r, p, ...] AS x` no longer crashes** with
+  `no such column: _gql_default_alias_0.id`. The LIST branch only emitted a
+  per-arm `FROM` when a WITH projection was carried (`has_carry`); pre-WITH
+  MATCH entity variables are excluded from carry, so an entity-referencing list
+  produced UNION arms with no FROM and unbound aliases. The branch now splices
+  the prior MATCH's FROM tables (and WHERE) into each arm — mirroring the
+  function-call branch — when `inner_sql` is a splicable `SELECT * FROM ...`.
+  This is a **prerequisite** for the ORDER-BY type-ordering scenarios
+  (ReturnOrderBy1 [11]/[12], WithOrderBy1 [21]/[22]), which now produce output
+  but still fail pending: (a) a Cypher total-orderability key in
+  `_gql_order_key` (map<node<rel<list<path<string<bool<number<NaN<null vs the
+  current SQLite-native order), (b) a distinguishable NaN value/rendering (NaN
+  currently collapses to NULL), and (c) path hydration through UNWIND. Those
+  remain deferred. Comparison2 [3] additionally needs WITH-WHERE input-scope
+  referencing (`WHERE i <> j` after a projection that drops `i`/`j`).

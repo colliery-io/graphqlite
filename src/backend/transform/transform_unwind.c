@@ -184,6 +184,15 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         /* List literal: use UNION ALL approach */
         cypher_list *list = (cypher_list*)unwind->expr;
 
+        /* When the list elements reference bound MATCH variables (e.g.
+         * `UNWIND [n, r, p, ...]` — ReturnOrderBy1 [11], Comparison2 [3]),
+         * each UNION arm must splice the prior MATCH's FROM tables so those
+         * aliases stay in scope (and so cardinality matches the surrounding
+         * scope). Mirrors the function-call branch's splice handling. */
+        bool list_splicable = (inner_sql && strlen(inner_sql) > 0 &&
+                               strncmp(inner_sql, "SELECT * FROM ", 14) == 0);
+        const char *list_where = list_splicable ? strstr(inner_sql, " WHERE ") : NULL;
+
         if (!list->items || list->items->count == 0) {
             /* Empty list: return no rows using impossible condition */
             dbuf_append(&cte_query, "SELECT NULL AS value");
@@ -265,7 +274,19 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     if (!ok) dbuf_append(&cte_query, "NULL");
                 }
                 dbuf_append(&cte_query, " AS value");
-                if (has_carry) {
+                if (list_splicable) {
+                    /* Element exprs reference the original MATCH aliases, so
+                     * splice the FROM tables directly (not wrapped as _prev). */
+                    if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols_orig));
+                    dbuf_append(&cte_query, " FROM ");
+                    if (list_where) {
+                        size_t tlen = (size_t)(list_where - (inner_sql + 14));
+                        dbuf_appendf(&cte_query, "%.*s", (int)tlen, inner_sql + 14);
+                        dbuf_append(&cte_query, list_where);  /* re-attach WHERE */
+                    } else {
+                        dbuf_append(&cte_query, inner_sql + 14);
+                    }
+                } else if (has_carry) {
                     dbuf_append(&cte_query, dbuf_get(&carry_cols));
                     dbuf_appendf(&cte_query, " FROM (%s) AS _prev", inner_sql);
                 }
