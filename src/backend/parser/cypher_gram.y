@@ -951,6 +951,34 @@ rel_pattern:
             if (p) p->varlen = (ast_node*)$7;
             $$ = p;
         }
+    /* Bidirectional bracketed: <-[...]-> (Match5 [27]) — equivalent to
+     * undirected `-[...]-`. Per openCypher, both arrows present means "any
+     * direction"; pass false/false to make_rel_pattern_varlen. */
+    | '<' '-' '[' variable_opt varlen_range_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen($4, NULL, (ast_node*)$6, false, false, (ast_node*)$5);
+        }
+    | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, false, false, (ast_node*)$7);
+            free($6);
+        }
+    | '<' '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, false, false, (ast_node*)$7);
+            free($6);
+        }
+    | '<' '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-' '>'
+        {
+            $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, false, false, (ast_node*)$7);
+            free($6);
+        }
+    | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-' '>'
+        {
+            cypher_rel_pattern *p = make_rel_pattern_multi_type($4, $6, (ast_node*)$8, false, false);
+            if (p) p->varlen = (ast_node*)$7;
+            $$ = p;
+        }
     /* Undirected relationships: -[...]- */
     | '-' '[' variable_opt varlen_range_opt properties_opt ']' '-'
         {

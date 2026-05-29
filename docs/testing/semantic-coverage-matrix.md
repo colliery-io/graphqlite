@@ -347,3 +347,16 @@ regressions; unit 944/944; functional clean):
   debug line and `continue`, treating the REMOVE item as a no-op. The existing
   "property not found on this entity" path was already silent — this aligns
   null-variable behavior with that. Fixes Remove1 [6].
+
+## Coverage update (2026-05-28) — accept bidirectional bracketed rel pattern `<-[...]->`
+
+`cypher_gram.y`. Verified via the TCK harness (3706 -> 3706 pass; one scenario
+moves from `error` -> `fail` as parse now succeeds; full unit + functional clean):
+
+- **Grammar accepts `<-[...]->` form** as equivalent to undirected `-[...]-`
+  (Match5 [27] and any future scenario using both arrows on a bracketed rel).
+  Five rules added to mirror the existing five `-[...]-` undirected forms
+  (var-only, IDENTIFIER, BQIDENT, non_reserved_kw type, multi-type list); each
+  passes `false/false` for `(left_arrow, right_arrow)` to `make_rel_pattern_varlen`.
+  Bare bidirectional `<-->` was already supported. Match5 [27] still fails
+  downstream on bidirectional varlen execution semantics; that fix is deferred.
