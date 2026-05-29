@@ -1579,8 +1579,14 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
                     }
                 }
             }
-            for (int i = 0; i < ex->expr.pattern->count; i++) {
-                if (validate_where_pattern_vars(ex->expr.pattern->items[i], bound, error_message) < 0) return -1;
+            /* The brace form `EXISTS { (n)-->(m) ... }` is an existential
+             * subquery — it MAY introduce fresh pattern variables (`m`), so
+             * skip the fresh-variable recursion for it. The paren
+             * pattern-predicate form keeps the stricter rule. */
+            if (!ex->is_subquery) {
+                for (int i = 0; i < ex->expr.pattern->count; i++) {
+                    if (validate_where_pattern_vars(ex->expr.pattern->items[i], bound, error_message) < 0) return -1;
+                }
             }
         }
         return 0;

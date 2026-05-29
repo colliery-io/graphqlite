@@ -395,6 +395,11 @@ typedef struct cypher_exists_expr {
         ast_list *pattern;       /* For EXISTS((pattern)) - list of path elements */
         ast_node *property;      /* For EXISTS(property) - property access expression */
     } expr;
+    ast_node *where_clause;      /* Optional inner WHERE for brace form
+                                  * EXISTS { (n)-->(m) WHERE <expr> } (NULL otherwise) */
+    bool is_subquery;            /* true for the brace form EXISTS { ... }, which
+                                  * (unlike the paren pattern-predicate) MAY
+                                  * introduce fresh pattern variables */
 } cypher_exists_expr;
 
 /* List predicate: all/any/none/single(x IN list WHERE predicate) */

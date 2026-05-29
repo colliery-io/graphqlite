@@ -1506,7 +1506,20 @@ function_call:
              * (ExistentialSubquery1 [1]/[3]). Reuses the pattern-existence
              * transform; correlated outer variables resolve via the
              * EXISTS_TYPE_PATTERN emitter's outer-alias lookup. */
-            $$ = (ast_node*)make_exists_pattern_expr($3, @1.first_line);
+            cypher_exists_expr *ee = make_exists_pattern_expr($3, @1.first_line);
+            if (ee) ee->is_subquery = true;
+            $$ = (ast_node*)ee;
+        }
+    | EXISTS '{' pattern_list WHERE expr '}'
+        {
+            /* Existential subquery with inner WHERE:
+             * EXISTS { (n)-->(m) WHERE n.prop = m.prop }
+             * (ExistentialSubquery1 [2]/[4]). The inner predicate is stored
+             * on where_clause and folded into the subquery by the transform,
+             * which registers the inner pattern variables first. */
+            cypher_exists_expr *ee = make_exists_pattern_expr($3, @1.first_line);
+            if (ee) { ee->where_clause = $5; ee->is_subquery = true; }
+            $$ = (ast_node*)ee;
         }
     | EXISTS '(' IDENTIFIER '.' IDENTIFIER ')'
         {

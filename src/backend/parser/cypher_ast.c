@@ -417,6 +417,9 @@ void ast_node_free(ast_node *node)
                 } else if (exists_expr->expr_type == EXISTS_TYPE_PROPERTY) {
                     ast_node_free(exists_expr->expr.property);
                 }
+                if (exists_expr->where_clause) {
+                    ast_node_free(exists_expr->where_clause);
+                }
             }
             break;
 

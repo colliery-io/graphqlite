@@ -399,3 +399,25 @@ unit 944/944; functional clean):
   `%expect 15` / `%expect-rr 3`). The brace form **with** an inner `WHERE`
   ([2]/[4]) and the full-query/aggregation/nested forms (ExistentialSubquery2/3)
   remain unsupported — they need inner-variable registration and are deferred.
+
+## Coverage update (2026-05-29) — existential subquery brace form with inner WHERE
+
+`cypher_gram.y` + `cypher_ast.{h,c}` + `transform_expr_predicate.c` +
+`transform_validate.c`. Verified via the TCK harness (3710 -> 3712, zero
+regressions; unit 944/944; functional clean):
+
+- **`WHERE exists { (n)-->(m) WHERE n.prop = m.prop }` evaluates** correctly
+  (ExistentialSubquery1 [2]/[4]). The brace form may introduce fresh inner
+  variables (`m`, `r`). Implementation:
+  - `cypher_exists_expr` gains `where_clause` (the inner predicate) and
+    `is_subquery` (brace vs paren). Grammar rule `EXISTS '{' pattern_list
+    WHERE expr '}'` sets both.
+  - The `EXISTS_TYPE_PATTERN` emitter registers the inner pattern's *new*
+    node/rel variables against their subquery aliases (`n%d` / `e%d`) before
+    transforming the inner WHERE, folds it in as ` AND (<expr>)`, then
+    `transform_var_truncate_to`s back to the saved scope.
+  - The WHERE-pattern fresh-variable validator skips `is_subquery` EXISTS
+    nodes (the brace form legitimately scopes fresh vars; the paren
+    pattern-predicate form keeps the stricter rule).
+  - Full-query/aggregation/nested existential subqueries (ExistentialSubquery2
+    [1]/[2], ExistentialSubquery3) remain deferred.

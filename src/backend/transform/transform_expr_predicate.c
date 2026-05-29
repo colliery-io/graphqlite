@@ -221,6 +221,14 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                         bool node_is_external[10];  /* Track which nodes are from outer context */
                         int node_count = 0;
 
+                        /* Brace form may carry an inner WHERE referencing the
+                         * subquery's own pattern variables (e.g. `m`, `r`).
+                         * Register those inner variables against their subquery
+                         * aliases so transform_expression can resolve them, then
+                         * truncate the var context back once the subquery SQL is
+                         * emitted (mirrors pattern-comprehension save/restore). */
+                        int exists_saved_vars = transform_var_count(ctx->var_ctx);
+
                         /* Process each element in the path */
                         for (int i = 0; i < path->elements->count; i++) {
                             ast_node *element = path->elements->items[i];
@@ -249,16 +257,31 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                             "n%d", node_count);
                                     append_sql(ctx, "nodes AS %s", node_aliases[node_count]);
                                     node_is_external[node_count] = false;
+                                    /* Register the inner node var so an inner WHERE
+                                     * can reference it (ExistentialSubquery1 [2]). */
+                                    if (node->variable && exists_expr->where_clause) {
+                                        transform_var_register_node(ctx->var_ctx, node->variable,
+                                                                    node_aliases[node_count], NULL);
+                                    }
                                     first_table = false;
                                 }
                                 node_count++;
 
                             } else if (element->type == AST_NODE_REL_PATTERN && i > 0) {
                                 /* Relationship pattern: -[variable:TYPE]-> */
+                                cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
                                 if (!first_table) {
                                     append_sql(ctx, ", ");
                                 }
                                 append_sql(ctx, "edges AS e%d", i/2);  /* Relationships are at odd indices */
+                                /* Register the inner rel var for the inner WHERE
+                                 * (ExistentialSubquery1 [4]: `type(r) = 'NA'`). */
+                                if (rel->variable && exists_expr->where_clause) {
+                                    char ealias[16];
+                                    snprintf(ealias, sizeof(ealias), "e%d", i/2);
+                                    transform_var_register_edge(ctx->var_ctx, rel->variable,
+                                                                ealias, rel->type);
+                                }
                                 first_table = false;
                             }
                         }
@@ -334,6 +357,22 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                 }
                             }
                         }
+
+                        /* Fold the inner WHERE predicate into the subquery,
+                         * now that the pattern's own variables are registered.
+                         * ExistentialSubquery1 [2]/[4]. */
+                        if (exists_expr->where_clause) {
+                            append_sql(ctx, first_condition ? "(" : " AND (");
+                            if (transform_expression(ctx, exists_expr->where_clause) < 0) {
+                                transform_var_truncate_to(ctx->var_ctx, exists_saved_vars);
+                                return -1;
+                            }
+                            append_sql(ctx, ")");
+                            first_condition = false;
+                        }
+
+                        /* Restore the outer variable scope. */
+                        transform_var_truncate_to(ctx->var_ctx, exists_saved_vars);
                     } else {
                         /* Empty pattern - should not happen */
                         append_sql(ctx, "SELECT 0");
