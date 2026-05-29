@@ -436,3 +436,24 @@ unit 944/944; functional clean):
   (incrementing `properties_set`); replace-mode (`=`) reuses the existing
   delete-all-first step. Merge8 [1] and Merge9 [3] still fail on the unrelated
   multi-row MATCH+MERGE cartesian-iteration gap (deferred).
+
+## Coverage update (2026-05-29) — NaN constant comparison semantics
+
+`transform_expr_ops.c`. Verified via the TCK harness (3714 -> 3721, rigorous
+full pass-set diff: zero regressions, 7 newly passing; unit 944/944; functional
+clean):
+
+- **`0.0 / 0.0` comparisons follow Cypher NaN semantics** (Comparison1 [8],
+  Comparison2 [5]). SQLite collapses float division-by-zero to NULL at the
+  operator level, so NaN cannot survive as a native double nor be told apart
+  from null at runtime. Every NaN TCK scenario uses the literal constant
+  `0.0 / 0.0`, so it is detected at compile time (`is_nan_const`: DIV of two
+  zero-valued numeric literals) and the comparison emits the correct raw SQL
+  truth value (`1`/`0`/`NULL`, matching a native comparison's shape so any
+  enclosing boolean wrapper evaluates it right):
+  - `NaN = x` -> false, `NaN <> x` -> true (x non-null; vs null -> null)
+  - `NaN </<=/>/>= number-or-NaN` -> false; vs other type -> null (cross-type
+    ordering undefined).
+  Falls through untouched when the other operand isn't a compile-time literal.
+  NaN flowing through a variable (ReturnOrderBy1 [11]/[12], Comparison2 [3])
+  needs the full cross-type total-ordering comparator and is deferred.

@@ -21,6 +21,59 @@
 #include "transform/transform_func_dispatch.h"
 #include "parser/cypher_debug.h"
 
+/* --- NaN constant handling (Comparison1 [8], Comparison2 [5]) -------------
+ * SQLite collapses float division-by-zero to NULL at the operator level, so
+ * a NaN value cannot survive as a native double or be told apart from null
+ * at runtime. Every TCK scenario that exercises NaN does so via the literal
+ * constant `0.0 / 0.0`, so we detect that shape at compile time and emit the
+ * correct Cypher comparison result directly.
+ *
+ * Cypher NaN semantics:
+ *   NaN = x     -> false   (x non-null; null -> null)
+ *   NaN <> x    -> true    (x non-null; null -> null)
+ *   NaN </<=/>/>= number/NaN -> false
+ *   NaN </<=/>/>= other-type -> null  (cross-type ordering is undefined)
+ */
+
+/* A numeric literal equal to zero (0 or 0.0). */
+static bool is_zero_numeric_literal(ast_node *e)
+{
+    if (!e || e->type != AST_NODE_LITERAL) return false;
+    cypher_literal *lit = (cypher_literal *)e;
+    if (lit->literal_type == LITERAL_INTEGER) return lit->value.integer == 0;
+    if (lit->literal_type == LITERAL_DECIMAL) return lit->value.decimal == 0.0;
+    return false;
+}
+
+/* The constant NaN expression `0.0 / 0.0` (two zero-valued numeric literals). */
+static bool is_nan_const(ast_node *e)
+{
+    if (!e || e->type != AST_NODE_BINARY_OP) return false;
+    cypher_binary_op *b = (cypher_binary_op *)e;
+    return b->op_type == BINARY_OP_DIV &&
+           is_zero_numeric_literal(b->left) &&
+           is_zero_numeric_literal(b->right);
+}
+
+/* Compile-time type class of the operand a NaN is being compared against. */
+typedef enum { NAN_OTHER_NUMBER, NAN_OTHER_STRING, NAN_OTHER_NULL,
+               NAN_OTHER_NONNULL, NAN_OTHER_UNKNOWN } nan_other_class;
+
+static nan_other_class classify_nan_other(ast_node *e)
+{
+    if (is_nan_const(e)) return NAN_OTHER_NUMBER;   /* NaN vs NaN behaves like a number */
+    if (!e || e->type != AST_NODE_LITERAL) return NAN_OTHER_UNKNOWN;
+    cypher_literal *lit = (cypher_literal *)e;
+    switch (lit->literal_type) {
+        case LITERAL_INTEGER:
+        case LITERAL_DECIMAL: return NAN_OTHER_NUMBER;
+        case LITERAL_STRING:  return NAN_OTHER_STRING;
+        case LITERAL_NULL:    return NAN_OTHER_NULL;
+        case LITERAL_BOOLEAN: return NAN_OTHER_NONNULL;
+    }
+    return NAN_OTHER_UNKNOWN;
+}
+
 /* Transform label expression (e.g., n:Person) */
 int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr)
 {
@@ -174,6 +227,41 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             append_sql(ctx, "))");
             ctx->in_comparison = was_in_comparison;
             return 0;
+        }
+    }
+
+    /* NaN constant comparisons (Comparison1 [8], Comparison2 [5]). Fires only
+     * when one operand is the literal `0.0 / 0.0` and the other is a
+     * compile-time-classifiable literal (or another NaN const); otherwise we
+     * fall through to the normal paths untouched. */
+    if (is_cmp) {
+        ast_node *nan_side = NULL, *other = NULL;
+        if (is_nan_const(binary_op->left))  { nan_side = binary_op->left;  other = binary_op->right; }
+        else if (is_nan_const(binary_op->right)) { nan_side = binary_op->right; other = binary_op->left; }
+        if (nan_side) {
+            nan_other_class oc = classify_nan_other(other);
+            if (oc != NAN_OTHER_UNKNOWN) {
+                /* Emit a raw SQL truth value (1 / 0 / NULL) — the same shape a
+                 * native comparison yields — so any enclosing boolean wrapper
+                 * (`_gql_bool_str(CASE WHEN ... )`, a WHERE filter, etc.)
+                 * evaluates it correctly. Emitting a tagged 'true'/'false'
+                 * text here would be re-read as a falsy condition. */
+                const char *result_sql; /* "1" | "0" | "NULL" */
+                switch (binary_op->op_type) {
+                    case BINARY_OP_EQ:
+                        result_sql = (oc == NAN_OTHER_NULL) ? "NULL" : "0";
+                        break;
+                    case BINARY_OP_NEQ:
+                        result_sql = (oc == NAN_OTHER_NULL) ? "NULL" : "1";
+                        break;
+                    default: /* ordering: <, <=, >, >= */
+                        result_sql = (oc == NAN_OTHER_NUMBER) ? "0" : "NULL";
+                        break;
+                }
+                append_sql(ctx, "%s", result_sql);
+                ctx->in_comparison = was_in_comparison;
+                return 0;
+            }
         }
     }
 
