@@ -1500,6 +1500,14 @@ function_call:
             /* EXISTS((pattern)) - check for relationship/path existence */
             $$ = (ast_node*)make_exists_pattern_expr($3, @1.first_line);
         }
+    | EXISTS '{' pattern_list '}'
+        {
+            /* Existential subquery brace form: EXISTS { (n)-->() }
+             * (ExistentialSubquery1 [1]/[3]). Reuses the pattern-existence
+             * transform; correlated outer variables resolve via the
+             * EXISTS_TYPE_PATTERN emitter's outer-alias lookup. */
+            $$ = (ast_node*)make_exists_pattern_expr($3, @1.first_line);
+        }
     | EXISTS '(' IDENTIFIER '.' IDENTIFIER ')'
         {
             /* EXISTS(n.property) - unambiguous property existence check */

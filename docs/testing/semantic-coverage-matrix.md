@@ -385,3 +385,17 @@ unit 944/944; functional clean):
   Added a mirror rule chaining four `make_label_expr` conjuncts. Repeated labels
   are harmless — each conjunct is an independent EXISTS check. No bison conflicts
   (still `%expect 15` / `%expect-rr 3`).
+
+## Coverage update (2026-05-28) — existential subquery brace form (no inner WHERE)
+
+`cypher_gram.y`. Verified via the TCK harness (3708 -> 3710, zero regressions;
+unit 944/944; functional clean):
+
+- **`WHERE exists { (n)-->() }` parses and evaluates** (ExistentialSubquery1
+  [1]/[3]). Added `EXISTS '{' pattern_list '}'` reusing the existing
+  `EXISTS_TYPE_PATTERN` transform, which already resolves correlated outer
+  variables (the bound `n`) via its outer-alias lookup and emits a correlated
+  `EXISTS (SELECT 1 FROM ... WHERE ...)` subquery. No bison conflicts (still
+  `%expect 15` / `%expect-rr 3`). The brace form **with** an inner `WHERE`
+  ([2]/[4]) and the full-query/aggregation/nested forms (ExistentialSubquery2/3)
+  remain unsupported — they need inner-variable registration and are deferred.
