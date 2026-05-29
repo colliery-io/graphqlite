@@ -583,6 +583,65 @@ int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result
     return -1;
 }
 
+/* Copy all properties from a source entity (node or edge) onto a destination
+ * entity. Implements the entity RHS of bulk SET — `SET r = a` / `SET r += a`
+ * (Merge6 [6], Merge7 [4], Merge8 [1], Merge9 [3]). Reads each of the five
+ * property-type tables for the source and re-sets them on the destination via
+ * the typed schema setters, incrementing result->properties_set per copy. */
+static int copy_entity_properties(cypher_executor *executor,
+                                  int src_id, bool src_is_edge,
+                                  int dst_id, bool dst_is_edge,
+                                  cypher_result *result)
+{
+    const char *node_tbls[] = {"node_props_text", "node_props_int",
+                               "node_props_real", "node_props_bool",
+                               "node_props_json"};
+    const char *edge_tbls[] = {"edge_props_text", "edge_props_int",
+                               "edge_props_real", "edge_props_bool",
+                               "edge_props_json"};
+    const property_type types[] = {PROP_TYPE_TEXT, PROP_TYPE_INTEGER,
+                                   PROP_TYPE_REAL, PROP_TYPE_BOOLEAN,
+                                   PROP_TYPE_JSON};
+    const char **tbls = src_is_edge ? edge_tbls : node_tbls;
+    const char *idcol = src_is_edge ? "edge_id" : "node_id";
+
+    for (int t = 0; t < 5; t++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT pk.key, p.value FROM %s p "
+            "JOIN property_keys pk ON p.key_id = pk.id WHERE p.%s = %d",
+            tbls[t], idcol, src_id);
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(executor->db, sql, -1, &st, NULL) != SQLITE_OK) continue;
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            const char *key = (const char*)sqlite3_column_text(st, 0);
+            if (!key) continue;
+            property_type pt = types[t];
+            const void *pv = NULL;
+            int64_t ival = 0; double rval = 0; int bval = 0;
+            switch (pt) {
+                case PROP_TYPE_TEXT:
+                case PROP_TYPE_JSON:
+                    pv = (const char*)sqlite3_column_text(st, 1);
+                    break;
+                case PROP_TYPE_INTEGER:
+                    ival = sqlite3_column_int64(st, 1); pv = &ival; break;
+                case PROP_TYPE_REAL:
+                    rval = sqlite3_column_double(st, 1); pv = &rval; break;
+                case PROP_TYPE_BOOLEAN:
+                    bval = sqlite3_column_int(st, 1); pv = &bval; break;
+            }
+            if (!pv) continue;
+            int rc = dst_is_edge
+                ? cypher_schema_set_edge_property(executor->schema_mgr, dst_id, key, pt, pv)
+                : cypher_schema_set_node_property(executor->schema_mgr, dst_id, key, pt, pv);
+            if (rc == 0) result->properties_set++;
+        }
+        sqlite3_finalize(st);
+    }
+    return 0;
+}
+
 /* Execute SET operations with variable bindings */
 int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_map *var_map, cypher_result *result)
 {
@@ -643,13 +702,20 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 return -1;
             }
 
-            /* Resolve the map expression — map literal or parameter */
+            /* Resolve the map expression — map literal, parameter, or an
+             * entity identifier (SET r = a copies a's properties). */
             cypher_map *map = NULL;
             char *resolved_json = NULL;
+            cypher_identifier *src_entity = NULL;  /* non-NULL => entity-copy RHS */
             property_value param_pv;
             property_value_init(&param_pv);
 
-            if (item->expr->type == AST_NODE_MAP) {
+            if (item->expr->type == AST_NODE_IDENTIFIER) {
+                /* SET <entity> = <entity> / += <entity> — copy all properties
+                 * from the source entity (Merge6 [6] etc.). Handled after the
+                 * destination entity id and replace-mode delete are resolved. */
+                src_entity = (cypher_identifier*)item->expr;
+            } else if (item->expr->type == AST_NODE_MAP) {
                 map = (cypher_map*)item->expr;
             } else if (item->expr->type == AST_NODE_PARAMETER && executor->params_json) {
                 cypher_parameter *param = (cypher_parameter*)item->expr;
@@ -705,6 +771,27 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 } else {
                     cypher_schema_delete_all_node_properties(executor->schema_mgr, entity_id);
                 }
+            }
+
+            /* Entity-copy RHS: SET <dst> = <src> / += <src>. The replace-mode
+             * delete above already cleared dst for `=`; now copy src's props. */
+            if (src_entity) {
+                bool src_is_edge = is_variable_edge(var_map, src_entity->name);
+                int src_id = src_is_edge
+                    ? get_variable_edge_id(var_map, src_entity->name)
+                    : get_variable_node_id(var_map, src_entity->name);
+                if (src_id < 0) {
+                    char error[256];
+                    snprintf(error, sizeof(error),
+                             "Unbound source variable in bulk SET copy: %s", src_entity->name);
+                    set_result_error(result, error);
+                    property_value_free(&param_pv);
+                    return -1;
+                }
+                copy_entity_properties(executor, src_id, src_is_edge,
+                                       entity_id, is_edge, result);
+                property_value_free(&param_pv);
+                continue;
             }
 
             /* Set each property from the map */

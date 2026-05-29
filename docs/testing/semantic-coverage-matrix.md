@@ -421,3 +421,18 @@ regressions; unit 944/944; functional clean):
     pattern-predicate form keeps the stricter rule).
   - Full-query/aggregation/nested existential subqueries (ExistentialSubquery2
     [1]/[2], ExistentialSubquery3) remain deferred.
+
+## Coverage update (2026-05-29) — bulk SET from an entity (SET r = a)
+
+`executor_set.c`. Verified via the TCK harness (3712 -> 3714, zero regressions;
+unit 944/944; functional clean):
+
+- **`SET <entity> = <entity>` / `+= <entity>` copies all properties** from the
+  source entity to the destination (Merge6 [6] `ON CREATE SET r = a`, Merge7 [4]
+  `ON MATCH SET r = a`). The bulk-SET handler previously accepted only a map
+  literal or JSON parameter as RHS and errored on an identifier. Added a
+  `copy_entity_properties` helper that reads the source's five property-type
+  tables and re-sets each on the destination via the typed schema setters
+  (incrementing `properties_set`); replace-mode (`=`) reuses the existing
+  delete-all-first step. Merge8 [1] and Merge9 [3] still fail on the unrelated
+  multi-row MATCH+MERGE cartesian-iteration gap (deferred).
