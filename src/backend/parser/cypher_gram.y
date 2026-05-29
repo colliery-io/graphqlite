@@ -1384,6 +1384,30 @@ primary_expr:
                                             @1.first_line);
             free($1); free($3); free($5); free($7);
         }
+    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+        {
+            /* Four-label conjunction (Graph5 [4], e.g. `a:C:A:A:C`).
+             * Repeated labels are harmless — each conjunct is an
+             * independent EXISTS check. */
+            cypher_identifier *b1 = make_identifier($1, @1.first_line);
+            cypher_identifier *b2 = make_identifier(strdup($1), @1.first_line);
+            cypher_identifier *b3 = make_identifier(strdup($1), @1.first_line);
+            cypher_identifier *b4 = make_identifier(strdup($1), @1.first_line);
+            cypher_label_expr *l1 = make_label_expr((ast_node*)b1, $3, @3.first_line);
+            cypher_label_expr *l2 = make_label_expr((ast_node*)b2, $5, @5.first_line);
+            cypher_label_expr *l3 = make_label_expr((ast_node*)b3, $7, @7.first_line);
+            cypher_label_expr *l4 = make_label_expr((ast_node*)b4, $9, @9.first_line);
+            cypher_binary_op *and12 = make_binary_op(BINARY_OP_AND,
+                                                     (ast_node*)l1, (ast_node*)l2,
+                                                     @1.first_line);
+            cypher_binary_op *and123 = make_binary_op(BINARY_OP_AND,
+                                                      (ast_node*)and12, (ast_node*)l3,
+                                                      @1.first_line);
+            $$ = (ast_node*)make_binary_op(BINARY_OP_AND,
+                                            (ast_node*)and123, (ast_node*)l4,
+                                            @1.first_line);
+            free($1); free($3); free($5); free($7); free($9);
+        }
     ;
 
 literal_expr:

@@ -373,3 +373,15 @@ moves from `error` -> `fail` as parse now succeeds; full unit + functional clean
   (`executor_match.c` and `transform_return.c`) already skipped the older
   `_gql_default_alias_` and `__unnamed_rel_` prefixes; both now also skip
   `_pv_n` / `_pv_e`. Fixes Return7 [1].
+
+## Coverage update (2026-05-28) — four-label conjunction in expression context
+
+`cypher_gram.y`. Verified via the TCK harness (3707 -> 3708, zero regressions;
+unit 944/944; functional clean):
+
+- **`WHERE a:L1:L2:L3:L4` parses** as the conjunction `(a:L1) AND (a:L2) AND
+  (a:L3) AND (a:L4)` (Graph5 [4], e.g. `a:C:A:A:C`). The `expr`-context label
+  rules already covered 1/2/3 labels; the four-label form raised a parse error.
+  Added a mirror rule chaining four `make_label_expr` conjuncts. Repeated labels
+  are harmless — each conjunct is an independent EXISTS check. No bison conflicts
+  (still `%expect 15` / `%expect-rr 3`).
