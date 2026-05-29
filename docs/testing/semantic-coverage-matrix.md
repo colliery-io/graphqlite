@@ -360,3 +360,16 @@ moves from `error` -> `fail` as parse now succeeds; full unit + functional clean
   passes `false/false` for `(left_arrow, right_arrow)` to `make_rel_pattern_varlen`.
   Bare bidirectional `<-->` was already supported. Match5 [27] still fails
   downstream on bidirectional varlen execution semantics; that fix is deferred.
+
+## Coverage update (2026-05-28) — RETURN * skips named-path anon element prefixes
+
+`executor_match.c` + `transform_return.c`. Verified via the TCK harness
+(3706 -> 3707, zero regressions; unit 944/944; functional clean):
+
+- **`RETURN *` after `MATCH p = (a)-->(b)` exposes only `a, b, p`**, not the
+  synthesized rel alias. When a path is named (`p = ...`), anonymous path
+  elements get synthesized variable names with prefixes `_pv_n<base>_<j>`
+  (nodes) and `_pv_e<base>_<j>` (rels). The two `RETURN *` expansion sites
+  (`executor_match.c` and `transform_return.c`) already skipped the older
+  `_gql_default_alias_` and `__unnamed_rel_` prefixes; both now also skip
+  `_pv_n` / `_pv_e`. Fixes Return7 [1].

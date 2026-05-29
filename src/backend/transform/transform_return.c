@@ -295,9 +295,13 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 transform_var *var = transform_var_at(ctx->var_ctx, vi);
                 if (!var || !var->is_visible || !var->name) continue;
                 /* RETURN * exposes only user-named variables, not the synthetic
-                 * aliases generated for anonymous nodes/rels (With1 [1]/[2]). */
+                 * aliases generated for anonymous nodes/rels (With1 [1]/[2]).
+                 * Named paths additionally synthesize `_pv_n<base>_<j>` /
+                 * `_pv_e<base>_<j>` for their anonymous path elements (Return7 [1]). */
                 if (strncmp(var->name, "_gql_default_alias_", 19) == 0 ||
-                    strncmp(var->name, "__unnamed_rel_", 14) == 0) continue;
+                    strncmp(var->name, "__unnamed_rel_", 14) == 0 ||
+                    strncmp(var->name, "_pv_n", 5) == 0 ||
+                    strncmp(var->name, "_pv_e", 5) == 0) continue;
 
                 /* Build expression for this variable based on its kind */
                 if (var->kind == VAR_KIND_NODE) {
