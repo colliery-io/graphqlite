@@ -1210,6 +1210,53 @@ void gql_order_key_func(
     sqlite3_result_value(context, argv[0]);
 }
 
+/* Cypher orderability type-rank (0..9), the PRIMARY ORDER BY key so mixed-type
+ * sorts follow Cypher's total order:
+ *   map < node < rel < list < path < string < bool < number < NaN < null
+ * The secondary key (_gql_order_key) then orders within a homogeneous rank.
+ * Values arrive as untyped SQLite cells; JSON entity/map/path shapes are told
+ * apart by their distinctive keys (heuristic, sufficient for the value shapes
+ * this engine emits). GQLITE-T-0340. */
+void gql_order_rank_func(
+    sqlite3_context *context,
+    int argc,
+    sqlite3_value **argv
+) {
+    if (argc != 1) { sqlite3_result_int(context, 9); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_NULL) { sqlite3_result_int(context, 9); return; }   /* null  */
+    if (t == SQLITE_INTEGER || t == SQLITE_FLOAT) {
+        sqlite3_result_int(context, 7); return;                          /* number */
+    }
+    if (t == SQLITE_TEXT) {
+        const char *s = (const char*)sqlite3_value_text(argv[0]);
+        if (!s) { sqlite3_result_int(context, 9); return; }
+        /* NaN sentinel — ranks just after numbers. */
+        if (strcmp(s, GQL_NAN_SENTINEL) == 0) { sqlite3_result_int(context, 8); return; }
+        /* Boolean: subtype-tagged or the canonical literals. */
+        if (sqlite3_value_subtype(argv[0]) == GQL_SUBTYPE_BOOLEAN ||
+            strcmp(s, "true") == 0 || strcmp(s, "false") == 0) {
+            sqlite3_result_int(context, 6); return;                      /* bool */
+        }
+        if (s[0] == '{') {
+            /* Entity/path/map JSON. Path carries both "nodes" and "rels"
+             * arrays; a node carries "labels"; a relationship carries
+             * "startNode"/"startNodeId"; otherwise it is a plain map. Order of
+             * checks matters because a path's text contains the inner keys. */
+            bool has_nodes = strstr(s, "\"nodes\"") != NULL;
+            bool has_rels  = strstr(s, "\"rels\"")  != NULL;
+            if (has_nodes && has_rels) { sqlite3_result_int(context, 4); return; }   /* path */
+            if (strstr(s, "\"labels\"")) { sqlite3_result_int(context, 1); return; } /* node */
+            if (strstr(s, "\"startNode")) { sqlite3_result_int(context, 2); return; }/* rel  */
+            sqlite3_result_int(context, 0); return;                      /* map */
+        }
+        if (s[0] == '[') { sqlite3_result_int(context, 3); return; }     /* list */
+        sqlite3_result_int(context, 5); return;                          /* string */
+    }
+    /* BLOB / unknown — treat as string-ish. */
+    sqlite3_result_int(context, 5);
+}
+
 /* --- Cypher-orderability min()/max() aggregates (Aggregation2 [9]/[11]/[12]).
  * SQLite's native MIN/MAX use storage-class order, which mis-orders mixed-type
  * and list values. These custom aggregates keep the element whose Cypher

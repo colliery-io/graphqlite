@@ -172,7 +172,7 @@ int transform_null_check(cypher_transform_context *ctx, cypher_null_check *null_
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op)
 {
     CYPHER_DEBUG("Transforming binary operation: op_type=%d", binary_op->op_type);
-    
+
     /* Set comparison context for comparison operators */
     bool was_in_comparison = ctx->in_comparison;
     bool is_cmp = (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||

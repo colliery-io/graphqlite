@@ -80,6 +80,14 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_order_key_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* Cypher orderability type-rank (0..9) — the primary ORDER BY key so mixed
+   * types sort map<node<rel<list<path<string<bool<number<NaN<null. The
+   * secondary key (_gql_order_key) then sorts within a (homogeneous) rank. */
+  rc = sqlite3_create_function(db, "_gql_order_rank", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_order_rank_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_in", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_in_func, 0, 0);

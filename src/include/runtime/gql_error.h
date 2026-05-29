@@ -34,6 +34,14 @@
  * (SQLITE_INTEGER=1 .. SQLITE_NULL=5) so existing readers ignore it. */
 #define GQL_COL_TYPE_BOOLEAN  100
 
+/* NaN sentinel. SQLite collapses float NaN to NULL and drops subtypes across
+ * CTE boundaries, so a runtime NaN value (e.g. produced by `0.0/0.0` inside an
+ * UNWIND list) is carried as a private TEXT string recognized by content. The
+ * leading control byte (0x01, SOH) makes collision with a real Cypher string
+ * effectively impossible. The formatter renders it as unquoted `NaN`; the
+ * orderability rank places it just after numbers (rank 8). (GQLITE-T-0340.) */
+#define GQL_NAN_SENTINEL  "\x01NaN"
+
 void graphqlite_result_error(sqlite3_context *context,
                              const char *message,
                              const char *code);

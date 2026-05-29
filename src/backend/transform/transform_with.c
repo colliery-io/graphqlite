@@ -685,8 +685,12 @@ with_star_columns_done:
                 cypher_order_by_item *oi = (cypher_order_by_item*)with->order_by->items[i];
                 if (i > 0) dbuf_append(&cte_body, ", ");
                 char *oe = transform_expression_to_string(ctx, oi->expr);
-                dbuf_appendf(&cte_body, "_gql_order_key(%s)%s", oe ? oe : "NULL",
-                             oi->descending ? " DESC" : "");
+                const char *oexpr = oe ? oe : "NULL";
+                const char *odir = oi->descending ? " DESC" : "";
+                /* Type-rank primary key for Cypher orderability, then the
+                 * within-type key (GQLITE-T-0340). */
+                dbuf_appendf(&cte_body, "_gql_order_rank(%s)%s, _gql_order_key(%s)%s",
+                             oexpr, odir, oexpr, odir);
                 free(oe);
             }
             order_pushed_to_cte = true;

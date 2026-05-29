@@ -477,15 +477,20 @@ void sql_order_by(sql_builder *b, const char *expr, bool desc)
         dbuf_append(&b->order_by, ", ");
     }
 
-    /* Wrap with _gql_order_key() so time/datetime strings sort by UTC
-     * instant rather than local-time lexicographic order, and lists sort
-     * by Cypher list semantics. Pass-through for other types. */
-    dbuf_append(&b->order_by, "_gql_order_key(");
+    /* Cypher orderability: sort first by type rank so mixed types order
+     * map<node<rel<list<path<string<bool<number<NaN<null (GQLITE-T-0340),
+     * then by the within-type key. `_gql_order_key` additionally makes
+     * time/datetime strings sort by UTC instant and lists sort by Cypher
+     * list semantics; pass-through for other types. */
+    const char *dir = desc ? " DESC" : "";
+    dbuf_append(&b->order_by, "_gql_order_rank(");
     dbuf_append(&b->order_by, expr);
     dbuf_append(&b->order_by, ")");
-    if (desc) {
-        dbuf_append(&b->order_by, " DESC");
-    }
+    dbuf_append(&b->order_by, dir);
+    dbuf_append(&b->order_by, ", _gql_order_key(");
+    dbuf_append(&b->order_by, expr);
+    dbuf_append(&b->order_by, ")");
+    dbuf_append(&b->order_by, dir);
 
     b->order_count++;
 }

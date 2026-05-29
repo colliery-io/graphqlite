@@ -479,3 +479,22 @@ unit 944/944; functional clean):
   currently collapses to NULL), and (c) path hydration through UNWIND. Those
   remain deferred. Comparison2 [3] additionally needs WITH-WHERE input-scope
   referencing (`WHERE i <> j` after a projection that drops `i`/`j`).
+
+## Coverage update (2026-05-29) — Cypher orderability type-rank in ORDER BY
+
+`sql_builder.c`, `transform_with.c`, `udf_helpers.c`, `udf_register.c`. Verified
+via the TCK harness (3721 -> 3721; rigorous full pass-set diff: zero regressions,
+zero newly passing; unit 944/944; functional clean):
+
+- **ORDER BY over mixed types now follows Cypher orderability**
+  (map < node < rel < list < path < string < bool < number < NaN < null) instead
+  of SQLite's native storage-class order. New `_gql_order_rank(value)` UDF returns
+  the type rank 0..9 (entities/maps/paths told apart by their distinctive JSON
+  keys); `sql_order_by` and the WITH ORDER-BY path now emit
+  `_gql_order_rank(e) <dir>, _gql_order_key(e) <dir>` — rank groups by type,
+  `_gql_order_key` orders within the (homogeneous) rank. This is the
+  GQLITE-T-0340 comparator: standalone groundwork for the mixed-type ORDER-BY
+  scenarios (ReturnOrderBy1 [11]/[12], WithOrderBy1 [21]/[22]), which also need
+  a renderable NaN value and path-through-UNWIND hydration (both deferred —
+  see GQLITE-T-0340). The rank UDF already detects the planned NaN sentinel
+  (rank 8) for forward-compat.
