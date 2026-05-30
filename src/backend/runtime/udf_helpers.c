@@ -577,6 +577,52 @@ void gql_subscript_func(
         "TypeError: InvalidArgumentType: Cannot subscript value of non-list/non-map", -1);
 }
 
+/* labels()/type() over a statically-Any argument (Graph3 [6], Graph4 [5]).
+ * The runtime value decides: a node/relationship JSON object yields its
+ * labels/type; null yields null; anything else raises a TypeError so the
+ * "fail on invalid argument" scenarios (Graph3 [9]) still error. `path` is
+ * "$.labels" or "$.type"; `want_array` distinguishes the two shapes. */
+static void gql_entity_accessor(sqlite3_context *context, sqlite3_value *v,
+                                const char *path, bool want_array,
+                                const char *err) {
+    if (sqlite3_value_type(v) == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    const char *s = (sqlite3_value_type(v) == SQLITE_TEXT)
+                    ? (const char*)sqlite3_value_text(v) : NULL;
+    if (s && s[0] == '{') {
+        sqlite3 *db = sqlite3_context_db_handle(context);
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT json_type(?1, ?2), json_extract(?1, ?2)",
+                               -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_value(st, 1, v);
+            sqlite3_bind_text(st, 2, path, -1, SQLITE_TRANSIENT);
+            int ok = 0;
+            if (sqlite3_step(st) == SQLITE_ROW) {
+                const char *jt = (const char*)sqlite3_column_text(st, 0);
+                if (jt && ((want_array && strcmp(jt, "array") == 0) ||
+                           (!want_array && strcmp(jt, "text") == 0))) {
+                    sqlite3_result_value(context, sqlite3_column_value(st, 1));
+                    ok = 1;
+                }
+            }
+            sqlite3_finalize(st);
+            if (ok) return;
+        }
+    }
+    sqlite3_result_error(context, err, -1);
+}
+
+void gql_labels_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    gql_entity_accessor(context, argv[0], "$.labels", true,
+        "TypeError: InvalidArgumentValue: labels() requires a Node");
+}
+
+void gql_type_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    gql_entity_accessor(context, argv[0], "$.type", false,
+        "TypeError: InvalidArgumentValue: type() requires a Relationship");
+}
+
 /* Cypher's three-valued IN operator.
  *   null IN []          -> false
  *   null IN <non-empty> -> null

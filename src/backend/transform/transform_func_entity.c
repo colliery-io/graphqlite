@@ -87,9 +87,14 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
     }
 
     if (arg->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("labels() function argument must be a node variable");
-        return -1;
+        /* labels() accepts type Any (Graph3 [6]): a non-identifier argument
+         * (e.g. `labels(list[0])`) is statically typed Any and resolved at
+         * runtime by the _gql_labels UDF — a node value yields its labels, null
+         * yields null, anything else raises a TypeError (Graph3 [9]). */
+        append_sql(ctx, "_gql_labels(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, ")");
+        return 0;
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
@@ -331,9 +336,20 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     }
 
     if (arg->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("keys() function argument must be a node, relationship, or map");
-        return -1;
+        /* keys() accepts type Any (Map3 [2] `keys($param)`): a parameter or
+         * other expression that resolves to a map at runtime. Compute the value
+         * once in a subquery, then json_each its keys; if it is a node/rel JSON
+         * object (carries a `properties` object) use that object's keys instead
+         * of the wrapper keys. NULL-guarded. */
+        append_sql(ctx,
+            "(SELECT CASE WHEN _kv.v IS NULL THEN NULL ELSE "
+            "(SELECT json_group_array(key) FROM json_each("
+            "CASE WHEN json_type(_kv.v, '$.properties') = 'object' "
+            "THEN json_extract(_kv.v, '$.properties') ELSE _kv.v END)) END "
+            "FROM (SELECT ");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, " AS v) _kv)");
+        return 0;
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;

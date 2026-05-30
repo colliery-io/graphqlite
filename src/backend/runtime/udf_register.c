@@ -88,6 +88,17 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_order_rank_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* labels()/type() over a statically-Any argument: return the labels/type for
+   * a node/relationship value, null for null, else raise a TypeError. */
+  rc = sqlite3_create_function(db, "_gql_labels", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_labels_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  rc = sqlite3_create_function(db, "_gql_type", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_type_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_in", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_in_func, 0, 0);

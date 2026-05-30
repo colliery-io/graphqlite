@@ -531,3 +531,20 @@ TCK harness (3722 -> 3725; unit 944/944; functional clean):
   C path): fixes ReturnOrderBy1 [11]/[12] and WithOrderBy1 [21] (WithOrderBy1 [22]
   landed with B). Mixed-type ORDER BY now fully follows Cypher orderability
   map<node<rel<list<path<string<bool<number<NaN<null.
+
+## Coverage update (2026-05-30) — labels()/type()/keys() accept type Any
+
+`transform_func_entity.c`, `transform_func_aggregate.c`, `udf_helpers.c`,
+`udf_register.c`. Verified via the TCK harness (3725 -> 3728, rigorous full
+pass-set diff: zero regressions, +3; unit 944/944; functional clean):
+
+- **`labels()`, `type()`, `keys()` accept a statically-Any argument** (e.g.
+  `labels(list[0])`, `type(list[0])`, `keys($param)`) — previously rejected at
+  compile time unless the argument was a bare node/rel identifier. labels()/type()
+  on a non-identifier now route through new `_gql_labels` / `_gql_type` UDFs that
+  inspect the runtime value: a node/relationship JSON object yields its
+  labels/type, null yields null, and anything else raises a runtime
+  `TypeError: InvalidArgumentValue` — so the negative scenarios (Graph3 [9]) still
+  error. keys() on a parameter/expression emits a single-eval subquery over
+  json_each, using the value's `properties` object when present (node/rel) else
+  its own keys (map). Fixes Graph3 [6], Graph4 [5], Map3 [2].

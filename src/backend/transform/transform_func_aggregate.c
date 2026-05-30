@@ -311,9 +311,14 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
     }
 
     if (arg->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("type() function argument must be a relationship variable");
-        return -1;
+        /* type() accepts type Any (Graph4 [5]): a non-identifier argument
+         * (e.g. `type(list[0])`) is resolved at runtime by the _gql_type UDF —
+         * a relationship value yields its type, null yields null, anything else
+         * raises a TypeError. */
+        append_sql(ctx, "_gql_type(");
+        if (transform_expression(ctx, arg) < 0) return -1;
+        append_sql(ctx, ")");
+        return 0;
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;

@@ -37,6 +37,8 @@ void gql_order_cmp_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 /* Order key + namespace/timezone extractors */
 void gql_order_key_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_order_rank_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_labels_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_type_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_extract_ns_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_strip_tz_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_extract_tz_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
