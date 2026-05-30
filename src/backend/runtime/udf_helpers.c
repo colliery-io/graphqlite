@@ -20,6 +20,7 @@
 #include <regex.h>
 #include <time.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdint.h>
 
 #if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
@@ -2333,6 +2334,96 @@ void gql_dyn_add_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
 }
 void gql_dyn_sub_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     gql_dyn_addsub_func(ctx, argc, argv, -1);
+}
+
+/* Scale a Duration by a numeric factor (Temporal8 [7]). Cypher multiplies each
+ * component (months, days, seconds, nanos) by the factor and cascades the
+ * fractional remainder of each larger unit down into the next smaller one, using
+ * the duration-arithmetic conversions 1 month = 30.436875 days and 1 day = 86400
+ * seconds. Components are NOT otherwise normalized across each other. */
+static void scale_duration(sqlite3_context *ctx, const char *dur, double factor) {
+    double months_f = (double)dur_field_ll(dur, "months") * factor;
+    double days_f   = (double)dur_field_ll(dur, "days") * factor;
+    double total_ns_base = ((double)dur_field_ll(dur, "seconds") * 1e9
+                            + (double)dur_field_ll(dur, "nanosecondsOfSecond")) * factor;
+
+    /* trunc toward zero keeps the signed fraction so negatives cascade too. */
+    double months_int = trunc(months_f);
+    double month_frac = months_f - months_int;
+    days_f += month_frac * 30.436875;        /* avg Gregorian month in days */
+
+    double days_int = trunc(days_f);
+    double day_frac = days_f - days_int;
+    double total_ns = total_ns_base + day_frac * 86400.0 * 1e9;
+
+    /* Cypher truncates the final nanosecond toward zero. But the carries above
+     * accumulate floating-point noise (~0.02 ULP at this magnitude), so an
+     * exact-integer result can read as x.9999. Snap to the nearest integer when
+     * within a small tolerance (absorbs the noise), otherwise truncate toward
+     * zero (so a genuine half like *0.5 of an odd nanosecond drops, not rounds). */
+    double rounded = round(total_ns);
+    long long ns_ll = (fabs(total_ns - rounded) < 0.05)
+                          ? (long long)rounded
+                          : (long long)trunc(total_ns);
+    emit_duration_json(ctx, (long long)months_int, (long long)days_int, ns_ll);
+}
+
+/* `_gql_dyn_mul` / `_gql_dyn_div`: numeric * / / that also scales a Duration
+ * operand (Temporal8 [7]). `op` is '*' or '/'. */
+static void gql_dyn_muldiv_func(sqlite3_context *ctx, int argc, sqlite3_value **argv, char op) {
+    if (argc != 2) { sqlite3_result_null(ctx); return; }
+    int t0 = sqlite3_value_type(argv[0]);
+    int t1 = sqlite3_value_type(argv[1]);
+    if (t0 == SQLITE_NULL || t1 == SQLITE_NULL) { sqlite3_result_null(ctx); return; }
+
+    const char *l_dur = NULL, *r_dur = NULL;
+    bool l_is_dur = is_duration_value(argv[0], &l_dur);
+    bool r_is_dur = is_duration_value(argv[1], &r_dur);
+
+    if (l_is_dur && !r_is_dur) {
+        /* duration * num  or  duration / num */
+        double n = sqlite3_value_double(argv[1]);
+        if (op == '/') {
+            if (n == 0.0) { sqlite3_result_null(ctx); return; }
+            n = 1.0 / n;
+        }
+        scale_duration(ctx, l_dur, n);
+        return;
+    }
+    if (r_is_dur && !l_is_dur && op == '*') {
+        /* num * duration (commutes for * only) */
+        scale_duration(ctx, r_dur, sqlite3_value_double(argv[0]));
+        return;
+    }
+    if (l_is_dur || r_is_dur) {
+        /* num / duration, duration * duration, etc. — undefined. */
+        sqlite3_result_null(ctx);
+        return;
+    }
+
+    /* Plain numeric: preserve SQLite-native int/float semantics. */
+    if (op == '*') {
+        if (t0 == SQLITE_INTEGER && t1 == SQLITE_INTEGER) {
+            sqlite3_result_int64(ctx, sqlite3_value_int64(argv[0]) * sqlite3_value_int64(argv[1]));
+        } else {
+            sqlite3_result_double(ctx, sqlite3_value_double(argv[0]) * sqlite3_value_double(argv[1]));
+        }
+    } else { /* '/' — Cypher integer division truncates toward zero. */
+        if (t0 == SQLITE_INTEGER && t1 == SQLITE_INTEGER) {
+            long long b = sqlite3_value_int64(argv[1]);
+            if (b == 0) { sqlite3_result_null(ctx); return; }
+            sqlite3_result_int64(ctx, sqlite3_value_int64(argv[0]) / b);
+        } else {
+            sqlite3_result_double(ctx, sqlite3_value_double(argv[0]) / sqlite3_value_double(argv[1]));
+        }
+    }
+}
+
+void gql_dyn_mul_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    gql_dyn_muldiv_func(ctx, argc, argv, '*');
+}
+void gql_dyn_div_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    gql_dyn_muldiv_func(ctx, argc, argv, '/');
 }
 
 /* Compose a YYYY-MM-DD date string from a map's named components. Used by

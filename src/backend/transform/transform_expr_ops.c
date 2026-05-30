@@ -537,6 +537,30 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         }
     }
 
+    /* MUL/DIV: route through `_gql_dyn_mul` / `_gql_dyn_div` so a Duration
+     * operand is scaled component-wise (Temporal8 [7]); plain numerics keep
+     * native int/float semantics inside the helper. Skip the helper when both
+     * operands are numeric literals (no duration possible) to avoid overhead. */
+    if (binary_op->op_type == BINARY_OP_MUL || binary_op->op_type == BINARY_OP_DIV) {
+        bool both_num_lit = false;
+        if (binary_op->left->type == AST_NODE_LITERAL && binary_op->right->type == AST_NODE_LITERAL) {
+            cypher_literal *ll = (cypher_literal *)binary_op->left;
+            cypher_literal *rl = (cypher_literal *)binary_op->right;
+            bool l_num = ll->literal_type == LITERAL_INTEGER || ll->literal_type == LITERAL_DECIMAL;
+            bool r_num = rl->literal_type == LITERAL_INTEGER || rl->literal_type == LITERAL_DECIMAL;
+            both_num_lit = l_num && r_num;
+        }
+        if (!both_num_lit) {
+            append_sql(ctx, binary_op->op_type == BINARY_OP_MUL ? "_gql_dyn_mul(" : "_gql_dyn_div(");
+            if (transform_expression(ctx, binary_op->left) < 0) return -1;
+            append_sql(ctx, ", ");
+            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            append_sql(ctx, "))");
+            ctx->in_comparison = was_in_comparison;
+            return 0;
+        }
+    }
+
     /* Transform left expression */
     CYPHER_DEBUG("Transforming left operand");
     if (transform_expression(ctx, binary_op->left) < 0) {

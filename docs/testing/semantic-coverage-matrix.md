@@ -548,3 +548,18 @@ pass-set diff: zero regressions, +3; unit 944/944; functional clean):
   error. keys() on a parameter/expression emits a single-eval subquery over
   json_each, using the value's `properties` object when present (node/rel) else
   its own keys (map). Fixes Graph3 [6], Graph4 [5], Map3 [2].
+
+## Coverage update (2026-05-30) — duration multiply/divide by a number (Temporal8 [7])
+
+`transform_expr_ops.c`, `udf_helpers.c`, `udf_register.c`. Verified via the TCK
+harness (3728 -> 3731, rigorous full pass-set diff: zero regressions, +3; unit
+944/944; functional clean):
+
+- **`duration * n` / `duration / n` now scale the duration component-wise**
+  instead of coercing the JSON to 0. New `_gql_dyn_mul` / `_gql_dyn_div` UDFs
+  (mirroring the ADD/SUB `_gql_dyn_*` dispatch) detect a Duration operand and
+  scale months/days/seconds/nanos by the factor, cascading each unit's
+  fractional remainder down via 1 month = 30.436875 days and 1 day = 86400 s
+  (components otherwise NOT normalized across each other); plain numerics keep
+  native int/float semantics. BINARY_OP_MUL/DIV route through the helpers unless
+  both operands are numeric literals. Fixes Temporal8 [7]. Part of GQLITE-T-0341.
