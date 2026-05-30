@@ -44,6 +44,10 @@ struct cypher_transform_context {
     /* Context flags */
     bool in_comparison;             /* True when transforming expressions in comparison context */
     bool in_union;                  /* True when transforming UNION branches (skip buffer reset) */
+    bool emit_hydrated_path;        /* True when a path expression must emit the full
+                                     * {nodes,rels} JSON object inline (e.g. as a list
+                                     * element under UNWIND) rather than elem_ids for
+                                     * executor post-hydration. GQLITE-T-0340 sub-C. */
     
     /* Unique alias counters */
     int global_alias_counter;       /* Global counter for all unnamed entities (like AGE) */

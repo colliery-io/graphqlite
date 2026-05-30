@@ -515,3 +515,19 @@ via the TCK harness (3721 -> 3722, rigorous full pass-set diff: zero regressions
   Combined with the orderability rank (sub-feature A) this fixes WithOrderBy1
   [22]. ReturnOrderBy1 [11]/[12], WithOrderBy1 [21] now order correctly and only
   fail on path-as-list-element rendering (sub-feature C, deferred).
+
+## Coverage update (2026-05-29) — path-as-list-element hydration (GQLITE-T-0340 sub-feature C)
+
+`cypher_transform.h`, `transform_return.c`, `transform_unwind.c`. Verified via the
+TCK harness (3722 -> 3725; unit 944/944; functional clean):
+
+- **A path variable used as a list element under UNWIND now renders as the full
+  `{nodes,rels}` object** instead of the raw `elem_ids` array. The executor's
+  elem_ids post-hydration only reaches top-level RETURN columns, not values buried
+  in an UNWIND row. New context flag `emit_hydrated_path` makes the path
+  projection emit the self-contained hydrated JSON (reusing the pattern-
+  comprehension builder) for non-varlen paths; `transform_unwind` sets it around
+  each list-element transform. Completes the GQLITE-T-0340 stack (A rank + B NaN +
+  C path): fixes ReturnOrderBy1 [11]/[12] and WithOrderBy1 [21] (WithOrderBy1 [22]
+  landed with B). Mixed-type ORDER BY now fully follows Cypher orderability
+  map<node<rel<list<path<string<bool<number<NaN<null.

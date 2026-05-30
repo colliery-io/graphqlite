@@ -883,12 +883,15 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                              * path_ids projection (Match7 [19]). */
                             bool single_varlen = has_varlen && rel_count == 1;
 
-                            if (path_var->path_type == VAR_PATH_COMPREHENSION) {
+                            if (path_var->path_type == VAR_PATH_COMPREHENSION ||
+                                (ctx->emit_hydrated_path && !single_varlen)) {
                                 /* T-0332: pattern comprehension path — emit fully hydrated
                                  * path JSON ({nodes:[...], rels:[...]}) so it survives nested
                                  * inside a json_group_array aggregate without needing executor
                                  * post-processing of list elements. Build using json_object so
-                                 * SQLite quotes/escapes correctly. */
+                                 * SQLite quotes/escapes correctly.
+                                 * GQLITE-T-0340 sub-C: also used for a path as a list element
+                                 * under UNWIND, where executor elem_ids hydration can't reach. */
                                 append_sql(ctx, "json_object('nodes', json_array(");
                                 bool first_n = true;
                                 for (int i = 0; i < path_var->path_elements->count; i++) {

@@ -260,10 +260,17 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                         ctx->sql_buffer = temp_buffer;
                         ctx->sql_size = 0;
                         ctx->sql_capacity = temp_capacity;
+                        /* A path variable as a list element must materialize as
+                         * a self-contained {nodes,rels} object — the executor's
+                         * elem_ids post-hydration only reaches top-level RETURN
+                         * columns, not values buried in an UNWIND row. (T-0340 sub-C) */
+                        bool saved_ehp = ctx->emit_hydrated_path;
+                        ctx->emit_hydrated_path = true;
                         if (transform_expression(ctx, item) == 0 && ctx->sql_buffer[0]) {
                             dbuf_appendf(&cte_query, "(%s)", ctx->sql_buffer);
                             ok = true;
                         }
+                        ctx->emit_hydrated_path = saved_ehp;
                         /* append_sql may realloc; free what ctx->sql_buffer
                          * now points to, not the original temp_buffer. */
                         free(ctx->sql_buffer);
