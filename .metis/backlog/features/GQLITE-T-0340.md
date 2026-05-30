@@ -90,5 +90,19 @@ map < node < rel < list < path < string < bool < number < NaN < null
   `UNWIND [..., p, ...]` renders the path as `[1,1,2]` (elem ids) instead of the
   path object; direct `RETURN p` is correct. Lives in the UNWIND list-element
   path-expr / build_path_from_ids interaction.
-- BLOCKERS SUMMARY: the 4 target ORDER-BY scenarios need A (done) + B + C all
-  three. A is shippable groundwork on its own.
+- 2026-05-29: **Sub-feature B (NaN value) DONE** (commit d74210e, +1). NaN carried
+  as the private string GQL_NAN_SENTINEL (0x01 'N' 'a' 'N'); standalone `0.0/0.0`
+  emits `(CHAR(1)||'NaN')`; agtype `create_property_agtype_value` maps it to a
+  float NaN whose AGTV_FLOAT serializer prints `NaN`; plain formatter prints it
+  too. Fixed WithOrderBy1 [22]. Rigorous diff: zero regressions.
+- 2026-05-29: **Sub-feature C (path-as-list-element) DONE** (commit, +3). New
+  context flag `emit_hydrated_path` makes the path projection emit the full
+  {nodes,rels} object inline (reusing the comprehension builder) for non-varlen
+  paths; transform_unwind sets it around each list-element transform. Fixed
+  ReturnOrderBy1 [11]/[12], WithOrderBy1 [21].
+- 2026-05-29: **STACK COMPLETE.** All four target scenarios pass; mixed-type
+  ORDER BY follows Cypher orderability map<node<rel<list<path<string<bool<number
+  <NaN<null. 3721 -> 3725 (+4: B +1, C +3; A +0 groundwork). Two full TCK runs
+  confirm stability and zero regressions (the ReturnOrderBy1 [1] entry seen in an
+  interim `comm` was a baseline-run transient — the scenario is deterministic and
+  passes). Task can be marked done.
