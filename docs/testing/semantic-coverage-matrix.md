@@ -498,3 +498,20 @@ zero newly passing; unit 944/944; functional clean):
   a renderable NaN value and path-through-UNWIND hydration (both deferred —
   see GQLITE-T-0340). The rank UDF already detects the planned NaN sentinel
   (rank 8) for forward-compat.
+
+## Coverage update (2026-05-29) — renderable NaN value (GQLITE-T-0340 sub-feature B)
+
+`transform_expr_ops.c`, `executor_match.c`, `agtype.c`, `extension.c`. Verified
+via the TCK harness (3721 -> 3722, rigorous full pass-set diff: zero regressions,
++1 WithOrderBy1 [22]; unit 944/944; functional clean):
+
+- **`0.0 / 0.0` now produces a renderable NaN value** that prints as the bare
+  token `NaN` and orders at rank 8. SQLite collapses float `/0` to NULL and drops
+  subtypes across CTE boundaries, so NaN is carried as the private string
+  `GQL_NAN_SENTINEL` (0x01 'N' 'a' 'N') — recognized by content, collision-proof.
+  Standalone `0.0/0.0` emits `(CHAR(1) || 'NaN')`; the agtype layer
+  (`create_property_agtype_value`) maps the sentinel to a float NaN whose
+  serializer prints `NaN`; the plain formatter prints the sentinel as `NaN`.
+  Combined with the orderability rank (sub-feature A) this fixes WithOrderBy1
+  [22]. ReturnOrderBy1 [11]/[12], WithOrderBy1 [21] now order correctly and only
+  fail on path-as-list-element rendering (sub-feature C, deferred).

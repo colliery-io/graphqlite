@@ -173,6 +173,16 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
 {
     CYPHER_DEBUG("Transforming binary operation: op_type=%d", binary_op->op_type);
 
+    /* Standalone NaN constant `0.0 / 0.0` (not a comparison operand — those are
+     * folded by the is_cmp block below). SQLite would yield NULL; emit the NaN
+     * sentinel string instead (GQL_NAN_SENTINEL = 0x01 'N' 'a' 'N') so it
+     * renders as `NaN` and orders at rank 8 (GQLITE-T-0340). CHAR(1) is the
+     * 0x01 prefix byte. */
+    if (is_nan_const((ast_node *)binary_op)) {
+        append_sql(ctx, "(CHAR(1) || 'NaN')");
+        return 0;
+    }
+
     /* Set comparison context for comparison operators */
     bool was_in_comparison = ctx->in_comparison;
     bool is_cmp = (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ ||

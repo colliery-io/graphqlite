@@ -364,6 +364,9 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                              * (e.g. toString(true) result). I-0040 M13. */
                             size_t slen = strlen(val);
                             if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
+                        } else if (strcmp(val, GQL_NAN_SENTINEL) == 0) {
+                            /* NaN sentinel (GQLITE-T-0340) — emit unquoted NaN. */
+                            offset += snprintf(json_result + offset, buffer_size - offset, "NaN");
                         } else {
                             /* String value - quote and escape */
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include <limits.h>
 
 #include "executor/executor_internal.h"
@@ -574,9 +575,16 @@ agtype_value* create_property_agtype_value(const char* value)
     if (!value) {
         return agtype_value_create_null();
     }
-    
+
+    /* NaN sentinel (GQLITE-T-0340): carried as the private string
+     * GQL_NAN_SENTINEL. Materialize as a float NaN so the serializer renders
+     * the bare token `NaN` instead of a quoted control-char string. */
+    if (strcmp(value, GQL_NAN_SENTINEL) == 0) {
+        return agtype_value_create_float(NAN);
+    }
+
     /* Try to detect the data type from the string value */
-    
+
     /* Check for boolean values */
     if (strcmp(value, "true") == 0) {
         return agtype_value_create_bool(true);

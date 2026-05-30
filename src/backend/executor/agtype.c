@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <math.h>
 #include "executor/agtype.h"
 #include "parser/cypher_debug.h"
 
@@ -976,8 +977,14 @@ char* agtype_value_to_string(agtype_value *val)
         case AGTV_FLOAT: {
             result = malloc(40);
             if (result) {
-                /* %.17g preserves full double precision (TCK expects). */
-                snprintf(result, 40, "%.17g", val->val.float_value);
+                if (isnan(val->val.float_value)) {
+                    /* Cypher renders NaN as the bare token `NaN` (GQLITE-T-0340),
+                     * not the platform's "nan"/"-nan". */
+                    snprintf(result, 40, "NaN");
+                } else {
+                    /* %.17g preserves full double precision (TCK expects). */
+                    snprintf(result, 40, "%.17g", val->val.float_value);
+                }
             }
             break;
         }
