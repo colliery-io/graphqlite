@@ -64,3 +64,32 @@ diff after each (zero regressions); unit 944/944; functional clean. Record findi
 - 2026-05-30: Task created with sub-step breakdown from the failure inventory.
   Baseline main = 3728 pass. Starting analysis with sub-step 1 (Temporal8 duration
   arithmetic) — biggest concentrated win.
+
+### 2026-05-30: Sub-step 1 (Temporal8) deep analysis
+
+Durations are stored as JSON `{"_iso8601","months","days","seconds","nanosecondsOfSecond"}`.
+Reusable runtime helpers in `udf_helpers.c`: `is_duration_value()`, `dur_field_ll()`,
+`emit_duration_json(ctx, months, days, total_ns)` (keeps months/days independent, only
+splits total_ns→seconds+nanos), `apply_duration_to_temporal()`, `format_iso_duration()`.
+ADD/SUB route through `gql_dyn_addsub_func` (`_gql_dyn_add`/`_gql_dyn_sub`), which already
+handles dur+dur and dur+temporal.
+
+Concrete Temporal8 bugs found:
+- **[7] multiply/divide by number → returns `0`.** `BINARY_OP_MUL`/`DIV` in
+  transform_expr_ops.c emit a bare ` * ` / ` / `; SQLite coerces the duration JSON text
+  to 0. FIX: route MUL/DIV through new `_gql_dyn_mul`/`_gql_dyn_div` UDFs (mirror the
+  ADD/SUB dispatch) that detect a duration operand and scale months/days/total_ns by the
+  number (Cypher rounding for non-integer factors TBD — check expected values per example).
+- **[2]-[5] duration ± temporal: wrong values** (e.g. local time off by hours:
+  exp `22:29:27.5` vs act `17:14:54.5`). `apply_duration_to_temporal` mis-applies some
+  components — investigate which (days/seconds vs hours). NOT just formatting.
+- **[6] duration ± duration: wrong values AND wraps as object.** exp `P25Y4M43DT50H...`
+  vs act `{_iso8601:'P25Y4M44DT20H...'}`. Two issues: (a) value differs by ~6h (computation
+  or the test's input durations carry hours we mis-split between days/seconds), (b) the
+  result renders as the full duration object, but the expected is the ISO string — the
+  renderer already extracts `_iso8601` for duration values (udf_helpers.c:905), so check
+  why the arithmetic result loses that path (likely the column type/rendering path).
+
+NEXT (next work session): implement `_gql_dyn_mul`/`_gql_dyn_div` for durations ([7],
+clearest win), then chase the value-computation discrepancy in apply_duration_to_temporal
+([2]-[5]) and dur+dur ([6]). Verify each with rigorous pass-set diff.
