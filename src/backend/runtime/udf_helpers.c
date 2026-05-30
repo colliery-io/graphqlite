@@ -2115,6 +2115,14 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
             residue_ns = time_ns - extra_days * DAY_NS;
             if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
             base_days += extra_days;
+        } else {
+            /* Pure date + duration: the duration's sub-day time still
+             * contributes its WHOLE days (truncated toward zero); the sub-day
+             * remainder is dropped since a date has no time-of-day. The
+             * duration value itself is not normalized — only this date
+             * arithmetic rolls the hours into days. (Temporal8 [1] example 3.) */
+            long long DAY_NS = 86400LL * 1000000000LL;
+            base_days += add_total_ns / DAY_NS;
         }
         int oy, om, od;
         civil_from_days(base_days, &oy, &om, &od);
@@ -2730,7 +2738,10 @@ void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **a
         double total_months_d = years * 12.0 + months;
         total_months = (long long)total_months_d;
         double frac_months = total_months_d - total_months;
-        double total_days_d = weeks * 7.0 + days + frac_months * 30.0;
+        /* Fractional months convert to days at the average Gregorian month
+         * (365.2425/12 = 30.436875 days), matching Cypher duration arithmetic
+         * (Temporal8 [6]). */
+        double total_days_d = weeks * 7.0 + days + frac_months * 30.436875;
         total_days = (long long)total_days_d;
         double frac_days = total_days_d - total_days;
         double total_seconds_d = frac_days * 86400.0 + hours * 3600.0
@@ -2742,14 +2753,12 @@ void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **a
         total_ns = total_secs * 1000000000LL + total_ns_from_secs + extra_ns;
     }
 
-    /* Move full-day overflow from total_ns into total_days using
-     * trunc-toward-zero division — preserves the sign of total_ns so
-     * inputs like {days:1, milliseconds:-1} keep the day and time signs
-     * separate ('P1DT-0.001S' rather than 'PT23H59M59.999S'). */
-    long long DAY_NS = 86400LL * 1000000000LL;
-    long long extra_days = total_ns / DAY_NS;
-    long long residue_ns = total_ns - extra_days * DAY_NS;
-    total_days += extra_days;
+    /* Cypher durations do NOT normalize sub-day time into the days field — the
+     * seconds component keeps hours even past 24 (e.g. `PT67H`, Temporal8 [6]).
+     * Only weeks→days and the fractional month/day carries above feed `days`;
+     * the time residue stays in `total_ns`. (`emit_duration_json`, used by
+     * duration addition, follows the same rule — keeping the two consistent.) */
+    long long residue_ns = total_ns;
 
     char iso[160];
     format_iso_duration((int)total_months, (int)total_days, residue_ns, iso, sizeof(iso));
