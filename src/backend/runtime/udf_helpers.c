@@ -2893,7 +2893,9 @@ void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value *
     double total_months_d = years * 12.0 + months;
     int total_months = (int)total_months_d;
     double frac_months = total_months_d - total_months;
-    double total_days_d = weeks * 7.0 + days + frac_months * 30.0;
+    /* Fractional months cascade to days at the average Gregorian month
+     * (30.436875), matching Cypher (Temporal2 [7] 'P0.75M'). */
+    double total_days_d = weeks * 7.0 + days + frac_months * 30.436875;
     long long total_days = (long long)total_days_d;
     double frac_days = total_days_d - total_days;
     double total_seconds_d = frac_days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds;
