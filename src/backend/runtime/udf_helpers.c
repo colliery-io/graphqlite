@@ -382,6 +382,23 @@ static int gql_cmp_json_vals(sqlite3 *db,
  *
  *   Called by transform_binary_operation's LT/GT/LTE/GTE path —
  *   each operand is transformed exactly once. */
+static int64_t parse_temporal_ns(const char *s);  /* defined below */
+
+/* Heuristic: does the text look like a Cypher temporal value (time 'HH:MM…' or
+ * date/datetime 'YYYY-MM-DD…')? Used so ordered comparison of two temporals
+ * uses their UTC instant rather than a lexical compare (Temporal7 [3]). */
+static bool looks_temporal(const char *s) {
+    if (!s) return false;
+    size_t n = strlen(s);
+    if (n >= 5 && s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9' &&
+        s[2] == ':' && s[3] >= '0' && s[3] <= '9' && s[4] >= '0' && s[4] <= '9')
+        return true;  /* time HH:MM… */
+    if (n >= 10 && s[4] == '-' && s[7] == '-' &&
+        s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9')
+        return true;  /* date / datetime YYYY-MM-DD… */
+    return false;
+}
+
 void gql_order_cmp_func(
     sqlite3_context *context, int argc, sqlite3_value **argv) {
     if (argc != 3) { sqlite3_result_null(context); return; }
@@ -456,7 +473,14 @@ void gql_order_cmp_func(
         const char *a = (const char *)sqlite3_value_text(argv[0]);
         const char *b = (const char *)sqlite3_value_text(argv[1]);
         if (!a || !b) { sqlite3_result_null(context); return; }
-        cmp = strcmp(a, b);
+        if (looks_temporal(a) && looks_temporal(b)) {
+            /* Compare two temporal values by UTC instant, not lexically, so a
+             * tz offset is honored (Temporal7 [3]: 10:00+01:00 < 09:35+00:00). */
+            int64_t na = parse_temporal_ns(a), nb = parse_temporal_ns(b);
+            cmp = (na < nb) ? -1 : (na > nb) ? 1 : 0;
+        } else {
+            cmp = strcmp(a, b);
+        }
         if (cmp < 0) cmp = -1;
         else if (cmp > 0) cmp = 1;
     } else {
