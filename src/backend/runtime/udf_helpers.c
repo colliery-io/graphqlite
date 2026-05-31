@@ -3080,6 +3080,18 @@ void gql_normalize_date_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
     if (argc != 1) { sqlite3_result_null(ctx); return; }
     const char *s = (const char*)sqlite3_value_text(argv[0]);
     if (!s) { sqlite3_result_null(ctx); return; }
+    /* date(datetime/localdatetime): keep only the date portion before the 'T'
+     * so '1984-11-11T12:31:14' yields '1984-11-11' rather than failing the
+     * length checks below (Temporal3 [1] ex8/15). */
+    char datebuf[16];
+    const char *Tpos = strchr(s, 'T');
+    if (Tpos) {
+        size_t dlen = (size_t)(Tpos - s);
+        if (dlen >= sizeof(datebuf)) dlen = sizeof(datebuf) - 1;
+        memcpy(datebuf, s, dlen);
+        datebuf[dlen] = 0;
+        s = datebuf;
+    }
     int len = (int)strlen(s);
     bool has_W = strchr(s, 'W') != NULL;
     bool has_dash = strchr(s, '-') != NULL;
