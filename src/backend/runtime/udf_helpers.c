@@ -1264,6 +1264,25 @@ void gql_order_key_func(
  * Values arrive as untyped SQLite cells; JSON entity/map/path shapes are told
  * apart by their distinctive keys (heuristic, sufficient for the value shapes
  * this engine emits). GQLITE-T-0340. */
+/* Normalize a numeric tz offset string: drop a zero seconds suffix, keep
+ * non-zero seconds (Temporal1 [13]: '+02:05:00' -> '+02:05', '+02:05:59' kept).
+ * Non-offset inputs (e.g. 'Z', a named zone) pass through unchanged. */
+void gql_fmt_offset_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    const char *tz = (const char*)sqlite3_value_text(argv[0]);
+    if (!tz) { sqlite3_result_null(context); return; }
+    int oh = 0, om = 0, os = 0;
+    if ((tz[0] == '+' || tz[0] == '-') &&
+        sscanf(tz + 1, "%d:%d:%d", &oh, &om, &os) >= 2) {
+        char buf[16];
+        if (os != 0) snprintf(buf, sizeof(buf), "%c%02d:%02d:%02d", tz[0], oh, om, os);
+        else         snprintf(buf, sizeof(buf), "%c%02d:%02d", tz[0], oh, om);
+        sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_result_text(context, tz, -1, SQLITE_TRANSIENT);
+    }
+}
+
 void gql_order_rank_func(
     sqlite3_context *context,
     int argc,

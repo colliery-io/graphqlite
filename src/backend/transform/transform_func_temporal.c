@@ -290,9 +290,9 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                                  "WHEN substr(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone'),1,1) IN ('+','-') "
-                                 "THEN json_extract(json(");
+                                 "THEN _gql_fmt_offset(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
-                append_sql(ctx, "), '$.timezone') "
+                append_sql(ctx, "), '$.timezone')) "
                                  "ELSE '[' || json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') || ']' END)");
