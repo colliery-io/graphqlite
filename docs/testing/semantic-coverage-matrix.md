@@ -595,3 +595,16 @@ pass-set diff: zero regressions, +2; unit 944/944; functional clean):
   trailing day (time-of-day comparison), using `days_from_civil` (unbounded)
   instead of `timegm`. Part of GQLITE-T-0341. Remaining Temporal10: DST-aware
   durations [8] and large-duration overflow [9]/[10] (deferred).
+
+## Coverage update (2026-05-30) — time() drops named-zone region; date() quarter selection (Temporal3)
+
+`udf_helpers.c`, `transform_func_temporal.c`, `udf_register.c`. Verified via the
+TCK harness (rigorous full pass-set diffs: zero regressions; unit 944/944;
+functional clean):
+
+- **`date({date: other, quarter: N})` preserves month-of-quarter + day** (+3,
+  3744->3747). Was resetting to the quarter's first month/day 1.
+- **`time()` / `localtime()` drop a named-zone `[Region]` suffix**, keeping only
+  the numeric offset, while `datetime()` retains it (+2, 3747->3749). The shared
+  `_gql_time_compose` UDF gained a `drop_region` arg (1 for time, 0 for datetime).
+  Part of GQLITE-T-0341.

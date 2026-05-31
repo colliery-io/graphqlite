@@ -2583,7 +2583,11 @@ void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
  *   8 base_time, 9 base_datetime, 10 base_localdatetime, 11 base_localtime
  */
 void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    if (argc != 12) { sqlite3_result_null(ctx); return; }
+    if (argc != 13) { sqlite3_result_null(ctx); return; }
+    /* drop_region: a Cypher time/localtime value never carries a named zone —
+     * keep only the numeric offset. datetime() passes 0 to retain it. */
+    int drop_region = (sqlite3_value_type(argv[12]) != SQLITE_NULL)
+                          ? sqlite3_value_int(argv[12]) : 0;
     int h = 0, mi = 0, sec = 0;
     int64_t ns = 0;
     bool inherit_subsec = false;
@@ -2702,12 +2706,23 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
                  * a summer date (most TCK tests with named zones use one).
                  * For datetime() the outer SQL replaces this when needed. */
                 const char *off = named_tz_offset(tz, 2000, 7, 15);
-                p += snprintf(p, sizeof(buf) - (p - buf), "%s[%s]", off, tz);
+                if (drop_region)
+                    p += snprintf(p, sizeof(buf) - (p - buf), "%s", off);
+                else
+                    p += snprintf(p, sizeof(buf) - (p - buf), "%s[%s]", off, tz);
             } else if (tz) {
                 p += snprintf(p, sizeof(buf) - (p - buf), "%s", tz);
             }
         } else if (base_tz) {
-            p += snprintf(p, sizeof(buf) - (p - buf), "%s", base_tz);
+            /* Inherited from a base value. A time value drops any [Region]
+             * suffix, keeping only the offset (Temporal3 [3]). */
+            if (drop_region) {
+                const char *br = strchr(base_tz, '[');
+                if (br) p += snprintf(p, sizeof(buf) - (p - buf), "%.*s", (int)(br - base_tz), base_tz);
+                else    p += snprintf(p, sizeof(buf) - (p - buf), "%s", base_tz);
+            } else {
+                p += snprintf(p, sizeof(buf) - (p - buf), "%s", base_tz);
+            }
         } else {
             *p++ = 'Z'; *p = 0;
         }

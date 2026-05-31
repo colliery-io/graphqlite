@@ -243,7 +243,9 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                     if (transform_expression(ctx, arg) < 0) return -1;
                     append_sql(ctx, "), '$.%s')", base_keys[i]);
                 }
-                append_sql(ctx, ")");
+                /* drop_region=1: a Cypher time/localtime never carries a named
+                 * zone — keep only the offset (Temporal3 [3]). */
+                append_sql(ctx, ", 1)");
                 return 0;
             }
             const char *fmt_in_sql;
@@ -417,7 +419,8 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                     if (transform_expression(ctx, arg) < 0) return -1;
                     append_sql(ctx, "), '$.%s')", base_keys[i]);
                 }
-                append_sql(ctx, "))");
+                /* drop_region=0: datetime keeps the named-zone suffix. */
+                append_sql(ctx, ", 0))");
                 return 0;
             }
 

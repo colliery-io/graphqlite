@@ -219,7 +219,7 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   rc = sqlite3_create_function(db, "_gql_date_compose", 10, SQLITE_UTF8, 0,
                          gql_date_compose_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
-  rc = sqlite3_create_function(db, "_gql_time_compose", 12, SQLITE_UTF8, 0,
+  rc = sqlite3_create_function(db, "_gql_time_compose", 13, SQLITE_UTF8, 0,
                          gql_time_compose_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
