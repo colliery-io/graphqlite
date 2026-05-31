@@ -1435,7 +1435,9 @@ void gql_extract_tz_func(
     const char *start;
     if (t) {
         start = t + 1;
-    } else if (strlen(s) >= 8 && s[2] == ':') {
+    } else if (strlen(s) >= 5 && s[2] == ':') {
+        /* Time-only 'HH:MM[...]' — a 'Z' or offset can follow as early as
+         * position 5 (e.g. '21:40Z'), so require only HH:MM, not HH:MM:SS. */
         start = s;
     } else {
         sqlite3_result_text(context, "", 0, SQLITE_TRANSIENT); return;
@@ -3197,8 +3199,12 @@ void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
             }
             /* A `time` value carries only the numeric offset — the named-zone
              * bracket (e.g. [Europe/Stockholm], already resolved to the offset)
-             * is dropped (only datetime keeps the zone name). Temporal3 [3]. */
-            snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d", tz_main[0], oh, om);
+             * is dropped (only datetime keeps the zone name). Temporal3 [3].
+             * A zero offset renders as `Z`, not `±00:00` (Temporal2 [3]). */
+            if (oh == 0 && om == 0)
+                snprintf(tz_out, sizeof(tz_out), "Z");
+            else
+                snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d", tz_main[0], oh, om);
         }
     }
 
@@ -3372,7 +3378,12 @@ void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value *
                 if (strchr(tz_main + 1, ':')) sscanf(tz_main + 1, "%d:%d", &oh, &om);
                 else if (strlen(tz_main + 1) >= 4) sscanf(tz_main + 1, "%2d%2d", &oh, &om);
                 else sscanf(tz_main + 1, "%d", &oh);
-                snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d%s", tz_main[0], oh, om, bracket ? bracket : "");
+                /* A zero numeric offset with no named zone renders as `Z`
+                 * (Temporal2 [5]); a named zone keeps the explicit offset. */
+                if (oh == 0 && om == 0 && !bracket)
+                    snprintf(tz_out, sizeof(tz_out), "Z");
+                else
+                    snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d%s", tz_main[0], oh, om, bracket ? bracket : "");
             } else if (*tz_start == '[') snprintf(tz_out, sizeof(tz_out), "%s", tz_start);
         }
 
