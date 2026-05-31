@@ -126,3 +126,28 @@ Remaining Temporal (next sub-steps):
 - Temporal3 [10] (2): datetime named-tz DST offset (+01 vs +02).
 - Temporal2 parsing (6), Temporal1 [13], Temporal5 [6], Temporal7 [3].
 - Temporal10 DST [8] (5) + large/overflow [9]/[10] (2) — hardest, deferred.
+
+### 2026-05-31: checkpoint — branch i0049-temporal at 3749 (+21 vs main 3728)
+
+Closed this session: Temporal8 (27/27), Temporal10 inMonths/inDays, Temporal3
+quarter selection + time() region-drop, Temporal1 [12], Temporal7 [6].
+7 commits, all rigorous-diff zero-regression, unit 944/944.
+
+Remaining Temporal (precise, with root cause for next session):
+- **Temporal2 [3]/[5]** (2): tz offset `-00:00`/`+00:00` must render as `Z`.
+  Formatting fix in the offset emitters.
+- **Temporal1 [13]** (3 examples): tz offset with seconds — `+02:05:00` -> `+02:05`
+  (drop `:00`), `+02:05:59` -> keep `:59`. Offset parse must retain seconds and
+  the formatter must emit `:SS` only when non-zero. (Currently offsets stored as
+  minutes; need second precision.)
+- **Temporal2 [7]** (2): parse duration FROM string `P22DT19H51M49.5S` — fractional
+  / multi-field ISO duration parse broken (gives P22DT12H / PT0S).
+- **Temporal3 [1] ex8/15** (2): date selection returns None — investigate which
+  selection form (likely week/weekYear combo) crashes.
+- **Temporal5 [6]** (1): datetime accessors (one accessor value off).
+- **Temporal7 [3]** (1): compare times — boolean vector inverted (tz/offset compare).
+- **DST cluster (hard, deferred): Temporal3 [10] (2), Temporal2 [6] (2),
+  Temporal10 [8] (6)** — need real DST-transition handling at named-zone dates
+  (named_tz_offset is a month approximation; these test exact transition days).
+- **Overflow (deferred): Temporal10 [9]/[10] (2)** — int64 overflow in calendar/
+  seconds path for billion-year / huge-second durations.
