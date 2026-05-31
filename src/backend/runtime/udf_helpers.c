@@ -2545,11 +2545,28 @@ void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, omm, odd);
     } else if (sqlite3_value_type(argv[6]) != SQLITE_NULL) {
         int q = sqlite3_value_int(argv[6]);
-        int doq = (sqlite3_value_type(argv[7]) != SQLITE_NULL) ? sqlite3_value_int(argv[7]) : 1;
-        int month = (q - 1) * 3 + 1;
-        long start_days = days_from_civil(y, month, 1);
-        civil_from_days(start_days + (doq - 1), &oy, &omm, &odd);
-        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, omm, odd);
+        if (sqlite3_value_type(argv[7]) != SQLITE_NULL) {
+            /* dayOfQuarter is absolute within the quarter. */
+            int doq = sqlite3_value_int(argv[7]);
+            int month = (q - 1) * 3 + 1;
+            long start_days = days_from_civil(y, month, 1);
+            civil_from_days(start_days + (doq - 1), &oy, &omm, &odd);
+            snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, omm, odd);
+        } else {
+            /* Only `quarter` is selected — preserve the month-within-quarter and
+             * day from the base value (or month/day scalar overrides). E.g.
+             * quarter 3 over 1984-11-11 (Q4 month-2, day 11) -> 1984-08-11.
+             * (Temporal3 [1] quarter examples.) */
+            int src_mo = (sqlite3_value_type(argv[1]) != SQLITE_NULL)
+                             ? sqlite3_value_int(argv[1]) : mo;
+            int month_in_q = ((src_mo - 1) % 3 + 3) % 3 + 1;
+            int new_month = (q - 1) * 3 + month_in_q;
+            int day = (sqlite3_value_type(argv[2]) != SQLITE_NULL)
+                          ? sqlite3_value_int(argv[2]) : d;
+            int dim = days_in_month_c(y, new_month);
+            if (day > dim) day = dim;
+            snprintf(buf, sizeof(buf), "%04d-%02d-%02d", y, new_month, day);
+        }
     } else {
         if (sqlite3_value_type(argv[1]) != SQLITE_NULL) mo = sqlite3_value_int(argv[1]);
         if (sqlite3_value_type(argv[2]) != SQLITE_NULL) d = sqlite3_value_int(argv[2]);
