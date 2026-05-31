@@ -111,3 +111,18 @@ duration.inMonths/inDays now compare time-of-day in UTC when both sides have tz
 DST-aware durations [8] (5 — needs real DST transition handling, hard) and large
 durations [9]/[10] (2 — int overflow in the calendar/seconds path). Deferring DST
 + overflow; next consider Temporal3 (date selection, 9) and Temporal2 (parsing, 6).
+
+### 2026-05-30: Session checkpoint — branch i0049-temporal at 3744 (+16 vs main 3728)
+
+Commits: duration mul/div (+3), fractional construction+date arith (+11),
+inMonths/inDays tz (+2). Temporal8 fully closed (27/27).
+
+Remaining Temporal (next sub-steps):
+- Temporal3 [1] date selection (5): `date({date: other, quarter: N})` must
+  preserve monthOfQuarter + day (we reset to quarter-start month + day 1, giving
+  1984-07-01 vs expected 1984-08-11). Plus week/ordinalDay base-selection forms.
+- Temporal3 [3] time() with named tz (2): `time(...)` must DROP the `[Region]`
+  suffix, keeping only the offset (datetime keeps it; time drops it).
+- Temporal3 [10] (2): datetime named-tz DST offset (+01 vs +02).
+- Temporal2 parsing (6), Temporal1 [13], Temporal5 [6], Temporal7 [3].
+- Temporal10 DST [8] (5) + large/overflow [9]/[10] (2) — hardest, deferred.
