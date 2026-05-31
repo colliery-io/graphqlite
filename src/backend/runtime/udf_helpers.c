@@ -1659,6 +1659,8 @@ static int days_in_month_c(int year, int month) {
  * is missing a date or time component, the result borrows zero for that
  * component. Components share sign per-section (date and time may have
  * opposite signs to match TCK examples like 'P-27DT-21H-40M-32.142S'). */
+static long days_from_civil(int y, int m, int d);  /* defined below */
+
 static int64_t time_ns_of(const tparts *p) {
     if (!p->has_time) return 0;
     int64_t NS = 1000000000LL;
@@ -1811,12 +1813,21 @@ void gql_duration_in_days_func(sqlite3_context *ctx, int argc, sqlite3_value **a
     if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) { sqlite3_result_null(ctx); return; }
     int64_t days = 0;
     if (a.has_date && b.has_date) {
-        struct tm ta, tb;
-        memset(&ta, 0, sizeof(ta)); memset(&tb, 0, sizeof(tb));
-        ta.tm_year = a.y - 1900; ta.tm_mon = a.mo - 1; ta.tm_mday = a.d;
-        tb.tm_year = b.y - 1900; tb.tm_mon = b.mo - 1; tb.tm_mday = b.d;
-        time_t epa = timegm(&ta), epb = timegm(&tb);
-        days = (epb - epa) / 86400;
+        /* Whole days in the elapsed period — the calendar day difference,
+         * reduced by one when the later instant's time-of-day falls short of
+         * the earlier one (so a partial trailing day isn't counted). Compare in
+         * UTC when both sides carry a tz offset (Temporal10 [4] example 17). */
+        int cmp = compare_temporal(&a, &b);
+        bool forward = (cmp <= 0);
+        const tparts *lo = forward ? &a : &b;
+        const tparts *hi = forward ? &b : &a;
+        int64_t dd = days_from_civil(hi->y, hi->mo, hi->d)
+                   - days_from_civil(lo->y, lo->mo, lo->d);
+        int64_t lo_t, hi_t;
+        if (lo->has_tz && hi->has_tz) { lo_t = time_ns_of_utc(lo); hi_t = time_ns_of_utc(hi); }
+        else { lo_t = time_ns_of(lo); hi_t = time_ns_of(hi); }
+        if (hi_t < lo_t) dd -= 1;
+        days = forward ? dd : -dd;
     }
     char iso[64];
     if (days == 0) snprintf(iso, sizeof(iso), "PT0S");
@@ -1844,8 +1855,12 @@ void gql_duration_in_months_func(sqlite3_context *ctx, int argc, sqlite3_value *
         const tparts *hi = forward ? &b : &a;
         int y = hi->y - lo->y, m = hi->mo - lo->mo, dd = hi->d - lo->d;
         /* When days equal, also account for time-of-day: a full month is
-         * only reached when hi.time >= lo.time. */
-        int64_t lo_t = time_ns_of(lo), hi_t = time_ns_of(hi);
+         * only reached when hi.time >= lo.time. Compare in UTC when both sides
+         * carry a tz offset so a tz difference doesn't spuriously drop a month
+         * (Temporal10 [3] example 19). */
+        int64_t lo_t, hi_t;
+        if (lo->has_tz && hi->has_tz) { lo_t = time_ns_of_utc(lo); hi_t = time_ns_of_utc(hi); }
+        else { lo_t = time_ns_of(lo); hi_t = time_ns_of(hi); }
         if (dd < 0 || (dd == 0 && hi_t < lo_t)) m -= 1;
         if (m < 0) { m += 12; y -= 1; }
         total_months = y * 12 + m;

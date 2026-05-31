@@ -581,3 +581,17 @@ pass-set diff: zero regressions, +11; unit 944/944; functional clean):
   the duration value is no longer pre-normalized, `apply_duration_to_temporal`
   now adds `time_ns / DAY_NS` whole days (trunc toward zero) to a pure-date input
   and drops the sub-day remainder (Temporal8 [1] example 3). Part of GQLITE-T-0341.
+
+## Coverage update (2026-05-30) — duration.inMonths/inDays tz normalization (Temporal10 [3]/[4])
+
+`udf_helpers.c`. Verified via the TCK harness (3742 -> 3744, rigorous full
+pass-set diff: zero regressions, +2; unit 944/944; functional clean):
+
+- **`duration.inMonths` / `duration.inDays` compare the time-of-day in UTC**
+  when both operands carry a tz offset, instead of the local clock face. A
+  tz-offset difference (e.g. `+0200` vs `+0100`) no longer spuriously drops a
+  whole month/day (Temporal10 [3] ex19 `P1Y`, [4] ex17 `P337D`). inDays was also
+  rewritten to count whole days from the calendar day difference minus a partial
+  trailing day (time-of-day comparison), using `days_from_civil` (unbounded)
+  instead of `timegm`. Part of GQLITE-T-0341. Remaining Temporal10: DST-aware
+  durations [8] and large-duration overflow [9]/[10] (deferred).

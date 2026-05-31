@@ -93,3 +93,21 @@ Concrete Temporal8 bugs found:
 NEXT (next work session): implement `_gql_dyn_mul`/`_gql_dyn_div` for durations ([7],
 clearest win), then chase the value-computation discrepancy in apply_duration_to_temporal
 ([2]-[5]) and dur+dur ([6]). Verify each with rigorous pass-set diff.
+
+### 2026-05-30: Sub-step 1 (Temporal8) COMPLETE — Temporal8 27/27
+
+Two commits (branch i0049-temporal): duration mul/div (+3), fractional construction
++ date arithmetic (+11). Branch 3728 -> 3742. Key learnings (durations are NOT
+normalized across components; 1 month = 30.436875 days, 1 day = 86400 s; only
+date+duration rolls whole-day time into the date). Remaining Temporal:
+Temporal10 (10, duration.between + DST), Temporal3 (9, date selection),
+Temporal2 (6, parsing), Temporal1 [13]/Temporal5 [6]/Temporal7 [3] (1 each).
+NEXT: Temporal10 duration.between.
+
+### 2026-05-30: Sub-step 2 (Temporal10) partial — inMonths/inDays tz fix (+2)
+
+duration.inMonths/inDays now compare time-of-day in UTC when both sides have tz
+(Temporal10 [3] ex19, [4] ex17). Branch 3742 -> 3744. Remaining Temporal10 (8):
+DST-aware durations [8] (5 — needs real DST transition handling, hard) and large
+durations [9]/[10] (2 — int overflow in the calendar/seconds path). Deferring DST
++ overflow; next consider Temporal3 (date selection, 9) and Temporal2 (parsing, 6).
