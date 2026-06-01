@@ -537,7 +537,15 @@ void sql_cte(sql_builder *b, const char *name, const char *query, bool recursive
         dbuf_append(&b->cte, ", ");
     }
 
-    dbuf_appendf(&b->cte, "%s AS (%s)", name, query);
+    /* A CTE whose body calls a non-deterministic function (rand() ->
+     * RANDOM()) must be MATERIALIZED: SQLite otherwise treats a multiply-
+     * referenced CTE as a view and re-evaluates RANDOM() per reference, so a
+     * WITH-projected random list yields a DIFFERENT value at each use (e.g.
+     * none()/any() over it see different lists — Quantifier9/11/12). Gating on
+     * RANDOM() keeps recursive/UNWIND CTEs untouched. Non-recursive only
+     * (MATERIALIZED is invalid on a recursive CTE). */
+    bool materialize = !recursive && strstr(query, "RANDOM(") != NULL;
+    dbuf_appendf(&b->cte, "%s AS %s(%s)", name, materialize ? "MATERIALIZED " : "", query);
     b->cte_count++;
 }
 
@@ -555,7 +563,9 @@ void sql_pre_cte(sql_builder *b, const char *name, const char *query, bool recur
     if (b->pre_cte_count > 0) {
         dbuf_append(&b->pre_cte, ", ");
     }
-    dbuf_appendf(&b->pre_cte, "%s AS (%s)", name, query);
+    /* MATERIALIZED when the body is non-deterministic — see sql_cte(). */
+    bool materialize = !recursive && strstr(query, "RANDOM(") != NULL;
+    dbuf_appendf(&b->pre_cte, "%s AS %s(%s)", name, materialize ? "MATERIALIZED " : "", query);
     b->pre_cte_count++;
     if (recursive) b->pre_cte_recursive = true;
 }

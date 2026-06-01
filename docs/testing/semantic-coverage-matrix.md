@@ -624,3 +624,19 @@ transition elapsed time), Temporal3 [10] / Temporal2 [6] (offset resolution on a
 DST-transition date). `named_tz_offset`'s month approximation is load-bearing
 (an accurate last-Sunday-rule swap regressed -29), so DST needs a careful,
 empirical, per-zone effort + across-transition interval math. Deferred.
+
+## Coverage update (2026-06-01) — MATERIALIZE non-deterministic WITH/pre CTEs (Quantifier +18)
+
+`sql_builder.c`. Verified via the TCK harness (3758 -> 3776, rigorous full
+pass-set diff: zero regressions, +18; unit 944/944; functional clean):
+
+- **A WITH-projected value built with `rand()` is now stable across references.**
+  SQLite treats a multiply-referenced CTE as a view and re-evaluates its body per
+  reference, so a `rand()`-derived list got a DIFFERENT value at each use — e.g.
+  `none(x IN list WHERE p)` and `any(x IN list WHERE p)` over the same `list` saw
+  different random lists, breaking algebraic identities and yielding inconsistent
+  rows. `sql_cte`/`sql_pre_cte` now emit `AS MATERIALIZED (...)` when the CTE body
+  calls a non-deterministic function (detected by `RANDOM(`), forcing single
+  evaluation. Gated on `RANDOM(` and non-recursive only, so recursive/varlen and
+  ordinary CTEs are untouched. Fixes Quantifier9/11/12 algebraic-identity cluster
+  and related (+18 across Quantifier1-12).
