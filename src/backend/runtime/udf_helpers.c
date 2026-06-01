@@ -3069,6 +3069,18 @@ void gql_temporal_field_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
     if (p.has_tz) {
         if (strcmp(field, "offsetMinutes") == 0) { sqlite3_result_int(ctx, p.tz_offset_min); return; }
         if (strcmp(field, "offsetSeconds") == 0) { sqlite3_result_int(ctx, p.tz_offset_min * 60); return; }
+        if (strcmp(field, "timezone") == 0) {
+            /* `.timezone` returns the named zone when present (e.g.
+             * 'Europe/Stockholm'), otherwise the numeric offset (Temporal5 [6]). */
+            const char *lb = s ? strchr(s, '[') : NULL;
+            if (lb) {
+                const char *rb = strchr(lb, ']');
+                int zlen = rb ? (int)(rb - lb - 1) : (int)strlen(lb + 1);
+                sqlite3_result_text(ctx, lb + 1, zlen, SQLITE_TRANSIENT);
+                return;
+            }
+            /* fall through to offset form below */
+        }
         if (strcmp(field, "offset") == 0 || strcmp(field, "timezone") == 0) {
             char buf[16];
             int oh = p.tz_offset_min / 60;
