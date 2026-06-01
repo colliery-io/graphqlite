@@ -189,3 +189,12 @@ Dug into the 12 remaining DST scenarios empirically. Findings:
 - RECOMMENDATION: close T-0341 as "Temporal non-DST done (+30)"; open a separate
   task "embed IANA tzdata for full temporal DST conformance" (large, data-heavy)
   for the 12 DST scenarios.
+
+### 2026-06-01: DST gaps filed as bugs
+Non-DST Temporal closed via PR #88 (main 3758, +30). The 12 DST scenarios are now
+tracked as follow-up bugs:
+- [[GQLITE-T-0342]] — duration across a DST transition (Temporal10 [8], 8)
+- [[GQLITE-T-0343]] — named-zone offset coarse approximation / historical rules
+  (Temporal3 [10], 2); documents the -52-regression trap
+- [[GQLITE-T-0344]] — datetime string parse named-zone historical/LMT offset
+  (Temporal2 [6], 2); the foundational "embed IANA tzdata" item the others depend on
