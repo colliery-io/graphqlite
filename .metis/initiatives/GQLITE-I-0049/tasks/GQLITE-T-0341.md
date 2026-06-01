@@ -164,3 +164,28 @@ A clean last-Sunday-rule rewrite REGRESSED -29 (many passing tests depend on the
 coarse rule). DST must be done empirically/per-date against the TCK's exact
 expectations, NOT a simple rule swap. Recommend PR the +30 branch; tackle DST
 as a separate focused task.
+
+### 2026-06-01: DST cluster — ROOT CAUSE = needs an IANA tz database (NOT closeable by rules)
+
+Dug into the 12 remaining DST scenarios empirically. Findings:
+- **Why the offset approximation is load-bearing / risky:** `named_tz_offset` is
+  called from many paths (construction, parsing, duration.between, accessors,
+  rendering). The TCK encodes HISTORICALLY-ACCURATE IANA data, so any rule must
+  match history exactly. A modern "last Sunday of March..October" EU rule
+  REGRESSED -52 examples because pre-1996 EU DST ended the last Sunday of
+  SEPTEMBER (e.g. 1984-10-11 Stockholm = +01:00, not +02:00). The OLD coarse
+  Apr–Sep approximation happens to match those pre-1996 Sept endings.
+- A regression-free improvement IS possible: historical end-month
+  (`(y>=1996)?Oct:Sep`) + threading the real base date into the datetime
+  named-tz offset lookup (`_gql_tz_offset_for(tz, _gql_date_compose(... $.date,
+  $.datetime))`). Verified 0 regressions, and it fixes individual examples
+  (e.g. Temporal3 [10] ex14) — but flips NO full scenario, so net +0. Reverted
+  to keep the +30 branch coherent; re-derive from this note when doing IANA work.
+- **Hard stop:** full DST is impossible without an embedded IANA tz database.
+  Temporal2 [6] expects `1818-07-21 Stockholm = +00:53:28` — Local Mean Time
+  before standardization. No rule produces that. Temporal10 [8] additionally
+  needs across-transition elapsed time (24 wall-clock hrs = 25 real hrs on the
+  fall-back day). Both require the real tzdata.
+- RECOMMENDATION: close T-0341 as "Temporal non-DST done (+30)"; open a separate
+  task "embed IANA tzdata for full temporal DST conformance" (large, data-heavy)
+  for the 12 DST scenarios.
