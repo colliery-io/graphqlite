@@ -608,3 +608,19 @@ functional clean):
   the numeric offset, while `datetime()` retains it (+2, 3747->3749). The shared
   `_gql_time_compose` UDF gained a `drop_region` arg (1 for time, 0 for datetime).
   Part of GQLITE-T-0341.
+
+## Coverage update (2026-05-31) — Temporal cluster grind (T-0341), 3728 -> 3758 (+30)
+
+`udf_helpers.c`, `transform_func_temporal.c`, `udf_register.c`. Closed nearly the
+whole Temporal cluster across many rigorous-diff-verified commits: duration
+multiply/divide; fractional duration construction + date arithmetic;
+duration.inMonths/inDays tz normalization; date() quarter selection; time()
+region-drop; zero-offset -> Z; offset zero-seconds drop; date(datetime); ISO
+fractional-month cascade; UTC-instant temporal comparison; .timezone accessor;
+alternate ISO duration form. Unit 944/944, functional clean throughout.
+
+Remaining Temporal = the DST cluster only (12): Temporal10 [8] (across-DST-
+transition elapsed time), Temporal3 [10] / Temporal2 [6] (offset resolution on a
+DST-transition date). `named_tz_offset`'s month approximation is load-bearing
+(an accurate last-Sunday-rule swap regressed -29), so DST needs a careful,
+empirical, per-zone effort + across-transition interval math. Deferred.

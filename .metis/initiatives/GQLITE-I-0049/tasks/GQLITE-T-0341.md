@@ -151,3 +151,16 @@ Remaining Temporal (precise, with root cause for next session):
   (named_tz_offset is a month approximation; these test exact transition days).
 - **Overflow (deferred): Temporal10 [9]/[10] (2)** — int64 overflow in calendar/
   seconds path for billion-year / huge-second durations.
+
+### 2026-05-31: Temporal cluster nearly closed — branch 3758 (+30 vs main 3728)
+
+All non-DST Temporal now passes. Remaining = DST only (12):
+- Temporal10 [8] (8): duration.inSeconds across the 2017-10-29 fall-back —
+  needs across-transition elapsed-time (24 wall hrs = 25 real hrs).
+- Temporal3 [10] (2) / Temporal2 [6] (2): named-zone offset on a DST-transition
+  date (e.g. 1984-03-28 -> +02).
+GOTCHA: named_tz_offset's month approximation (Apr–Sep summer) is LOAD-BEARING.
+A clean last-Sunday-rule rewrite REGRESSED -29 (many passing tests depend on the
+coarse rule). DST must be done empirically/per-date against the TCK's exact
+expectations, NOT a simple rule swap. Recommend PR the +30 branch; tackle DST
+as a separate focused task.
