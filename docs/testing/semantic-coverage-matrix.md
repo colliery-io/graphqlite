@@ -640,3 +640,19 @@ pass-set diff: zero regressions, +18; unit 944/944; functional clean):
   evaluation. Gated on `RANDOM(` and non-recursive only, so recursive/varlen and
   ordinary CTEs are untouched. Fixes Quantifier9/11/12 algebraic-identity cluster
   and related (+18 across Quantifier1-12).
+
+## Coverage update (2026-06-01) — property access on an entity inside a list (groundwork)
+
+`transform_expr_ops.c`. Verified via the TCK harness (rigorous full pass-set diff:
+zero regressions; unit 944/944; functional clean):
+
+- **`r.name` on a node/relationship that is a list element now reads `.properties`.**
+  A projected/list-element JSON value (e.g. the quantifier variable in
+  `any(r IN relationships(p) WHERE r.name = 'a')`) used top-level
+  `json_extract($.name)`, which is null for an entity (its props live under
+  `.properties`). The projected-JSON property branch now routes through
+  `_gql_dyn_prop`, which picks `$.properties.<key>` for entity-shaped objects and
+  `$.<key>` for plain maps. Correct standalone (the entity-in-list quantifier now
+  evaluates), though the Quantifier1-4 [8]/[9] scenarios additionally need varlen
+  `relationships(p)`/`nodes(p)` through an aggregating WITH + GROUP-BY-on-list
+  (deeper, deferred).

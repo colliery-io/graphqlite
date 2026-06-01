@@ -803,7 +803,7 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
            * parser. (Temporal5 [7].) */
           append_sql(ctx,
               "CASE WHEN json_valid(%s) AND instr(%s, '\"_iso8601\"') > 0 THEN _gql_duration_field(%s, '%s')"
-              " WHEN json_valid(%s) THEN json_extract(%s, '$.%s')"
+              " WHEN json_valid(%s) THEN _gql_dyn_prop(%s, '%s')"
               " ELSE _gql_temporal_field(%s, '%s') END",
               alias, alias, alias, pn,
               alias, alias, pn,
