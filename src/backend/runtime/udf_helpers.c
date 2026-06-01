@@ -2883,6 +2883,20 @@ void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value *
     double hours = 0, minutes = 0, seconds = 0;
     bool in_time = false;
     const char *p = s + 1;
+    /* Alternate ISO form P[YYYY]-[MM]-[DD]T[hh]:[mm]:[ss] (Temporal2 [7] ex8).
+     * Detected by date-style dashes after 'P'; the unit-letter form below has
+     * none. */
+    {
+        int Y = 0, Mo = 0, D = 0, H = 0, Mi = 0; double S = 0;
+        int n = sscanf(p, "%d-%d-%dT%d:%d:%lf", &Y, &Mo, &D, &H, &Mi, &S);
+        if (n >= 3 && strchr(p, '-')) {
+            years = Y; months = Mo; days = D;
+            if (n >= 4) hours = H;
+            if (n >= 5) minutes = Mi;
+            if (n >= 6) seconds = S;
+            p = ""; /* skip the unit-letter loop below */
+        }
+    }
     while (*p) {
         if (*p == 'T') { in_time = true; p++; continue; }
         /* Parse a numeric value (with optional sign + fractional). */
