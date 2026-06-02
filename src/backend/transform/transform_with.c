@@ -224,6 +224,60 @@ static bool expr_refs_dropped_input_var(cypher_transform_context *ctx, ast_node 
     }
 }
 
+/* True if every identifier referenced by `expr` is live in the CURRENT
+ * (input) scope — i.e. the expression can be evaluated inside the WITH's CTE
+ * body (where the input tables are in FROM). Used to decide whether a
+ * non-aggregating WITH's ORDER BY can be pushed into the CTE body so a
+ * DOWNSTREAM aggregating WITH (e.g. `... ORDER BY value WITH collect(x)`)
+ * sees rows in sorted order. Mirrors validate_identifiers_in_scope_ex's walk;
+ * projected-only aliases (not yet input vars) make this return false, so they
+ * stay on the outer path. (WithOrderBy1 [45].) */
+static bool order_expr_all_live_input(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!expr) return true;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER: {
+            cypher_identifier *id = (cypher_identifier*)expr;
+            if (!id->name) return true;
+            return transform_var_lookup(ctx->var_ctx, id->name) != NULL;
+        }
+        case AST_NODE_PROPERTY:
+            return order_expr_all_live_input(ctx, ((cypher_property*)expr)->expr);
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *b = (cypher_binary_op*)expr;
+            return order_expr_all_live_input(ctx, b->left) &&
+                   order_expr_all_live_input(ctx, b->right);
+        }
+        case AST_NODE_NOT_EXPR:
+            return order_expr_all_live_input(ctx, ((cypher_not_expr*)expr)->expr);
+        case AST_NODE_NULL_CHECK:
+            return order_expr_all_live_input(ctx, ((cypher_null_check*)expr)->expr);
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call*)expr;
+            if (fc->args)
+                for (int i = 0; i < fc->args->count; i++)
+                    if (!order_expr_all_live_input(ctx, fc->args->items[i])) return false;
+            return true;
+        }
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list*)expr;
+            if (l->items)
+                for (int i = 0; i < l->items->count; i++)
+                    if (!order_expr_all_live_input(ctx, l->items->items[i])) return false;
+            return true;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript*)expr;
+            return order_expr_all_live_input(ctx, s->expr) &&
+                   order_expr_all_live_input(ctx, s->index) &&
+                   order_expr_all_live_input(ctx, s->slice_start) &&
+                   order_expr_all_live_input(ctx, s->slice_end);
+        }
+        default:
+            return true;  /* literals, parameters, etc. */
+    }
+}
+
 /*
  * Transform an expression to a dynamically allocated string.
  * Uses a temporary buffer to capture output, then returns the result.
@@ -670,16 +724,30 @@ with_star_columns_done:
                 nm = ((cypher_property*)it->expr)->property_name;
             if (nm) proj_names[proj_n++] = (char*)nm;
         }
-        bool needs = false, has_agg_order = false;
+        bool needs = false, has_agg_order = false, all_live_input = true;
         for (int i = 0; i < with->order_by->count; i++) {
             cypher_order_by_item *oi = (cypher_order_by_item*)with->order_by->items[i];
             if (find_aggregating_call(oi->expr)) has_agg_order = true;
             if (expr_refs_dropped_input_var(ctx, oi->expr, proj_names, proj_n)) needs = true;
+            if (!order_expr_all_live_input(ctx, oi->expr)) all_live_input = false;
         }
         /* Aggregating ORDER BY exprs (e.g. ORDER BY count(x) + 1) interact with
          * the WITH's GROUP BY and must stay on the outer path. (WithOrderBy4 [16].) */
         if (has_agg_order) needs = false;
-        if (needs) {
+
+        /* Push the ORDER BY into the CTE body when either:
+         *  (a) `needs` — it references an input variable the WITH drops, which
+         *      the outer SELECT over the CTE cannot resolve (WithOrderBy2
+         *      [21]-[24]); this REPLACES the outer ORDER BY; or
+         *  (b) every ORDER BY identifier is a live input variable and the WITH
+         *      has no LIMIT/SKIP — ordering the CTE rows so a DOWNSTREAM
+         *      aggregating WITH (`... ORDER BY value WITH collect(x)`) sees
+         *      sorted input. SQLite preserves an ordered subquery's row order
+         *      through json_group_array. The outer ORDER BY is still emitted
+         *      for final-output ordering. (WithOrderBy1 [45].) */
+        bool no_limit = !with->limit && !with->skip;
+        bool dup_for_downstream = !needs && !has_agg_order && all_live_input && no_limit;
+        if (needs || dup_for_downstream) {
             dbuf_append(&cte_body, " ORDER BY ");
             for (int i = 0; i < with->order_by->count; i++) {
                 cypher_order_by_item *oi = (cypher_order_by_item*)with->order_by->items[i];
@@ -693,7 +761,9 @@ with_star_columns_done:
                              oexpr, odir, oexpr, odir);
                 free(oe);
             }
-            order_pushed_to_cte = true;
+            /* Only the dropped-var case suppresses the outer ORDER BY; the
+             * downstream-ordering duplicate keeps it for final output. */
+            if (needs) order_pushed_to_cte = true;
         }
     }
 

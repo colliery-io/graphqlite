@@ -656,3 +656,29 @@ zero regressions; unit 944/944; functional clean):
   evaluates), though the Quantifier1-4 [8]/[9] scenarios additionally need varlen
   `relationships(p)`/`nodes(p)` through an aggregating WITH + GROUP-BY-on-list
   (deeper, deferred).
+
+## Coverage update (2026-06-02) — ORDER BY in WITH flows to downstream aggregation; overflow-safe temporal ordering (+10)
+
+`transform_with.c`, `runtime/udf_helpers.c`. Verified via the TCK harness (rigorous
+full pass-set diff: **zero regressions, +10**, 3776→3786; unit 944/944; functional
+clean). Closes the entire `WithOrderBy1` [45] cluster ("Sort order should be
+consistent with comparisons where comparisons are defined", all 10 type examples).
+
+- **`WITH … ORDER BY <input-var> WITH collect(x)` now sees rows in sorted order.**
+  An ORDER BY on a non-aggregating WITH was only pushed into the WITH's CTE body
+  when it referenced a *dropped* input variable (WithOrderBy2 [21]-[24]); for an
+  ORDER BY over a *kept* input variable it stayed on the outer SELECT, which a
+  subsequent aggregating WITH (`collect`) never observed — so `collect` aggregated
+  in UNWIND order. Now, when every ORDER BY identifier is a live input variable and
+  the WITH has no LIMIT/SKIP, the ORDER BY is *also* emitted inside the CTE body
+  (`order_expr_all_live_input` gate) so the downstream aggregate's input is ordered
+  (SQLite preserves an ordered subquery's row order through `json_group_array`).
+  The outer ORDER BY is still emitted for final-output ordering.
+- **Temporal `<`/`>` ordering no longer overflows int64 for far-future years.**
+  `gql_order_cmp_func`'s temporal path compared `parse_temporal_ns()` values, where
+  `epoch_seconds * 1e9` overflows int64 around year ~2262 and wraps negative — so
+  `localdatetime/datetime({year: 9999})` compared as the *smallest* value, making
+  `<` disagree with the ORDER BY key (which uses the zero-padded ISO string). New
+  `cmp_temporal_strings()` parses each operand to `(epoch_seconds, sub_second_ns)`
+  and compares componentwise (no overflow across the full Cypher year range),
+  falling back to lexical compare on parse failure.

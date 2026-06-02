@@ -383,6 +383,11 @@ static int gql_cmp_json_vals(sqlite3 *db,
  *   Called by transform_binary_operation's LT/GT/LTE/GTE path —
  *   each operand is transformed exactly once. */
 static int64_t parse_temporal_ns(const char *s);  /* defined below */
+/* Overflow-safe temporal ordering: compares two ISO temporal strings by their
+ * UTC instant using (epoch_seconds, sub_second_ns) components, so far-future
+ * years whose epoch-nanoseconds exceed int64 don't wrap. Returns -1/0/1, or
+ * -2 if either operand fails to parse. (WithOrderBy1 [45].) */
+static int cmp_temporal_strings(const char *a, const char *b);  /* defined below */
 
 /* Heuristic: does the text look like a Cypher temporal value (time 'HH:MM…' or
  * date/datetime 'YYYY-MM-DD…')? Used so ordered comparison of two temporals
@@ -475,9 +480,11 @@ void gql_order_cmp_func(
         if (!a || !b) { sqlite3_result_null(context); return; }
         if (looks_temporal(a) && looks_temporal(b)) {
             /* Compare two temporal values by UTC instant, not lexically, so a
-             * tz offset is honored (Temporal7 [3]: 10:00+01:00 < 09:35+00:00). */
-            int64_t na = parse_temporal_ns(a), nb = parse_temporal_ns(b);
-            cmp = (na < nb) ? -1 : (na > nb) ? 1 : 0;
+             * tz offset is honored (Temporal7 [3]: 10:00+01:00 < 09:35+00:00).
+             * Use the overflow-safe (seconds, ns) comparison so far-future
+             * years (9999) don't wrap int64 epoch-ns (WithOrderBy1 [45]). */
+            cmp = cmp_temporal_strings(a, b);
+            if (cmp == -2) cmp = strcmp(a, b);  /* unparseable → lexical */
         } else {
             cmp = strcmp(a, b);
         }
@@ -1552,6 +1559,70 @@ static int64_t parse_temporal_ns(const char *s) {
     time_t epoch = timegm(&t);
     epoch -= tz_offset_min * 60;
     return (int64_t)epoch * 1000000000LL + ns;
+}
+
+/* Parse an ISO temporal string into UTC epoch SECONDS plus sub-second nanos,
+ * without the int64 overflow that (epoch * 1e9) suffers for far-future years.
+ * Mirrors parse_temporal_ns's field extraction. Returns false on parse error. */
+static bool parse_temporal_secs_ns(const char *s, int64_t *out_secs, int64_t *out_ns) {
+    if (!s) return false;
+    int y = 1970, mo = 1, d = 1, h = 0, mi = 0, sec = 0;
+    int64_t ns = 0;
+    int tz_offset_min = 0;
+    const char *time_start = NULL;
+    if (strlen(s) >= 10 && s[4] == '-') {
+        if (sscanf(s, "%d-%d-%d", &y, &mo, &d) < 3) return false;
+        if (s[10] == 'T' || s[10] == ' ') time_start = s + 11;
+    } else if (strlen(s) >= 5 && s[2] == ':') {
+        time_start = s;
+    } else {
+        return false;
+    }
+    if (time_start) {
+        sscanf(time_start, "%d:%d:%d", &h, &mi, &sec);
+        const char *dot = strchr(time_start, '.');
+        if (dot) {
+            char buf[10] = { '0','0','0','0','0','0','0','0','0', 0 };
+            int i;
+            for (i = 0; i < 9 && dot[i + 1] >= '0' && dot[i + 1] <= '9'; i++)
+                buf[i] = dot[i + 1];
+            ns = atoll(buf);
+        }
+        const char *tz_from = dot ? dot + 1 : time_start;
+        const char *tz = NULL;
+        for (const char *q = tz_from; *q; q++) {
+            if (*q == 'Z' || *q == '+' || (*q == '-' && q > time_start + 2)) { tz = q; break; }
+        }
+        if (tz) {
+            if (*tz == 'Z') tz_offset_min = 0;
+            else {
+                int sign = (*tz == '+') ? 1 : -1;
+                int oh = 0, om = 0;
+                if (sscanf(tz + 1, "%d:%d", &oh, &om) >= 1 ||
+                    sscanf(tz + 1, "%2d%2d", &oh, &om) >= 1)
+                    tz_offset_min = sign * (oh * 60 + om);
+            }
+        }
+    }
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d;
+    t.tm_hour = h; t.tm_min = mi; t.tm_sec = sec;
+    time_t epoch = timegm(&t);
+    epoch -= tz_offset_min * 60;
+    *out_secs = (int64_t)epoch;
+    *out_ns = ns;
+    return true;
+}
+
+static int cmp_temporal_strings(const char *a, const char *b) {
+    int64_t sa, na, sb, nb;
+    if (!parse_temporal_secs_ns(a, &sa, &na) ||
+        !parse_temporal_secs_ns(b, &sb, &nb))
+        return -2;
+    if (sa != sb) return (sa < sb) ? -1 : 1;
+    if (na != nb) return (na < nb) ? -1 : 1;
+    return 0;
 }
 
 /* Build openCypher Duration JSON object from a signed total-nanoseconds value.
