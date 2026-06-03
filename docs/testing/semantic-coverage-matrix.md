@@ -682,3 +682,20 @@ consistent with comparisons where comparisons are defined", all 10 type examples
   `cmp_temporal_strings()` parses each operand to `(epoch_seconds, sub_second_ns)`
   and compares componentwise (no overflow across the full Cypher year range),
   falling back to lexical compare on parse failure.
+
+## Coverage update (2026-06-03) — implicit GROUP BY on a computed key (+2)
+
+`transform_with.c`. Verified via the TCK harness (rigorous full pass-set diff:
+**zero regressions, +2**, 3786→3788; unit 944/944; functional clean). Fixes
+WithOrderBy4 [12] ("Sort by an aliased aggregate projection") and Pattern2 [8]
+("Use a pattern comprehension in WITH").
+
+- **A non-aggregate *computed* WITH projection is now a GROUP BY key.**
+  In `WITH a.num2 % 3 AS mod, sum(a.num + a.num2) AS sum`, the grouping key
+  `a.num2 % 3` is a general expression (BINARY_OP), handled by the catch-all
+  projection branch — which emitted the column but never added it to GROUP BY.
+  Simple identifier and property keys were grouped, but the computed key wasn't,
+  so every row collapsed into a single group and the aggregate summed across the
+  whole table. The catch-all branch now appends the (non-aggregate) transformed
+  expression to GROUP BY, mirroring the identifier/property branches. Aggregate
+  projections (`find_aggregating_call` non-null) are still excluded from GROUP BY.

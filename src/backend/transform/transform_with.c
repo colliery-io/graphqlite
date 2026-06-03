@@ -625,6 +625,11 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 return -1;
             }
 
+            /* Capture the raw transformed expression so it can serve as both
+             * the projected column and (when it's a non-aggregate key) a
+             * GROUP BY term. */
+            char *grp_expr = strdup(ctx->sql_buffer);
+
             /* Boolean-valued projections (comparisons, AND/OR/NOT, quantifiers,
              * IS NULL, ...) must carry the boolean subtype so a downstream
              * RETURN of this column renders as a JSON boolean, not 1/0. Wrap the
@@ -656,7 +661,17 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
              * all-null row instead of 0 rows. (With6 [6]/[7].) */
             if (find_aggregating_call(item->expr) != NULL) {
                 has_aggregate = true;
+            } else if (grp_expr && grp_expr[0]) {
+                /* A non-aggregate COMPUTED key (e.g. `a.num2 % 3 AS mod`) is a
+                 * grouping key — emit it into GROUP BY just like simple
+                 * identifier/property keys. Without this the key was projected
+                 * but never grouped, so an aggregating WITH collapsed all rows
+                 * into one group (WithOrderBy4 [11]/[12]). */
+                if (group_count > 0) dbuf_append(&group_buf, ", ");
+                dbuf_append(&group_buf, grp_expr);
+                group_count++;
             }
+            free(grp_expr);
         }
     }
 
