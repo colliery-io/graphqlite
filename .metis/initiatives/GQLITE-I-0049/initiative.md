@@ -81,3 +81,34 @@ sub-steps once started (human check-in before decomposing, per Metis HITL).
 
 - 2026-05-30: Initiative created. Structure approved (initiative + task-per-cluster).
   Starting with Temporal (T-A).
+- 2026-06-02: **WithOrderBy (T-D) cluster CLOSED (+10, PR #91).** `WithOrderBy1`
+  [45] (all 10 type examples). Two root causes: (1) a non-aggregating WITH's
+  ORDER BY over a *kept* input variable was only applied on the outer SELECT, so a
+  downstream aggregating WITH (`collect`) never saw sorted rows — now also pushed
+  into the CTE body via `order_expr_all_live_input` gate in `transform_with.c`
+  (SQLite preserves an ordered subquery's order through `json_group_array`);
+  (2) `gql_order_cmp_func`'s temporal compare used `parse_temporal_ns` whose
+  `epoch*1e9` overflows int64 ~year 2262, so year-9999 datetimes sorted *smallest*
+  — new overflow-safe `cmp_temporal_strings()` compares `(epoch_seconds, sub_ns)`.
+  Verified zero regressions, 3776→3786, unit 944/944, functional clean.
+- 2026-06-02: **Merge (T-C) — deep architectural blockers identified, deferred.**
+  Investigated the undirected MATCH+MERGE+RETURN cluster (Merge5 [12]/[13]).
+  Root cause of row-doubling: the RETURN-after-MERGE re-query builds a synthetic
+  combined MATCH (original MATCH pattern + MERGE pattern). For undirected
+  `(a)-[r]-(b)` whose endpoints reuse MATCH variables, the transform re-emits the
+  shared endpoints into a *reset* FROM and drops the MATCH nodes' property
+  constraints, so the undirected OR matches each edge twice. A property-transplant
+  fix (copy MATCH node props onto MERGE endpoints, drop redundant standalone nodes)
+  was prototyped but blocked by a *second* transform bug: a fresh-fresh undirected
+  connected pattern in the re-query drops endpoint property joins entirely (the
+  parsed-equivalent query emits them fine — the re-query path resets the builder
+  mid-emission). Reverted (no commit). Additional Merge blockers: (a) MERGE
+  processes only the FIRST match row (`break` in `executor_merge.c` ~line 1088), so
+  multi-row MATCH+MERGE can't bind/return per-row (Merge8 [1] expects +3 rels);
+  (b) `handle_create_return` is a hand-rolled projection that doesn't handle
+  aggregate RETURN items (`count(*)`/`count(a)` → `?column?`/null) — gates
+  Merge5 [4], Merge9 [3]. These need transform/executor rework, not a contained
+  fix; left for a dedicated effort.
+- 2026-06-02: Comparison2 [3] confirmed blocked by boolean-type-preservation
+  (`WHERE <bool-var>` and `WHERE b = true` both filter all rows). List12 [1] is the
+  entity-in-list property access deep item (`x.name` on collected nodes → null).
