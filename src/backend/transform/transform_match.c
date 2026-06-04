@@ -2003,7 +2003,9 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
         }
 
-skip_target_node_join:
+skip_target_node_join: ;  /* null statement: a label may not precede a
+        * declaration in C17 and earlier — Apple clang rejects
+        * `label: char x[..]` outright (the release macos build). */
         /* Add label constraints for target node if specified.
          *
          * I-0047 P3: for OPTIONAL + varlen with a DEFERRED target
