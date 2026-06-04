@@ -43,6 +43,25 @@ g.dijkstra("alice", "bob")
 - **Zero configuration** — Works with any SQLite database, no server required
 - **Multiple bindings** — Python, Rust, and raw SQL interfaces
 
+## openCypher Conformance
+
+GraphQLite is validated against the official [openCypher Technology Compatibility
+Kit (TCK)](https://github.com/opencypher/openCypher) — the canonical conformance
+suite for the Cypher query language. Current coverage:
+
+| Area | Scenarios | Passing |
+|------|-----------|---------|
+| **Overall** | **3,876** | **97.7%** |
+| Expressions (temporal, lists, maps, comparison, literals, …) | 2,599 | 98.0% |
+| Clauses (MATCH, WITH, MERGE, CREATE, SET, DELETE, UNWIND, …) | 1,247 | 97.2% |
+| Use cases (triadic selection, subgraph counting) | 30 | 100% |
+
+Run it yourself with `angreal test tck`. The remaining gaps are tracked in
+[`docs/testing/semantic-coverage-matrix.md`](docs/testing/semantic-coverage-matrix.md)
+and concentrate in a few deep areas (DST-aware timezone arithmetic, nested
+existential subqueries, multi-row MERGE). Booleans, strings, null handling,
+CREATE/SET/DELETE/REMOVE, UNION, and SKIP/LIMIT are at 100%.
+
 ## Documentation
 
 **[Full Documentation](https://colliery-io.github.io/graphqlite/)** — Tutorials, how-to guides, and API reference

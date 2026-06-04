@@ -4,6 +4,58 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-06-03
+
+A large openCypher conformance release. TCK pass rate moves from **91.5%**
+(3549 executable scenarios) to **97.7%** (3788 / 3876), **+239 scenarios** with
+zero regressions among previously-passing scenarios. 944/944 unit tests pass;
+functional tests clean.
+
+### Added — openCypher coverage
+
+- **Pattern & path matching completeness** — variable-length path hydration,
+  `relationships()` / `nodes()` on varlen and null paths, path-wide relationship
+  uniqueness, multi-rel OPTIONAL MATCH with full-pattern (all-or-none) semantics,
+  bidirectional bracketed relationship patterns, and four-label conjunctions in
+  expression context.
+- **Temporal** — closed the non-DST temporal cluster: duration arithmetic and
+  ISO round-trip normalization (months not normalized across days; 1 month =
+  30.436875 days), `duration.between`, component accessors, `date`/`time`/
+  `datetime`/`localdatetime` construction and selection, named-zone handling, and
+  UTC-instant ordering. Cross-type ordering now uses an orderability comparator
+  with a NaN sentinel and an overflow-safe `(seconds, nanoseconds)` temporal
+  comparison (far-future years no longer wrap int64 epoch-nanoseconds).
+- **Quantifiers** — `all` / `any` / `none` / `single` over list pipelines now
+  evaluate consistently; non-deterministic CTEs (`rand()`/`RANDOM()` in WITH
+  projections) are emitted `AS MATERIALIZED` so a multiply-referenced list is
+  evaluated once, fixing algebraic-identity scenarios.
+- **WITH / ORDER BY / aggregation** — `ORDER BY` on a non-aggregating WITH now
+  flows to a downstream aggregating WITH (`… ORDER BY x WITH collect(y)` collects
+  in sorted order); computed (non-aggregate) WITH keys (e.g. `a.n % 3 AS m`) are
+  now GROUP BY keys; `LIMIT`/`OFFSET` inline into the WITH CTE body.
+- **Existential subqueries** — `EXISTS { pattern }` brace form.
+- **Validation** — compile-time `SyntaxError` diagnostics (pattern expressions in
+  `SET` RHS, relationship-uniqueness, label/type 3-valued-logic predicates, and
+  more).
+
+### Fixed
+
+- Multi-row `MATCH … CREATE` / `MATCH … DELETE … CREATE` runs the write per
+  matched row; inter-pattern variable references in `CREATE` (`{x: a.id}`)
+  resolve against earlier patterns; `RETURN` is pre-captured before `DELETE`.
+- `REMOVE` on a null/unbound variable is a no-op; `RETURN *` excludes synthetic
+  anonymous aliases.
+- General-expression projection in `CREATE … RETURN` and `SET` (list/JSON props).
+
+### Notes
+
+Remaining gaps (~2.3%) concentrate in DST-aware timezone arithmetic, nested
+existential subqueries, multi-row MERGE binding, and boolean subtype preservation
+(SQLite has no native boolean type). See
+[`docs/testing/semantic-coverage-matrix.md`](docs/testing/semantic-coverage-matrix.md).
+Windows extension tests (`test_*_timestamp*`) remain non-blocking pending an
+MSYS2/MinGW `julianday('now')` regression (GQLITE-T-0205).
+
 ## [0.5.0] — 2026-05-22
 
 Significant TCK conformance release plus the first-time Windows extension
