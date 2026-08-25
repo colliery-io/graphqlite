@@ -404,6 +404,85 @@ static void test_dispatch_match_return(void)
     }
 }
 
+/*
+ * GitHub #95: RETURN of a relationship variable created between
+ * MATCH-bound endpoints. Previously raised "Unknown variable: r" after
+ * the CREATE had already committed.
+ */
+static void test_dispatch_match_create_return_created_var(void)
+{
+    cypher_executor *executor = cypher_executor_create(dispatch_test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        cypher_result *r1 = cypher_executor_execute(executor, "CREATE (n:DispMCR {name: \"h0\"})");
+        if (r1) cypher_result_free(r1);
+        cypher_result *r2 = cypher_executor_execute(executor, "CREATE (n:DispMCR {name: \"h1\"})");
+        if (r2) cypher_result_free(r2);
+
+        /* RETURN r.prop on the created relationship */
+        cypher_result *result = cypher_executor_execute(executor,
+            "MATCH (x:DispMCR {name: \"h0\"}), (y:DispMCR {name: \"h1\"}) "
+            "CREATE (x)-[r:DISP_LINKS {seq: 7}]->(y) RETURN r.seq AS s");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                if (result->row_count == 1 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "7");
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        /* Bare RETURN r on the created relationship */
+        result = cypher_executor_execute(executor,
+            "MATCH (x:DispMCR {name: \"h0\"}), (y:DispMCR {name: \"h1\"}) "
+            "CREATE (x)-[r:DISP_LINKS2 {seq: 8}]->(y) RETURN r");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                if (result->row_count == 1 && result->data[0][0]) {
+                    CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "DISP_LINKS2"));
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        /* Two separate MATCH clauses feeding the CREATE */
+        result = cypher_executor_execute(executor,
+            "MATCH (x:DispMCR {name: \"h0\"}) MATCH (y:DispMCR {name: \"h1\"}) "
+            "CREATE (x)-[r:DISP_LINKS3 {seq: 9}]->(y) RETURN r.seq AS s");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                if (result->row_count == 1 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "9");
+                }
+            }
+            cypher_result_free(result);
+        }
+
+        /* Exactly one edge per CREATE (no duplicates from the RETURN pass) */
+        result = cypher_executor_execute(executor,
+            "MATCH ()-[e:DISP_LINKS]->() RETURN count(e) AS c");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success && result->row_count == 1 && result->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+            }
+            cypher_result_free(result);
+        }
+
+        cypher_executor_free(executor);
+    }
+}
+
 static void test_dispatch_match_set(void)
 {
     cypher_executor *executor = cypher_executor_create(dispatch_test_db);
@@ -530,6 +609,7 @@ int init_query_dispatch_suite(void)
 
     if (!CU_add_test(dispatch_suite, "dispatch: CREATE", test_dispatch_create)) return -1;
     if (!CU_add_test(dispatch_suite, "dispatch: MATCH+RETURN", test_dispatch_match_return)) return -1;
+    if (!CU_add_test(dispatch_suite, "dispatch: MATCH+CREATE+RETURN created rel var", test_dispatch_match_create_return_created_var)) return -1;
     if (!CU_add_test(dispatch_suite, "dispatch: MATCH+SET", test_dispatch_match_set)) return -1;
     if (!CU_add_test(dispatch_suite, "dispatch: MATCH+DELETE", test_dispatch_match_delete)) return -1;
     if (!CU_add_test(dispatch_suite, "dispatch: MERGE", test_dispatch_merge)) return -1;

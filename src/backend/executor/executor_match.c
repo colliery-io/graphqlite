@@ -954,13 +954,24 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
  * no-arg wrapper just did this). I-0041 C11. */
 int execute_multi_match_create_query(cypher_executor *executor, cypher_query *query,
                                      cypher_create *create, cypher_result *result,
-                                     variable_map **out_var_map)
+                                     variable_map **out_var_map,
+                                     variable_map ***out_row_maps, int *out_row_count)
 {
+    if (out_row_maps) *out_row_maps = NULL;
+    if (out_row_count) *out_row_count = 0;
     if (!executor || !query || !create || !result) {
         if (out_var_map) *out_var_map = NULL;
         return -1;
     }
     if (out_var_map) *out_var_map = NULL;
+
+    /* GitHub #95: when out_row_maps is non-NULL, hand back one variable_map
+     * per processed MATCH row (matched + CREATE-introduced bindings) so the
+     * caller can project a RETURN that references CREATE-only variables.
+     * Caller owns the array and each map. */
+    variable_map **row_maps = NULL;
+    int row_maps_n = 0, row_maps_cap = 0;
+    const bool collect_rows = (out_row_maps != NULL);
 
     variable_map *var_map = create_variable_map();
     if (!var_map) {
@@ -1102,6 +1113,8 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
                 free(row_ids);
                 cypher_transform_free_context(ctx);
                 if (var_map) free_variable_map(var_map);
+                for (int k = 0; k < row_maps_n; k++) free_variable_map(row_maps[k]);
+                free(row_maps);
                 return -1;
             }
             for (int i = 0; i < vcount2; i++) {
@@ -1128,13 +1141,36 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
                             free(row_ids);
                             cypher_transform_free_context(ctx);
                             if (var_map) free_variable_map(var_map);
+                            for (int k = 0; k < row_maps_n; k++) free_variable_map(row_maps[k]);
+                            free(row_maps);
                             return -1;
                         }
                     }
                 }
             }
-            if (var_map) free_variable_map(var_map);
-            var_map = row_vm;
+            if (collect_rows) {
+                /* Hand row ownership to the collected array; var_map stays
+                 * NULL and is recreated empty below. */
+                if (row_maps_n == row_maps_cap) {
+                    row_maps_cap = row_maps_cap ? row_maps_cap * 2 : 8;
+                    variable_map **grown = realloc(row_maps, row_maps_cap * sizeof(variable_map*));
+                    if (!grown) {
+                        set_result_error(result, "OOM (row map array)");
+                        free_variable_map(row_vm);
+                        for (int k = 0; k < rows_n; k++) free(row_ids[k]);
+                        free(row_ids);
+                        cypher_transform_free_context(ctx);
+                        for (int k = 0; k < row_maps_n; k++) free_variable_map(row_maps[k]);
+                        free(row_maps);
+                        return -1;
+                    }
+                    row_maps = grown;
+                }
+                row_maps[row_maps_n++] = row_vm;
+            } else {
+                if (var_map) free_variable_map(var_map);
+                var_map = row_vm;
+            }
         }
         for (int k = 0; k < rows_n; k++) free(row_ids[k]);
         free(row_ids);
@@ -1159,11 +1195,24 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
                 }
             }
         }
+        if (collect_rows) {
+            /* Legacy path binds/creates a single row; expose it as one map. */
+            row_maps = malloc(sizeof(variable_map*));
+            if (row_maps) {
+                row_maps[0] = var_map;
+                row_maps_n = 1;
+                var_map = NULL;
+            }
+        }
     }
 
+    if (out_row_maps) {
+        *out_row_maps = row_maps;
+        if (out_row_count) *out_row_count = row_maps_n;
+    }
     if (out_var_map) {
-        *out_var_map = var_map;
-    } else {
+        *out_var_map = var_map ? var_map : create_variable_map();
+    } else if (var_map) {
         free_variable_map(var_map);
     }
     return 0;

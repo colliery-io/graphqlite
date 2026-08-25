@@ -126,10 +126,15 @@ int execute_set_items(cypher_executor *executor, ast_list *items, variable_map *
 int execute_match_return_query(cypher_executor *executor, cypher_match *match, cypher_return *return_clause, cypher_result *result);
 int execute_match_create_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_result *result);
 /* Canonical multi-MATCH + CREATE entry point (I-0041 C11). Pass NULL
- * for out_var_map if the caller doesn't need the accumulated bindings. */
+ * for out_var_map if the caller doesn't need the accumulated bindings.
+ * Pass non-NULL out_row_maps/out_row_count to receive one variable_map per
+ * processed MATCH row (matched + CREATE-introduced bindings) for RETURN
+ * projection of CREATE-only variables (GitHub #95); caller owns the array
+ * and each map. */
 int execute_multi_match_create_query(cypher_executor *executor, cypher_query *query,
                                      cypher_create *create, cypher_result *result,
-                                     variable_map **out_var_map);
+                                     variable_map **out_var_map,
+                                     variable_map ***out_row_maps, int *out_row_count);
 int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match,
                                   variable_map *var_map, cypher_result *result);
 int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_match *match, cypher_merge *merge,

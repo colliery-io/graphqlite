@@ -812,7 +812,7 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
      * scenarios (Match5 [26] setup: rewires (a)-[r]->(b) by creating
      * (b)-[:LIKES]->(a) and deleting r). */
     if (cre) {
-        if (execute_multi_match_create_query(executor, query, cre, result, NULL) < 0) {
+        if (execute_multi_match_create_query(executor, query, cre, result, NULL, NULL, NULL) < 0) {
             return -1;
         }
     }
@@ -1180,7 +1180,8 @@ static int handle_match_create(cypher_executor *executor, cypher_query *query,
      * legacy execute_match_create_query path. */
     variable_map *mc_vars = NULL;
     int rc = execute_multi_match_create_query(executor, query, create, result,
-                                                          set ? &mc_vars : NULL);
+                                                          set ? &mc_vars : NULL,
+                                                          NULL, NULL);
     if (rc < 0) {
         if (mc_vars) free_variable_map(mc_vars);
         return rc;
@@ -1197,6 +1198,53 @@ static int handle_match_create(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/* GitHub #95 helpers: detect RETURN items that reference a variable bound
+ * only by a CREATE pattern (not by any MATCH), e.g.
+ *   MATCH (x), (y) CREATE (x)-[r:T]->(y) RETURN r
+ * The legacy path re-executes MATCH+RETURN, which has no binding for `r`
+ * and errored AFTER the CREATE had already committed. */
+static bool pattern_list_binds_var(ast_list *pattern, const char *name)
+{
+    if (!pattern || !name) return false;
+    for (int i = 0; i < pattern->count; i++) {
+        ast_node *p = pattern->items[i];
+        if (!p || p->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path*)p;
+        if (path->var_name && strcmp(path->var_name, name) == 0) return true;
+        if (!path->elements) continue;
+        for (int j = 0; j < path->elements->count; j++) {
+            ast_node *el = path->elements->items[j];
+            if (!el) continue;
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                cypher_node_pattern *np = (cypher_node_pattern*)el;
+                if (np->variable && strcmp(np->variable, name) == 0) return true;
+            } else if (el->type == AST_NODE_REL_PATTERN) {
+                cypher_rel_pattern *rp = (cypher_rel_pattern*)el;
+                if (rp->variable && strcmp(rp->variable, name) == 0) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Base variable of a var-map-projectable RETURN expression: a bare
+ * identifier (`r`) or a simple property access (`r.prop`). NULL for
+ * anything else. */
+static const char *projectable_base_var(ast_node *expr)
+{
+    if (!expr) return NULL;
+    if (expr->type == AST_NODE_IDENTIFIER) {
+        return ((cypher_identifier*)expr)->name;
+    }
+    if (expr->type == AST_NODE_PROPERTY) {
+        cypher_property *prop = (cypher_property*)expr;
+        if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
+            return ((cypher_identifier*)prop->expr)->name;
+        }
+    }
+    return NULL;
+}
+
 static int handle_match_create_return(cypher_executor *executor, cypher_query *query,
                                       cypher_result *result, clause_flags flags)
 {
@@ -1206,6 +1254,140 @@ static int handle_match_create_return(cypher_executor *executor, cypher_query *q
     cypher_return *ret = find_return_clause(query);
 
     CYPHER_DEBUG("Executing MATCH+CREATE+RETURN via pattern dispatch");
+
+    /* GitHub #95: if the RETURN references CREATE-only variables, project it
+     * from the per-row variable maps instead of re-running MATCH+RETURN
+     * (which cannot see them and would error after the write committed).
+     * Only taken when every RETURN item is a var-map-projectable shape
+     * (bare var, var.prop, or an aggregate over those), so all other
+     * queries keep the legacy path unchanged. */
+    bool any_create_only = false;
+    bool all_projectable = true;
+    if (ret && ret->items && !ret->return_all && !ret->order_by && query->clauses) {
+        for (int i = 0; i < ret->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
+            ast_node *expr = item ? item->expr : NULL;
+            if (aggregating_call_name(expr)) {
+                cypher_function_call *fc = (cypher_function_call*)expr;
+                expr = (fc->args && fc->args->count > 0) ? fc->args->items[0] : NULL;
+                if (!expr) continue; /* count(*) — no variable reference */
+            }
+            const char *base = projectable_base_var(expr);
+            if (!base) { all_projectable = false; break; }
+            bool in_match = false;
+            for (int ci = 0; ci < query->clauses->count; ci++) {
+                ast_node *c = query->clauses->items[ci];
+                if (c && c->type == AST_NODE_MATCH &&
+                    pattern_list_binds_var(((cypher_match*)c)->pattern, base)) {
+                    in_match = true;
+                    break;
+                }
+            }
+            if (!in_match) {
+                bool in_create = false;
+                for (int ci = 0; ci < query->clauses->count; ci++) {
+                    ast_node *c = query->clauses->items[ci];
+                    if (c && c->type == AST_NODE_CREATE &&
+                        pattern_list_binds_var(((cypher_create*)c)->pattern, base)) {
+                        in_create = true;
+                        break;
+                    }
+                }
+                if (in_create) {
+                    any_create_only = true;
+                } else {
+                    all_projectable = false;
+                    break;
+                }
+            }
+        }
+    } else {
+        all_projectable = false;
+    }
+
+    if (any_create_only && all_projectable) {
+        variable_map **maps = NULL;
+        int n_maps = 0;
+        if (execute_multi_match_create_query(executor, query, create, result,
+                                             NULL, &maps, &n_maps) < 0) {
+            return -1;
+        }
+
+        int col_count = ret->items->count;
+        set_return_column_names(ret, result);
+
+        /* SKIP/LIMIT */
+        int64_t limit_val = -1, skip_val = 0;
+        if (ret->limit && ret->limit->type == AST_NODE_LITERAL) {
+            cypher_literal *l = (cypher_literal*)ret->limit;
+            if (l->literal_type == LITERAL_INTEGER) limit_val = l->value.integer;
+        }
+        if (ret->skip && ret->skip->type == AST_NODE_LITERAL) {
+            cypher_literal *l = (cypher_literal*)ret->skip;
+            if (l->literal_type == LITERAL_INTEGER) skip_val = l->value.integer;
+        }
+        int start = 0;
+        if (skip_val > 0) start = (skip_val >= n_maps) ? n_maps : (int)skip_val;
+        int end = n_maps;
+        if (limit_val == 0) end = start;
+        else if (limit_val > 0 && start + (int)limit_val < end) end = start + (int)limit_val;
+        int produced = end - start;
+        if (produced < 0) produced = 0;
+
+        if (return_has_aggregation(ret)) {
+            /* Single aggregated row across the (post-skip/limit) maps. */
+            result->row_count = 1;
+            result->data = malloc(sizeof(char**));
+            result->data_types = malloc(sizeof(int*));
+            result->data[0] = malloc(col_count * sizeof(char*));
+            result->data_types[0] = calloc(col_count, sizeof(int));
+            for (int i = 0; i < col_count; i++) {
+                cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+                if (aggregating_call_name(it->expr)) {
+                    project_aggregate_cell(executor, it, maps + start, produced, result, i);
+                } else if (produced > 0) {
+                    char **save_data = result->data[0];
+                    int *save_types = result->data_types[0];
+                    char ***save_data_all = result->data;
+                    int **save_types_all = result->data_types;
+                    char **tmp = malloc(col_count * sizeof(char*));
+                    int *tmp_t = calloc(col_count, sizeof(int));
+                    result->data = &tmp;
+                    result->data_types = &tmp_t;
+                    project_return_row_from_var_map(executor, ret, maps[start], result, 0);
+                    result->data = save_data_all;
+                    result->data_types = save_types_all;
+                    save_data[i] = tmp[i];
+                    save_types[i] = tmp_t[i];
+                    for (int k = 0; k < col_count; k++) if (k != i && tmp[k]) free(tmp[k]);
+                    free(tmp);
+                    free(tmp_t);
+                } else {
+                    result->data[0][i] = NULL;
+                }
+            }
+        } else {
+            result->row_count = produced;
+            if (produced == 0) {
+                result->data = NULL;
+                result->data_types = NULL;
+            } else {
+                result->data = malloc(produced * sizeof(char**));
+                result->data_types = malloc(produced * sizeof(int*));
+                for (int r = 0; r < produced; r++) {
+                    result->data[r] = malloc(col_count * sizeof(char*));
+                    result->data_types[r] = calloc(col_count, sizeof(int));
+                    project_return_row_from_var_map(executor, ret, maps[start + r], result, r);
+                }
+            }
+        }
+
+        for (int j = 0; j < n_maps; j++) free_variable_map(maps[j]);
+        free(maps);
+        result->success = true;
+        return 0;
+    }
+
     int rc = execute_match_create_return_query(executor, match, create, ret, result);
     if (rc >= 0) {
         result->success = true;
