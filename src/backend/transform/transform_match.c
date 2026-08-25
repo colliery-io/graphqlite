@@ -516,7 +516,45 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     if (m->pairs) {
                         for (int pi = 0; pi < m->pairs->count; pi++) {
                             cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[pi];
-                            if (!pair->key || !pair->value || pair->value->type != AST_NODE_LITERAL) continue;
+                            if (!pair->key || !pair->value) continue;
+                            if (pair->value->type == AST_NODE_PARAMETER) {
+                                /* Parameter in relationship property filter, e.g.
+                                 * ()-[r:KNOWS {tag: $t}]->(). Mirror the node-pattern
+                                 * parameter handling: OR conditions across each edge
+                                 * property type table so string, int, real, and bool
+                                 * params all match correctly (GitHub #96 — previously
+                                 * parameters here were silently skipped, so the
+                                 * filter matched every edge of the type). */
+                                cypher_parameter *param = (cypher_parameter*)pair->value;
+                                char *esc_key = escape_sql_string(pair->key);
+                                const char *key_sql = esc_key ? esc_key : pair->key;
+                                dynamic_buffer cond;
+                                dbuf_init(&cond);
+                                dbuf_appendf(&cond,
+                                    "("
+                                    "EXISTS(SELECT 1 FROM edge_props_text ept "
+                                    "JOIN property_keys pk ON ept.key_id = pk.id "
+                                    "WHERE ept.edge_id = %s.id AND pk.key = '%s' AND ept.value = :%s) OR "
+                                    "EXISTS(SELECT 1 FROM edge_props_int epi "
+                                    "JOIN property_keys pk ON epi.key_id = pk.id "
+                                    "WHERE epi.edge_id = %s.id AND pk.key = '%s' AND epi.value = :%s) OR "
+                                    "EXISTS(SELECT 1 FROM edge_props_real epr "
+                                    "JOIN property_keys pk ON epr.key_id = pk.id "
+                                    "WHERE epr.edge_id = %s.id AND pk.key = '%s' AND epr.value = :%s) OR "
+                                    "EXISTS(SELECT 1 FROM edge_props_bool epb "
+                                    "JOIN property_keys pk ON epb.key_id = pk.id "
+                                    "WHERE epb.edge_id = %s.id AND pk.key = '%s' AND epb.value = :%s)"
+                                    ")",
+                                    edge_alias, key_sql, param->name,
+                                    edge_alias, key_sql, param->name,
+                                    edge_alias, key_sql, param->name,
+                                    edge_alias, key_sql, param->name);
+                                free(esc_key);
+                                sql_where(ctx->unified_builder, dbuf_get(&cond));
+                                dbuf_free(&cond);
+                                continue;
+                            }
+                            if (pair->value->type != AST_NODE_LITERAL) continue;
                             cypher_literal *lit = (cypher_literal*)pair->value;
                             const char *tbl = NULL;
                             char val_buf[256] = "";

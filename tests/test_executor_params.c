@@ -332,6 +332,58 @@ static void test_null_param(void)
     if (result) cypher_result_free(result);
 }
 
+/*
+ * GitHub #96: inline relationship-pattern property filter with a parameter
+ * value, e.g. MATCH ()-[r:KNOWS {tag: $t}]->(). Previously the parameter
+ * was silently skipped and the filter matched every edge of the type.
+ */
+static void test_rel_inline_param_filter(void)
+{
+    cypher_result *r;
+    r = exec("CREATE (:RelParam {name: \"src\"})");
+    if (r) cypher_result_free(r);
+    r = exec("CREATE (:RelParam {name: \"dst\"})");
+    if (r) cypher_result_free(r);
+    r = exec("MATCH (a:RelParam {name: \"src\"}), (b:RelParam {name: \"dst\"}) "
+             "CREATE (a)-[:RP_KNOWS {w: 1}]->(b)");
+    if (r) cypher_result_free(r);
+    r = exec("MATCH (a:RelParam {name: \"src\"}), (b:RelParam {name: \"dst\"}) "
+             "CREATE (a)-[:RP_KNOWS {w: 2, tag: \"target\"}]->(b)");
+    if (r) cypher_result_free(r);
+
+    /* String parameter: must match only the tagged edge, not all edges. */
+    cypher_result *result = exec_params(
+        "MATCH ()-[e:RP_KNOWS {tag: $t}]->() RETURN e.w AS w",
+        "{\"t\": \"target\"}"
+    );
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result && result->success);
+    CU_ASSERT_EQUAL(get_row_count(result), 1);
+    CU_ASSERT_TRUE(result_contains_value(result, "w", "2"));
+    if (result) cypher_result_free(result);
+
+    /* Integer parameter. */
+    result = exec_params(
+        "MATCH ()-[e:RP_KNOWS {w: $w}]->() RETURN e.w AS w",
+        "{\"w\": 1}"
+    );
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result && result->success);
+    CU_ASSERT_EQUAL(get_row_count(result), 1);
+    CU_ASSERT_TRUE(result_contains_value(result, "w", "1"));
+    if (result) cypher_result_free(result);
+
+    /* Non-matching parameter value: no rows. */
+    result = exec_params(
+        "MATCH ()-[e:RP_KNOWS {tag: $t}]->() RETURN e.w AS w",
+        "{\"t\": \"nope\"}"
+    );
+    CU_ASSERT_PTR_NOT_NULL(result);
+    CU_ASSERT_TRUE(result && result->success);
+    CU_ASSERT_EQUAL(get_row_count(result), 0);
+    if (result) cypher_result_free(result);
+}
+
 /* Register all tests */
 int register_params_tests(void)
 {
@@ -369,6 +421,10 @@ int register_params_tests(void)
     if (!CU_add_test(suite, "Boolean parameter", test_boolean_param))
         return -1;
     if (!CU_add_test(suite, "Null parameter", test_null_param))
+        return -1;
+
+    /* Relationship inline pattern property filter (GitHub #96) */
+    if (!CU_add_test(suite, "Relationship inline property filter with parameter", test_rel_inline_param_filter))
         return -1;
 
     return 0;
