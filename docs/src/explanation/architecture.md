@@ -11,6 +11,7 @@ Building a purpose-built graph engine would require implementing disk layout, bu
 The transpiler approach means:
 
 - **Durability and atomicity come for free.** Every write goes through SQLite's WAL and journalling machinery.
+- **Concurrent access inherits SQLite's guarantees.** Multiple processes (not just threads) can safely read and write the same database file at the same time; SQLite's locking serialises the writes with no corruption or lost updates. The default rollback-journal mode allows one writer at a time with readers blocked during writes; enabling [WAL mode](https://www.sqlite.org/wal.html) (`PRAGMA journal_mode=WAL`) lets readers proceed concurrently with a writer and typically improves write throughput. GraphQLite adds no locking of its own — whatever concurrency SQLite supports in your configuration is what you get.
 - **Standard tooling works.** The underlying tables are plain SQLite tables. You can inspect them with the SQLite CLI, use SQLite backup APIs, and attach the database to other tools.
 - **Query execution is handled by a proven optimiser.** The generated SQL benefits from SQLite's query planner, covering indexes, and prepared statement caching.
 
