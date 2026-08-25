@@ -4,6 +4,45 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-08-25
+
+Patch release fixing three reported issues (#95, #96, #97). 947/947 unit
+tests pass; functional tests clean (including the new hard-assertion
+regression suite `tests/functional/39_issue_regression_tests.sql`);
+openCypher TCK per-scenario diff shows zero regressions.
+
+### Fixed
+
+- **Relationship inline property filters with parameters** (#96) —
+  `MATCH ()-[r:TYPE {prop: $param}]->()` silently skipped the parameter
+  and matched *every* edge of the type, which was dangerous for `SET`/
+  `DELETE` scoped by such a filter. Parameter values are now matched
+  against the edge property tables exactly like literals. Node patterns
+  and `WHERE` clauses were unaffected.
+- **`RETURN` of a relationship created between MATCH-bound nodes** (#95) —
+  `MATCH (x), (y) CREATE (x)-[r:T]->(y) RETURN r` raised
+  `Unknown variable: r` *after* the `CREATE` had committed. The
+  MATCH+CREATE+RETURN path now projects CREATE-introduced variables
+  (bare `r`, `r.prop`, aggregates, `SKIP`/`LIMIT`) with one result row
+  per matched row, for both comma-pattern and multi-`MATCH` shapes.
+- **MERGE with parameter-valued inline properties** — the MERGE match
+  phase ignored `$param` inline properties for both nodes and edges
+  (matching any node of the label / any existing edge on the triple),
+  and node creation dropped them entirely. All three paths now resolve
+  parameters correctly.
+
+### Added
+
+- **Caller-assigned edge ids for `upsert_edge`** (#97) — Python
+  `upsert_edge(..., edge_id=None)` and Rust `upsert_edge_with_id(...)`
+  merge on an `id` relationship property instead of the
+  `(source, target, rel_type)` triple, so parallel edges between the
+  same two nodes with the same type are individually addressable and
+  upsertable in place. Omitting the id keeps the existing
+  merge-on-triple behavior.
+- Documentation: concurrent multi-process access inherits SQLite's own
+  locking/WAL guarantees — stated explicitly in the architecture page.
+
 ## [0.6.0] — 2026-06-03
 
 A large openCypher conformance release. TCK pass rate moves from **91.5%**
