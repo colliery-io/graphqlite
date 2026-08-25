@@ -55,7 +55,7 @@ out in sections 2 and 3.
 | `MERGE (a)-[r:R {k:v}]->(b)` | rel | `39:T-0187` ✓ | `39:T-0187` ✓ (T-0186/7) | GAP | n/a |
 | `MERGE (n) SET n.k = v` | node | `39:T-0195a` ✓ | GAP | GAP | n/a |
 | `MERGE (n) SET n += {..}` | node | `39:T-0195b` ✓ | GAP | GAP | `39:T-0195b` ✓ |
-| `MATCH (a) CREATE (a)-[:R]->(b)` | new rel | `10:…` ✓ | GAP | GAP | n/a |
+| `MATCH (a) CREATE (a)-[:R]->(b)` | new rel | `10:…`, `39:GH-95` ✓ (incl. `RETURN r`/`r.k` read-back) | GAP | GAP | n/a |
 | `MATCH (a) CREATE (a)-[:R]->(b) SET b.k = v` | new node | `39:T-0198c` ✓ | GAP | GAP | n/a |
 | `MATCH (a) MATCH (b) CREATE (a)-[:R]->(b)` | rel | `39:T-0197a` ✓ | `39:T-0197c` ✓ | GAP | n/a |
 | `MATCH (a) MATCH (b) MERGE (a)-[r]->(b) SET r.k = v` | rel | `39:T-0196` ✓ | `39:T-0196` ✓ | GAP | n/a |
@@ -108,6 +108,9 @@ shipped — remaining gaps below.
 | Trailing SET after MERGE, rel | ✓ | GAP | file follow-up |
 | Trailing SET after MATCH+MERGE, rel | ✓ | GAP | file follow-up |
 | `SET r +=` on rel var | `39:T-0202c` ✓ | `39:T-0202d` ✓ | |
+| MATCH rel inline prop filter (read) | `39:GH-96 1.2` ✓ | `39:GH-96 1.1/1.4` ✓ | fixed in GH-96 |
+| MERGE node inline prop (match phase) | ✓ | `39:GH-97 3.1` ✓ | fixed with GH-97 |
+| MERGE rel inline prop (match phase) | ✓ | `39:GH-97 3.2` ✓ | fixed with GH-97 |
 
 ---
 
@@ -699,3 +702,34 @@ WithOrderBy4 [12] ("Sort by an aliased aggregate projection") and Pattern2 [8]
   whole table. The catch-all branch now appends the (non-aggregate) transformed
   expression to GROUP BY, mirroring the identifier/property branches. Aggregate
   projections (`find_aggregating_call` non-null) are still excluded from GROUP BY.
+
+## Coverage update (2026-08-25) — GitHub issues #95/#96/#97
+
+Regression tests live in `tests/functional/39_issue_regression_tests.sql`
+(hard assertions: a CHECK-constrained temp table aborts the run under
+`sqlite3 -bail` on any mismatch). Verified alongside unit 947/947, Python
+357, Rust 244, and a full TCK pass-set diff (zero regressions).
+
+- **GH-96 — `MATCH ()-[r:T {k: $param}]->()`** — relationship inline
+  property filters previously *skipped* parameter values entirely,
+  matching every edge of the type (node patterns and WHERE clauses were
+  unaffected). `transform_match.c` now emits the same OR-of-EXISTS
+  parameter condition the node path uses. Cells: read-filter literal vs
+  `$param` symmetry for rel patterns (section 3), including a
+  `SET`-scoped-by-filter safety check.
+- **GH-95 — `MATCH … CREATE (a)-[r]->(b) RETURN r`** — RETURN of a
+  variable introduced by CREATE (not bound by any MATCH) raised
+  "Unknown variable" *after* committing the write. The
+  MATCH+CREATE+RETURN handler now projects such variables from per-row
+  variable maps (bare var, `var.k`, aggregates, SKIP/LIMIT; one result
+  row per MATCH row). Cell: `MATCH (a) CREATE (a)-[:R]->(b)` read-back
+  on the created rel var (section 1).
+- **GH-97 — MERGE `$param` inline properties** — the MERGE match phase
+  ignored parameter-valued inline properties for both nodes and edges
+  (matching any node of the label / any edge on the triple), and node
+  creation dropped them. `executor_merge.c` now resolves parameters in
+  `find_node_by_pattern`, `find_edge_by_pattern`, and the node-create
+  property phase. This makes caller-assigned edge ids workable:
+  `upsert_edge(..., edge_id=...)` (Python) / `upsert_edge_with_id`
+  (Rust) merge on an `id` relationship property so parallel edges on
+  the same (source, target, type) triple are individually addressable.

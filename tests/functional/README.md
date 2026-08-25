@@ -56,6 +56,11 @@ The functional tests are numbered sequentially and cover all aspects of GraphQLi
 **Covers**: Node reuse vs creation, relationship creation with existing nodes  
 **Key Tests**: Node reuse verification, error handling for missing nodes, efficiency patterns
 
+### 39_issue_regression_tests.sql
+**Purpose**: Round-trip regression tests for reported GitHub issues (see `docs/testing/semantic-coverage-matrix.md`)  
+**Covers**: GH-96 (rel inline property filter with `$param`), GH-95 (MATCH+CREATE ... RETURN created rel var), GH-97 (MERGE with `$param` inline properties / parallel edges)  
+**Key Tests**: Hard assertions via a CHECK-constrained temp table — any mismatch aborts the run under `sqlite3 -bail`
+
 ## Running Tests
 
 ### Run All Functional Tests
