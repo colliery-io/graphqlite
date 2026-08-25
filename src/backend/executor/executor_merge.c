@@ -78,6 +78,53 @@ typedef struct {
 
 #define MAX_BINDINGS 64
 
+/* Set a node property from a $parameter value during the MERGE create
+ * phase. Previously parameter-valued inline properties (e.g.
+ * MERGE (n:L {id: $id})) were silently dropped at creation, leaving the
+ * new node without the property. */
+static void set_node_prop_from_param(cypher_executor *executor, int node_id,
+                                     const char *key, cypher_parameter *param,
+                                     cypher_result *result)
+{
+    if (!executor->params_json) return;
+    property_type ptype;
+    property_value pv;
+    property_value_init(&pv);
+    if (get_param_value(executor->params_json, param->name, &ptype, &pv) != 0) {
+        property_value_free(&pv);
+        return;
+    }
+    const void *prop_value = NULL;
+    int64_t ibuf;
+    double rbuf;
+    int bbuf;
+    switch (ptype) {
+        case PROP_TYPE_TEXT:
+        case PROP_TYPE_JSON:
+            prop_value = pv.as_str;
+            break;
+        case PROP_TYPE_INTEGER:
+            ibuf = pv.as_int;
+            prop_value = &ibuf;
+            break;
+        case PROP_TYPE_REAL:
+            rbuf = pv.as_real;
+            prop_value = &rbuf;
+            break;
+        case PROP_TYPE_BOOLEAN:
+            bbuf = pv.as_bool;
+            prop_value = &bbuf;
+            break;
+        default:
+            break;
+    }
+    if (prop_value &&
+        cypher_schema_set_node_property(executor->schema_mgr, node_id, key, ptype, prop_value) == 0) {
+        result->properties_set++;
+    }
+    property_value_free(&pv);
+}
+
 /* Helper to bind all parameters to a prepared statement */
 static int bind_all_params(sqlite3_stmt *stmt, param_binding *bindings, int count)
 {
@@ -113,6 +160,10 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     int offset = 0;
     param_binding bindings[MAX_BINDINGS];
     int bind_count = 0;
+    /* Strings resolved from $parameters; must stay alive until after
+     * sqlite3_step (BIND_TEXT uses SQLITE_STATIC). */
+    char *owned_strs[MAX_BINDINGS];
+    int owned_count = 0;
 
     offset += snprintf(sql + offset, sizeof(sql) - offset,
                        "SELECT n.id FROM nodes n");
@@ -159,6 +210,67 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                     } else {
                         free(resolved);
                     }
+                } else if (pair->key && pair->value &&
+                           pair->value->type == AST_NODE_PARAMETER &&
+                           executor->params_json) {
+                    /* Parameter-valued inline property, e.g.
+                     * MERGE (n:L {id: $id}). Previously skipped, so the
+                     * match phase ignored the filter entirely (same family
+                     * as GitHub #96) and MERGE could match an unrelated
+                     * node of the label. Resolve the parameter and add the
+                     * same join a literal value would get. */
+                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                    property_type ptype;
+                    property_value pv;
+                    property_value_init(&pv);
+                    if (get_param_value(executor->params_json, param->name, &ptype, &pv) != 0) {
+                        property_value_free(&pv);
+                        continue;
+                    }
+                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) {
+                        property_value_free(&pv);
+                        break;
+                    }
+                    const char *prop_table = NULL;
+                    param_binding val_bind;
+                    switch (ptype) {
+                        case PROP_TYPE_TEXT:
+                            prop_table = "node_props_text";
+                            val_bind.type = BIND_TEXT;
+                            val_bind.value.text = pv.as_str;
+                            owned_strs[owned_count++] = pv.as_str;
+                            pv.as_str = NULL; /* ownership moved */
+                            break;
+                        case PROP_TYPE_INTEGER:
+                            prop_table = "node_props_int";
+                            val_bind.type = BIND_INT;
+                            val_bind.value.integer = (int)pv.as_int;
+                            break;
+                        case PROP_TYPE_REAL:
+                            prop_table = "node_props_real";
+                            val_bind.type = BIND_DOUBLE;
+                            val_bind.value.real = pv.as_real;
+                            break;
+                        case PROP_TYPE_BOOLEAN:
+                            prop_table = "node_props_bool";
+                            val_bind.type = BIND_INT;
+                            val_bind.value.integer = pv.as_bool ? 1 : 0;
+                            break;
+                        default:
+                            break;
+                    }
+                    property_value_free(&pv);
+                    if (!prop_table) continue;
+                    offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                      " JOIN %s np%d ON n.id = np%d.node_id"
+                                      " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
+                                      " AND np%d.value = ?",
+                                      prop_table, i, i, i, i, i, i, i);
+                    bindings[bind_count].type = BIND_TEXT;
+                    bindings[bind_count].value.text = pair->key;
+                    bind_count++;
+                    bindings[bind_count] = val_bind;
+                    bind_count++;
                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
 
@@ -241,12 +353,14 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("MERGE find query prepare failed: %s", sqlite3_errmsg(executor->db));
+        for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
         return -1;
     }
 
     if (bind_all_params(stmt, bindings, bind_count) != 0) {
         CYPHER_DEBUG("MERGE find query bind failed");
         sqlite3_finalize(stmt);
+        for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
         return -1;
     }
 
@@ -257,6 +371,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     }
 
     sqlite3_finalize(stmt);
+    for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
     return node_id;
 }
 
@@ -273,6 +388,10 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     int offset = 0;
     param_binding bindings[MAX_BINDINGS];
     int bind_count = 0;
+    /* Strings resolved from $parameters; must stay alive until after
+     * sqlite3_step (BIND_TEXT uses SQLITE_STATIC). */
+    char *owned_strs[MAX_BINDINGS];
+    int owned_count = 0;
 
     /* source_id and target_id are integers from our own code, safe to interpolate.
      * For an undirected pattern (a)-[r]-(b) the existing edge may run either
@@ -303,7 +422,67 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
         if (map->pairs) {
             for (int i = 0; i < map->pairs->count; i++) {
                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[i];
-                if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
+                if (pair->key && pair->value &&
+                    pair->value->type == AST_NODE_PARAMETER &&
+                    executor->params_json) {
+                    /* Parameter-valued inline property, e.g.
+                     * MERGE (a)-[r:T {id: $eid}]->(b). Previously skipped,
+                     * so MERGE matched any existing edge on the triple and
+                     * never created a second one (same family as GitHub
+                     * #96; needed for #97-style caller-assigned edge ids). */
+                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                    property_type ptype;
+                    property_value pv;
+                    property_value_init(&pv);
+                    if (get_param_value(executor->params_json, param->name, &ptype, &pv) != 0) {
+                        property_value_free(&pv);
+                        continue;
+                    }
+                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) {
+                        property_value_free(&pv);
+                        break;
+                    }
+                    const char *prop_table = NULL;
+                    param_binding val_bind;
+                    switch (ptype) {
+                        case PROP_TYPE_TEXT:
+                            prop_table = "edge_props_text";
+                            val_bind.type = BIND_TEXT;
+                            val_bind.value.text = pv.as_str;
+                            owned_strs[owned_count++] = pv.as_str;
+                            pv.as_str = NULL; /* ownership moved */
+                            break;
+                        case PROP_TYPE_INTEGER:
+                            prop_table = "edge_props_int";
+                            val_bind.type = BIND_INT;
+                            val_bind.value.integer = (int)pv.as_int;
+                            break;
+                        case PROP_TYPE_REAL:
+                            prop_table = "edge_props_real";
+                            val_bind.type = BIND_DOUBLE;
+                            val_bind.value.real = pv.as_real;
+                            break;
+                        case PROP_TYPE_BOOLEAN:
+                            prop_table = "edge_props_bool";
+                            val_bind.type = BIND_INT;
+                            val_bind.value.integer = pv.as_bool ? 1 : 0;
+                            break;
+                        default:
+                            break;
+                    }
+                    property_value_free(&pv);
+                    if (!prop_table) continue;
+                    offset += snprintf(sql + offset, sizeof(sql) - offset,
+                                      " AND EXISTS (SELECT 1 FROM %s ep%d"
+                                      " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
+                                      " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
+                                      prop_table, i, i, i, i, i, i, i);
+                    bindings[bind_count].type = BIND_TEXT;
+                    bindings[bind_count].value.text = pair->key;
+                    bind_count++;
+                    bindings[bind_count] = val_bind;
+                    bind_count++;
+                } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
 
                     if (bind_count + 2 > MAX_BINDINGS) break;
@@ -385,12 +564,14 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("MERGE find edge query prepare failed: %s", sqlite3_errmsg(executor->db));
+        for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
         return -1;
     }
 
     if (bind_all_params(stmt, bindings, bind_count) != 0) {
         CYPHER_DEBUG("MERGE find edge query bind failed");
         sqlite3_finalize(stmt);
+        for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
         return -1;
     }
 
@@ -401,6 +582,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     }
 
     sqlite3_finalize(stmt);
+    for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
     return edge_id;
 }
 /* Execute MERGE clause — canonical signature (I-0041 C8–C10).
@@ -562,6 +744,10 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                                         cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value);
                                         result->properties_set++;
                                     }
+                                } else if (pair->key && pair->value &&
+                                           pair->value->type == AST_NODE_PARAMETER) {
+                                    set_node_prop_from_param(executor, node_id, pair->key,
+                                        (cypher_parameter*)pair->value, result);
                                 }
                             }
                         }
@@ -685,6 +871,10 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                                             cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value);
                                             result->properties_set++;
                                         }
+                                    } else if (pair->key && pair->value &&
+                                               pair->value->type == AST_NODE_PARAMETER) {
+                                        set_node_prop_from_param(executor, target_node_id, pair->key,
+                                            (cypher_parameter*)pair->value, result);
                                     }
                                 }
                             }
@@ -1214,6 +1404,10 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                                         cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value);
                                         result->properties_set++;
                                     }
+                                } else if (pair->key && pair->value &&
+                                           pair->value->type == AST_NODE_PARAMETER) {
+                                    set_node_prop_from_param(executor, node_id, pair->key,
+                                        (cypher_parameter*)pair->value, result);
                                 }
                             }
                         }
@@ -1338,6 +1532,10 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                                             cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value);
                                             result->properties_set++;
                                         }
+                                    } else if (pair->key && pair->value &&
+                                               pair->value->type == AST_NODE_PARAMETER) {
+                                        set_node_prop_from_param(executor, target_node_id, pair->key,
+                                            (cypher_parameter*)pair->value, result);
                                     }
                                 }
                             }

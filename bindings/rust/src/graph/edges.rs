@@ -108,6 +108,68 @@ impl Graph {
         Ok(())
     }
 
+    /// Create or update an edge identified by a caller-assigned edge id.
+    ///
+    /// The edge is matched/merged on `edge_id` (stored as an `id` property on
+    /// the relationship) instead of on the (source, target, rel_type) triple,
+    /// so multiple parallel edges can exist between the same two nodes with
+    /// the same relationship type. Repeated calls with the same `edge_id`
+    /// update that edge's properties in place; different `edge_id`s create
+    /// distinct edges.
+    ///
+    /// Both source and target nodes must exist.
+    pub fn upsert_edge_with_id<I, K, V>(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        props: I,
+        rel_type: &str,
+        edge_id: &str,
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Into<PropertyValue>,
+    {
+        let safe_rel_type = sanitize_rel_type(rel_type);
+
+        let props: Vec<(String, PropertyValue)> = props
+            .into_iter()
+            .map(|(k, v)| (k.as_ref().to_string(), v.into()))
+            .collect();
+
+        let merge_query = format!(
+            "MATCH (a {{id: $src}}), (b {{id: $tgt}}) MERGE (a)-[r:{} {{id: $eid}}]->(b)",
+            safe_rel_type
+        );
+        self.connection()
+            .cypher_builder(&merge_query)
+            .param("src", source_id)
+            .param("tgt", target_id)
+            .param("eid", edge_id)
+            .run()?;
+
+        if !props.is_empty() {
+            let set_parts: Vec<String> = props
+                .iter()
+                .map(|(k, v)| format!("r.{} = {}", k, v.to_cypher()))
+                .collect();
+            let set_str = set_parts.join(", ");
+            let set_query = format!(
+                "MATCH (a {{id: $src}})-[r:{} {{id: $eid}}]->(b {{id: $tgt}}) SET {}",
+                safe_rel_type, set_str
+            );
+            self.connection()
+                .cypher_builder(&set_query)
+                .param("src", source_id)
+                .param("tgt", target_id)
+                .param("eid", edge_id)
+                .run()?;
+        }
+
+        Ok(())
+    }
+
     /// Delete the directed edge between two nodes.
     pub fn delete_edge(
         &self,

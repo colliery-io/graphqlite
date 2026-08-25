@@ -285,6 +285,44 @@ fn test_graph_upsert_edge() {
 }
 
 #[test]
+fn test_graph_upsert_edge_with_id() {
+    // GitHub #97: caller-assigned edge ids address parallel edges on the
+    // same (source, target, type) triple.
+    let g = test_graph();
+
+    g.upsert_node("a", [("name", "A")], "Node").unwrap();
+    g.upsert_node("b", [("name", "B")], "Node").unwrap();
+
+    // Two distinct edge_ids on the same triple -> two parallel edges
+    g.upsert_edge_with_id("a", "b", [("seq", "1")], "KNOWS", "k1")
+        .unwrap();
+    g.upsert_edge_with_id("a", "b", [("seq", "2")], "KNOWS", "k2")
+        .unwrap();
+
+    let result = g
+        .connection()
+        .cypher("MATCH (a {id: 'a'})-[r:KNOWS]->(b {id: 'b'}) RETURN r.id AS eid")
+        .unwrap();
+    assert_eq!(result.len(), 2);
+
+    // Repeating an edge_id updates that edge in place
+    g.upsert_edge_with_id("a", "b", [("seq", "10")], "KNOWS", "k1")
+        .unwrap();
+    let result = g
+        .connection()
+        .cypher("MATCH (a {id: 'a'})-[r:KNOWS]->(b {id: 'b'}) RETURN r.id AS eid")
+        .unwrap();
+    assert_eq!(result.len(), 2);
+    let result = g
+        .connection()
+        .cypher("MATCH ()-[r:KNOWS {id: 'k1'}]->() RETURN r.seq AS seq")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    let seq: i64 = result[0].get("seq").unwrap_or(0);
+    assert_eq!(seq, 10);
+}
+
+#[test]
 fn test_graph_stats() {
     let g = test_graph();
 

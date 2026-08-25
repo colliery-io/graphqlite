@@ -881,6 +881,82 @@ static void test_merge_with_edge_variable_return(void)
     }
 }
 
+/* GitHub #97 prerequisite: MERGE must honor parameter-valued inline
+ * properties both when matching and when creating. Previously they were
+ * silently ignored: MERGE (n:L {id: $id}) matched any :L node and created
+ * nodes without the property; MERGE (a)-[r:T {id: $eid}]->(b) matched any
+ * existing edge on the triple, so parallel edges could not be addressed. */
+static void test_merge_param_properties(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (!executor) return;
+
+    /* Node MERGE with a parameter property: create sets the property... */
+    cypher_result *r = cypher_executor_execute_params(executor,
+        "MERGE (n:ParamMerge {pid: $p})", "{\"p\": \"m1\"}");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) { CU_ASSERT_TRUE(r->success); CU_ASSERT_EQUAL(r->nodes_created, 1); cypher_result_free(r); }
+
+    /* ...re-merge with the same value matches (no new node)... */
+    r = cypher_executor_execute_params(executor,
+        "MERGE (n:ParamMerge {pid: $p})", "{\"p\": \"m1\"}");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) { CU_ASSERT_TRUE(r->success); CU_ASSERT_EQUAL(r->nodes_created, 0); cypher_result_free(r); }
+
+    /* ...and a different value creates a second node. */
+    r = cypher_executor_execute_params(executor,
+        "MERGE (n:ParamMerge {pid: $p})", "{\"p\": \"m2\"}");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) { CU_ASSERT_TRUE(r->success); CU_ASSERT_EQUAL(r->nodes_created, 1); cypher_result_free(r); }
+
+    /* The created nodes carry the property value. */
+    r = cypher_executor_execute(executor,
+        "MATCH (n:ParamMerge {pid: 'm2'}) RETURN n.pid");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) {
+        CU_ASSERT_TRUE(r->success);
+        CU_ASSERT_EQUAL(r->row_count, 1);
+        cypher_result_free(r);
+    }
+
+    /* Edge MERGE with a parameter property: distinct ids create parallel
+     * edges on the same (source, target, type) triple; repeats match. */
+    r = cypher_executor_execute_params(executor,
+        "MATCH (a:ParamMerge {pid: $s}), (b:ParamMerge {pid: $t}) "
+        "MERGE (a)-[e:PM_REL {eid: $e}]->(b)",
+        "{\"s\": \"m1\", \"t\": \"m2\", \"e\": \"e1\"}");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) { CU_ASSERT_TRUE(r->success); CU_ASSERT_EQUAL(r->relationships_created, 1); cypher_result_free(r); }
+
+    r = cypher_executor_execute_params(executor,
+        "MATCH (a:ParamMerge {pid: $s}), (b:ParamMerge {pid: $t}) "
+        "MERGE (a)-[e:PM_REL {eid: $e}]->(b)",
+        "{\"s\": \"m1\", \"t\": \"m2\", \"e\": \"e1\"}");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) { CU_ASSERT_TRUE(r->success); CU_ASSERT_EQUAL(r->relationships_created, 0); cypher_result_free(r); }
+
+    r = cypher_executor_execute_params(executor,
+        "MATCH (a:ParamMerge {pid: $s}), (b:ParamMerge {pid: $t}) "
+        "MERGE (a)-[e:PM_REL {eid: $e}]->(b)",
+        "{\"s\": \"m1\", \"t\": \"m2\", \"e\": \"e2\"}");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) { CU_ASSERT_TRUE(r->success); CU_ASSERT_EQUAL(r->relationships_created, 1); cypher_result_free(r); }
+
+    r = cypher_executor_execute(executor,
+        "MATCH ()-[e:PM_REL]->() RETURN count(e) AS c");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) {
+        CU_ASSERT_TRUE(r->success);
+        if (r->success && r->row_count == 1 && r->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(r->data[0][0], "2");
+        }
+        cypher_result_free(r);
+    }
+
+    cypher_executor_free(executor);
+}
+
 /* Initialize the MERGE executor test suite */
 int init_executor_merge_suite(void)
 {
@@ -908,7 +984,8 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE+WITH+SET no RETURN", test_merge_with_set_no_return) ||
         !CU_add_test(suite, "MERGE+WITH+RETURN no SET", test_merge_with_return_no_set) ||
         !CU_add_test(suite, "MERGE+WITH+multi-SET", test_merge_with_multiple_set) ||
-        !CU_add_test(suite, "MERGE+WITH+edge variable", test_merge_with_edge_variable_return)) {
+        !CU_add_test(suite, "MERGE+WITH+edge variable", test_merge_with_edge_variable_return) ||
+        !CU_add_test(suite, "MERGE with parameter properties", test_merge_param_properties)) {
         return CU_get_error();
     }
 

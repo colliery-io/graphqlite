@@ -60,14 +60,23 @@ class EdgesMixin(BaseMixin):
         source_id: str,
         target_id: str,
         edge_data: dict[str, Any],
-        rel_type: str = "RELATED"
+        rel_type: str = "RELATED",
+        edge_id: Optional[str] = None,
     ) -> None:
         """
         Create or update an edge between two nodes.
 
-        If an edge of the same type already exists, its properties are updated
-        (merge semantics -- existing properties not in edge_data are preserved).
-        If no edge of that type exists, a new one is created.
+        Without edge_id: if an edge of the same type already exists, its
+        properties are updated (merge semantics -- existing properties not in
+        edge_data are preserved). If no edge of that type exists, a new one is
+        created.
+
+        With edge_id: the edge is matched/merged on that caller-assigned id
+        (stored as an ``id`` property on the relationship) instead of on the
+        (source, target, rel_type) triple. Repeated calls with the same
+        edge_id update that edge in place; different edge_ids create distinct
+        parallel edges between the same two nodes with the same type.
+
         Both source and target nodes must exist.
 
         Args:
@@ -75,17 +84,29 @@ class EdgesMixin(BaseMixin):
             target_id: Target node id
             edge_data: Dictionary of edge properties
             rel_type: Relationship type label
+            edge_id: Optional caller-assigned edge identifier
         """
         safe_rel_type = sanitize_rel_type(rel_type)
 
-        self._conn.cypher(
-            f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
-            f"MERGE (a)-[r:{safe_rel_type}]->(b)",
-            params={"src": source_id, "tgt": target_id},
-        )
+        if edge_id is None:
+            self._conn.cypher(
+                f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
+                f"MERGE (a)-[r:{safe_rel_type}]->(b)",
+                params={"src": source_id, "tgt": target_id},
+            )
+            rel_match = f"[r:{safe_rel_type}]"
+            base_params = {"src": source_id, "tgt": target_id}
+        else:
+            self._conn.cypher(
+                f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
+                f"MERGE (a)-[r:{safe_rel_type} {{id: $eid}}]->(b)",
+                params={"src": source_id, "tgt": target_id, "eid": edge_id},
+            )
+            rel_match = f"[r:{safe_rel_type} {{id: $eid}}]"
+            base_params = {"src": source_id, "tgt": target_id, "eid": edge_id}
 
         if edge_data:
-            params = {"src": source_id, "tgt": target_id}
+            params = dict(base_params)
             set_parts = []
             for i, (k, v) in enumerate(edge_data.items()):
                 param_name = f"v{i}"
@@ -93,7 +114,7 @@ class EdgesMixin(BaseMixin):
                 params[param_name] = v
             set_str = ", ".join(set_parts)
             self._conn.cypher(
-                f"MATCH (a {{id: $src}})-[r:{safe_rel_type}]->"
+                f"MATCH (a {{id: $src}})-{rel_match}->"
                 f"(b {{id: $tgt}}) SET {set_str}",
                 params=params,
             )

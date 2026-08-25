@@ -252,6 +252,57 @@ def test_upsert_edge_update_empty_props(g):
     assert edge["properties"]["weight"] == 1
 
 
+def test_upsert_edge_with_edge_id_parallel_edges(g):
+    """GitHub #97: a caller-assigned edge_id addresses parallel edges on the
+    same (source, target, type) triple."""
+    g.upsert_node("a", {"name": "A"})
+    g.upsert_node("b", {"name": "B"})
+
+    # Two distinct edge_ids on the same triple -> two parallel edges
+    g.upsert_edge("a", "b", {"seq": 1}, rel_type="KNOWS", edge_id="k1")
+    g.upsert_edge("a", "b", {"seq": 2}, rel_type="KNOWS", edge_id="k2")
+
+    rows = g.query(
+        "MATCH (a {id: 'a'})-[r:KNOWS]->(b {id: 'b'}) "
+        "RETURN r.id AS eid, r.seq AS seq"
+    )
+    assert len(rows) == 2
+    by_id = {row["eid"]: row["seq"] for row in rows}
+    assert by_id == {"k1": 1, "k2": 2}
+
+
+def test_upsert_edge_with_edge_id_upserts_in_place(g):
+    """GitHub #97: repeating an edge_id updates that edge, not a new one."""
+    g.upsert_node("a", {"name": "A"})
+    g.upsert_node("b", {"name": "B"})
+
+    g.upsert_edge("a", "b", {"seq": 1}, rel_type="KNOWS", edge_id="k1")
+    g.upsert_edge("a", "b", {"seq": 10, "note": "updated"}, rel_type="KNOWS", edge_id="k1")
+
+    rows = g.query(
+        "MATCH (a {id: 'a'})-[r:KNOWS]->(b {id: 'b'}) "
+        "RETURN r.seq AS seq, r.note AS note"
+    )
+    assert len(rows) == 1
+    assert rows[0]["seq"] == 10
+    assert rows[0]["note"] == "updated"
+
+
+def test_upsert_edge_without_edge_id_keeps_triple_semantics(g):
+    """Without edge_id, repeated upserts still merge on the triple."""
+    g.upsert_node("a", {"name": "A"})
+    g.upsert_node("b", {"name": "B"})
+
+    g.upsert_edge("a", "b", {"w": 1}, rel_type="KNOWS")
+    g.upsert_edge("a", "b", {"w": 2}, rel_type="KNOWS")
+
+    rows = g.query(
+        "MATCH (a {id: 'a'})-[r:KNOWS]->(b {id: 'b'}) RETURN r.w AS w"
+    )
+    assert len(rows) == 1
+    assert rows[0]["w"] == 2
+
+
 def test_get_edge_by_type(g):
     """get_edge should be able to retrieve a specific edge type."""
     g.upsert_node("a", {"name": "A"})
