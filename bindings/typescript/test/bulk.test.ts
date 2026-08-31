@@ -209,3 +209,59 @@ test('insertNodesBulk / insertEdgesBulk: empty input is a no-op', gate, () => {
   assert.equal(insertNodesBulk(g.connection, []).size, 0);
   assert.equal(insertEdgesBulk(g.connection, []), 0);
 });
+
+test('insertNodesBulk prepares fixed SQL once for a same-shape batch', gate, (t) => {
+  // Given: a real database with prepare calls observed after graph setup.
+  using g = newGraph();
+  const db = g.connection.database;
+  const originalPrepare = db.prepare.bind(db);
+  const preparedSql: string[] = [];
+  t.mock.method(db, 'prepare', (sql: string) => {
+    preparedSql.push(sql);
+    return originalPrepare(sql);
+  });
+
+  // When: several nodes with every property storage type are inserted together.
+  insertNodesBulk(
+    g.connection,
+    Array.from({ length: 4 }, (_, index) => [
+      `node-${index}`,
+      { enabled: true, count: index, score: index + 0.5, name: `Node ${index}` },
+      'Node',
+    ]),
+  );
+
+  // Then: every static SQL shape is prepared at most once for the whole call.
+  assert.equal(preparedSql.length, new Set(preparedSql).size);
+});
+
+test('insertEdgesBulk prepares fixed SQL once for a same-shape batch', gate, (t) => {
+  // Given: endpoints created before prepare-call observation begins.
+  using g = newGraph();
+  const idMap = insertNodesBulk(
+    g.connection,
+    Array.from({ length: 5 }, (_, index) => [`node-${index}`, {}, 'Node']),
+  );
+  const db = g.connection.database;
+  const originalPrepare = db.prepare.bind(db);
+  const preparedSql: string[] = [];
+  t.mock.method(db, 'prepare', (sql: string) => {
+    preparedSql.push(sql);
+    return originalPrepare(sql);
+  });
+
+  // When: several edges with every property storage type are inserted together.
+  insertEdgesBulk(
+    g.connection,
+    Array.from({ length: 4 }, (_, index) => [
+      `node-${index}`,
+      `node-${index + 1}`,
+      { enabled: true, count: index, score: index + 0.5, name: `Edge ${index}` },
+      'LINKS',
+    ]),
+    idMap,
+  );
+
+  // Then: every static SQL shape is prepared at most once for the whole call.
+  assert.equal(preparedSql.length, new Set(preparedSql).size);
+});

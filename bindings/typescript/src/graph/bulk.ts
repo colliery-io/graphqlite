@@ -17,7 +17,16 @@
 //     utils.ts's (no reserved-word check; empty → "REL", not "REL_"). Do not
 //     merge the two.
 import type { Connection } from '../connection.ts';
-import type { DatabaseSync as DatabaseSyncInstance } from 'node:sqlite';
+import {
+  ensurePreparedPropertyKey,
+  insertPreparedProperty,
+  lookupPreparedNodeId,
+  prepareEdgeBulkStatements,
+  prepareNodeBulkStatements,
+} from './bulk-sql.ts';
+import type { EdgeBulkStatements } from './bulk-sql.ts';
+
+export { ensurePropertyKey, insertProperty, lookupNodeId } from './bulk-sql.ts';
 
 /** `[externalId, props, label]` — one node for {@link insertNodesBulk}. */
 export type BulkNodeItem = [string, Record<string, unknown>, string];
@@ -65,32 +74,28 @@ export function insertNodesBulk(conn: Connection, nodes: BulkNodeItem[]): Map<st
   const db = conn.database;
   db.exec('BEGIN IMMEDIATE');
   try {
-    const idKeyId = ensurePropertyKey(db, 'id');
+    const statements = prepareNodeBulkStatements(db);
+    const idKeyId = ensurePreparedPropertyKey(statements.propertyKeys, 'id');
     // Property-key cache within this transaction (quirk #6). Seeded with `id`.
     const propKeyCache = new Map<string, number>([['id', idKeyId]]);
 
     for (const [externalId, props, label] of nodes) {
-      const info = db.prepare('INSERT INTO nodes DEFAULT VALUES').run();
+      const info = statements.insertNode.run();
       const nodeId = Number(info.lastInsertRowid);
       idMap.set(externalId, nodeId);
 
-      db.prepare('INSERT OR IGNORE INTO node_labels (node_id, label) VALUES (?, ?)').run(
-        nodeId,
-        label,
-      );
+      statements.insertLabel.run(nodeId, label);
 
       // The external id is stored as the `id` text property (quirk #6).
-      db.prepare(
-        'INSERT OR REPLACE INTO node_props_text (node_id, key_id, value) VALUES (?, ?, ?)',
-      ).run(nodeId, idKeyId, externalId);
+      statements.properties.text.run(nodeId, idKeyId, externalId);
 
       for (const [key, value] of Object.entries(props)) {
         let keyId = propKeyCache.get(key);
         if (keyId === undefined) {
-          keyId = ensurePropertyKey(db, key);
+          keyId = ensurePreparedPropertyKey(statements.propertyKeys, key);
           propKeyCache.set(key, keyId);
         }
-        insertProperty(db, 'node', nodeId, keyId, value);
+        insertPreparedProperty(statements.properties, { entityId: nodeId, keyId, value });
       }
     }
 
@@ -124,29 +129,34 @@ export function insertEdgesBulk(
   const db = conn.database;
   db.exec('BEGIN IMMEDIATE');
   try {
+    const statements = prepareEdgeBulkStatements(db);
     const propKeyCache = new Map<string, number>();
+    const relTypeCache = new Map<string, string>();
     // Cache for endpoints not present in the provided map.
     const fallbackCache = new Map<string, number>();
+    const endpointContext: EndpointContext = { statements, idMap: map, fallbackCache };
     let edgesInserted = 0;
 
     for (const [source, target, props, relType] of edges) {
-      const safeRelType = sanitizeRelType(relType);
-      const sourceId = resolveEndpoint(db, source, map, fallbackCache);
-      const targetId = resolveEndpoint(db, target, map, fallbackCache);
+      let safeRelType = relTypeCache.get(relType);
+      if (safeRelType === undefined) {
+        safeRelType = sanitizeRelType(relType);
+        relTypeCache.set(relType, safeRelType);
+      }
+      const sourceId = resolveEndpoint(endpointContext, source);
+      const targetId = resolveEndpoint(endpointContext, target);
 
-      const info = db
-        .prepare('INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)')
-        .run(sourceId, targetId, safeRelType);
+      const info = statements.insertEdge.run(sourceId, targetId, safeRelType);
       const edgeId = Number(info.lastInsertRowid);
       edgesInserted += 1;
 
       for (const [key, value] of Object.entries(props)) {
         let keyId = propKeyCache.get(key);
         if (keyId === undefined) {
-          keyId = ensurePropertyKey(db, key);
+          keyId = ensurePreparedPropertyKey(statements.propertyKeys, key);
           propKeyCache.set(key, keyId);
         }
-        insertProperty(db, 'edge', edgeId, keyId, value);
+        insertPreparedProperty(statements.properties, { entityId: edgeId, keyId, value });
       }
     }
 
@@ -213,97 +223,26 @@ export function resolveNodeIds(conn: Connection, externalIds: string[]): Map<str
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Ensure a property key row exists, returning its id (bulk.py:323-333). */
-export function ensurePropertyKey(db: DatabaseSyncInstance, key: string): number {
-  const row = db.prepare('SELECT id FROM property_keys WHERE key = ?').get(key) as
-    | { id?: number }
-    | undefined;
-  if (row && row.id !== undefined) {
-    return row.id;
-  }
-  const info = db.prepare('INSERT INTO property_keys (key) VALUES (?)').run(key);
-  return Number(info.lastInsertRowid);
-}
-
-/** Look up a node's internal rowid by external id, throwing if absent (bulk.py:335-354). */
-export function lookupNodeId(db: DatabaseSyncInstance, externalId: string): number {
-  const idKeyRow = db.prepare("SELECT id FROM property_keys WHERE key = 'id'").get() as
-    | { id?: number }
-    | undefined;
-  if (!idKeyRow || idKeyRow.id === undefined) {
-    throw new Error(`Node with id '${externalId}' not found (no 'id' property key)`);
-  }
-  const idKeyId = idKeyRow.id;
-
-  const row = db
-    .prepare('SELECT node_id FROM node_props_text WHERE key_id = ? AND value = ?')
-    .get(idKeyId, externalId) as { node_id?: number } | undefined;
-  if (!row || row.node_id === undefined) {
-    throw new Error(`Node with id '${externalId}' not found`);
-  }
-  return row.node_id;
+interface EndpointContext {
+  readonly statements: EdgeBulkStatements;
+  readonly idMap: ReadonlyMap<string, number>;
+  readonly fallbackCache: Map<string, number>;
 }
 
 /** idMap → fallback cache → DB lookup (cached). Mirrors bulk.py:182-198. */
-function resolveEndpoint(
-  db: DatabaseSyncInstance,
-  externalId: string,
-  idMap: Map<string, number>,
-  fallbackCache: Map<string, number>,
-): number {
-  if (idMap.has(externalId)) {
-    return idMap.get(externalId)!;
+function resolveEndpoint(context: EndpointContext, externalId: string): number {
+  const { statements, idMap, fallbackCache } = context;
+  const mappedId = idMap.get(externalId);
+  if (mappedId !== undefined) {
+    return mappedId;
   }
-  if (fallbackCache.has(externalId)) {
-    return fallbackCache.get(externalId)!;
+  const cachedId = fallbackCache.get(externalId);
+  if (cachedId !== undefined) {
+    return cachedId;
   }
-  const nodeId = lookupNodeId(db, externalId);
+  const nodeId = lookupPreparedNodeId(statements, externalId);
   fallbackCache.set(externalId, nodeId);
   return nodeId;
-}
-
-/**
- * Insert a property value into the typed table for its JS runtime type
- * (bulk.py:356-381). The branch order is load-bearing:
- *
- *   1. `typeof v === 'boolean'`     → `*_bool`  (1/0)
- *   2. `Number.isInteger(v)`        → `*_int`
- *   3. `typeof v === 'number'`      → `*_real`
- *   4. otherwise                    → `*_text`  (`String(v)`)
- *
- * **Deliberate divergence from Python (AC#2):** JavaScript has no int/float
- * distinction — `1.0 === 1` and `Number.isInteger(1.0)` is `true`, so a value
- * written as `1.0` lands in `*_int` here, whereas Python's `isinstance(1.0,
- * float)` sends it to `*_real`. This is intentional, documented, and covered by
- * the `bulk-float-int-quirk` parity scenario + allowlist entry.
- */
-export function insertProperty(
-  db: DatabaseSyncInstance,
-  entityType: 'node' | 'edge',
-  entityId: number,
-  keyId: number,
-  value: unknown,
-): void {
-  const tablePrefix = entityType === 'node' ? 'node_props' : 'edge_props';
-  const idColumn = entityType === 'node' ? 'node_id' : 'edge_id';
-
-  if (typeof value === 'boolean') {
-    db.prepare(
-      `INSERT OR REPLACE INTO ${tablePrefix}_bool (${idColumn}, key_id, value) VALUES (?, ?, ?)`,
-    ).run(entityId, keyId, value ? 1 : 0);
-  } else if (typeof value === 'number' && Number.isInteger(value)) {
-    db.prepare(
-      `INSERT OR REPLACE INTO ${tablePrefix}_int (${idColumn}, key_id, value) VALUES (?, ?, ?)`,
-    ).run(entityId, keyId, value);
-  } else if (typeof value === 'number') {
-    db.prepare(
-      `INSERT OR REPLACE INTO ${tablePrefix}_real (${idColumn}, key_id, value) VALUES (?, ?, ?)`,
-    ).run(entityId, keyId, value);
-  } else {
-    db.prepare(
-      `INSERT OR REPLACE INTO ${tablePrefix}_text (${idColumn}, key_id, value) VALUES (?, ?, ?)`,
-    ).run(entityId, keyId, String(value));
-  }
 }
 
 /**
