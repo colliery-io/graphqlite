@@ -178,10 +178,20 @@ test('insertGraphBulk: nodesInserted = idMap.size, shrinks on duplicate external
 
 test('insertNodesBulk: mid-transaction failure rolls back and re-throws (quirk #1)', gate, () => {
   using g = newGraph();
+  const failingProps = new Proxy<Record<string, unknown>>(
+    {},
+    {
+      ownKeys() {
+        throw new Error('property enumeration failed');
+      },
+    },
+  );
   assert.throws(() => {
-    // Second item is malformed (null) → destructuring throws inside the tx.
-    insertNodesBulk(g.connection, [['good', {}, 'N'], null as unknown as never]);
-  });
+    insertNodesBulk(g.connection, [
+      ['good', {}, 'N'],
+      ['bad', failingProps, 'N'],
+    ]);
+  }, /property enumeration failed/);
   // ROLLBACK undid the 'good' insert — no partial state survives.
   assert.equal(g.getAllNodes().length, 0);
   assert.equal(resolveNodeIds(g.connection, ['good']).size, 0);
