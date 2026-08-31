@@ -33,6 +33,7 @@
 - [Graph Algorithms](./reference/algorithms.md)
 - [Python API](./reference/python-api.md)
 - [Rust API](./reference/rust-api.md)
+- [TypeScript API](./reference/typescript-api.md)
 - [SQL Interface](./reference/sql-interface.md)
 - [Database Schema](./reference/database-schema.md)
 

@@ -1,0 +1,119 @@
+{
+  "$comment": [
+    "Language-neutral parity scenarios for #30 [V-01] Python<->TS 대조 하네스.",
+    "Method names are the TS camelCase canonical form; run_python.py maps them to",
+    "snake_case. 'args' is a positional array; each runner's dispatch adapter knows",
+    "how to translate options-bearing methods (shortestPath weightProp, bfs maxDepth,",
+    "nodeSimilarity threshold/topK, knn k, astar latProp/lonProp).",
+    "Every scenario runs on a fresh in-memory graph after 'fixture' is applied."
+  ],
+  "fixture": [
+    { "method": "upsertNode", "args": ["alice", { "name": "Alice", "group": 1, "lat": 0, "lon": 0 }, "Person"] },
+    { "method": "upsertNode", "args": ["bob", { "name": "Bob", "group": 1, "lat": 0, "lon": 1 }, "Person"] },
+    { "method": "upsertNode", "args": ["carol", { "name": "Carol", "group": 1, "lat": 1, "lon": 0 }, "Person"] },
+    { "method": "upsertNode", "args": ["dave", { "name": "Dave", "group": 2, "lat": 5, "lon": 5 }, "Person"] },
+    { "method": "upsertNode", "args": ["eve", { "name": "Eve", "group": 2, "lat": 5, "lon": 6 }, "Person"] },
+    { "method": "upsertNode", "args": ["frank", { "name": "Frank", "group": 2, "lat": 6, "lon": 5 }, "Person"] },
+    { "method": "upsertEdge", "args": ["alice", "bob", { "weight": 1 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["bob", "carol", { "weight": 1 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["carol", "alice", { "weight": 1 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["carol", "dave", { "weight": 2 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["dave", "eve", { "weight": 1 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["eve", "dave", { "weight": 1 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["eve", "frank", { "weight": 3 }, "KNOWS"] },
+    { "method": "upsertEdge", "args": ["frank", "dave", { "weight": 1 }, "KNOWS"] }
+  ],
+  "scenarios": [
+    {
+      "id": "crud-nodes",
+      "group": "crud",
+      "steps": [
+        { "id": "upsert-new", "method": "upsertNode", "args": ["grace", { "name": "Grace", "age": 40 }, "Person"] },
+        { "id": "has-new", "method": "hasNode", "args": ["grace"] },
+        { "id": "get-new", "method": "getNode", "args": ["grace"] },
+        { "id": "degree-new", "method": "nodeDegree", "args": ["grace"] },
+        { "id": "upsert-update", "method": "upsertNode", "args": ["grace", { "age": 41 }] },
+        { "id": "get-updated", "method": "getNode", "args": ["grace"] },
+        { "id": "has-missing", "method": "hasNode", "args": ["nobody"] },
+        { "id": "get-missing", "method": "getNode", "args": ["nobody"] },
+        { "id": "getall-person", "method": "getAllNodes", "args": ["Person"] },
+        { "id": "getall-any", "method": "getAllNodes", "args": [] },
+        { "id": "delete", "method": "deleteNode", "args": ["grace"] },
+        { "id": "has-after-delete", "method": "hasNode", "args": ["grace"] }
+      ]
+    },
+    {
+      "id": "crud-edges",
+      "group": "crud",
+      "steps": [
+        { "id": "upsert-new", "method": "upsertEdge", "args": ["alice", "dave", { "weight": 9 }, "RELATED"] },
+        { "id": "has-typed", "method": "hasEdge", "args": ["alice", "dave", "RELATED"] },
+        { "id": "has-untyped", "method": "hasEdge", "args": ["alice", "dave"] },
+        { "id": "get-typed", "method": "getEdge", "args": ["alice", "dave", "RELATED"] },
+        { "id": "upsert-update", "method": "upsertEdge", "args": ["alice", "dave", { "weight": 10 }, "RELATED"] },
+        { "id": "get-updated", "method": "getEdge", "args": ["alice", "dave", "RELATED"] },
+        { "id": "has-missing", "method": "hasEdge", "args": ["alice", "frank"] },
+        { "id": "get-missing", "method": "getEdge", "args": ["alice", "frank"] },
+        { "id": "getall", "method": "getAllEdges", "args": [] },
+        { "id": "delete", "method": "deleteEdge", "args": ["alice", "dave", "RELATED"] },
+        { "id": "has-after-delete", "method": "hasEdge", "args": ["alice", "dave", "RELATED"] }
+      ]
+    },
+    {
+      "id": "queries",
+      "group": "query",
+      "steps": [
+        { "id": "nodeDegree", "method": "nodeDegree", "args": ["carol"] },
+        { "id": "getNeighbors", "method": "getNeighbors", "args": ["carol"] },
+        { "id": "getNodeEdges", "method": "getNodeEdges", "args": ["carol"] },
+        { "id": "getEdgesFrom", "method": "getEdgesFrom", "args": ["carol"] },
+        { "id": "getEdgesTo", "method": "getEdgesTo", "args": ["carol"] },
+        { "id": "getEdgesByType", "method": "getEdgesByType", "args": ["carol", "KNOWS"] },
+        { "id": "stats", "method": "stats", "args": [] },
+        { "id": "query-noparams", "method": "query", "args": ["MATCH (n:Person) RETURN count(n) AS c", null] },
+        { "id": "query-params", "method": "query", "args": ["MATCH (n {id: $id}) RETURN n.name AS name", { "id": "alice" }] }
+      ]
+    },
+    {
+      "id": "algorithms",
+      "group": "algorithm",
+      "steps": [
+        { "id": "pagerank", "method": "pagerank", "args": [0.85, 20] },
+        { "id": "degreeCentrality", "method": "degreeCentrality", "args": [] },
+        { "id": "betweennessCentrality", "method": "betweennessCentrality", "args": [] },
+        { "id": "closenessCentrality", "method": "closenessCentrality", "args": [] },
+        { "id": "eigenvectorCentrality", "method": "eigenvectorCentrality", "args": [100] },
+        { "id": "communityDetection", "method": "communityDetection", "args": [10] },
+        { "id": "louvain", "method": "louvain", "args": [1.0] },
+        { "id": "weaklyConnectedComponents", "method": "weaklyConnectedComponents", "args": [] },
+        { "id": "stronglyConnectedComponents", "method": "stronglyConnectedComponents", "args": [] },
+        { "id": "shortestPath", "method": "shortestPath", "args": ["alice", "frank"] },
+        { "id": "astar", "method": "astar", "args": ["alice", "frank"] },
+        { "id": "allPairsShortestPath", "method": "allPairsShortestPath", "args": [] },
+        { "id": "bfs", "method": "bfs", "args": ["alice"] },
+        { "id": "dfs", "method": "dfs", "args": ["alice"] },
+        { "id": "nodeSimilarity", "method": "nodeSimilarity", "args": [] },
+        { "id": "knn", "method": "knn", "args": ["alice", 3] },
+        { "id": "triangleCount", "method": "triangleCount", "args": [] }
+      ]
+    },
+    {
+      "id": "bulk-float-int-quirk",
+      "group": "bulk",
+      "steps": [
+        { "id": "insert", "method": "insertNodesBulk", "args": [[["floaty", { "x": 1.0 }, "T"]]] },
+        { "id": "prop-table", "method": "bulkPropTable", "args": ["floaty", "x"] }
+      ]
+    },
+    {
+      "id": "known-divergences",
+      "group": "divergence",
+      "steps": [
+        { "id": "getAllNodes-bad-label", "method": "getAllNodes", "args": ["bad-label"] },
+        { "id": "upsertNode-bad-key", "method": "upsertNode", "args": ["zed", { "bad-key": 1 }, "Person"] },
+        { "id": "leidenCommunities", "method": "leidenCommunities", "args": [] },
+        { "id": "toRustworkx", "method": "toRustworkx", "args": [] }
+      ]
+    }
+  ]
+}

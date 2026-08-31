@@ -1,8 +1,8 @@
 # Contributing to GraphQLite
 
 GraphQLite is a Cypher-on-SQLite engine shipped as a SQLite extension plus
-Python and Rust bindings. This document covers how to build, test, and ship
-changes.
+Python, Rust, and TypeScript bindings. This document covers how to build,
+test, and ship changes.
 
 ## Build
 
@@ -31,13 +31,14 @@ can corrupt enum-tagged structs.
 | TCK (openCypher conformance) | `angreal test tck` | Anything in `src/backend/transform/` or `src/backend/executor/` |
 | Rust binding | `angreal test rust` | Rust binding surface area |
 | Python binding | `angreal test python` | Python binding surface area |
+| TypeScript binding | `angreal test typescript` | TypeScript binding surface area |
 | CLI | `angreal test cli` | `gqlite` interactive entry point |
 | Constraints (expected-fail) | `angreal test constraints` | Negative test corpus |
 | Everything | `angreal test all` | Pre-release smoke |
 
-Backend parity (extension vs Rust vs Python) is verified post-hoc. Run
-backends independently and reconcile divergences in their own tickets — do
-not gate one backend on another in the same commit.
+Backend parity (extension vs Rust vs Python vs TypeScript) is verified
+post-hoc. Run backends independently and reconcile divergences in their own
+tickets — do not gate one backend on another in the same commit.
 
 ### Before push
 

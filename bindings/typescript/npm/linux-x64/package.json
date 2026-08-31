@@ -1,0 +1,14 @@
+{
+  "name": "@graphqlite/linux-x64",
+  "version": "0.6.1",
+  "description": "GraphQLite native extension for linux/x64 — a platform-specific optionalDependency of graphqlite.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/colliery-io/graphqlite.git",
+    "directory": "bindings/typescript/npm/linux-x64"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": ["graphqlite.so"]
+}

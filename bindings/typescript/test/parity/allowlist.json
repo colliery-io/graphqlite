@@ -1,0 +1,73 @@
+{
+  "$comment": [
+    "Intentional cross-binding divergences. A step listed here is allowed to differ",
+    "for the declared binding pair(s) without failing the parity gate. Keyed by",
+    "'<scenario-id>.<step-id>'. Every entry needs a documented reason and a",
+    "'bindings' array naming the pair(s) it applies to: 'python-ts' (TS↔Python) and/or",
+    "'rust-ts' (TS↔Rust). An entry with no 'bindings' field applies to every pair.",
+    "See #30 [V-01] AC3 and #84: TS added an identifier-validation boundary (F-05)",
+    "that Python/Rust lack, and some methods were never ported to every binding."
+  ],
+  "allow": [
+    {
+      "id": "algorithms.louvain",
+      "modes": ["cypher"],
+      "bindings": ["python-ts"],
+      "reason": "Numeric-formatting divergence surfaced by cypher mode only: Python interpolates the resolution float via str(1.0) -> 'RETURN louvain(1.0)', while TS interpolates via template literal -> 'RETURN louvain(1)' (JS has no int/float distinction; 1.0 === 1). The C core parses both to the same value, so results mode agrees exactly — this affects the emitted Cypher string alone. Rust's Display for f64 also prints 1.0 as '1', so rust-ts AGREES here and is not listed."
+    },
+    {
+      "id": "bulk-float-int-quirk.prop-table",
+      "modes": ["results"],
+      "bindings": ["python-ts", "rust-ts"],
+      "reason": "#31 [X-01] AC#2: bulk insertProperty routes values by runtime type. JavaScript has no int/float distinction (1.0 === 1, Number.isInteger(1.0) === true), so a value written as 1.0 lands in node_props_int, whereas Python's isinstance(1.0, float) and Rust's serde_json float (as_i64() == None for 1.0 -> PropertyValue::Float) both send it to node_props_real. The insert return value (external-id -> rowid map) is identical on all sides; only the storage table differs, which this diagnostic step surfaces. TS disagrees with BOTH Python and Rust (int vs real). Results-mode only — bulk uses raw SQL and emits no Cypher, so cypher mode captures nothing on any side."
+    },
+    {
+      "id": "crud-nodes.upsert-update",
+      "modes": ["cypher"],
+      "bindings": ["rust-ts"],
+      "reason": "Cypher-construction divergence surfaced by cypher mode only (#84). Updating an existing node's property, the TS/Python bindings emit the SET clause with a bound parameter ('SET n.age = $val', value carried in params), while the Rust binding inlines the value literally into the query via PropertyValue::to_cypher() ('SET n.age = 41'). The core applies the same value either way, so results mode agrees exactly — only the emitted query string + params differ. Directly analogous to the algorithms.louvain numeric-formatting entry."
+    },
+    {
+      "id": "crud-edges.upsert-new",
+      "modes": ["cypher"],
+      "bindings": ["rust-ts"],
+      "reason": "Cypher-construction divergence surfaced by cypher mode only (#84). After MERGE-ing the edge, TS/Python set edge properties via a bound parameter ('SET r.weight = $v0', value in params) whereas the Rust binding inlines the value literally ('SET r.weight = 9'). The MERGE query and end result are identical; only the SET query string + params differ. Same class as crud-nodes.upsert-update / algorithms.louvain."
+    },
+    {
+      "id": "crud-edges.upsert-update",
+      "modes": ["cypher"],
+      "bindings": ["rust-ts"],
+      "reason": "Cypher-construction divergence surfaced by cypher mode only (#84). Updating an existing edge's property, TS/Python emit 'SET r.weight = $v0' (parameterized) while the Rust binding inlines the value ('SET r.weight = 10'). Results agree; only the emitted Cypher string + params differ. Same class as crud-edges.upsert-new."
+    },
+    {
+      "id": "queries.getNodeEdges",
+      "modes": ["results"],
+      "bindings": ["rust-ts"],
+      "reason": "Result-shape divergence surfaced by the Rust leg (#84). For the identical emitted query (MATCH (n {id})-[r]-(m) RETURN n.id AS source, m.id AS target, r), the TS and Python bindings return getNodeEdges as a list of [source, target, r] TUPLES, whereas every other edge-listing method (getEdgesFrom/getEdgesTo/getEdgesByType/getAllEdges) returns objects — the Rust binding is internally consistent and returns a CypherResult (object rows: {source, target, r}) for all of them, matching TS/Python on the others and diverging only on this one method. The underlying edge data (id/type/startNode/endNode/properties) is identical; only the row container differs. Cypher mode agrees (same query), so results-mode only."
+    },
+    {
+      "id": "known-divergences.getAllNodes-bad-label",
+      "modes": ["results", "cypher"],
+      "bindings": ["python-ts", "rust-ts"],
+      "reason": "F-05: TS assertIdentifier rejects the interpolated label 'bad-label' with ValidationError before any query; Python and Rust both interpolate it unchecked (MATCH (n:bad-label) ...) and the C core raises a parse error. Different error surface by design — TS fails early with a validation error type, Python/Rust fail in the core with a Cypher/parse error type."
+    },
+    {
+      "id": "known-divergences.upsertNode-bad-key",
+      "modes": ["results", "cypher"],
+      "bindings": ["python-ts", "rust-ts"],
+      "reason": "F-05: TS assertIdentifier rejects the interpolated property key 'bad-key' with ValidationError before writing; Python and Rust both interpolate it unchecked (CREATE (... {bad-key: 1})) and the C core raises a parse error. Different error surface by design."
+    },
+    {
+      "id": "known-divergences.leidenCommunities",
+      "modes": ["results", "cypher"],
+      "bindings": ["python-ts", "rust-ts"],
+      "reason": "Not ported to TS or Rust: Graph.leidenCommunities throws UnsupportedOperationError (TS); the Rust binding has no such method (runner returns an UnsupportedOperation error); Python's leiden_communities depends on the Python-only 'graspologic' package (raises ImportError when absent). All three error, but the error type strings differ by design."
+    },
+    {
+      "id": "known-divergences.toRustworkx",
+      "modes": ["results", "cypher"],
+      "bindings": ["python-ts", "rust-ts"],
+      "reason": "Not ported to TS or Rust: no toRustworkx method exists on the TS or Rust Graph (both surface an error); Python's to_rustworkx depends on the Python-only 'rustworkx' package (raises ImportError when absent). All three error, but the error type strings differ by design."
+    }
+  ]
+}

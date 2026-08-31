@@ -15,6 +15,7 @@ Store and query graph data directly in SQLite—combining the simplicity of a si
 brew install graphqlite       # macOS/Linux (Homebrew)
 pip install graphqlite        # Python
 cargo add graphqlite          # Rust
+npm install graphqlite        # TypeScript / Node.js
 ```
 
 ## Quick Start
@@ -41,7 +42,7 @@ g.dijkstra("alice", "bob")
 - **Cypher queries** — MATCH, CREATE, MERGE, SET, DELETE, WITH, UNWIND, RETURN
 - **Graph algorithms** — PageRank, Louvain, Dijkstra, BFS/DFS, connected components, and more
 - **Zero configuration** — Works with any SQLite database, no server required
-- **Multiple bindings** — Python, Rust, and raw SQL interfaces
+- **Multiple bindings** — Python, Rust, TypeScript, and raw SQL interfaces
 
 ## openCypher Conformance
 

@@ -163,8 +163,76 @@ def test_python(verbose: bool = False, python: str = "") -> int:
 
 @test()
 @angreal.command(
+    name="typescript",
+    about="Run TypeScript binding tests",
+    tool=angreal.ToolDescription(
+        """
+Run the TypeScript binding tests using node's built-in test runner.
+
+## When to use
+- After changes to TypeScript bindings
+- Validating TypeScript API compatibility
+
+## Examples
+```
+angreal test typescript
+```
+
+## Prerequisites
+- Extension must be built first (auto-built if missing)
+- Node.js >= 24 with npm
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(
+    name="verbose",
+    long="verbose",
+    short="v",
+    is_flag=True,
+    takes_value=False,
+    help="Show verbose output"
+)
+def test_typescript(verbose: bool = False) -> int:
+    """Run TypeScript binding tests."""
+    if not ensure_extension_built():
+        return 1
+
+    root = get_project_root()
+    bindings_dir = os.path.join(root, "bindings", "typescript")
+
+    for ext in ("dylib", "so", "dll"):
+        candidate = os.path.join(root, "build", f"graphqlite.{ext}")
+        if os.path.exists(candidate):
+            extension_path = candidate
+            break
+    else:
+        print("Built extension not found under build/!")
+        return 1
+
+    if not os.path.exists(os.path.join(bindings_dir, "node_modules")):
+        print("Installing TypeScript binding dependencies (npm ci)...")
+        install = subprocess.run(["npm", "ci"], cwd=bindings_dir)
+        if install.returncode != 0:
+            return install.returncode
+
+    print("Running TypeScript binding tests...")
+    cmd = ["npm", "test"]
+    if verbose:
+        print(f"Running: {' '.join(cmd)} in {bindings_dir}")
+
+    env = os.environ.copy()
+    env["GQLITE_EXT_DYLIB"] = extension_path
+    env["GRAPHQLITE_EXTENSION_PATH"] = extension_path
+
+    result = subprocess.run(cmd, cwd=bindings_dir, env=env)
+    return result.returncode
+
+
+@test()
+@angreal.command(
     name="bindings",
-    about="Run all binding tests (Rust + Python)",
+    about="Run all binding tests (Rust + Python + TypeScript)",
     tool=angreal.ToolDescription(
         """
 Run all language binding tests (Rust and Python).
@@ -204,6 +272,11 @@ def test_bindings(verbose: bool = False) -> int:
     result = test_python(verbose=verbose)
     if result != 0:
         print("Python tests failed!")
+        return result
+
+    result = test_typescript(verbose=verbose)
+    if result != 0:
+        print("TypeScript tests failed!")
         return result
 
     print("All binding tests passed!")

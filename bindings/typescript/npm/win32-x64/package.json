@@ -1,0 +1,14 @@
+{
+  "name": "@graphqlite/win32-x64",
+  "version": "0.6.1",
+  "description": "GraphQLite native extension for win32/x64 — a platform-specific optionalDependency of graphqlite.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/colliery-io/graphqlite.git",
+    "directory": "bindings/typescript/npm/win32-x64"
+  },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["graphqlite.dll"]
+}

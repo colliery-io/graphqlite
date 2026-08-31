@@ -1,0 +1,14 @@
+{
+  "name": "@graphqlite/darwin-arm64",
+  "version": "0.6.1",
+  "description": "GraphQLite native extension for darwin/arm64 — a platform-specific optionalDependency of graphqlite.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/colliery-io/graphqlite.git",
+    "directory": "bindings/typescript/npm/darwin-arm64"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["graphqlite.dylib"]
+}

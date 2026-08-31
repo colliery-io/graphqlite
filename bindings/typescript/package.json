@@ -1,0 +1,45 @@
+{
+  "name": "graphqlite",
+  "version": "0.6.1",
+  "description": "SQLite extension for graph queries using Cypher — TypeScript bindings",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/colliery-io/graphqlite.git",
+    "directory": "bindings/typescript"
+  },
+  "keywords": [
+    "sqlite",
+    "graph",
+    "cypher",
+    "database"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./async": "./src/async.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint .",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "optionalDependencies": {
+    "@graphqlite/darwin-arm64": "0.6.1",
+    "@graphqlite/darwin-x64": "0.6.1",
+    "@graphqlite/linux-x64": "0.6.1",
+    "@graphqlite/linux-arm64": "0.6.1",
+    "@graphqlite/win32-x64": "0.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}
