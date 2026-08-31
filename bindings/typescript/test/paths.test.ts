@@ -146,6 +146,8 @@ test('path algorithms end-to-end against the real extension', gate, () => {
   const as = g.astar('a', 'c');
   assert.equal(as.found, true);
   assert.deepEqual(as.path, ['a', 'b', 'c']);
+  assert.equal(as.distance, 2);
+  assert.ok(as.nodesExplored >= 1);
 
   // apsp goes through extractAlgoArray → reachable pairs.
   const all = g.allPairsShortestPath();
