@@ -4,14 +4,14 @@ level: initiative
 title: "Issue triage batch 0.7.0 — bindings correctness + core stats/similarity fixes (#104–#116)"
 short_code: "GQLITE-I-0050"
 created_at: 2026-09-05T13:13:58.758467+00:00
-updated_at: 2026-09-05T13:34:57.847154+00:00
+updated_at: 2026-09-05T14:33:33.201985+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

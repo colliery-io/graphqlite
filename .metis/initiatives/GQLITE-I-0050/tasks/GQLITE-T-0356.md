@@ -4,14 +4,14 @@ level: task
 title: "Release 0.7.0: version bump, changelog, full test matrix, PR"
 short_code: "GQLITE-T-0356"
 created_at: 2026-09-05T13:18:50.452900+00:00
-updated_at: 2026-09-05T13:33:31.298378+00:00
+updated_at: 2026-09-05T14:33:31.746289+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -27,6 +27,8 @@ initiative_id: GQLITE-I-0050
 ## Objective **[REQUIRED]**
 
 Ship the batch as 0.7.0 in a single PR.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 
