@@ -1935,6 +1935,8 @@ def test_upsert_edge_rejects_bad_property_key(g):
     g.upsert_node("y", {})
     with pytest.raises(ValueError):
         g.upsert_edge("x", "y", {"w: 1, hacked": True})
+    with pytest.raises(ValueError):
+        g.upsert_edge("x", "y", {"w: 1, hacked": True}, edge_id="e1")
     assert not g.has_edge("x", "y")
 
 

@@ -4369,6 +4369,9 @@ fn test_upsert_rejects_bad_identifiers() {
     let r = g.upsert_edge("x", "y", [("w: 1, hacked", "1")], "R");
     assert!(matches!(r, Err(Error::InvalidIdentifier(_))));
     assert!(!g.has_edge("x", "y", None).unwrap());
+    let r = g.upsert_edge_with_id("x", "y", [("w: 1, hacked", "1")], "R", "e1");
+    assert!(matches!(r, Err(Error::InvalidIdentifier(_))));
+    assert!(!g.has_edge("x", "y", None).unwrap());
 }
 
 #[test]

@@ -9,7 +9,7 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 A bindings-correctness release closing the GitHub issue batch #104–#116. Core
 changes are limited to `nodeSimilarity` argument handling and the shape of the
 `cypher()` return value for write queries. TCK pass count is unchanged at
-3788 / 3876; 945/945 unit tests; Python 383 / Rust 301 binding tests.
+3788 / 3876; 948/948 unit tests; Python 386 / Rust 302 binding tests.
 
 ### Breaking
 

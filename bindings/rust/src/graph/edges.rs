@@ -125,7 +125,9 @@ impl Graph {
     /// update that edge's properties in place; different `edge_id`s create
     /// distinct edges.
     ///
-    /// Both source and target nodes must exist.
+    /// Both source and target nodes must exist. Every property key must be a
+    /// plain identifier; otherwise [`crate::Error::InvalidIdentifier`] is
+    /// returned before anything is written (GitHub #110).
     pub fn upsert_edge_with_id<I, K, V>(
         &self,
         source_id: &str,
@@ -145,6 +147,9 @@ impl Graph {
             .into_iter()
             .map(|(k, v)| (k.as_ref().to_string(), v.into()))
             .collect();
+        for (k, _) in &props {
+            assert_identifier(k)?;
+        }
 
         let merge_query = format!(
             "MATCH (a {{id: $src}}), (b {{id: $tgt}}) MERGE (a)-[r:{} {{id: $eid}}]->(b)",
