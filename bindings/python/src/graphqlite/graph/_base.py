@@ -8,9 +8,8 @@ from ..utils import escape_string, format_props
 class BaseMixin:
     """Base mixin providing connection access and utility methods."""
 
-    # These will be set by the main Graph class
+    # Set by the main Graph class
     _conn: Any
-    namespace: str
 
     def _escape(self, s: str) -> str:
         """Escape a string for Cypher queries."""

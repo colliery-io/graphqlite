@@ -4,6 +4,63 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-09-05
+
+A bindings-correctness release closing the GitHub issue batch #104–#116. Core
+changes are limited to `nodeSimilarity` argument handling and the shape of the
+`cypher()` return value for write queries. TCK pass count is unchanged at
+3788 / 3876; 945/945 unit tests; Python 383 / Rust 301 binding tests.
+
+### Breaking
+
+- **`cypher()` returns a JSON object for write queries** (#116). A modification
+  query without `RETURN` now yields
+  `{"nodes_created":N,"relationships_created":N,"nodes_deleted":N,"relationships_deleted":N,"properties_set":N}`
+  instead of the `"Query executed successfully - nodes created: N, ..."` string.
+  The first byte distinguishes a statistics object (`{`) from a result set
+  (`[`). Both bindings surface it as a single row keyed by those five fields.
+  `DETACH DELETE` now reports the cascaded edge count in
+  `relationships_deleted` (it was always 0).
+- **Python `GraphManager.query(cypher, graphs, params=None)`** (#112): `graphs`
+  is required and must be non-empty (`ValueError` otherwise). The documented
+  "auto-detected from the query" behaviour never existed. Rust `query` /
+  `query_sql` return `Error::InvalidArgument` on an empty slice.
+- **Python `Graph(db_path, extension_path=None)`** (#113): the dead `namespace`
+  parameter is gone from `Graph` and `graph()`; passing it raises `TypeError`.
+  Callers passing `extension_path` positionally must update.
+- **Python `Graph.get_node_edges()` returns dicts** (#114) with `source`,
+  `target`, `r` keys, matching `get_edges_from` / `get_edges_to`, instead of
+  `(source, target, props)` tuples.
+
+### Fixed
+
+- **Algorithm results always empty in the bindings** (#104, #105, #106):
+  `astar`, `node_similarity`, `knn` (Python + Rust) and `bfs`, `dfs`, `apsp`
+  (Rust) never unwrapped the core's `column_0` wrapper. The unwrap now lives in
+  one place per binding (`extract_algo_array` / `extract_algo_object`;
+  `algo_rows` / `algo_object`) and every algorithm goes through it.
+- **`nodeSimilarity(threshold, topK)` ignored `threshold`** in the core (#107).
+- **`node_similarity(top_k=N)` ignored `top_k`** unless `threshold` was also
+  set, in both bindings (#108).
+- **`upsert_node` let `node_data["id"]` hijack identity** (#109): a caller
+  supplied `id` no longer overrides `node_id` on create or renames the node on
+  update, in both bindings.
+- **Identifiers are validated before interpolation** (#110): labels, property
+  keys, and A* coordinate property names must match
+  `^[A-Za-z_][A-Za-z0-9_]*$`. Python raises `ValueError`; Rust returns the new
+  `Error::InvalidIdentifier`. `assert_identifier` / `is_identifier` are
+  exported. Relationship types keep the existing `sanitize_rel_type` contract.
+- **`GraphManager` accepted path traversal in graph names** (#111): names are
+  validated with the same identifier rule and must resolve inside `base_path`.
+  Python raises `ValueError`; Rust returns the new `Error::InvalidGraphName`.
+- **Two divergent `sanitize_rel_type` implementations in Python** (#115):
+  `BulkMixin._sanitize_rel_type` is removed; bulk inserts store the same
+  relationship type as the Cypher path for reserved words and empty input.
+
+### Docs
+
+- `sql-interface.md` documents the statistics object; `python-api.md` and
+  `rust-api.md` reflect the new `GraphManager.query` and `Graph` signatures.
 ## [0.6.1] — 2026-08-25
 
 Patch release fixing three reported issues (#95, #96, #97). 947/947 unit

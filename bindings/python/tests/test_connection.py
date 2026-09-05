@@ -1303,3 +1303,35 @@ def test_unwind_with_index(db):
     assert len(results) == 1
     assert results[0]["first"] == "x"
     assert results[0]["last"] == "z"
+
+
+# =============================================================================
+# Write statistics object (GitHub #116)
+# =============================================================================
+
+STAT_KEYS = {"nodes_created", "relationships_created", "nodes_deleted",
+             "relationships_deleted", "properties_set"}
+
+
+def _stats(db, query):
+    result = db.cypher(query)
+    assert len(result) == 1
+    row = result[0]
+    assert set(row.keys()) == STAT_KEYS
+    return row
+
+
+def test_write_query_stats(db):
+    assert _stats(db, "CREATE (a:X {name: 'a'})-[:R {w: 1}]->(b:X)") == {
+        "nodes_created": 2, "relationships_created": 1,
+        "nodes_deleted": 0, "relationships_deleted": 0, "properties_set": 2,
+    }
+    assert _stats(db, "MERGE (n:X {id: 'm'})")["nodes_created"] == 1
+    assert _stats(db, "MERGE (n:X {id: 'm'})")["nodes_created"] == 0
+    assert _stats(db, "MATCH (n:X {id: 'm'}) SET n.k = 1, n.j = 2")["properties_set"] == 2
+    assert _stats(db, "MATCH (n:X {id: 'm'}) DELETE n")["nodes_deleted"] == 1
+    detach = _stats(db, "MATCH (n:X) DETACH DELETE n")
+    assert detach["nodes_deleted"] == 2
+    assert detach["relationships_deleted"] == 1
+    # A RETURN with zero rows is still an (empty) result set, not stats
+    assert db.cypher("MATCH (n:Nope) RETURN n").to_list() == []

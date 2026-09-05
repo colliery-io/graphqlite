@@ -65,7 +65,6 @@ class Graph(
     def __init__(
         self,
         db_path: Union[str, Path] = ":memory:",
-        namespace: str = "default",
         extension_path: Optional[str] = None
     ):
         """
@@ -73,12 +72,10 @@ class Graph(
 
         Args:
             db_path: Path to database file or ":memory:" for in-memory
-            namespace: Optional namespace for isolating graphs
             extension_path: Path to graphqlite extension (auto-detected if None)
         """
         ext_path = find_extension(extension_path)
         self._conn = connect(str(db_path), ext_path)
-        self.namespace = namespace
 
     @property
     def connection(self):
@@ -198,7 +195,6 @@ class Graph(
 
 def graph(
     db_path: Union[str, Path] = ":memory:",
-    namespace: str = "default",
     extension_path: Optional[str] = None
 ) -> Graph:
     """
@@ -208,7 +204,6 @@ def graph(
 
     Args:
         db_path: Path to database file or ":memory:" for in-memory
-        namespace: Optional namespace for isolating graphs
         extension_path: Path to graphqlite extension (auto-detected if None)
 
     Returns:
@@ -218,7 +213,7 @@ def graph(
         >>> g = graphqlite.graph(":memory:")
         >>> g.upsert_node("n1", {"name": "Test"})
     """
-    return Graph(db_path, namespace, extension_path)
+    return Graph(db_path, extension_path)
 
 
 __all__ = ["BulkInsertResult", "Graph", "graph"]

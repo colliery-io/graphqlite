@@ -233,10 +233,12 @@ fn create(&self, name: &str) -> Result<Graph>
 fn open(&self, name: &str) -> Result<Graph>
 fn open_or_create(&self, name: &str) -> Result<Graph>
 fn drop(&self, name: &str) -> Result<()>
-fn query(&self, cypher: &str, graphs: Option<&[&str]>, params: Option<&serde_json::Value>) -> Result<Vec<serde_json::Value>>
-fn query_sql(&self, sql: &str, graphs: &[&str], parameters: &[&dyn rusqlite::ToSql]) -> Result<Vec<serde_json::Value>>
+fn query(&mut self, cypher: &str, graph_names: &[&str]) -> Result<CypherResult>
+fn query_sql(&mut self, sql: &str, graph_names: &[&str]) -> Result<Vec<Vec<rusqlite::types::Value>>>
 fn close(self) -> Result<()>
 ```
+
+`graph_names` must list every graph referenced by a `FROM` clause (or by table prefix in `query_sql`); an empty slice returns `Error::InvalidArgument`. Graph names must be identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`); anything else returns `Error::InvalidGraphName`.
 
 ---
 

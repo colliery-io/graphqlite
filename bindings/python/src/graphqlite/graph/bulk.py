@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from ._base import BaseMixin
+from ..utils import sanitize_rel_type
 
 
 @dataclass
@@ -177,7 +178,7 @@ class BulkMixin(BaseMixin):
 
             for source, target, props, rel_type in edges:
                 # Sanitize relationship type
-                safe_rel_type = self._sanitize_rel_type(rel_type)
+                safe_rel_type = sanitize_rel_type(rel_type)
 
                 # Resolve source ID
                 if source in id_map:
@@ -380,17 +381,3 @@ class BulkMixin(BaseMixin):
                 (entity_id, key_id, str(value)),
             )
 
-    def _sanitize_rel_type(self, rel_type: str) -> str:
-        """Sanitize a relationship type for use in the database."""
-        # Replace non-alphanumeric characters with underscores
-        safe = "".join(c if c.isalnum() or c == "_" else "_" for c in rel_type)
-
-        # Ensure it doesn't start with a number
-        if safe and safe[0].isdigit():
-            safe = "REL_" + safe
-
-        # Handle empty string
-        if not safe:
-            safe = "REL"
-
-        return safe

@@ -609,9 +609,12 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
             params.threshold = resolve_double_arg((ast_node *)func->args->items[0], params_json, params.threshold);
         }
 
-        /* Check for top_k as last argument */
+        /* nodeSimilarity(threshold, top_k): two numeric args. The pair check
+         * above only sets source_id when both args resolve as strings, so
+         * reaching here with count >= 2 means args[0] is the threshold and
+         * args[1] is top_k (GitHub #107: threshold used to be skipped). */
         if (func->args && func->args->count >= 2 && !params.source_id) {
-            /* nodeSimilarity(threshold, top_k) */
+            params.threshold = resolve_double_arg((ast_node *)func->args->items[0], params_json, params.threshold);
             params.top_k = resolve_int_arg((ast_node *)func->args->items[1], params_json, params.top_k);
         }
 

@@ -160,7 +160,10 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
 
 /* DELETE functions */
 int delete_edge_by_id(cypher_executor *executor, int64_t edge_id);
-int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach);
+/* When detach is true and detached_edges is non-NULL, receives the number of
+ * incident edges removed before the node itself was deleted. */
+int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach,
+                      int *detached_edges);
 
 /* Path and CREATE functions */
 int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *path,

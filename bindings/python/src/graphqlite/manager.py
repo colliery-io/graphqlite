@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 from .connection import Connection, CypherResult
 from .graph import Graph
 from ._platform import find_extension
+from .utils import assert_identifier
 
 
 class GraphManager:
@@ -50,8 +51,24 @@ class GraphManager:
         self._base_path.mkdir(parents=True, exist_ok=True)
 
     def _graph_path(self, name: str) -> Path:
-        """Get the file path for a graph."""
-        return self._base_path / f"{name}.db"
+        """
+        Get the file path for a graph, validating the name first.
+
+        Graph names are plain identifiers (``^[A-Za-z_][A-Za-z0-9_]*$``) --
+        they become both a file name under ``base_path`` and the schema name
+        in ``ATTACH DATABASE ... AS name``. The resolved path is additionally
+        required to stay inside ``base_path`` (GitHub #111).
+
+        Raises:
+            ValueError: If the name is not a valid identifier or would
+                resolve outside the base directory.
+        """
+        assert_identifier(name, "graph name")
+        base = self._base_path.resolve()
+        path = (base / f"{name}.db").resolve()
+        if path.parent != base:
+            raise ValueError(f"Invalid graph name {name!r}: escapes base path")
+        return path
 
     def _ensure_coordinator(self) -> sqlite3.Connection:
         """Get or create the coordinator connection for cross-graph queries."""
@@ -205,25 +222,30 @@ class GraphManager:
     def query(
         self,
         cypher: str,
-        graphs: Optional[list[str]] = None,
+        graphs: list[str],
         params: Optional[dict[str, Any]] = None
     ) -> CypherResult:
         """
         Execute a cross-graph Cypher query.
 
-        Uses the FROM clause syntax to query across multiple graphs.
-        Graphs are automatically attached to the coordinator connection.
+        Uses the FROM clause syntax to query across multiple graphs. Every
+        graph named in a FROM clause must be listed in ``graphs`` so it can be
+        attached to the coordinator connection; the binding does not parse
+        the query to discover them.
 
         Note: Open graph connections are committed before the query runs
         to ensure their changes are visible to the coordinator.
 
         Args:
             cypher: Cypher query with FROM clauses specifying graphs
-            graphs: List of graph names to attach (auto-detected from query if None)
+            graphs: Non-empty list of graph names to attach
             params: Optional query parameters
 
         Returns:
             CypherResult with query results
+
+        Raises:
+            ValueError: If ``graphs`` is empty.
 
         Example:
             >>> # Query across social and products graphs
@@ -233,26 +255,15 @@ class GraphManager:
             ...     RETURN u.name, graph(u) AS source
             ... ''', graphs=["social"])
         """
+        if not graphs:
+            raise ValueError("graphs is required: list every graph the query's FROM clauses reference")
+
         # Commit any open graph connections so their data is visible
         for graph in self._open_graphs.values():
             graph.connection.commit()
 
         coord = self._ensure_coordinator()
-
-        # Attach requested graphs
-        if graphs:
-            for name in graphs:
-                path = self._graph_path(name)
-                if not path.exists():
-                    available = self.list()
-                    raise FileNotFoundError(
-                        f"Graph '{name}' not found. Available: {available}"
-                    )
-                try:
-                    coord.execute(f"ATTACH DATABASE '{path}' AS {name}")
-                except sqlite3.OperationalError as e:
-                    if "already in use" not in str(e).lower():
-                        raise
+        self._attach(coord, graphs)
 
         # Execute query
         import json
@@ -335,9 +346,17 @@ class GraphManager:
             ...     JOIN products.node_props_text p ON s.value = p.value
             ... ''', graphs=["social", "products"])
         """
-        coord = self._ensure_coordinator()
+        if not graphs:
+            raise ValueError("graphs is required: list every graph the SQL references")
 
-        # Attach requested graphs
+        coord = self._ensure_coordinator()
+        self._attach(coord, graphs)
+
+        cursor = coord.execute(sql, parameters)
+        return cursor.fetchall()
+
+    def _attach(self, coord: sqlite3.Connection, graphs: list[str]) -> None:
+        """Attach each named graph to the coordinator (idempotent)."""
         for name in graphs:
             path = self._graph_path(name)
             if not path.exists():
@@ -350,9 +369,6 @@ class GraphManager:
             except sqlite3.OperationalError as e:
                 if "already in use" not in str(e).lower():
                     raise
-
-        cursor = coord.execute(sql, parameters)
-        return cursor.fetchall()
 
     def close(self) -> None:
         """Close all open graph connections and the coordinator."""

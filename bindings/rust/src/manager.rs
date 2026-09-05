@@ -62,9 +62,21 @@ impl GraphManager {
         })
     }
 
-    /// Get the file path for a graph.
-    fn graph_path(&self, name: &str) -> PathBuf {
-        self.base_path.join(format!("{}.db", name))
+    /// Get the file path for a graph, validating the name first.
+    ///
+    /// Graph names are plain identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`): they
+    /// become both a file name under `base_path` and the schema name in
+    /// `ATTACH DATABASE ... AS name`. The resolved path is additionally
+    /// required to stay directly inside `base_path` (GitHub #111).
+    fn graph_path(&self, name: &str) -> Result<PathBuf> {
+        if !crate::utils::is_identifier(name) {
+            return Err(Error::InvalidGraphName(name.to_string()));
+        }
+        let path = self.base_path.join(format!("{}.db", name));
+        if path.parent() != Some(self.base_path.as_path()) {
+            return Err(Error::InvalidGraphName(name.to_string()));
+        }
+        Ok(path)
     }
 
     /// Get or create the coordinator connection for cross-graph queries.
@@ -106,7 +118,7 @@ impl GraphManager {
     ///
     /// * `name` - Graph name
     pub fn exists(&self, name: &str) -> bool {
-        self.graph_path(name).exists()
+        self.graph_path(name).map(|p| p.exists()).unwrap_or(false)
     }
 
     /// Create a new graph.
@@ -123,7 +135,7 @@ impl GraphManager {
     ///
     /// Returns an error if the graph already exists.
     pub fn create(&mut self, name: &str) -> Result<&Graph> {
-        let path = self.graph_path(name);
+        let path = self.graph_path(name)?;
         if path.exists() {
             return Err(Error::GraphExists(name.to_string()));
         }
@@ -152,7 +164,7 @@ impl GraphManager {
             return Ok(self.open_graphs.get(name).unwrap());
         }
 
-        let path = self.graph_path(name);
+        let path = self.graph_path(name)?;
         if !path.exists() {
             let available = self.list()?;
             return Err(Error::GraphNotFound {
@@ -202,7 +214,7 @@ impl GraphManager {
     ///
     /// Returns an error if the graph doesn't exist.
     pub fn drop(&mut self, name: &str) -> Result<()> {
-        let path = self.graph_path(name);
+        let path = self.graph_path(name)?;
         if !path.exists() {
             let available = self.list()?;
             return Err(Error::GraphNotFound {
@@ -229,22 +241,32 @@ impl GraphManager {
 
     /// Execute a cross-graph Cypher query.
     ///
-    /// Uses the FROM clause syntax to query across multiple graphs.
-    /// Graphs are automatically attached to the coordinator connection.
+    /// Uses the FROM clause syntax to query across multiple graphs. Every
+    /// graph named in a FROM clause must be listed in `graph_names` so it can
+    /// be attached to the coordinator connection; the binding does not parse
+    /// the query to discover them.
     ///
     /// # Arguments
     ///
     /// * `cypher` - Cypher query with FROM clauses specifying graphs
-    /// * `graph_names` - List of graph names to attach
+    /// * `graph_names` - Non-empty list of graph names to attach
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// CypherResult with query results.
+    /// Returns [`Error::InvalidArgument`] if `graph_names` is empty and
+    /// [`Error::InvalidGraphName`] if a name is not a plain identifier.
     pub fn query(&mut self, cypher: &str, graph_names: &[&str]) -> Result<CypherResult> {
+        if graph_names.is_empty() {
+            return Err(Error::InvalidArgument(
+                "graph_names is required: list every graph the query's FROM clauses reference"
+                    .to_string(),
+            ));
+        }
+
         // Collect graph paths first (before borrowing coordinator)
         let mut graph_paths: Vec<(String, PathBuf)> = Vec::new();
         for name in graph_names {
-            let path = self.graph_path(name);
+            let path = self.graph_path(name)?;
             if !path.exists() {
                 let available = self.list()?;
                 return Err(Error::GraphNotFound {
@@ -297,16 +319,27 @@ impl GraphManager {
     /// # Arguments
     ///
     /// * `sql` - SQL query with graph-prefixed table names
-    /// * `graph_names` - List of graph names to attach
+    /// * `graph_names` - Non-empty list of graph names to attach
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`] if `graph_names` is empty and
+    /// [`Error::InvalidGraphName`] if a name is not a plain identifier.
     pub fn query_sql(
         &mut self,
         sql: &str,
         graph_names: &[&str],
     ) -> Result<Vec<Vec<rusqlite::types::Value>>> {
+        if graph_names.is_empty() {
+            return Err(Error::InvalidArgument(
+                "graph_names is required: list every graph the SQL references".to_string(),
+            ));
+        }
+
         // Collect graph paths first (before borrowing coordinator)
         let mut graph_paths: Vec<(String, PathBuf)> = Vec::new();
         for name in graph_names {
-            let path = self.graph_path(name);
+            let path = self.graph_path(name)?;
             if !path.exists() {
                 let available = self.list()?;
                 return Err(Error::GraphNotFound {

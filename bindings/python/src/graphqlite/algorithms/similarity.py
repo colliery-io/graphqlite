@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ..graph._base import BaseMixin
-from ._parsing import safe_float, safe_int
+from ._parsing import extract_algo_array, safe_float, safe_int
 
 
 class SimilarityMixin(BaseMixin):
@@ -32,17 +32,18 @@ class SimilarityMixin(BaseMixin):
         """
         if node1_id and node2_id:
             query = f"RETURN nodeSimilarity('{self._escape(node1_id)}', '{self._escape(node2_id)}')"
-        elif threshold > 0 and top_k > 0:
+        elif top_k > 0:
+            # top_k needs the two-argument form even when threshold is 0 (#108)
             query = f"RETURN nodeSimilarity({threshold}, {top_k})"
         elif threshold > 0:
             query = f"RETURN nodeSimilarity({threshold})"
         else:
             query = "RETURN nodeSimilarity()"
 
-        result = self._conn.cypher(query)
+        rows = extract_algo_array(self._conn.cypher(query))
 
         pairs = []
-        for row in result:
+        for row in rows:
             node1 = row.get("node1")
             node2 = row.get("node2")
             similarity = row.get("similarity")
@@ -72,10 +73,10 @@ class SimilarityMixin(BaseMixin):
             sorted by similarity descending
         """
         query = f"RETURN knn('{self._escape(node_id)}', {k})"
-        result = self._conn.cypher(query)
+        rows = extract_algo_array(self._conn.cypher(query))
 
         neighbors = []
-        for row in result:
+        for row in rows:
             neighbor = row.get("neighbor")
             similarity = row.get("similarity")
             rank = row.get("rank")
@@ -99,10 +100,10 @@ class SimilarityMixin(BaseMixin):
         Returns:
             List of dicts with 'node_id', 'user_id', 'triangles', 'clustering_coefficient'
         """
-        result = self._conn.cypher("RETURN triangleCount()")
+        rows = extract_algo_array(self._conn.cypher("RETURN triangleCount()"))
 
         triangles = []
-        for row in result:
+        for row in rows:
             node_id = row.get("node_id")
             user_id = row.get("user_id")
             tri_count = row.get("triangles")

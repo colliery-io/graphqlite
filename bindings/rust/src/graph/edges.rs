@@ -1,7 +1,7 @@
 //! Edge operations for Graph.
 
 use super::Graph;
-use crate::utils::{rel_type_pattern, sanitize_rel_type, PropertyValue};
+use crate::utils::{assert_identifier, rel_type_pattern, sanitize_rel_type, PropertyValue};
 use crate::{CypherResult, Result, Value};
 
 impl Graph {
@@ -59,6 +59,11 @@ impl Graph {
     /// If an edge of the same type already exists, its properties are updated
     /// (merge semantics — existing properties not in `props` are preserved).
     /// If no edge of that type exists, a new one is created.
+    ///
+    /// Every property key must be a plain identifier
+    /// (`^[A-Za-z_][A-Za-z0-9_]*$`); otherwise
+    /// [`crate::Error::InvalidIdentifier`] is returned before anything is
+    /// written (GitHub #110). `rel_type` is sanitized via [`sanitize_rel_type`].
     pub fn upsert_edge<I, K, V>(
         &self,
         source_id: &str,
@@ -77,6 +82,9 @@ impl Graph {
             .into_iter()
             .map(|(k, v)| (k.as_ref().to_string(), v.into()))
             .collect();
+        for (k, _) in &props {
+            assert_identifier(k)?;
+        }
 
         let merge_query = format!(
             "MATCH (a {{id: $src}}), (b {{id: $tgt}}) MERGE (a)-[r:{}]->(b)",

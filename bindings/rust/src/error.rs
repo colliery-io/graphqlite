@@ -46,4 +46,18 @@ pub enum Error {
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A label, property key, or coordinate property name is not a plain
+    /// identifier and cannot be interpolated into a query (GitHub #110).
+    #[error("Invalid identifier {0:?}: must match ^[A-Za-z_][A-Za-z0-9_]*$")]
+    InvalidIdentifier(String),
+
+    /// A graph name is not a plain identifier or would resolve outside the
+    /// manager's base directory (GitHub #111).
+    #[error("Invalid graph name {0:?}: must match ^[A-Za-z_][A-Za-z0-9_]*$ and stay inside the base directory")]
+    InvalidGraphName(String),
+
+    /// A caller-supplied argument is unusable (for example an empty graph list).
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }

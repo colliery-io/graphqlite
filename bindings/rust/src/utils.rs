@@ -1,5 +1,6 @@
 //! Utility functions for Cypher query construction.
 
+use crate::{Error, Result};
 use std::collections::HashSet;
 
 /// Cypher reserved keywords that can't be used as relationship types.
@@ -109,6 +110,30 @@ pub fn sanitize_rel_type(rel_type: &str) -> String {
         format!("REL_{}", safe)
     } else {
         safe
+    }
+}
+
+/// Returns `true` if `name` matches `^[A-Za-z_][A-Za-z0-9_]*$`.
+///
+/// Labels, property keys, coordinate property names, and graph names are
+/// interpolated directly into Cypher/SQL (they cannot be bound as `$params`),
+/// so they must be plain identifiers.
+pub fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Validate that `name` is a plain identifier, returning
+/// [`Error::InvalidIdentifier`] otherwise (GitHub #110).
+pub fn assert_identifier(name: &str) -> Result<()> {
+    if is_identifier(name) {
+        Ok(())
+    } else {
+        Err(Error::InvalidIdentifier(name.to_string()))
     }
 }
 

@@ -3,37 +3,47 @@
 from typing import Any, List, Optional
 
 
-# Known column names for graph algorithm results
-ALGO_COLUMN_NAMES = [
-    "column_0", "wcc()", "scc()", "pagerank()", "degree_centrality()",
-    "betweenness_centrality()", "closeness_centrality()", "eigenvector_centrality()",
-    "labelPropagation()", "louvain()", "bfs()", "dfs()", "apsp()"
-]
+# The core returns every graph-algorithm result as a single row whose only
+# column is ``column_0`` (verified for all 18 algorithm functions). These two
+# helpers are the *only* place that wrapper is unwrapped; every algorithm
+# method must go through one of them (GitHub #104/#105/#106).
+ALGO_COLUMN = "column_0"
 
 
-def extract_algo_array(result: List[dict]) -> List[dict]:
-    """Extract wrapped array results from graph algorithms.
+def extract_algo_array(result: Any) -> List[dict]:
+    """Unwrap a list-valued algorithm result into a list of row dicts.
 
-    Graph algorithms return results in one of two formats:
-    1. Old format: Multiple rows with fields directly accessible
-    2. New format: Single row with a column containing an array of objects
-
-    This function detects the new format and extracts the array elements.
+    Accepts a ``CypherResult`` or a plain list of dicts. If the result is a
+    single row whose ``column_0`` is a list, the list's dict elements are
+    returned; otherwise the rows are returned unchanged.
     """
-    # If multiple rows, assume old format - return as-is
-    if len(result) != 1:
-        return result
+    rows = list(result)
+    if len(rows) != 1:
+        return rows
 
-    # Single row - check if it has an array column
-    row = result[0]
+    row = rows[0]
+    if isinstance(row, dict) and isinstance(row.get(ALGO_COLUMN), list):
+        return [item for item in row[ALGO_COLUMN] if isinstance(item, dict)]
 
-    # Try common column names for wrapped array results
-    for col_name in ALGO_COLUMN_NAMES:
-        if col_name in row and isinstance(row[col_name], list):
-            return row[col_name]
+    return rows
 
-    # No array column found, return original result
-    return result
+
+def extract_algo_object(result: Any) -> Optional[dict]:
+    """Unwrap an object-valued algorithm result (dijkstra, astar) into a dict.
+
+    Returns ``None`` when the result has no rows. If the single row's
+    ``column_0`` is a dict, that dict is returned; otherwise the row itself
+    is returned so callers can read fields directly.
+    """
+    rows = list(result)
+    if not rows:
+        return None
+
+    row = rows[0]
+    if isinstance(row, dict) and isinstance(row.get(ALGO_COLUMN), dict):
+        return row[ALGO_COLUMN]
+
+    return row if isinstance(row, dict) else None
 
 
 def parse_score_result(row: dict, score_key: str = "score") -> Optional[dict]:

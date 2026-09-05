@@ -1,10 +1,32 @@
 //! Path finding algorithm implementations.
 
-use super::parsing::extract_float;
+use super::parsing::{algo_object, algo_rows, extract_float, extract_string};
 use super::{AStarResult, ApspResult, ShortestPathResult};
 use crate::graph::Graph;
-use crate::utils::escape_string;
+use crate::utils::{assert_identifier, escape_string};
 use crate::{Result, Value};
+use std::collections::HashMap;
+
+fn path_field(data: &HashMap<String, Value>) -> Vec<String> {
+    match data.get("path") {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn distance_field(data: &HashMap<String, Value>) -> Option<f64> {
+    data.get("distance").and_then(Value::as_f64)
+}
+
+fn found_field(data: &HashMap<String, Value>) -> bool {
+    data.get("found").and_then(Value::as_bool).unwrap_or(false)
+}
 
 impl Graph {
     /// Find the shortest path between two nodes using Dijkstra's algorithm.
@@ -35,88 +57,17 @@ impl Graph {
 
         let result = self.connection().cypher(&query)?;
 
-        if result.is_empty() {
-            return Ok(ShortestPathResult {
+        Ok(match algo_object(&result) {
+            Some(data) => ShortestPathResult {
+                path: path_field(&data),
+                distance: distance_field(&data),
+                found: found_field(&data),
+            },
+            None => ShortestPathResult {
                 path: Vec::new(),
                 distance: None,
                 found: false,
-            });
-        }
-
-        let row = &result[0];
-
-        // Handle nested column_0 structure
-        if let Some(Value::Object(data)) = row.get_value("column_0") {
-            let path = data
-                .get("path")
-                .and_then(|v| match v {
-                    Value::Array(arr) => Some(
-                        arr.iter()
-                            .filter_map(|v| match v {
-                                Value::String(s) => Some(s.clone()),
-                                _ => None,
-                            })
-                            .collect(),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or_default();
-
-            let distance = data.get("distance").and_then(|v| match v {
-                Value::Float(f) => Some(*f),
-                Value::Integer(i) => Some(*i as f64),
-                _ => None,
-            });
-
-            let found = data
-                .get("found")
-                .and_then(|v| match v {
-                    Value::Bool(b) => Some(*b),
-                    _ => None,
-                })
-                .unwrap_or(false);
-
-            return Ok(ShortestPathResult {
-                path,
-                distance,
-                found,
-            });
-        }
-
-        // Direct access
-        let path = row
-            .get_value("path")
-            .and_then(|v| match v {
-                Value::Array(arr) => Some(
-                    arr.iter()
-                        .filter_map(|v| match v {
-                            Value::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect(),
-                ),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let distance = row.get_value("distance").and_then(|v| match v {
-            Value::Float(f) => Some(*f),
-            Value::Integer(i) => Some(*i as f64),
-            _ => None,
-        });
-
-        let found = row
-            .get_value("found")
-            .and_then(|v| match v {
-                Value::Bool(b) => Some(*b),
-                _ => None,
-            })
-            .unwrap_or(false);
-
-        Ok(ShortestPathResult {
-            path,
-            distance,
-            found,
+            },
         })
     }
 
@@ -126,8 +77,13 @@ impl Graph {
     ///
     /// * `source_id` - Starting node's id
     /// * `target_id` - Target node's id
-    /// * `lat_prop` - Optional property name for latitude
-    /// * `lon_prop` - Optional property name for longitude
+    /// * `lat_prop` - Optional property name for latitude (must be a plain identifier)
+    /// * `lon_prop` - Optional property name for longitude (must be a plain identifier)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidIdentifier`] if a coordinate property
+    /// name is not a valid identifier; nothing is executed in that case.
     pub fn astar(
         &self,
         source_id: &str,
@@ -139,68 +95,35 @@ impl Graph {
         let esc_target = escape_string(target_id);
 
         let query = match (lat_prop, lon_prop) {
-            (Some(lat), Some(lon)) => format!(
-                "RETURN astar('{}', '{}', '{}', '{}')",
-                esc_source, esc_target, lat, lon
-            ),
+            (Some(lat), Some(lon)) => {
+                assert_identifier(lat)?;
+                assert_identifier(lon)?;
+                format!(
+                    "RETURN astar('{}', '{}', '{}', '{}')",
+                    esc_source, esc_target, lat, lon
+                )
+            }
             _ => format!("RETURN astar('{}', '{}')", esc_source, esc_target),
         };
 
         let result = self.connection().cypher(&query)?;
 
-        if result.is_empty() {
-            return Ok(AStarResult {
+        Ok(match algo_object(&result) {
+            Some(data) => AStarResult {
+                path: path_field(&data),
+                distance: distance_field(&data),
+                found: found_field(&data),
+                nodes_explored: data
+                    .get("nodes_explored")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0),
+            },
+            None => AStarResult {
                 path: Vec::new(),
                 distance: None,
                 found: false,
                 nodes_explored: 0,
-            });
-        }
-
-        let row = &result[0];
-
-        let path = row
-            .get_value("path")
-            .and_then(|v| match v {
-                Value::Array(arr) => Some(
-                    arr.iter()
-                        .filter_map(|v| match v {
-                            Value::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect(),
-                ),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let distance = row.get_value("distance").and_then(|v| match v {
-            Value::Float(f) => Some(*f),
-            Value::Integer(i) => Some(*i as f64),
-            _ => None,
-        });
-
-        let found = row
-            .get_value("found")
-            .and_then(|v| match v {
-                Value::Bool(b) => Some(*b),
-                _ => None,
-            })
-            .unwrap_or(false);
-
-        let nodes_explored = row
-            .get_value("nodes_explored")
-            .map(|v| match v {
-                Value::Integer(i) => *i,
-                _ => 0,
-            })
-            .unwrap_or(0);
-
-        Ok(AStarResult {
-            path,
-            distance,
-            found,
-            nodes_explored,
+            },
         })
     }
 
@@ -209,19 +132,13 @@ impl Graph {
     /// Uses Floyd-Warshall algorithm with O(V³) time complexity.
     pub fn apsp(&self) -> Result<Vec<ApspResult>> {
         let result = self.connection().cypher("RETURN apsp()")?;
+        let rows = algo_rows(&result);
 
         let mut paths = Vec::new();
-        for row in result.iter() {
-            let source = row.get_value("source").and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            });
-            let target = row.get_value("target").and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            });
-
-            if let (Some(source), Some(target)) = (source, target) {
+        for row in rows.iter() {
+            if let (Some(source), Some(target)) =
+                (extract_string(row, "source"), extract_string(row, "target"))
+            {
                 paths.push(ApspResult {
                     source,
                     target,

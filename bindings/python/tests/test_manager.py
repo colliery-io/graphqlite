@@ -235,3 +235,47 @@ class TestGraphManagerPersistence:
 
         with graphs(temp_dir) as gm:
             assert gm.list() == ["alpha", "beta"]
+
+
+class TestGraphManagerHardening:
+    """Regression tests for GitHub #111 (path traversal) and #112 (graphs required)."""
+
+    @pytest.mark.parametrize("bad", ["../x", "a/b", "", "a b", "1abc", "x;DROP"])
+    def test_manager_rejects_traversal(self, temp_dir, bad):
+        with graphs(temp_dir) as gm:
+            for op in (gm.create, gm.open, gm.open_or_create, gm.exists):
+                with pytest.raises(ValueError):
+                    op(bad)
+            with pytest.raises(ValueError):
+                gm.query("MATCH (n) RETURN n", graphs=[bad])
+        parent = os.path.dirname(os.path.abspath(temp_dir))
+        assert not os.path.exists(os.path.join(parent, "x.db"))
+        assert not os.path.exists(os.path.join(temp_dir, "a", "b.db"))
+        assert os.listdir(temp_dir) == []
+
+    def test_manager_drop_rejects_traversal(self, temp_dir):
+        parent = os.path.dirname(os.path.abspath(temp_dir))
+        victim = os.path.join(parent, "victim_should_survive.db")
+        with open(victim, "w") as fh:
+            fh.write("x")
+        try:
+            with graphs(temp_dir) as gm:
+                with pytest.raises(ValueError):
+                    gm.drop("../victim_should_survive")
+            assert os.path.exists(victim)
+        finally:
+            os.unlink(victim)
+
+    def test_manager_query_requires_graphs(self, temp_dir):
+        with graphs(temp_dir) as gm:
+            gm.create("social").upsert_node("s1", {"name": "S1"})
+            with pytest.raises(ValueError, match="graphs is required"):
+                gm.query("MATCH (n) FROM social RETURN n.name", graphs=[])
+            with pytest.raises(ValueError, match="graphs is required"):
+                gm.query("MATCH (n) FROM social RETURN n.name", None)
+            with pytest.raises(TypeError):
+                gm.query("MATCH (n) FROM social RETURN n.name")
+            with pytest.raises(ValueError, match="graphs is required"):
+                gm.query_sql("SELECT 1", [])
+            rows = gm.query("MATCH (n) FROM social RETURN n.name", graphs=["social"]).to_list()
+            assert rows == [{"n.name": "S1"}]

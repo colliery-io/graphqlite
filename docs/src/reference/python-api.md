@@ -185,14 +185,13 @@ High-level graph API built on top of `Connection`. Manages a single named graph 
 ### Constructor
 
 ```python
-graphqlite.Graph(db_path=":memory:", namespace="default", extension_path=None)
-graphqlite.graph(db_path=":memory:", namespace="default", extension_path=None) -> Graph
+graphqlite.Graph(db_path=":memory:", extension_path=None)
+graphqlite.graph(db_path=":memory:", extension_path=None) -> Graph
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `db_path` | str | `":memory:"` | SQLite database path |
-| `namespace` | str | `"default"` | Graph namespace identifier |
 | `extension_path` | str \| None | `None` | Path to extension; auto-detected if `None` |
 
 ---
@@ -311,7 +310,7 @@ Return nodes connected to `id` in either direction (undirected — includes both
 graph.get_node_edges(id: str) -> list[dict]
 ```
 
-Return all edges incident to `id` (in and out).
+Return all edges incident to `id` (in and out). Each row is a dict with `source`, `target`, and `r` keys, the same shape as `get_edges_from` / `get_edges_to`.
 
 #### `Graph.get_edges_from`
 
@@ -553,7 +552,7 @@ graphqlite.graphs(base_path: str, extension_path: str = None) -> GraphManager
 | `open` | `manager.open(name: str) -> Graph` | Open existing graph; raises if not found |
 | `open_or_create` | `manager.open_or_create(name: str) -> Graph` | Open or create |
 | `drop` | `manager.drop(name: str) -> None` | Delete the graph database file |
-| `query` | `manager.query(cypher: str, graphs: list[str] = None, params: dict = None) -> list` | Query across multiple graphs; `graphs=None` queries all |
+| `query` | `manager.query(cypher: str, graphs: list[str], params: dict = None) -> CypherResult` | Query across multiple graphs; `graphs` must list every graph named in a `FROM` clause (raises `ValueError` if empty) |
 | `query_sql` | `manager.query_sql(sql: str, graphs: list[str], parameters: tuple = ()) -> list` | Raw SQL across multiple graphs |
 | `close` | `manager.close() -> None` | Close all open connections |
 

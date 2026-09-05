@@ -4,6 +4,7 @@ import json
 from typing import Any, Optional
 
 from ._base import BaseMixin
+from ..utils import assert_identifier
 
 
 class NodesMixin(BaseMixin):
@@ -59,15 +60,28 @@ class NodesMixin(BaseMixin):
         Otherwise, a new node is created.
 
         Args:
-            node_id: Unique identifier for the node (stored as 'id' property)
-            node_data: Dictionary of properties to set
-            label: Node label (only used on creation)
+            node_id: Unique identifier for the node (stored as 'id' property).
+                An ``"id"`` key inside ``node_data`` is ignored; ``node_id``
+                always determines identity.
+            node_data: Dictionary of properties to set. Keys must be valid
+                identifiers (``^[A-Za-z_][A-Za-z0-9_]*$``).
+            label: Node label (only used on creation); must be a valid
+                identifier.
+
+        Raises:
+            ValueError: If ``label`` or any property key is not a valid
+                identifier. Nothing is written in that case.
         """
-        props = {"id": node_id, **node_data}
+        assert_identifier(label, "label")
+        # node_id is the identity; never let a caller-supplied "id" replace
+        # it on create or rename the node on update (GitHub #109).
+        data = {k: v for k, v in node_data.items() if k != "id"}
+        for k in data:
+            assert_identifier(k, "property key")
 
         if self.has_node(node_id):
             # Update existing node
-            for k, v in node_data.items():
+            for k, v in data.items():
                 self._conn.cypher(
                     f"MATCH (n {{id: $id}}) "
                     f"SET n.{k} = $val RETURN n",
@@ -75,7 +89,7 @@ class NodesMixin(BaseMixin):
                 )
         else:
             # Create new node
-            prop_str = self._format_props(props)
+            prop_str = self._format_props({"id": node_id, **data})
             self._conn.cypher(f"CREATE (n:{label} {{{prop_str}}})")
 
     def delete_node(self, node_id: str) -> None:
@@ -101,6 +115,7 @@ class NodesMixin(BaseMixin):
             List of node dicts
         """
         if label:
+            assert_identifier(label, "label")
             result = self._conn.cypher(f"MATCH (n:{label}) RETURN n")
         else:
             result = self._conn.cypher("MATCH (n) RETURN n")

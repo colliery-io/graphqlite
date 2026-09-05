@@ -101,9 +101,11 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
 
                             CYPHER_DEBUG("Deleting node '%s' with ID %lld", item->variable, entity_id);
 
-                            int delete_result = delete_node_by_id(executor, entity_id, delete_clause->detach);
+                            int detached = 0;
+                            int delete_result = delete_node_by_id(executor, entity_id, delete_clause->detach, &detached);
                             if (delete_result == 0) {
                                 deleted_nodes++;
+                                deleted_edges += detached;
                             } else {
                                 /* Failed to delete node - likely due to constraint violation */
                                 set_result_error(result, "Cannot delete node - it still has relationships");
@@ -180,9 +182,11 @@ int execute_delete_operations(cypher_executor *executor,
         } else {
             int node_id = get_variable_node_id(var_map, item->variable);
             if (node_id < 0) continue;
-            int rc = delete_node_by_id(executor, (int64_t)node_id, del->detach);
+            int detached = 0;
+            int rc = delete_node_by_id(executor, (int64_t)node_id, del->detach, &detached);
             if (rc == 0) {
                 deleted_nodes++;
+                deleted_edges += detached;
             } else {
                 set_result_error(result,
                     "Cannot delete node - it still has relationships");
@@ -235,8 +239,10 @@ int delete_edge_by_id(cypher_executor *executor, int64_t edge_id)
 }
 
 /* Delete a node by ID */
-int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach)
+int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach,
+                      int *detached_edges)
 {
+    if (detached_edges) *detached_edges = 0;
     if (!executor || !executor->db) {
         return -1;
     }
@@ -256,6 +262,7 @@ int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach)
             if (err_msg) sqlite3_free(err_msg);
             return -1;
         }
+        if (detached_edges) *detached_edges = sqlite3_changes(executor->db);
         CYPHER_DEBUG("Deleted all connected edges for node %lld", node_id);
     } else {
         /* Regular DELETE: Check for connected edges (constraint enforcement) */
