@@ -1,7 +1,7 @@
 //! Node operations for Graph.
 
 use super::Graph;
-use crate::utils::{escape_string, PropertyValue};
+use crate::utils::{assert_identifier, escape_string, PropertyValue};
 use crate::{Result, Value};
 
 impl Graph {
@@ -38,16 +38,27 @@ impl Graph {
     ///
     /// If a node with the given id exists, its properties are updated.
     /// Otherwise, a new node is created.
+    ///
+    /// `node_id` always determines identity: an `"id"` entry in `props` is
+    /// ignored on both paths (GitHub #109). `label` and every property key
+    /// must be plain identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`); otherwise
+    /// [`crate::Error::InvalidIdentifier`] is returned before anything is
+    /// written (GitHub #110).
     pub fn upsert_node<I, K, V>(&self, node_id: &str, props: I, label: &str) -> Result<()>
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
         V: Into<PropertyValue>,
     {
+        assert_identifier(label)?;
         let props: Vec<(String, PropertyValue)> = props
             .into_iter()
             .map(|(k, v)| (k.as_ref().to_string(), v.into()))
+            .filter(|(k, _)| k != "id")
             .collect();
+        for (k, _) in &props {
+            assert_identifier(k)?;
+        }
 
         if self.has_node(node_id)? {
             // Update existing node
@@ -85,7 +96,12 @@ impl Graph {
     }
 
     /// Get all nodes, optionally filtered by label.
+    ///
+    /// Returns [`crate::Error::InvalidIdentifier`] if `label` is not a plain identifier.
     pub fn get_all_nodes(&self, label: Option<&str>) -> Result<Vec<Value>> {
+        if let Some(l) = label {
+            assert_identifier(l)?;
+        }
         let query = match label {
             Some(l) => format!("MATCH (n:{}) RETURN n", l),
             None => "MATCH (n) RETURN n".to_string(),

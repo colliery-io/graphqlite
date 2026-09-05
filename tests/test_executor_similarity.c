@@ -223,6 +223,45 @@ static void test_similarity_threshold(void)
     }
 }
 
+/* GitHub #107: nodeSimilarity(threshold, top_k) must honour the threshold. */
+static void test_similarity_threshold_with_topk(void)
+{
+    cypher_executor_free(executor);
+    sqlite3_close(test_db);
+    sqlite3_open(":memory:", &test_db);
+    executor = cypher_executor_create(test_db);
+
+    /* a-b share {c,d} (sim 1.0); a-e share only c (sim 0.5); b-e sim 0.5;
+     * every pair involving c or d has similarity 0.0 */
+    exec_cypher("CREATE (a:Node {id: 'a'}), (b:Node {id: 'b'}), "
+                "(c:Node {id: 'c'}), (d:Node {id: 'd'}), (e:Node {id: 'e'})");
+    exec_cypher("MATCH (a {id: 'a'}), (c {id: 'c'}) CREATE (a)-[:L]->(c)");
+    exec_cypher("MATCH (a {id: 'a'}), (d {id: 'd'}) CREATE (a)-[:L]->(d)");
+    exec_cypher("MATCH (b {id: 'b'}), (c {id: 'c'}) CREATE (b)-[:L]->(c)");
+    exec_cypher("MATCH (b {id: 'b'}), (d {id: 'd'}) CREATE (b)-[:L]->(d)");
+    exec_cypher("MATCH (e {id: 'e'}), (c {id: 'c'}) CREATE (e)-[:L]->(c)");
+
+    char *json = exec_get_json("RETURN nodeSimilarity(0.9, 10)");
+    CU_ASSERT_PTR_NOT_NULL(json);
+    if (json) {
+        /* Only the a-b pair (1.0) survives a 0.9 threshold */
+        CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"similarity\":1.0"));
+        CU_ASSERT_PTR_NULL(strstr(json, "\"similarity\":0.5"));
+        CU_ASSERT_PTR_NULL(strstr(json, "\"similarity\":0.0"));
+        free(json);
+    }
+
+    /* top_k alone (threshold 0) still caps the list at exactly one pair */
+    json = exec_get_json("RETURN nodeSimilarity(0, 1)");
+    CU_ASSERT_PTR_NOT_NULL(json);
+    if (json) {
+        const char *first = strstr(json, "\"node1\"");
+        CU_ASSERT_PTR_NOT_NULL(first);
+        if (first) CU_ASSERT_PTR_NULL(strstr(first + 1, "\"node1\""));
+        free(json);
+    }
+}
+
 static void test_similarity_no_overlap(void)
 {
     cypher_executor_free(executor);
@@ -262,6 +301,7 @@ int init_executor_similarity_suite(void)
     if (!CU_add_test(suite, "Similarity partial overlap", test_similarity_partial_overlap)) return CU_get_error();
     if (!CU_add_test(suite, "Similarity all pairs", test_similarity_all_pairs)) return CU_get_error();
     if (!CU_add_test(suite, "Similarity threshold filter", test_similarity_threshold)) return CU_get_error();
+    if (!CU_add_test(suite, "Similarity threshold with top_k (#107)", test_similarity_threshold_with_topk)) return CU_get_error();
     if (!CU_add_test(suite, "Similarity no overlap", test_similarity_no_overlap)) return CU_get_error();
 
     return CUE_SUCCESS;

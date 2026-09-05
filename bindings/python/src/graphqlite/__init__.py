@@ -5,15 +5,15 @@ from typing import Optional
 from .connection import Connection, connect, wrap
 from .graph import BulkInsertResult, Graph, graph
 from .manager import GraphManager, graphs
-from .utils import escape_string, sanitize_rel_type, CYPHER_RESERVED
+from .utils import assert_identifier, escape_string, sanitize_rel_type, CYPHER_RESERVED
 from ._platform import get_loadable_path
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 __all__ = [
     "BulkInsertResult",
     "Connection", "connect", "wrap", "load", "loadable_path",
     "Graph", "graph", "GraphManager", "graphs",
-    "escape_string", "sanitize_rel_type", "CYPHER_RESERVED"
+    "assert_identifier", "escape_string", "sanitize_rel_type", "CYPHER_RESERVED"
 ]
 
 

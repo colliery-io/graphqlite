@@ -31,8 +31,7 @@ class TraversalMixin(BaseMixin):
         else:
             query = f"RETURN bfs('{self._escape(start_id)}', {max_depth})"
 
-        result = self._conn.cypher(query)
-        rows = extract_algo_array(result.to_list())
+        rows = extract_algo_array(self._conn.cypher(query))
 
         nodes = []
         for row in rows:
@@ -68,8 +67,7 @@ class TraversalMixin(BaseMixin):
         else:
             query = f"RETURN dfs('{self._escape(start_id)}', {max_depth})"
 
-        result = self._conn.cypher(query)
-        rows = extract_algo_array(result.to_list())
+        rows = extract_algo_array(self._conn.cypher(query))
 
         nodes = []
         for row in rows:

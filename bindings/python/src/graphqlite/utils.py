@@ -1,6 +1,34 @@
 """Utility functions for GraphQLite."""
 
+import re
 from typing import Any
+
+# Labels, property keys, and coordinate property names are interpolated
+# directly into Cypher (they cannot be bound as $params), so they must be
+# plain identifiers. Same rule as GraphManager graph names.
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def assert_identifier(name: Any, kind: str = "identifier") -> str:
+    """
+    Validate that ``name`` is a safe Cypher identifier.
+
+    Raises ``ValueError`` for anything that does not match
+    ``^[A-Za-z_][A-Za-z0-9_]*$``. Used before interpolating labels, property
+    keys, and coordinate property names into a query (GitHub #110).
+
+    Args:
+        name: Candidate identifier
+        kind: Human-readable noun for the error message
+
+    Returns:
+        The validated name, unchanged
+    """
+    if not isinstance(name, str) or not IDENTIFIER_RE.match(name):
+        raise ValueError(
+            f"Invalid {kind} {name!r}: must match ^[A-Za-z_][A-Za-z0-9_]*$"
+        )
+    return name
 
 
 # Cypher reserved keywords that can't be used as relationship types

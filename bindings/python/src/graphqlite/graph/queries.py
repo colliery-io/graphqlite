@@ -49,22 +49,24 @@ class QueriesMixin(BaseMixin):
         )
         return [row.get("m") for row in result if row.get("m")]
 
-    def get_node_edges(self, node_id: str) -> list[tuple[str, str, dict]]:
+    def get_node_edges(self, node_id: str) -> list[dict]:
         """
-        Get all edges connected to a node.
+        Get all edges connected to a node (both directions).
 
         Args:
             node_id: The node's id property value
 
         Returns:
-            List of (source_id, target_id, properties) tuples
+            List of dicts with 'source', 'target', 'r' keys -- the same shape
+            as ``get_edges_from`` / ``get_edges_to``. ``source`` is always the
+            queried node and ``target`` the other endpoint.
         """
         result = self._conn.cypher(
             "MATCH (n {id: $id})-[r]-(m) "
             "RETURN n.id AS source, m.id AS target, r",
             params={"id": node_id},
         )
-        return [(row["source"], row["target"], row.get("r", {})) for row in result]
+        return result.to_list()
 
     def get_edges_from(self, node_id: str) -> list[dict]:
         """

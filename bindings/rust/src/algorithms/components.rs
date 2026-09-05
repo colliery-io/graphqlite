@@ -1,7 +1,7 @@
 //! Connected components algorithm implementations.
 
 use super::{
-    parsing::{extract_algo_array, extract_int, extract_node_id, extract_user_id},
+    parsing::{algo_rows, extract_int, extract_node_id, extract_user_id},
     ComponentResult,
 };
 use crate::graph::Graph;
@@ -13,7 +13,7 @@ impl Graph {
     /// Treats the graph as undirected and finds connected components.
     pub fn wcc(&self) -> Result<Vec<ComponentResult>> {
         let result = self.connection().cypher("RETURN wcc()")?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut components = Vec::new();
         for row in rows.iter() {
@@ -34,7 +34,7 @@ impl Graph {
     /// other node following edge directions. Uses Tarjan's algorithm.
     pub fn scc(&self) -> Result<Vec<ComponentResult>> {
         let result = self.connection().cypher("RETURN scc()")?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut components = Vec::new();
         for row in rows.iter() {

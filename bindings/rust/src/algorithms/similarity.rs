@@ -1,7 +1,7 @@
 //! Similarity algorithm implementations.
 
 use super::parsing::{
-    extract_float, extract_int, extract_node_id, extract_string, extract_user_id,
+    algo_rows, extract_float, extract_int, extract_node_id, extract_string, extract_user_id,
 };
 use super::{KnnResult, NodeSimilarityResult, TriangleCountResult};
 use crate::graph::Graph;
@@ -32,7 +32,8 @@ impl Graph {
                     escape_string(n2)
                 )
             }
-            _ if threshold > 0.0 && top_k > 0 => {
+            // top_k needs the two-argument form even when threshold is 0 (#108)
+            _ if top_k > 0 => {
                 format!("RETURN nodeSimilarity({}, {})", threshold, top_k)
             }
             _ if threshold > 0.0 => {
@@ -42,13 +43,13 @@ impl Graph {
         };
 
         let result = self.connection().cypher(&query)?;
+        let rows = algo_rows(&result);
 
         let mut pairs = Vec::new();
-        for row in result.iter() {
-            let node1 = extract_string(row, "node1");
-            let node2 = extract_string(row, "node2");
-
-            if let (Some(n1), Some(n2)) = (node1, node2) {
+        for row in rows.iter() {
+            if let (Some(n1), Some(n2)) =
+                (extract_string(row, "node1"), extract_string(row, "node2"))
+            {
                 pairs.push(NodeSimilarityResult {
                     node1: n1,
                     node2: n2,
@@ -68,9 +69,10 @@ impl Graph {
     pub fn knn(&self, node_id: &str, k: i32) -> Result<Vec<KnnResult>> {
         let query = format!("RETURN knn('{}', {})", escape_string(node_id), k);
         let result = self.connection().cypher(&query)?;
+        let rows = algo_rows(&result);
 
         let mut neighbors = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(neighbor) = extract_string(row, "neighbor") {
                 neighbors.push(KnnResult {
                     neighbor,
@@ -85,9 +87,10 @@ impl Graph {
     /// Count triangles each node participates in.
     pub fn triangle_count(&self) -> Result<Vec<TriangleCountResult>> {
         let result = self.connection().cypher("RETURN triangleCount()")?;
+        let rows = algo_rows(&result);
 
         let mut triangles = Vec::new();
-        for row in result.iter() {
+        for row in rows.iter() {
             if let Some(node_id) = extract_node_id(row) {
                 triangles.push(TriangleCountResult {
                     node_id,

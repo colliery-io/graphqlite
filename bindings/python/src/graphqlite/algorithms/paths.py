@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Optional
 
 from ..graph._base import BaseMixin
-from ._parsing import extract_algo_array, safe_float, safe_int
+from ..utils import assert_identifier
+from ._parsing import extract_algo_array, extract_algo_object, safe_float, safe_int
 
 
 class PathsMixin(BaseMixin):
@@ -37,28 +38,15 @@ class PathsMixin(BaseMixin):
         else:
             query = f'RETURN dijkstra("{esc_source}", "{esc_target}")'
 
-        result = self._conn.cypher(query)
+        data = extract_algo_object(self._conn.cypher(query))
 
-        if len(result) == 0:
+        if data is None:
             return {"path": [], "distance": None, "found": False}
 
-        row = result[0]
-
-        # Handle nested column_0 structure from algorithm return
-        if "column_0" in row:
-            data = row["column_0"]
-            if isinstance(data, dict):
-                return {
-                    "path": data.get("path", []),
-                    "distance": data.get("distance"),
-                    "found": data.get("found", False)
-                }
-
-        # Direct access if already unpacked
         return {
-            "path": row.get("path", []),
-            "distance": row.get("distance"),
-            "found": row.get("found", False)
+            "path": data.get("path", []),
+            "distance": data.get("distance"),
+            "found": data.get("found", False)
         }
 
     # Alias
@@ -88,21 +76,22 @@ class PathsMixin(BaseMixin):
             Dict with 'path' (list of node ids), 'distance', 'found', 'nodes_explored'
         """
         if lat_prop and lon_prop:
+            assert_identifier(lat_prop, "coordinate property")
+            assert_identifier(lon_prop, "coordinate property")
             query = f"RETURN astar('{self._escape(source_id)}', '{self._escape(target_id)}', '{lat_prop}', '{lon_prop}')"
         else:
             query = f"RETURN astar('{self._escape(source_id)}', '{self._escape(target_id)}')"
 
-        result = self._conn.cypher(query)
+        data = extract_algo_object(self._conn.cypher(query))
 
-        if not result:
+        if data is None:
             return {"path": [], "distance": None, "found": False, "nodes_explored": 0}
 
-        row = result[0]
         return {
-            "path": row.get("path", []),
-            "distance": row.get("distance"),
-            "found": row.get("found", False),
-            "nodes_explored": safe_int(row.get("nodes_explored"))
+            "path": data.get("path", []),
+            "distance": data.get("distance"),
+            "found": data.get("found", False),
+            "nodes_explored": safe_int(data.get("nodes_explored"))
         }
 
     # Alias
@@ -119,8 +108,7 @@ class PathsMixin(BaseMixin):
             List of dicts with 'source', 'target', 'distance' for each
             reachable pair of nodes (excludes self-loops and unreachable pairs)
         """
-        result = self._conn.cypher("RETURN apsp()")
-        rows = extract_algo_array(result.to_list())
+        rows = extract_algo_array(self._conn.cypher("RETURN apsp()"))
 
         paths = []
         for row in rows:

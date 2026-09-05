@@ -394,10 +394,18 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
             /* Query with RETURN clause but zero rows - return empty array */
             sqlite3_result_text(context, "[]", -1, SQLITE_STATIC);
         } else {
-            /* Modification query without RETURN - show statistics */
+            /* Modification query without RETURN - return a structured
+             * statistics object. A leading '{' distinguishes it from a
+             * result set ('[') so callers can branch on the first byte
+             * (GitHub #116). */
             char response[256];
-            snprintf(response, sizeof(response), "Query executed successfully - nodes created: %d, relationships created: %d",
-                    result->nodes_created, result->relationships_created);
+            snprintf(response, sizeof(response),
+                     "{\"nodes_created\":%d,\"relationships_created\":%d,"
+                     "\"nodes_deleted\":%d,\"relationships_deleted\":%d,"
+                     "\"properties_set\":%d}",
+                     result->nodes_created, result->relationships_created,
+                     result->nodes_deleted, result->relationships_deleted,
+                     result->properties_set);
             sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
         }
     } else {

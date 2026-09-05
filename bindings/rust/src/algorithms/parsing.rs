@@ -1,55 +1,50 @@
 //! Shared parsing helpers for algorithm results.
 
-use crate::{Row, Value};
+use crate::{CypherResult, Row, Value};
+use std::collections::HashMap;
 
-/// Extract a wrapped array result from graph algorithms.
+/// The core returns every graph-algorithm result as a single row whose only
+/// column is `column_0` (verified for all 18 algorithm functions).
+const ALGO_COLUMN: &str = "column_0";
+
+/// Unwrap a list-valued algorithm result into rows.
 ///
-/// Graph algorithms return results in one of two formats:
-/// 1. Old format: Multiple rows with fields directly accessible
-/// 2. New format: Single row with a column containing an array of objects
-///
-/// This function detects the new format and extracts the array elements,
-/// converting each object into a Row for consistent processing.
-pub(crate) fn extract_algo_array(result: &[&Row]) -> Vec<Row> {
-    // If multiple rows, assume old format - clone and return
-    if result.len() != 1 {
-        return result.iter().map(|r| (*r).clone()).collect();
-    }
-
-    // Single row - check if it has an array column
-    let row = result[0];
-
-    // Try common column names for wrapped array results
-    for col_name in [
-        "column_0",
-        "wcc()",
-        "scc()",
-        "pagerank()",
-        "degree_centrality()",
-        "betweenness_centrality()",
-        "closeness_centrality()",
-        "eigenvector_centrality()",
-        "labelPropagation()",
-        "louvain()",
-    ] {
-        if let Some(Value::Array(arr)) = row.get_value(col_name) {
-            // Convert array of objects to Vec<Row>
+/// This and [`algo_object`] are the *only* places the `column_0` wrapper is
+/// unwrapped; every algorithm method must go through one of them
+/// (GitHub #104/#105/#106). If the result is a single row whose `column_0`
+/// is an array, its object elements become rows; otherwise the rows are
+/// returned unchanged.
+pub(crate) fn algo_rows(result: &CypherResult) -> Vec<Row> {
+    if result.len() == 1 {
+        if let Some(Value::Array(arr)) = result[0].get_value(ALGO_COLUMN) {
             return arr
                 .iter()
-                .filter_map(|v| {
-                    if let Value::Object(obj) = v {
-                        // Convert HashMap<String, Value> to Row
-                        Some(Row::from_map(obj.clone()))
-                    } else {
-                        None
-                    }
+                .filter_map(|v| match v {
+                    Value::Object(obj) => Some(Row::from_map(obj.clone())),
+                    _ => None,
                 })
                 .collect();
         }
     }
+    result.iter().cloned().collect()
+}
 
-    // No array column found, return cloned original result
-    result.iter().map(|r| (*r).clone()).collect()
+/// Unwrap an object-valued algorithm result (dijkstra, astar) into a map.
+///
+/// Returns `None` when the result has no rows. If the single row's
+/// `column_0` is an object, that object is returned; otherwise the row's own
+/// columns are returned so callers can read fields directly.
+pub(crate) fn algo_object(result: &CypherResult) -> Option<HashMap<String, Value>> {
+    let row = result.get(0)?;
+    if let Some(Value::Object(obj)) = row.get_value(ALGO_COLUMN) {
+        return Some(obj.clone());
+    }
+    Some(
+        row.columns()
+            .iter()
+            .filter_map(|c| row.get_value(c).map(|v| (c.clone(), v.clone())))
+            .collect(),
+    )
 }
 
 /// Extract node_id from a result row.

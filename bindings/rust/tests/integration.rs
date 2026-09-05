@@ -4194,3 +4194,290 @@ fn test_call_subquery_processes_all_inner_match_rows() {
         .unwrap();
     assert_eq!(results.len(), 3);
 }
+
+// =============================================================================
+// Issue batch #104-#116 regression tests (0.7.0)
+// =============================================================================
+
+/// a->b, b->c, a->c, c->d; e is isolated. a and b share out-neighbour c.
+fn algo_graph() -> Graph {
+    let g = test_graph();
+    for n in ["a", "b", "c", "d", "e"] {
+        g.upsert_node(n, [("name", n)], "N").unwrap();
+    }
+    for (s, t) in [("a", "b"), ("b", "c"), ("a", "c"), ("c", "d")] {
+        g.upsert_edge(s, t, std::iter::empty::<(&str, &str)>(), "R")
+            .unwrap();
+    }
+    g
+}
+
+// --- #104 astar --------------------------------------------------------------
+
+#[test]
+fn test_astar_found() {
+    let g = algo_graph();
+    let r = g.astar("a", "c", None, None).unwrap();
+    assert!(r.found);
+    assert_eq!(r.path, vec!["a".to_string(), "c".to_string()]);
+    assert_eq!(r.distance, Some(1.0));
+    assert!(r.nodes_explored >= 2);
+}
+
+#[test]
+fn test_astar_no_path() {
+    let g = algo_graph();
+    let r = g.astar("a", "e", None, None).unwrap();
+    assert!(!r.found);
+    assert!(r.path.is_empty());
+}
+
+#[test]
+fn test_astar_rejects_bad_coordinate_prop() {
+    let g = algo_graph();
+    let r = g.astar("a", "c", Some("lat'"), Some("lon"));
+    assert!(matches!(r, Err(Error::InvalidIdentifier(_))));
+}
+
+// --- #105 node_similarity / knn ---------------------------------------------
+
+#[test]
+fn test_node_similarity_all_pairs() {
+    let g = algo_graph();
+    let pairs = g.node_similarity(None, None, 0.0, 0).unwrap();
+    assert!(!pairs.is_empty());
+    let ab: Vec<_> = pairs
+        .iter()
+        .filter(|p| (p.node1 == "a" && p.node2 == "b") || (p.node1 == "b" && p.node2 == "a"))
+        .collect();
+    assert_eq!(ab.len(), 1);
+    assert!((ab[0].similarity - 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn test_node_similarity_pair() {
+    let g = algo_graph();
+    let pairs = g.node_similarity(Some("a"), Some("b"), 0.0, 0).unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert!((pairs[0].similarity - 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn test_knn() {
+    let g = algo_graph();
+    // Only b shares an out-neighbour with a (c), so knn returns exactly b.
+    let n = g.knn("a", 2).unwrap();
+    assert_eq!(n.len(), 1);
+    assert_eq!(n[0].neighbor, "b");
+    assert_eq!(n[0].rank, 1);
+    assert!((n[0].similarity - 0.5).abs() < 1e-9);
+}
+
+// --- #108 top_k without threshold -------------------------------------------
+
+#[test]
+fn test_node_similarity_topk_only() {
+    let g = algo_graph();
+    assert!(g.node_similarity(None, None, 0.0, 0).unwrap().len() > 1);
+    assert_eq!(g.node_similarity(None, None, 0.0, 1).unwrap().len(), 1);
+}
+
+#[test]
+fn test_node_similarity_threshold_and_topk() {
+    let g = algo_graph();
+    let pairs = g.node_similarity(None, None, 0.4, 10).unwrap();
+    assert!(!pairs.is_empty());
+    assert!(pairs.iter().all(|p| p.similarity >= 0.4));
+}
+
+// --- #106 bfs / dfs / apsp --------------------------------------------------
+
+#[test]
+fn test_bfs() {
+    let g = algo_graph();
+    let v = g.bfs("a", None).unwrap();
+    assert_eq!(v.len(), 4, "a, b, c, d reachable; e is not");
+    assert_eq!(v[0].user_id, "a");
+    assert_eq!(v[0].depth, 0);
+    assert_eq!(v[0].order, 0);
+    let d = v.iter().find(|n| n.user_id == "d").expect("d visited");
+    assert_eq!(d.depth, 2);
+}
+
+#[test]
+fn test_dfs() {
+    let g = algo_graph();
+    let v = g.dfs("a", None).unwrap();
+    assert_eq!(v.len(), 4);
+    assert_eq!(v[0].user_id, "a");
+    assert!(v.iter().any(|n| n.user_id == "d"));
+}
+
+#[test]
+fn test_apsp() {
+    let g = algo_graph();
+    let p = g.apsp().unwrap();
+    assert!(p.len() >= 5);
+    assert!(p
+        .iter()
+        .any(|r| r.source == "a" && r.target == "d" && (r.distance - 2.0).abs() < 1e-9));
+}
+
+// --- #109 props "id" must not hijack identity --------------------------------
+
+#[test]
+fn test_upsert_node_id_symmetry() {
+    let g = test_graph();
+    g.upsert_node("alice", [("id", "bob"), ("name", "Alice")], "N")
+        .unwrap();
+    assert!(g.has_node("alice").unwrap());
+    assert!(!g.has_node("bob").unwrap());
+
+    g.upsert_node("carol", [("name", "Carol")], "N").unwrap();
+    g.upsert_node("carol", [("id", "dave"), ("name", "Carol2")], "N")
+        .unwrap();
+    assert!(g.has_node("carol").unwrap());
+    assert!(!g.has_node("dave").unwrap());
+    let node = g.get_node("carol").unwrap().unwrap();
+    assert_eq!(node["properties"]["name"].as_str(), Some("Carol2"));
+}
+
+// --- #110 identifier validation ---------------------------------------------
+
+#[test]
+fn test_upsert_rejects_bad_identifiers() {
+    let g = test_graph();
+    for bad_key in ["name: 'x', is_admin", "a b", "a-b", "1abc", ""] {
+        let r = g.upsert_node("k1", [(bad_key, "1")], "N");
+        assert!(
+            matches!(r, Err(Error::InvalidIdentifier(_))),
+            "key {:?}",
+            bad_key
+        );
+        assert!(!g.has_node("k1").unwrap());
+    }
+    let r = g.upsert_node("l1", [("name", "y")], "Person:Admin");
+    assert!(matches!(r, Err(Error::InvalidIdentifier(_))));
+    assert!(!g.has_node("l1").unwrap());
+    assert!(matches!(
+        g.get_all_nodes(Some("Person:Admin")),
+        Err(Error::InvalidIdentifier(_))
+    ));
+
+    g.upsert_node("x", [("name", "x")], "N").unwrap();
+    g.upsert_node("y", [("name", "y")], "N").unwrap();
+    let r = g.upsert_edge("x", "y", [("w: 1, hacked", "1")], "R");
+    assert!(matches!(r, Err(Error::InvalidIdentifier(_))));
+    assert!(!g.has_edge("x", "y", None).unwrap());
+    let r = g.upsert_edge_with_id("x", "y", [("w: 1, hacked", "1")], "R", "e1");
+    assert!(matches!(r, Err(Error::InvalidIdentifier(_))));
+    assert!(!g.has_edge("x", "y", None).unwrap());
+}
+
+#[test]
+fn test_valid_identifiers_still_pass() {
+    let g = test_graph();
+    g.upsert_node(
+        "ok1",
+        [("snake_case_2", "1"), ("_leading", "2"), ("CamelCase", "3")],
+        "Label_9",
+    )
+    .unwrap();
+    assert_eq!(g.get_all_nodes(Some("Label_9")).unwrap().len(), 1);
+    let props = g.get_node("ok1").unwrap().unwrap();
+    assert_eq!(props["properties"]["snake_case_2"].as_i64(), Some(1));
+}
+
+// --- #111 / #112 GraphManager hardening -------------------------------------
+
+#[test]
+fn test_manager_rejects_traversal() {
+    let (mut gm, tmpdir) = test_graph_manager();
+    for bad in ["../x", "a/b", "", "a b", "1abc", "x;DROP"] {
+        assert!(
+            matches!(gm.create(bad), Err(Error::InvalidGraphName(_))),
+            "{:?}",
+            bad
+        );
+        assert!(matches!(
+            gm.open_graph(bad),
+            Err(Error::InvalidGraphName(_))
+        ));
+        assert!(matches!(gm.drop(bad), Err(Error::InvalidGraphName(_))));
+        assert!(!gm.exists(bad));
+        assert!(matches!(
+            gm.query("MATCH (n) RETURN n", &[bad]),
+            Err(Error::InvalidGraphName(_))
+        ));
+    }
+    assert!(!tmpdir.path().parent().unwrap().join("x.db").exists());
+    assert!(!tmpdir.path().join("a").exists());
+    assert_eq!(gm.list().unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn test_manager_drop_rejects_traversal() {
+    let outer = tempfile::tempdir().unwrap();
+    let victim = outer.path().join("victim.db");
+    std::fs::write(&victim, b"x").unwrap();
+    let mut gm = GraphManager::open(outer.path().join("base")).unwrap();
+    assert!(matches!(
+        gm.drop("../victim"),
+        Err(Error::InvalidGraphName(_))
+    ));
+    assert!(victim.exists());
+}
+
+#[test]
+fn test_manager_query_requires_graphs() {
+    let (mut gm, _tmpdir) = test_graph_manager();
+    gm.create("social")
+        .unwrap()
+        .upsert_node("s1", [("name", "S1")], "Person")
+        .unwrap();
+    assert!(matches!(
+        gm.query("MATCH (n) FROM social RETURN n.name", &[]),
+        Err(Error::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        gm.query_sql("SELECT 1", &[]),
+        Err(Error::InvalidArgument(_))
+    ));
+    let rows = gm
+        .query("MATCH (n) FROM social RETURN n.name", &["social"])
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<String>("n.name").unwrap(), "S1");
+}
+
+// --- #116 structured write statistics ----------------------------------------
+
+#[test]
+fn test_write_query_stats() {
+    let conn = test_connection();
+    let r = conn
+        .cypher("CREATE (a:X {name: 'a'})-[:R {w: 1}]->(b:X)")
+        .unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].get::<i64>("nodes_created").unwrap(), 2);
+    assert_eq!(r[0].get::<i64>("relationships_created").unwrap(), 1);
+    assert_eq!(r[0].get::<i64>("nodes_deleted").unwrap(), 0);
+    assert_eq!(r[0].get::<i64>("relationships_deleted").unwrap(), 0);
+    assert_eq!(r[0].get::<i64>("properties_set").unwrap(), 2);
+
+    let r = conn.cypher("MERGE (n:X {id: 'm'})").unwrap();
+    assert_eq!(r[0].get::<i64>("nodes_created").unwrap(), 1);
+    let r = conn.cypher("MERGE (n:X {id: 'm'})").unwrap();
+    assert_eq!(r[0].get::<i64>("nodes_created").unwrap(), 0);
+    let r = conn
+        .cypher("MATCH (n:X {id: 'm'}) SET n.k = 1, n.j = 2")
+        .unwrap();
+    assert_eq!(r[0].get::<i64>("properties_set").unwrap(), 2);
+    let r = conn.cypher("MATCH (n:X {id: 'm'}) DELETE n").unwrap();
+    assert_eq!(r[0].get::<i64>("nodes_deleted").unwrap(), 1);
+    let r = conn.cypher("MATCH (n:X) DETACH DELETE n").unwrap();
+    assert_eq!(r[0].get::<i64>("nodes_deleted").unwrap(), 2);
+    assert_eq!(r[0].get::<i64>("relationships_deleted").unwrap(), 1);
+
+    assert!(conn.cypher("MATCH (n:Nope) RETURN n").unwrap().is_empty());
+}

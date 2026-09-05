@@ -1,7 +1,7 @@
 //! Community detection algorithm implementations.
 
 use super::{
-    parsing::{extract_algo_array, extract_int, extract_node_id, extract_user_id},
+    parsing::{algo_rows, extract_int, extract_node_id, extract_user_id},
     CommunityResult,
 };
 use crate::graph::Graph;
@@ -16,7 +16,7 @@ impl Graph {
     pub fn community_detection(&self, iterations: i32) -> Result<Vec<CommunityResult>> {
         let query = format!("RETURN labelPropagation({})", iterations);
         let result = self.connection().cypher(&query)?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut communities = Vec::new();
         for row in rows.iter() {
@@ -39,7 +39,7 @@ impl Graph {
     pub fn louvain(&self, resolution: f64) -> Result<Vec<CommunityResult>> {
         let query = format!("RETURN louvain({})", resolution);
         let result = self.connection().cypher(&query)?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut communities = Vec::new();
         for row in rows.iter() {

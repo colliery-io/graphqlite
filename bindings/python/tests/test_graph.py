@@ -113,8 +113,6 @@ def test_graph_connection_property(g):
     assert isinstance(conn, graphqlite.Connection)
 
 
-def test_graph_namespace(g):
-    assert g.namespace == "default"
 
 
 # =============================================================================
@@ -1820,3 +1818,176 @@ def test_call_subquery_processes_all_inner_match_rows(g):
     g.query("MATCH (c:CallCo) CALL { WITH c MATCH (d:CallDep) MERGE (c)-[:CHAS]->(d) }")
     result = g.query("MATCH (:CallCo)-[:CHAS]->(d:CallDep) RETURN d.id ORDER BY d.id")
     assert len(result) == 3
+
+
+# =============================================================================
+# Issue batch #104-#115 regression tests (0.7.0)
+# =============================================================================
+
+@pytest.fixture
+def algo_graph(g):
+    """a->b, b->c, a->c, c->d; e is isolated. a and b share neighbour c."""
+    for n in "abcde":
+        g.upsert_node(n, {"name": n}, label="N")
+    g.upsert_edge("a", "b", {})
+    g.upsert_edge("b", "c", {})
+    g.upsert_edge("a", "c", {})
+    g.upsert_edge("c", "d", {})
+    return g
+
+
+# --- #104 astar --------------------------------------------------------------
+
+def test_astar(algo_graph):
+    res = algo_graph.astar("a", "c")
+    assert res["found"] is True
+    assert res["path"] == ["a", "c"]
+    assert res["distance"] == 1
+    assert res["nodes_explored"] >= 2
+
+
+def test_astar_no_path(algo_graph):
+    res = algo_graph.astar("a", "e")
+    assert res == {"path": [], "distance": None, "found": False, "nodes_explored": 0} or (
+        res["found"] is False and res["path"] == []
+    )
+
+
+def test_astar_rejects_bad_coordinate_prop(algo_graph):
+    with pytest.raises(ValueError):
+        algo_graph.astar("a", "c", lat_prop="lat'", lon_prop="lon")
+
+
+# --- #105 node_similarity / knn ---------------------------------------------
+
+def test_node_similarity_all_pairs(algo_graph):
+    pairs = algo_graph.node_similarity()
+    assert len(pairs) > 0
+    ab = [p for p in pairs if {p["node1"], p["node2"]} == {"a", "b"}]
+    assert len(ab) == 1
+    assert ab[0]["similarity"] == pytest.approx(0.5)
+
+
+def test_node_similarity_pair(algo_graph):
+    pairs = algo_graph.node_similarity("a", "b")
+    assert len(pairs) == 1
+    assert {pairs[0]["node1"], pairs[0]["node2"]} == {"a", "b"}
+    assert pairs[0]["similarity"] == pytest.approx(0.5)
+
+
+def test_knn(algo_graph):
+    # Only b shares an out-neighbour with a (c), so knn returns exactly b.
+    neighbors = algo_graph.knn("a", 2)
+    assert len(neighbors) == 1
+    assert neighbors[0]["neighbor"] == "b"
+    assert neighbors[0]["rank"] == 1
+    assert neighbors[0]["similarity"] == pytest.approx(0.5)
+
+
+# --- #108 top_k without threshold -------------------------------------------
+
+def test_node_similarity_topk_only(algo_graph):
+    everything = algo_graph.node_similarity()
+    assert len(everything) > 1
+    assert len(algo_graph.node_similarity(top_k=1)) == 1
+
+
+def test_node_similarity_threshold_and_topk(algo_graph):
+    pairs = algo_graph.node_similarity(threshold=0.4, top_k=10)
+    assert len(pairs) >= 1
+    assert all(p["similarity"] >= 0.4 for p in pairs)
+
+
+# --- #109 node_data["id"] must not hijack identity --------------------------
+
+def test_upsert_node_id_symmetry(g):
+    g.upsert_node("alice", {"id": "bob", "name": "Alice"})
+    assert g.has_node("alice")
+    assert not g.has_node("bob")
+    assert g.get_node("alice")["properties"]["id"] == "alice"
+
+    g.upsert_node("carol", {"name": "Carol"})
+    g.upsert_node("carol", {"id": "dave", "name": "Carol2"})
+    assert g.has_node("carol")
+    assert not g.has_node("dave")
+    assert g.get_node("carol")["properties"]["name"] == "Carol2"
+
+
+# --- #110 identifier validation ---------------------------------------------
+
+@pytest.mark.parametrize("bad_key", ["name: 'x', is_admin", "a b", "a-b", "1abc", ""])
+def test_upsert_node_rejects_bad_property_key(g, bad_key):
+    with pytest.raises(ValueError):
+        g.upsert_node("k1", {bad_key: True})
+    assert not g.has_node("k1")
+
+
+def test_upsert_node_rejects_bad_label(g):
+    with pytest.raises(ValueError):
+        g.upsert_node("l1", {"name": "y"}, label="Person:Admin")
+    assert not g.has_node("l1")
+    with pytest.raises(ValueError):
+        g.get_all_nodes(label="Person:Admin")
+
+
+def test_upsert_edge_rejects_bad_property_key(g):
+    g.upsert_node("x", {})
+    g.upsert_node("y", {})
+    with pytest.raises(ValueError):
+        g.upsert_edge("x", "y", {"w: 1, hacked": True})
+    with pytest.raises(ValueError):
+        g.upsert_edge("x", "y", {"w: 1, hacked": True}, edge_id="e1")
+    assert not g.has_edge("x", "y")
+
+
+def test_valid_identifiers_still_pass(g):
+    g.upsert_node("ok1", {"snake_case_2": 1, "_leading": 2, "CamelCase": 3}, label="Label_9")
+    props = g.get_node("ok1")["properties"]
+    assert props["snake_case_2"] == 1 and props["_leading"] == 2 and props["CamelCase"] == 3
+    assert g.get_all_nodes(label="Label_9")
+
+
+# --- #113 namespace removed -------------------------------------------------
+
+def test_graph_rejects_namespace_kwarg():
+    ext_path = get_extension_path()
+    with pytest.raises(TypeError):
+        graph(":memory:", namespace="x", extension_path=ext_path)
+    with pytest.raises(TypeError):
+        Graph(":memory:", namespace="x", extension_path=ext_path)
+
+
+# --- #114 get_node_edges shape ----------------------------------------------
+
+def test_get_node_edges_shape(algo_graph):
+    rows = algo_graph.get_node_edges("a")
+    assert len(rows) == 2
+    for row in rows:
+        assert isinstance(row, dict)
+        assert set(row.keys()) == {"source", "target", "r"}
+        assert row["source"] == "a"
+
+    expected = {(r["source"], r["target"]) for r in algo_graph.get_edges_from("a")} | {
+        (r["target"], r["source"]) for r in algo_graph.get_edges_to("a")
+    }
+    assert {(r["source"], r["target"]) for r in rows} == expected
+
+
+# --- #115 one sanitizer ----------------------------------------------------
+
+@pytest.mark.parametrize("raw", ["MATCH", "", "1abc", "a-b"])
+def test_bulk_rel_type_matches_cypher_path(g, raw):
+    id_map = g.insert_nodes_bulk([("b1", {}, "Node"), ("b2", {}, "Node")])
+    g.insert_edges_bulk([("b1", "b2", {}, raw)], id_map)
+    g.upsert_node("c1", {})
+    g.upsert_node("c2", {})
+    g.upsert_edge("c1", "c2", {}, raw)
+
+    bulk_type = g.get_edges_from("b1")[0]["r"]["type"]
+    cypher_type = g.get_edges_from("c1")[0]["r"]["type"]
+    assert bulk_type == cypher_type == sanitize_rel_type(raw)
+
+
+def test_bulk_mixin_has_no_private_sanitizer():
+    from graphqlite.graph.bulk import BulkMixin
+    assert not hasattr(BulkMixin, "_sanitize_rel_type")

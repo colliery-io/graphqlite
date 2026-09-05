@@ -193,10 +193,22 @@ static char* execute_and_format(const char *query)
         return json;
     }
 
-    /* Modification query - return stats message */
+    /* RETURN clause but zero rows: the extension emits an empty array */
+    if (result->column_count > 0) {
+        cypher_result_free(result);
+        return strdup("[]");
+    }
+
+    /* Modification query - return the same structured stats object the
+     * extension emits (GitHub #116) */
     char *msg = malloc(256);
-    snprintf(msg, 256, "Query executed successfully - nodes created: %d, relationships created: %d",
-             result->nodes_created, result->relationships_created);
+    snprintf(msg, 256,
+             "{\"nodes_created\":%d,\"relationships_created\":%d,"
+             "\"nodes_deleted\":%d,\"relationships_deleted\":%d,"
+             "\"properties_set\":%d}",
+             result->nodes_created, result->relationships_created,
+             result->nodes_deleted, result->relationships_deleted,
+             result->properties_set);
     cypher_result_free(result);
     return msg;
 }
@@ -208,11 +220,11 @@ static int is_json_array(const char *str)
     return str[strlen(str)-1] == ']';
 }
 
-/* Helper to check if string starts with text (not JSON) */
-static int is_text_message(const char *str)
+/* Helper to check if string is a JSON object (write-statistics payload) */
+static int is_stats_object(const char *str)
 {
-    if (!str) return 0;
-    return str[0] != '[' && str[0] != '{';
+    if (!str || str[0] != '{') return 0;
+    return str[strlen(str)-1] == '}' && strstr(str, "\"nodes_created\":") != NULL;
 }
 
 /*=== Tests for RETURN scalar values ===*/
@@ -307,9 +319,9 @@ static void test_create_node_output(void)
     char *result = execute_and_format("CREATE (n:TestNode {name: \"test\"})");
     printf("\nCREATE node: %s\n", result);
 
-    CU_ASSERT_TRUE(is_text_message(result));
-    /* Check for success message format (not specific counts due to test isolation) */
-    CU_ASSERT_PTR_NOT_NULL(strstr(result, "Query executed successfully"));
+    CU_ASSERT_TRUE(is_stats_object(result));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"nodes_created\":1"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"relationships_created\":0"));
 
     free(result);
 }
@@ -319,8 +331,8 @@ static void test_create_multiple_nodes_output(void)
     char *result = execute_and_format("CREATE (a:A), (b:B), (c:C)");
     printf("\nCREATE multi: %s\n", result);
 
-    CU_ASSERT_TRUE(is_text_message(result));
-    CU_ASSERT_PTR_NOT_NULL(strstr(result, "Query executed successfully"));
+    CU_ASSERT_TRUE(is_stats_object(result));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"nodes_created\":3"));
 
     free(result);
 }
@@ -335,8 +347,8 @@ static void test_create_relationship_output(void)
         "MATCH (a:RelTest1), (b:RelTest2) CREATE (a)-[:KNOWS]->(b)");
     printf("\nCREATE rel: %s\n", result);
 
-    CU_ASSERT_TRUE(is_text_message(result));
-    CU_ASSERT_PTR_NOT_NULL(strstr(result, "Query executed successfully"));
+    CU_ASSERT_TRUE(is_stats_object(result));
+    CU_ASSERT_PTR_NOT_NULL(strstr(result, "\"relationships_created\":1"));
 
     free(result);
 }
@@ -349,7 +361,7 @@ static void test_match_empty_result(void)
     printf("\nMATCH empty: %s\n", result);
 
     /* Empty result should be [] or no rows */
-    CU_ASSERT_TRUE(is_json_array(result) || is_text_message(result));
+    CU_ASSERT_TRUE(is_json_array(result));
 
     free(result);
 }

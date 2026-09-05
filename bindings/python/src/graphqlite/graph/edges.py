@@ -3,7 +3,7 @@
 from typing import Any, Optional
 
 from ._base import BaseMixin
-from ..utils import sanitize_rel_type
+from ..utils import assert_identifier, sanitize_rel_type
 
 
 class EdgesMixin(BaseMixin):
@@ -82,10 +82,18 @@ class EdgesMixin(BaseMixin):
         Args:
             source_id: Source node id
             target_id: Target node id
-            edge_data: Dictionary of edge properties
-            rel_type: Relationship type label
+            edge_data: Dictionary of edge properties. Keys must be valid
+                identifiers (``^[A-Za-z_][A-Za-z0-9_]*$``).
+            rel_type: Relationship type label (sanitized via
+                ``sanitize_rel_type``)
             edge_id: Optional caller-assigned edge identifier
+
+        Raises:
+            ValueError: If any property key is not a valid identifier.
+                Nothing is written in that case.
         """
+        for k in edge_data:
+            assert_identifier(k, "property key")
         safe_rel_type = sanitize_rel_type(rel_type)
 
         if edge_id is None:

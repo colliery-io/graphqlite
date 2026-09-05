@@ -1,7 +1,7 @@
 //! Centrality algorithm implementations.
 
 use super::{
-    parsing::{extract_algo_array, extract_float, extract_int, extract_node_id, extract_user_id},
+    parsing::{algo_rows, extract_float, extract_int, extract_node_id, extract_user_id},
     BetweennessCentralityResult, ClosenessCentralityResult, DegreeCentralityResult,
     EigenvectorCentralityResult, PageRankResult,
 };
@@ -18,7 +18,7 @@ impl Graph {
     pub fn pagerank(&self, damping: f64, iterations: i32) -> Result<Vec<PageRankResult>> {
         let query = format!("RETURN pageRank({}, {})", damping, iterations);
         let result = self.connection().cypher(&query)?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut ranks = Vec::new();
         for row in rows.iter() {
@@ -36,7 +36,7 @@ impl Graph {
     /// Calculate degree centrality for all nodes.
     pub fn degree_centrality(&self) -> Result<Vec<DegreeCentralityResult>> {
         let result = self.connection().cypher("RETURN degreeCentrality()")?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut degrees = Vec::new();
         for row in rows.iter() {
@@ -56,7 +56,7 @@ impl Graph {
     /// Calculate betweenness centrality for all nodes.
     pub fn betweenness_centrality(&self) -> Result<Vec<BetweennessCentralityResult>> {
         let result = self.connection().cypher("RETURN betweennessCentrality()")?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut scores = Vec::new();
         for row in rows.iter() {
@@ -74,7 +74,7 @@ impl Graph {
     /// Calculate closeness centrality for all nodes.
     pub fn closeness_centrality(&self) -> Result<Vec<ClosenessCentralityResult>> {
         let result = self.connection().cypher("RETURN closenessCentrality()")?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut scores = Vec::new();
         for row in rows.iter() {
@@ -100,7 +100,7 @@ impl Graph {
     ) -> Result<Vec<EigenvectorCentralityResult>> {
         let query = format!("RETURN eigenvectorCentrality({})", iterations);
         let result = self.connection().cypher(&query)?;
-        let rows = extract_algo_array(result.iter().collect::<Vec<_>>().as_slice());
+        let rows = algo_rows(&result);
 
         let mut scores = Vec::new();
         for row in rows.iter() {

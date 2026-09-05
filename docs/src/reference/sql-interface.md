@@ -71,7 +71,13 @@ SELECT cypher('MATCH (n:Person) WHERE n.age > $min RETURN n.name', '{"min": 25}'
 ]
 ```
 
-For a single-column result the key is the expression text or alias from `RETURN`. For write queries with no `RETURN` clause, the result is a plain text status string such as `"Query executed successfully - nodes created: N, relationships created: M"`. The empty array `[]` is only returned when a `RETURN` clause produced zero matching rows.
+For a single-column result the key is the expression text or alias from `RETURN`. For write queries with no `RETURN` clause, the result is a JSON **object** of modification counts:
+
+```json
+{"nodes_created": 2, "relationships_created": 1, "nodes_deleted": 0, "relationships_deleted": 0, "properties_set": 0}
+```
+
+The first byte distinguishes the two shapes: `[` is a result set, `{` is a statistics object (or an error object, which additionally carries an `error` key). The empty array `[]` is only returned when a `RETURN` clause produced zero matching rows.
 
 **Error handling**: Sets SQLite error text and returns an error result on parse failure or execution failure.
 

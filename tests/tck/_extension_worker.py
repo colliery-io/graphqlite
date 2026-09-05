@@ -133,8 +133,9 @@ def _decode_payload(raw_payloads: list) -> dict:
 
     `cypher()` returns one SQLite row whose single TEXT column is one of:
       - a JSON array of column-keyed objects: '[{"name":"Alice"}, ...]'  → result set
-      - a status string: 'Query executed successfully - nodes created: N, ...'
-        (treat as 0 data rows; side-effect counters reported in `status`)
+      - a write-statistics object: '{"nodes_created":N,"relationships_created":N,
+        "nodes_deleted":N,"relationships_deleted":N,"properties_set":N}'
+        (treat as 0 data rows; reported verbatim in `status`)
       - the literal '[]' for empty result sets
       - a JSON error object: '{"error":"...","code":"..."}'  → surfaced upstream
     """
@@ -179,6 +180,10 @@ def _decode_payload(raw_payloads: list) -> dict:
             return {"ok": False,
                     "error_class": _classify(decoded.get("code", "")) or "GraphQLiteError",
                     "error_message": decoded.get("error", text)}
+        elif isinstance(decoded, dict) and "nodes_created" in decoded:
+            # Write-statistics object for a RETURN-less mutation: not data.
+            status = text
+            continue
         elif isinstance(decoded, dict):
             # Single-row object.
             if not columns:
