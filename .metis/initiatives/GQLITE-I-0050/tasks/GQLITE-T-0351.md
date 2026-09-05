@@ -4,14 +4,14 @@ level: task
 title: "#112: GraphManager.query claims auto-detection; make graphs required"
 short_code: "GQLITE-T-0351"
 created_at: 2026-09-05T13:18:42.956516+00:00
-updated_at: 2026-09-05T13:18:42.956516+00:00
+updated_at: 2026-09-05T13:34:42.659100+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -31,6 +31,10 @@ Close GitHub #112: docstrings and `python-api.md` claim graphs are auto-attached
 ## Validation
 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `gm.query("MATCH (n) FROM social RETURN n.name", graphs=None)` → `sqlite3.OperationalError: SQL prepare failed: no such table: social.nodes`; with `graphs=["social"]` → `[{'n.name': 'S1'}]`.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

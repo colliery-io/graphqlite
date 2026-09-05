@@ -4,14 +4,14 @@ level: task
 title: "#111: GraphManager accepts path traversal in graph names"
 short_code: "GQLITE-T-0350"
 created_at: 2026-09-05T13:18:42.200672+00:00
-updated_at: 2026-09-05T13:18:42.200672+00:00
+updated_at: 2026-09-05T13:34:41.906697+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -31,6 +31,10 @@ Close GitHub #111: `GraphManager._graph_path(name)` is `base_path / f"{name}.db"
 ## Validation
 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `graphs(tmp).create("../escaped")` created `<parent>/escaped.db` (`os.path.exists` → True). Rust `graph_path` has the identical construction.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

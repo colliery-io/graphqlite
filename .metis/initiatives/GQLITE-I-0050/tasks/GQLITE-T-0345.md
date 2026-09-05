@@ -4,14 +4,14 @@ level: task
 title: "#104/#105/#106: unwrap column_0 once at the result boundary (astar, nodeSimilarity, knn, Rust bfs/dfs/apsp)"
 short_code: "GQLITE-T-0345"
 created_at: 2026-09-05T13:15:32.542755+00:00
-updated_at: 2026-09-05T13:15:32.542755+00:00
+updated_at: 2026-09-05T13:34:38.258308+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -35,6 +35,10 @@ Validated 2026-09-05 against a fresh `angreal build extension` build via the Pyt
 - Python `node_similarity()` / `knn('a',2)` → `[]`, raw shows 6 pairs.
 - Rust `bfs`/`dfs`/`apsp` iterate `result.iter()` directly (confirmed by reading `traversal.rs`, `paths.rs`).
 - Probe of every algorithm function (pageRank … triangleCount) shows the core emits **only** `column_0`; the `wcc()`/`pagerank()`-style names in `ALGO_COLUMN_NAMES` never match.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

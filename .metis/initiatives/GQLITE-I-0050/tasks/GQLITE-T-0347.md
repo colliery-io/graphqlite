@@ -4,14 +4,14 @@ level: task
 title: "#108: bindings node_similarity(top_k=N) ignored unless threshold set"
 short_code: "GQLITE-T-0347"
 created_at: 2026-09-05T13:18:37.693293+00:00
-updated_at: 2026-09-05T13:18:37.693293+00:00
+updated_at: 2026-09-05T13:34:39.651909+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -31,6 +31,10 @@ Close GitHub #108: both bindings only emit the two-argument `nodeSimilarity(thre
 ## Validation
 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `g.node_similarity(top_k=1)` returned `[]` (masked by #105); reading `similarity.py:35` / `similarity.rs:35` confirms the branch order.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

@@ -4,14 +4,14 @@ level: task
 title: "#116: core return structured JSON stats for modification queries"
 short_code: "GQLITE-T-0355"
 created_at: 2026-09-05T13:18:48.976184+00:00
-updated_at: 2026-09-05T13:21:02.503024+00:00
+updated_at: 2026-09-05T13:34:47.172395+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -35,6 +35,8 @@ Decision (issue asked for one): **option 1** — change the output in the 0.7.0 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `CREATE (a:X)-[:R]->(b:X)` → `[{'result': 'Query executed successfully - nodes created: 2, relationships created: 1'}]`; DETACH DELETE and SET both report zeros. The executor already tracks `nodes_deleted`, `relationships_deleted`, `properties_set` (`cypher_executor.h:32-36`, used by the CLI in `main.c`).
 
 Consumers found by grep: `src/extension.c:397`, `tests/test_output_format.c` (builds and asserts the string), `tests/tck/_extension_worker.py::_decode_payload` (a JSON dict without `error` is currently treated as a **data row** — must become status or TCK write scenarios will gain a phantom row), `docs/src/reference/sql-interface.md:74`. The CLI (`main.c`) prints its own text and is untouched. Neither binding scrapes the string today; both already turn a JSON object into a single row.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

@@ -4,14 +4,14 @@ level: task
 title: "#113: python remove dead namespace parameter from Graph and graph()"
 short_code: "GQLITE-T-0352"
 created_at: 2026-09-05T13:18:44.452269+00:00
-updated_at: 2026-09-05T13:18:44.452269+00:00
+updated_at: 2026-09-05T13:34:44.141255+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -31,6 +31,10 @@ Close GitHub #113: remove the dead `namespace` parameter from `Graph.__init__`, 
 ## Validation
 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `graph(":memory:", namespace="x").namespace == "x"` and nothing else reads it (grep confirms only the three sites in the issue). Only the test suite references it (`test_graph_namespace`).
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

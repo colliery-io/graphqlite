@@ -4,14 +4,14 @@ level: task
 title: "#110: bindings validate identifiers (labels, keys, coordinate props) before interpolation"
 short_code: "GQLITE-T-0349"
 created_at: 2026-09-05T13:18:40.704706+00:00
-updated_at: 2026-09-05T13:18:40.704706+00:00
+updated_at: 2026-09-05T13:34:41.201261+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -35,6 +35,10 @@ Validated 2026-09-05 against a fresh `angreal build extension` build via the Pyt
 - `upsert_node("l1", {...}, label="Person:Admin")` → `labels(n) == ['Admin','Person']`.
 
 Decision: relationship types are **not** switched to raising. They already pass through the public, tested `sanitize_rel_type` in every path (`edges.py`, `queries.py`, Rust `rel_type_pattern`), and #115 relies on that contract. Only raw-interpolated identifiers get the assertion.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

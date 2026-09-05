@@ -4,14 +4,14 @@ level: task
 title: "#107: core nodeSimilarity(threshold, topK) ignores threshold"
 short_code: "GQLITE-T-0346"
 created_at: 2026-09-05T13:18:36.245066+00:00
-updated_at: 2026-09-05T13:21:00.995924+00:00
+updated_at: 2026-09-05T13:34:38.910061+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -34,6 +34,8 @@ Validated 2026-09-05 against a fresh `angreal build extension` build via the Pyt
 - `RETURN nodeSimilarity(0.9)` → `[]` (correct).
 - `RETURN nodeSimilarity(0.9, 10)` → all 6 pairs including `similarity: 0.0` (threshold ignored).
 - `RETURN nodeSimilarity(0, 1)` → exactly 1 pair (top_k works).
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

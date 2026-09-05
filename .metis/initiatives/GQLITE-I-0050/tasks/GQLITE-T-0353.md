@@ -4,14 +4,14 @@ level: task
 title: "#114: python get_node_edges returns tuples; standardize on dicts"
 short_code: "GQLITE-T-0353"
 created_at: 2026-09-05T13:18:45.961357+00:00
-updated_at: 2026-09-05T13:18:45.961357+00:00
+updated_at: 2026-09-05T13:34:44.916464+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -31,6 +31,10 @@ Close GitHub #114: `get_node_edges` returns `(source, target, r)` tuples while e
 ## Validation
 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `get_node_edges("a")[0]` → tuple; `get_edges_from("a")[0]` → dict with `source`/`target`/`r`. `python-api.md` already documents `list[dict]`.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

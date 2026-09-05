@@ -4,14 +4,14 @@ level: task
 title: "#115: python consolidate the two sanitize_rel_type implementations"
 short_code: "GQLITE-T-0354"
 created_at: 2026-09-05T13:18:47.456522+00:00
-updated_at: 2026-09-05T13:18:47.456522+00:00
+updated_at: 2026-09-05T13:34:46.419721+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -31,6 +31,10 @@ Close GitHub #115: `BulkMixin._sanitize_rel_type` diverges from `utils.sanitize_
 ## Validation
 
 Validated 2026-09-05 against a fresh `angreal build extension` build via the Python binding; behaviour reproduces exactly as filed. `("MATCH","","1abc","a-b")` → utils: `REL_MATCH, REL_, REL_1abc, a_b`; bulk: `MATCH, REL, REL_1abc, a_b`. Rust bulk already calls `crate::sanitize_rel_type`.
+
+## Acceptance Criteria
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 

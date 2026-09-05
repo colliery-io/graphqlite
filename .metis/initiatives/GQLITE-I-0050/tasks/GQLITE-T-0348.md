@@ -4,14 +4,14 @@ level: task
 title: "#109: bindings upsert_node lets node_data["id"] hijack node identity"
 short_code: "GQLITE-T-0348"
 created_at: 2026-09-05T13:18:39.198578+00:00
-updated_at: 2026-09-05T13:18:39.198578+00:00
+updated_at: 2026-09-05T13:34:56.334891+00:00
 parent: GQLITE-I-0050
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -34,6 +34,8 @@ Validated 2026-09-05 against a fresh `angreal build extension` build via the Pyt
 - Create: `upsert_node("alice", {"id": "bob", ...})` → `has_node("alice") False`, `has_node("bob") True`.
 - Update: `upsert_node("carol", {"id": "dave"})` after creating carol → carol gone, dave exists.
 - `upsert_edge` checked: `id`/`startNode`/`endNode` in edge props land in `properties` and do **not** affect identity, so no edge change is needed.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria **[REQUIRED]**
 
