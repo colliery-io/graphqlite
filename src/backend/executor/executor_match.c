@@ -26,7 +26,7 @@ int execute_match_clause(cypher_executor *executor, cypher_match *match, cypher_
     }
     
     /* Transform MATCH to SQL */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -70,7 +70,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("Executing MATCH+RETURN query");
 
     /* Build SQL query from MATCH and RETURN clauses */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -184,6 +184,15 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("MATCH+RETURN TIMING: transform=%.2fms, prepare=%.2fms, build_results=%.2fms", transform_ms, prepare_ms, execute_ms);
 #endif
 
+    /* Perf review F8: park the statement + transform context for the
+     * statement cache when the entry point asked for it. */
+    if (executor->stmt_capture && !executor->captured_stmt) {
+        sqlite3_reset(stmt);
+        executor->captured_stmt = stmt;
+        executor->captured_ctx = ctx;
+        executor->captured_ret = return_clause;
+        return 0;
+    }
     sqlite3_finalize(stmt);
     cypher_transform_free_context(ctx);
     return 0;
@@ -386,7 +395,9 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
         }
         
         if (has_agtype_values) {
-            result->agtype_data[current_row] = malloc(column_count * sizeof(agtype_value*));
+            /* calloc: a NULL cell means "render result->data verbatim"
+             * (entity JSON pass-through, perf review F5). */
+            result->agtype_data[current_row] = calloc(column_count, sizeof(agtype_value*));
             if (!result->agtype_data[current_row]) {
                 set_result_error(result, "Memory allocation failed for agtype row data");
                 return -1;
@@ -444,11 +455,16 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                             if (_evar && _evar->cte_name && value[0] == '[') {
                                 /* No agtype conversion — text result will be
                                  * rendered as the JSON array. */
+                                result->agtype_data[current_row][col] = NULL;
                             } else
-                            /* Check if value is already a JSON object (from new RETURN format) */
+                            /* Perf review F5: the SQL already emitted the final
+                             * edge JSON; leave the agtype cell NULL so the
+                             * renderer passes the text through verbatim instead
+                             * of parsing it into an agtype tree and serialising
+                             * it again (~300 mallocs per row). */
                             if (value[0] == '{') {
-                                /* Parse the JSON object directly */
-                                result->agtype_data[current_row][col] = agtype_value_from_edge_json(executor->db, value);
+                                /* verbatim pass-through */
+                                result->agtype_data[current_row][col] = NULL;
                             } else {
                                 /* Legacy path: value is just an edge ID */
                                 int64_t edge_id = atoll(value);
@@ -481,10 +497,11 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                             }
                         } else if (ctx && transform_var_lookup_node(ctx->var_ctx, ident->name)) {
                             /* This is a node variable */
-                            /* Check if value is already a JSON object (from new RETURN format) */
+                            /* Perf review F5: pass the SQL-built node JSON
+                             * through verbatim (see the edge case above). */
                             if (value[0] == '{') {
-                                /* Parse the JSON object directly */
-                                result->agtype_data[current_row][col] = agtype_value_from_vertex_json(executor->db, value);
+                                /* verbatim pass-through */
+                                result->agtype_data[current_row][col] = NULL;
                             } else {
                                 /* Legacy path: value is just a node ID */
                                 int64_t node_id = atoll(value);
@@ -861,7 +878,7 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
 {
     if (!executor || !match || !var_map || !result) return -1;
 
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -1006,7 +1023,7 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
      * from bleeding across rows. Multi-MATCH keeps the legacy first-row
      * behavior (a separate, larger fix). */
     if (match_count == 1 && single_match) {
-        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+        cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
         if (!ctx) {
             set_result_error(result, "Failed to create transform context");
             free_variable_map(var_map);
@@ -1227,7 +1244,7 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("Executing MATCH+CREATE query");
     
     /* First, execute the MATCH to bind variables to existing nodes */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

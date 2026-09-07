@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "gql_thread_local.h"
 #include "transform/transform_helpers.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
@@ -347,7 +348,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
      * aliases only. */
     char *with_where_pre = NULL;
     if (with->where) {
+        ctx->where_conjunct = true;   /* perf review F7 */
         with_where_pre = transform_expression_to_string(ctx, with->where);
+        ctx->where_conjunct = false;
         if (!with_where_pre && ctx->has_error) {
             /* Couldn't translate in pre-WITH scope (e.g. only projected
              * variables exist). Clear the error and try again post-projection
@@ -597,7 +600,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             const char *col_name = item->alias;
             if (!col_name) {
                 /* Generate a column name for expressions without alias */
-                static char auto_col[32];
+                static GQL_THREAD_LOCAL char auto_col[32];
                 snprintf(auto_col, sizeof(auto_col), "expr_%d", i);
                 col_name = auto_col;
             }
@@ -1054,7 +1057,9 @@ with_star_columns_done:
      * translation didn't succeed (i.e., the WHERE references projected
      * aliases only, which weren't in scope earlier). */
     if (with->where && !with_where_pre) {
+        ctx->where_conjunct = true;   /* perf review F7 */
         char *where_str = transform_expression_to_string(ctx, with->where);
+        ctx->where_conjunct = false;
         if (where_str) {
             sql_where(ctx->unified_builder, where_str);
             free(where_str);

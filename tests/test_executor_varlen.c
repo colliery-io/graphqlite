@@ -343,6 +343,88 @@ static void test_varlen_vs_regular(void)
 }
 
 /* Initialize the variable-length executor test suite */
+/* Perf review F2: when the pattern's start node carries an inline property
+ * map, the recursive CTE base case is anchored at that node instead of
+ * seeding a walk from every edge. Results must be identical to the
+ * unanchored form in every direction, with zero-hop, multi-pair maps, and
+ * parameters. Uses its own label/type so the shared chain is untouched. */
+static int va_rows(cypher_result *r) { return (r && r->success) ? r->row_count : -1; }
+static int va_has(cypher_result *r, const char *v)
+{
+    if (!r || !r->success) return 0;
+    for (int i = 0; i < r->row_count; i++)
+        if (r->data[i][0] && strcmp(r->data[i][0], v) == 0) return 1;
+    return 0;
+}
+static void test_varlen_anchored_start(void)
+{
+    cypher_result *r;
+    const char *setup[] = {
+        "CREATE (:VA {name: \"s\", k: 1})",
+        "CREATE (:VA {name: \"m\"})",
+        "CREATE (:VA {name: \"e\"})",
+        "CREATE (:VA {name: \"other\", k: 2})",
+        "MATCH (a:VA {name: \"s\"}), (b:VA {name: \"m\"}) CREATE (a)-[:VAR]->(b)",
+        "MATCH (a:VA {name: \"m\"}), (b:VA {name: \"e\"}) CREATE (a)-[:VAR]->(b)",
+        "MATCH (a:VA {name: \"other\"}), (b:VA {name: \"m\"}) CREATE (a)-[:VAR]->(b)",
+    };
+    for (size_t i = 0; i < sizeof(setup) / sizeof(setup[0]); i++) {
+        r = cypher_executor_execute(shared_executor, setup[i]);
+        if (r) cypher_result_free(r);
+    }
+
+    /* Directed from s: m (1 hop), e (2 hops) */
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA {name: \"s\"})-[:VAR*1..2]->(b) RETURN b.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 2);
+    CU_ASSERT_TRUE(va_has(r, "m") && va_has(r, "e"));
+    if (r) cypher_result_free(r);
+
+    /* Reversed arrow from e: m, then s and other */
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA {name: \"e\"})<-[:VAR*1..2]-(b) RETURN b.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 3);
+    CU_ASSERT_TRUE(va_has(r, "m") && va_has(r, "s") && va_has(r, "other"));
+    if (r) cypher_result_free(r);
+
+    /* Undirected single hop from m: s, other, e */
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA {name: \"m\"})-[:VAR*1..1]-(b) RETURN b.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 3);
+    CU_ASSERT_TRUE(va_has(r, "s") && va_has(r, "other") && va_has(r, "e"));
+    if (r) cypher_result_free(r);
+
+    /* Zero-hop includes the start node itself */
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA {name: \"s\"})-[:VAR*0..1]->(b) RETURN b.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 2);
+    CU_ASSERT_TRUE(va_has(r, "s") && va_has(r, "m"));
+    if (r) cypher_result_free(r);
+
+    /* Multi-pair map: both pairs must hold (INTERSECT) */
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA {name: \"s\", k: 1})-[:VAR*1..2]->(b) RETURN b.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 2);
+    if (r) cypher_result_free(r);
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA {name: \"s\", k: 2})-[:VAR*1..2]->(b) RETURN b.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 0);
+    if (r) cypher_result_free(r);
+
+    /* Parameter anchor */
+    r = cypher_executor_execute_params(shared_executor,
+        "MATCH (a:VA {name: $n})-[:VAR*1..2]->(b) RETURN b.name AS n", "{\"n\": \"s\"}");
+    CU_ASSERT_EQUAL(va_rows(r), 2);
+    CU_ASSERT_TRUE(va_has(r, "m") && va_has(r, "e"));
+    if (r) cypher_result_free(r);
+
+    /* Unanchored form still enumerates every VAR path: s->m, s->m->e, m->e, other->m, other->m->e */
+    r = cypher_executor_execute(shared_executor,
+        "MATCH (a:VA)-[:VAR*1..2]->(b:VA) RETURN a.name AS n");
+    CU_ASSERT_EQUAL(va_rows(r), 5);
+    if (r) cypher_result_free(r);
+}
+
 int init_executor_varlen_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor Variable-Length", setup_varlen_suite, teardown_varlen_suite);
@@ -365,7 +447,8 @@ int init_executor_varlen_suite(void)
         !CU_add_test(suite, "Varlen min bounded [*2..]", test_varlen_min_bounded) ||
         !CU_add_test(suite, "Varlen max bounded [*..2]", test_varlen_max_bounded) ||
         !CU_add_test(suite, "Varlen with variable", test_varlen_with_variable) ||
-        !CU_add_test(suite, "Varlen vs regular comparison", test_varlen_vs_regular)) {
+        !CU_add_test(suite, "Varlen vs regular comparison", test_varlen_vs_regular) ||
+        !CU_add_test(suite, "Varlen anchored at bound start node (perf F2)", test_varlen_anchored_start)) {
         return CU_get_error();
     }
 

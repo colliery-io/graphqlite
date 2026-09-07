@@ -25,7 +25,7 @@ static int merge_with_execute_return(cypher_executor *executor,
                                      variable_map *var_map,
                                      cypher_result *result)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "MERGE+WITH RETURN: failed to create transform context");
         return -1;
@@ -192,7 +192,7 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
             if (query->clauses->items[i]->type != AST_NODE_MATCH) continue;
             cypher_match *m = (cypher_match*)query->clauses->items[i];
 
-            cypher_transform_context *mctx = cypher_transform_create_context(executor->db);
+            cypher_transform_context *mctx = cypher_transform_create_context_ex(executor->db, false);
             if (!mctx) continue;
 
             if (transform_match_clause(mctx, m) == 0) {
@@ -202,29 +202,29 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
                 const char *joins_str = sql_builder_get_joins(mctx->unified_builder);
                 const char *where_str = sql_builder_get_where(mctx->unified_builder);
 
-                char id_sql[4096];
-                size_t pos = 0;
-                pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, "SELECT ");
+                sqlite3_str *id_str = sqlite3_str_new(executor->db);
+                sqlite3_str_appendall(id_str, "SELECT ");
                 bool first_col = true;
                 for (int vi = 0; vi < vcount; vi++) {
                     transform_var *tv = transform_var_at(mctx->var_ctx, vi);
                     if (tv && tv->kind == VAR_KIND_NODE) {
-                        if (!first_col) pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, ", ");
-                        pos += snprintf(id_sql + pos, sizeof(id_sql) - pos,
+                        if (!first_col) sqlite3_str_appendf(id_str, ", ");
+                        sqlite3_str_appendf(id_str,
                                         "%s.id AS \"%s_id\"", tv->table_alias, tv->name);
                         first_col = false;
                     }
                 }
                 if (!first_col) {
                     if (from_str && from_str[0])
-                        pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, " FROM %s", from_str);
+                        sqlite3_str_appendf(id_str, " FROM %s", from_str);
                     if (joins_str && joins_str[0])
-                        pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, " %s", joins_str);
+                        sqlite3_str_appendf(id_str, " %s", joins_str);
                     if (where_str && where_str[0])
-                        pos += snprintf(id_sql + pos, sizeof(id_sql) - pos, " WHERE %s", where_str);
+                        sqlite3_str_appendf(id_str, " WHERE %s", where_str);
 
+                    char *id_sql = sqlite3_str_finish(id_str);
                     sqlite3_stmt *match_stmt;
-                    if (sqlite3_prepare_v2(executor->db, id_sql, -1, &match_stmt, NULL) == SQLITE_OK) {
+                    if (id_sql && sqlite3_prepare_v2(executor->db, id_sql, -1, &match_stmt, NULL) == SQLITE_OK) {
                         if (sqlite3_step(match_stmt) == SQLITE_ROW) {
                             int mcols = sqlite3_column_count(match_stmt);
                             for (int mc = 0; mc < mcols; mc++) {
@@ -246,6 +246,9 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
                         }
                         sqlite3_finalize(match_stmt);
                     }
+                    sqlite3_free(id_sql);
+                } else {
+                    sqlite3_free(sqlite3_str_finish(id_str));
                 }
             }
             cypher_transform_free_context(mctx);
@@ -380,7 +383,7 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
     if (post_match && post_merge) {
         /* Execute MATCH to find additional variables, then MERGE with combined var_map */
         /* Transform MATCH to SQL and execute to get matched node IDs */
-        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+        cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
         if (!ctx) {
             free_variable_map(post_var_map);
             set_result_error(result, "Failed to create transform context for post-WITH");

@@ -4,6 +4,163 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-09-07
+
+A performance release implementing all ten findings of the performance review
+(Metis initiative GQLITE-I-0051, PR #119). Query results, TCK pass count and
+the `cypher()` output format are unchanged; the release adds one SQL surface,
+the `cypher_rows` table-valued function, and its binding wrappers. Headline
+numbers (release builds, 10K–20K nodes): parameterised point lookups
+7.75 ms → 0.07 ms, anchored variable-length paths 1.3 s → 0.35 ms, Louvain
+1.5 s → 0.17 s, `RETURN n` over 20K nodes 409 ms → 89 ms, repeated point
+queries 66 µs → 8 µs, `CREATE` 81 µs → 14.5 µs.
+
+### Performance (performance review, Metis GQLITE-I-0051)
+
+- **Parameterized inline property matches use the value indexes** (F1).
+  `MATCH (n {id: $id})` compiled to four correlated `EXISTS` subqueries that
+  SQLite planned as a full node scan; it now compiles to an `IN` semi-join
+  over the typed property tables driven by the `(key_id, value, id)` covering
+  indexes. Point lookups through `$param` go from ~8 ms to ~0.1 ms at 10K
+  nodes, which is every binding convenience method (`get_node`, `has_node`,
+  `upsert_node`, `get_neighbors`, ...). Edge inline parameter filters use the
+  same shape as a post-filter (43 ms → 3 ms).
+- **Variable-length paths are anchored at the bound start node** (F2). The
+  recursive CTE used to seed a walk from every edge of the type and filter
+  `start_id` afterwards; when the pattern's start node carries an inline
+  property map (literal or parameter, one or more pairs) the base case is now
+  restricted to those nodes. `(a {id: 'x'})-[:T*1..3]->(b)` at 10K nodes /
+  50K edges: 1.2 s → 0.4 ms.
+- **Louvain local-move pass is O(E) instead of O(n²)** (F3): 1.5 s → 0.17 s at
+  10K nodes, 44.6 s → 0.84 s at 50K.
+- **nodeSimilarity / knn no longer sort adjacency lists per pair** (F4), and
+  all-pairs mode with `threshold > 0` enumerates candidates through shared
+  neighbors instead of every pair, with a growable result list instead of an
+  n²/2 preallocation. The node cap for that mode is raised from 5,000 to
+  50,000; `threshold = 0` keeps the 5,000 cap because its output is O(n²).
+  Ties in the similarity ordering now break on `(node1, node2)`.
+
+- **One entity-JSON template, built from the typed tables** (F5). `RETURN n`
+  used to scan all of `property_keys` per node and probe ten indexes per key,
+  then parse the JSON back into an agtype tree and serialise it twice. The
+  property object is now a UNION ALL over the five typed tables keyed by the
+  entity id, defined once (`src/include/entity_json_sql.h`) instead of at
+  fourteen sites, and the executor passes entity JSON through verbatim.
+  20K nodes: `RETURN n` 409 ms → 89 ms, `RETURN r` 366 ms → 62 ms. Edge JSON
+  now uses `startNode`/`endNode` keys everywhere (previously `startNodeId`
+  in some SQL paths, normalised by the agtype round trip).
+- **Property key ids are resolved at transform time** (F6). `n.age` filters
+  each typed table on `key_id = N` instead of joining `property_keys` by
+  name in every branch (falls back to the name join for keys that do not
+  exist yet).
+- **WHERE comparisons use the value indexes** (F7). A top-level WHERE
+  conjunct of the form `n.prop <op> literal` (either order, `=`, `<`, `<=`,
+  `>`, `>=`) compiles to `id IN (SELECT ... FROM typed_table WHERE key_id = N
+  AND value <op> literal)` driven by the `(key_id, value, id)` indexes,
+  instead of a UDF over five correlated subqueries per row. Three-valued
+  semantics are preserved: the rewrite applies only where NULL and FALSE
+  are equivalent (WHERE conjuncts, including AND chains, OPTIONAL MATCH and
+  WITH ... WHERE), never under NOT, OR, CASE or in RETURN. 20K nodes:
+  `WHERE n.age > 85` 10.6 ms → 1.7 ms, `WHERE n.name = 'x'` 6.9 ms → 0.08 ms.
+
+- **Per-connection statement cache for read queries** (F8). Parsing,
+  transforming and preparing a 1–2 KB statement was ~90% of a point query.
+  The executor now keeps up to 64 pure read queries (MATCH … RETURN and the
+  generic read pipeline, never writes, CALL or algorithms) keyed by exact
+  Cypher text, with their AST, transform state and prepared statement, and
+  re-executes them with fresh bindings. Cached statements are finalised from
+  SQLite's `SQLITE_TRACE_CLOSE` callback so `sqlite3_close()` still succeeds;
+  an application that installs its own `sqlite3_trace_v2` hook afterwards
+  replaces that callback and should close with `sqlite3_close_v2()`. Set
+  `GQL_STMT_CACHE=0` in the environment to disable. The executor also stops
+  re-registering all 51 helper UDFs on every query. 20K nodes:
+  `MATCH (n {id: $id}) RETURN n.name` 66 µs → 8 µs on a hit, 51 µs on a miss.
+
+- **Write path keeps its statements prepared** (F9). The schema manager
+  compiled ~26 statements per created node (`sqlite3_exec` for the node
+  insert, and five cleanup deletes plus an insert per property). It now
+  holds lazily prepared statements for node/edge/label/key inserts and the
+  cleanup deletes, reset after every use and finalised through the same
+  close hook as the statement cache; properties of an entity created by the
+  same CREATE clause skip the cleanup deletes entirely. 10K-node graph,
+  µs per operation: `CREATE (n:Person {4 props})` 81 → 14.5 (raw SQL 8.8),
+  `MERGE` 66 → 29, `SET` 43 → 23, `UNWIND $rows CREATE` 5.6 → 2.4 per row.
+
+- **O(1) endpoint lookup for graph algorithms.** `dijkstra`, `astar`, `bfs`,
+  `dfs`, `knn` and the pair form of `nodeSimilarity` resolved user ids with a
+  string scan of every node; the CSR graph now carries a hash from user id to
+  index built at load.
+
+- **`cypher_rows` table-valued interface** (F10, ADR GQLITE-A-0006).
+  `SELECT ... FROM cypher_rows(query [, params])` exposes a Cypher result as
+  SQL rows: `row` is the JSON object `cypher()` would emit for that row,
+  `cols`/`ncols` describe the projection, and `c0`…`c31` carry the values
+  with native SQLite types (integers, reals, booleans, text; entities, lists
+  and maps as JSON text). SQLite steps the table one row at a time, so peak
+  memory is one row instead of the whole JSON string, `LIMIT` stops the scan,
+  and results compose with `WHERE`, joins and `json_each`. Write queries
+  without RETURN yield one statistics row; errors carry the same structured
+  message as `cypher()`. The table shares the connection's executor and
+  statement cache with `cypher()`. Bindings: Python `Connection.iter_rows()`
+  / `Graph.iter_query()` generators, Rust `Connection::cypher_rows_each()`.
+  50K-node `MATCH (n) RETURN n` consumed from Python: peak RSS growth
+  51 MB → 8 MB, first row in 165 ms instead of 198 ms; end-to-end time is
+  unchanged because this phase still materialises the result in C before
+  streaming it (stepping the statement inside the table is the follow-up).
+
+- **Smaller items from the review.** The property-key cache chains entries
+  on hash collision instead of evicting (two hot keys sharing one of the
+  1,024 slots used to miss alternately). A CSR graph loaded with
+  `gql_load_graph()` is rebuilt automatically before the next algorithm call
+  when a write has run since, instead of serving stale topology. Transform
+  and executor scratch buffers that were `static` are now thread-local, so
+  connections on different threads no longer share them. Fixed-size SQL
+  buffers (`char sql[2048…8192]`, silently truncating) in SET-with-function,
+  MERGE lookups, CALL subquery evaluation, aggregation JOINs and entity
+  refetch are built on the heap; the pattern-comprehension collect buffer
+  and the CALL evaluation scratch were stack arrays handed to a growable
+  buffer API, which could `realloc` a stack pointer for large projections
+  such as `[(a)-->(b) | {x: b, y: b, z: b, w: b}]`. The per-row `strdup`
+  copies in `build_query_results` are left alone: at three small
+  allocations per row they were not measurable next to the items above.
+
+### Fixed
+
+- **Non-ASCII query parameters are no longer corrupted.** The parameter
+  decoder handled `\n`, `\t`, `\r`, `\"` and `\\` but copied any other escape
+  through literally, and `json.dumps()` spells every non-ASCII character as
+  `\uXXXX` by default — so `{"name": "café"}` from the Python binding arrived
+  as the eight-character string `cafu00e9`, matched nothing, and was stored
+  that way by `CREATE`/`SET`. `\uXXXX` is now decoded to UTF-8, including
+  surrogate pairs, along with `\b`, `\f` and `\/`. One decoder is shared by
+  the three places that read parameter strings.
+- **Control characters in stored strings survive a scalar read.** The agtype
+  serializer replaced every control character below `\t`-range with a space,
+  so a value written correctly came back altered — valid JSON, silently wrong
+  data. They are now escaped as `\u00XX` (and `\b`/`\f` by name), matching
+  what the entity path already emitted.
+- **`ORDER BY` on a RETURN alias that shadows a column name.** `RETURN b.id
+  AS id ORDER BY id` sorted by the internal node id rather than the projected
+  value, because the ordering functions wrap the term and SQLite only
+  substitutes an output alias for a *bare* ORDER BY term; with two patterns in
+  scope the same query failed with "ambiguous column name". Such a term now
+  renders the aliased expression itself. Aliases that cannot collide keep the
+  cheap bare-alias reference.
+- **Rust binding re-extracts the bundled extension when its content changes.**
+  The extracted copy was reused whenever the file size matched, so a rebuilt
+  library of identical size (any development build, or a patched release of
+  the same version) kept loading the stale extract. It is now compared
+  byte-for-byte.
+- **`cypher()` emits valid JSON for strings containing control characters.**
+  The text result path escaped only `"` and `\\`; newlines, tabs and other
+  control characters (and therefore all `EXPLAIN` output) produced invalid
+  JSON. They are now escaped as `\\n`, `\\t`, ... or `\\u00XX`.
+
+### Tooling
+
+- `tests/performance/python/` harness runs on macOS (no `/proc`; falls back
+  to `ru_maxrss`) and picks the platform library name by default.
+
 ## [0.7.0] — 2026-09-05
 
 A bindings-correctness release closing the GitHub issue batch #104–#116. Core

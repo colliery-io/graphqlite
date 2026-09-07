@@ -270,16 +270,9 @@ graph_algo_result* execute_astar(sqlite3 *db, csr_graph *cached, const char *sou
 
     int n = graph->node_count;
 
-    /* Find source and target nodes */
-    int source = -1, target = -1;
-    for (int i = 0; i < n; i++) {
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], source_id) == 0) {
-            source = i;
-        }
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], target_id) == 0) {
-            target = i;
-        }
-    }
+    /* Find source and target nodes (O(1) via the user-id hash) */
+    int source = csr_find_user_id(graph, source_id);
+    int target = csr_find_user_id(graph, target_id);
 
     if (source == -1 || target == -1) {
         if (should_free_graph) csr_graph_free(graph);

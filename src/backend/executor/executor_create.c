@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "executor/executor_internal.h"
+#include "gql_thread_local.h"
 #include "executor/cypher_executor.h"
 #include "transform/cypher_transform.h"
 #include "parser/cypher_debug.h"
@@ -45,7 +46,7 @@ static bool ast_contains_function_call(ast_node *expr)
  * serialization can't evaluate. */
 static char* evaluate_expr_to_json(cypher_executor *executor, ast_node *expr)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return NULL;
 
     append_sql(ctx, "SELECT ");
@@ -166,7 +167,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         ? evaluate_expr_to_json(executor, pair->value)
                                         : serialize_ast_to_json(pair->value);
                                     if (json_str) {
-                                        if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, PROP_TYPE_JSON, json_str) == 0) {
+                                        if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, PROP_TYPE_JSON, json_str, true) == 0) {
                                             result->properties_set++;
                                             CYPHER_DEBUG("Set JSON property '%s' on node %d", pair->key, node_id);
                                         }
@@ -267,7 +268,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             static int64_t int_buf;
                                             static double real_buf;
                                             static int bool_buf;
-                                            static char text_buf[256];
+                                            static GQL_THREAD_LOCAL char text_buf[256];
                                             bool found = false;
                                             for (int t = 0; tables[t] && !found; t++) {
                                                 char sql[512];
@@ -323,7 +324,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         static double func_real_buf;
                                         static int func_bool_buf;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
-                                            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, func_pv.as_str) == 0) {
+                                            if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, func_pv.as_str, true) == 0) {
                                                 result->properties_set++;
                                             }
                                             property_value_free(&func_pv);
@@ -354,7 +355,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         static double gen_real_buf;
                                         static int gen_bool_buf;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
-                                            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, gen_pv.as_str) == 0) {
+                                            if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, gen_pv.as_str, true) == 0) {
                                                 result->properties_set++;
                                             }
                                             property_value_free(&gen_pv);
@@ -374,7 +375,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 }
 
                                 if (prop_value) {
-                                    if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value) == 0) {
+                                    if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, prop_value, true) == 0) {
                                         result->properties_set++;
                                         CYPHER_DEBUG("Set property '%s' on node %d", pair->key, node_id);
                                     }
@@ -482,7 +483,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         ? evaluate_expr_to_json(executor, pair->value)
                                         : serialize_ast_to_json(pair->value);
                                     if (json_str) {
-                                        if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, PROP_TYPE_JSON, json_str) == 0) {
+                                        if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, PROP_TYPE_JSON, json_str, true) == 0) {
                                             result->properties_set++;
                                             CYPHER_DEBUG("Set JSON property '%s' on target node %d", pair->key, target_node_id);
                                         }
@@ -535,7 +536,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         static double func_real_buf2;
                                         static int func_bool_buf2;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
-                                            if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, func_pv2.as_str) == 0) {
+                                            if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, func_pv2.as_str, true) == 0) {
                                                 result->properties_set++;
                                             }
                                             property_value_free(&func_pv2);
@@ -563,7 +564,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         static double gen_real_buf2;
                                         static int gen_bool_buf2;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
-                                            if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, gen_pv2.as_str) == 0) {
+                                            if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, gen_pv2.as_str, true) == 0) {
                                                 result->properties_set++;
                                             }
                                             property_value_free(&gen_pv2);
@@ -583,7 +584,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 }
 
                                 if (prop_value) {
-                                    if (cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value) == 0) {
+                                    if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value, true) == 0) {
                                         result->properties_set++;
                                         CYPHER_DEBUG("Set property '%s' on target node %d", pair->key, target_node_id);
                                     }

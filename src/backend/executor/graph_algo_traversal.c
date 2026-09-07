@@ -150,14 +150,8 @@ graph_algo_result* execute_bfs(sqlite3 *db, csr_graph *cached, const char *start
 
     int n = graph->node_count;
 
-    /* Find start node */
-    int start = -1;
-    for (int i = 0; i < n; i++) {
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], start_id) == 0) {
-            start = i;
-            break;
-        }
-    }
+    /* Find start node (O(1) via the user-id hash) */
+    int start = csr_find_user_id(graph, start_id);
 
     if (start == -1) {
         if (should_free_graph) csr_graph_free(graph);
@@ -314,14 +308,8 @@ graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start
 
     int n = graph->node_count;
 
-    /* Find start node */
-    int start = -1;
-    for (int i = 0; i < n; i++) {
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], start_id) == 0) {
-            start = i;
-            break;
-        }
-    }
+    /* Find start node (O(1) via the user-id hash) */
+    int start = csr_find_user_id(graph, start_id);
 
     if (start == -1) {
         if (should_free_graph) csr_graph_free(graph);

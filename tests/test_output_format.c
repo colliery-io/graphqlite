@@ -87,6 +87,9 @@ static char* execute_and_format(const char *query)
                         buffer_size += strlen(temp_str) + 50;
                         free(temp_str);
                     }
+                } else if (result->data && result->data[row] && result->data[row][col]) {
+                    /* Entity JSON passed through as text (perf review F5) */
+                    buffer_size += strlen(result->data[row][col]) + 50;
                 }
             }
         }
@@ -111,12 +114,19 @@ static char* execute_and_format(const char *query)
                 }
                 strcat(json, "\":");
 
-                char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
-                if (agtype_str) {
-                    strcat(json, agtype_str);
-                    free(agtype_str);
+                if (result->agtype_data[row][col] == NULL &&
+                    result->data && result->data[row] && result->data[row][col]) {
+                    /* Mirror extension.c: a NULL agtype cell with text data is
+                     * entity JSON passed through verbatim (perf review F5). */
+                    strcat(json, result->data[row][col]);
                 } else {
-                    strcat(json, "null");
+                    char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
+                    if (agtype_str) {
+                        strcat(json, agtype_str);
+                        free(agtype_str);
+                    } else {
+                        strcat(json, "null");
+                    }
                 }
             }
             strcat(json, "}");

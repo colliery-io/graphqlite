@@ -9,6 +9,7 @@
 #include <stdarg.h>
 
 #include "transform/cypher_transform.h"
+#include "gql_thread_local.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
@@ -22,6 +23,11 @@
 
 cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
 {
+    return cypher_transform_create_context_ex(db, true);
+}
+
+cypher_transform_context* cypher_transform_create_context_ex(sqlite3 *db, bool register_udfs)
+{
     cypher_transform_context *ctx = calloc(1, sizeof(cypher_transform_context));
     if (!ctx) {
         return NULL;
@@ -33,8 +39,9 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
      * are registered on this connection — the transform layer validates
      * by preparing SQL that references them. sqlite3_create_function is
      * idempotent (a repeat call just replaces the binding), so this is
-     * safe to call even when the SQLite extension already registered them. */
-    if (db) {
+     * safe to call even when the SQLite extension already registered them.
+     * The executor skips this (perf review F8): it registered at creation. */
+    if (db && register_udfs) {
         graphqlite_register_helper_udfs(db);
     }
 
@@ -95,8 +102,74 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     return ctx;
 }
 
+int cypher_transform_property_key_id(cypher_transform_context *ctx, const char *gprefix, const char *key)
+{
+    if (!ctx || !ctx->db || !key) return -1;
+    const char *g = gprefix ? gprefix : "";
+    for (int i = 0; i < ctx->pk_count; i++) {
+        if (strcmp(ctx->pk_graphs[i], g) == 0 && strcmp(ctx->pk_names[i], key) == 0) {
+            return ctx->pk_ids[i];
+        }
+    }
+
+    char sql[320];
+    snprintf(sql, sizeof(sql), "SELECT id FROM %sproperty_keys WHERE key = ?", g);
+    sqlite3_stmt *stmt = NULL;
+    int id = -1;
+    if (sqlite3_prepare_v2(ctx->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) id = sqlite3_column_int(stmt, 0);
+    }
+    if (stmt) sqlite3_finalize(stmt);
+
+    /* Cache negative results too: the transform of one statement runs
+     * entirely before that statement executes, so "unknown" cannot change
+     * within the lifetime of this context. */
+    if (ctx->pk_count == ctx->pk_cap) {
+        int cap = ctx->pk_cap ? ctx->pk_cap * 2 : 8;
+        char **gs = realloc(ctx->pk_graphs, (size_t)cap * sizeof(char *));
+        char **ns = realloc(ctx->pk_names, (size_t)cap * sizeof(char *));
+        int *ids = realloc(ctx->pk_ids, (size_t)cap * sizeof(int));
+        if (!gs || !ns || !ids) { free(gs); free(ns); free(ids); return id; }
+        ctx->pk_graphs = gs; ctx->pk_names = ns; ctx->pk_ids = ids; ctx->pk_cap = cap;
+    }
+    ctx->pk_graphs[ctx->pk_count] = strdup(g);
+    ctx->pk_names[ctx->pk_count] = strdup(key);
+    ctx->pk_ids[ctx->pk_count] = id;
+    if (ctx->pk_graphs[ctx->pk_count] && ctx->pk_names[ctx->pk_count]) {
+        ctx->pk_count++;
+    } else {
+        free(ctx->pk_graphs[ctx->pk_count]);
+        free(ctx->pk_names[ctx->pk_count]);
+    }
+    return id;
+}
+
 void cypher_transform_free_context(cypher_transform_context *ctx)
 {
+    if (ctx) {
+        for (int i = 0; i < ctx->anchor_count; i++) {
+            free(ctx->anchor_aliases[i]);
+            free(ctx->anchor_sqls[i]);
+        }
+        free(ctx->anchor_aliases);
+        free(ctx->anchor_sqls);
+        ctx->anchor_aliases = NULL;
+        ctx->anchor_sqls = NULL;
+        ctx->anchor_count = ctx->anchor_cap = 0;
+        for (int i = 0; i < ctx->pk_count; i++) {
+            free(ctx->pk_graphs[i]);
+            free(ctx->pk_names[i]);
+        }
+        free(ctx->pk_graphs);
+        free(ctx->pk_names);
+        free(ctx->pk_ids);
+        ctx->pk_graphs = NULL;
+        ctx->pk_names = NULL;
+        ctx->pk_ids = NULL;
+        ctx->pk_count = ctx->pk_cap = 0;
+    }
+
     if (!ctx) {
         return;
     }
@@ -244,7 +317,7 @@ void append_var_table(cypher_transform_context *ctx, const char *var_name, const
 
 const char *get_graph_table(cypher_transform_context *ctx, const char *table)
 {
-    static char table_buf[256];
+    static GQL_THREAD_LOCAL char table_buf[256];
 
     if (ctx->current_graph && ctx->current_graph[0] != '\0') {
         snprintf(table_buf, sizeof(table_buf), "%s.%s", ctx->current_graph, table);
@@ -1173,7 +1246,7 @@ int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *q
  */
 int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                        const char *source_alias, const char *target_alias,
-                       const char *cte_name)
+                       const char *cte_name, const char *anchor_ids_sql)
 {
     (void)source_alias; /* Mark as intentionally unused for now */
     (void)target_alias; /* Mark as intentionally unused for now */
@@ -1283,7 +1356,9 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         dbuf_appendf(&cte_query,
             "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',', "
             "CAST(n.id AS TEXT) "
-            "FROM nodes n UNION ALL ");
+            "FROM nodes n");
+        if (anchor_ids_sql) dbuf_appendf(&cte_query, " WHERE n.id IN (%s)", anchor_ids_sql);
+        dbuf_append(&cte_query, " UNION ALL ");
     }
 
     /* Base case: direct edges (depth = 1).
@@ -1298,7 +1373,16 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col);
-    if (have_tpred) dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred));
+    /* Perf review F2: anchor the base case at the bound start node. Without
+     * this the CTE expands every path from every edge of the type and only
+     * the outer query filters start_id. */
+    {
+        bool need_where = true;
+        if (have_tpred) { dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred)); need_where = false; }
+        if (anchor_ids_sql) {
+            dbuf_appendf(&cte_query, "%s e.%s IN (%s)", need_where ? " WHERE" : " AND", src_col, anchor_ids_sql);
+        }
+    }
 
     /* Undirected: emit the reverse-orientation base case too, so each
      * edge seeds a walk in both directions. */
@@ -1313,7 +1397,14 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             tgt_col, src_col,
             tgt_col, src_col,
             tgt_col, src_col);
-        if (have_tpred) dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred));
+        {
+            bool need_where = true;
+            if (have_tpred) { dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred)); need_where = false; }
+            if (anchor_ids_sql) {
+                /* Reverse orientation: the walk starts at the edge's other end. */
+                dbuf_appendf(&cte_query, "%s e.%s IN (%s)", need_where ? " WHERE" : " AND", tgt_col, anchor_ids_sql);
+            }
+        }
     }
 
     /* Recursive case — only recurse from depth >= 1 rows. The depth=0

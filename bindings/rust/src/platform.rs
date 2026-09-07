@@ -124,9 +124,13 @@ fn try_extract_to(dir: &PathBuf, filename: &str) -> Result<PathBuf> {
 
     let extension_path = dir.join(filename);
 
-    // Check if already present with correct size
-    let needs_extract = match std::fs::metadata(&extension_path) {
-        Ok(meta) => meta.len() != EXTENSION_BYTES.len() as u64,
+    // Re-extract unless the file on disk is byte-for-byte the embedded
+    // binary. A size-only check let a rebuilt library of identical size
+    // (common during development, and possible for a patched release of the
+    // same version) keep loading a stale extract; reading ~1 MB once per
+    // process is negligible.
+    let needs_extract = match std::fs::read(&extension_path) {
+        Ok(existing) => existing.as_slice() != EXTENSION_BYTES,
         Err(_) => true,
     };
 

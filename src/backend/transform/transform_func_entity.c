@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "transform/cypher_transform.h"
+#include "entity_json_sql.h"
 #include "transform/transform_func_entity.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
@@ -216,37 +217,21 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
     if (is_edge) {
         /* For edges, query edge property tables */
         /* Use separate EXISTS checks with OR - SQLite doesn't handle EXISTS with UNION ALL correctly */
-        append_sql(ctx, "(SELECT json_group_object(pk.key, COALESCE("
-            "(SELECT ept.value FROM %sedge_props_text ept WHERE ept.edge_id = %s%s AND ept.key_id = pk.id), "
-            "(SELECT epi.value FROM %sedge_props_int epi WHERE epi.edge_id = %s%s AND epi.key_id = pk.id), "
-            "(SELECT epr.value FROM %sedge_props_real epr WHERE epr.edge_id = %s%s AND epr.key_id = pk.id), "
-            "(SELECT epb.value FROM %sedge_props_bool epb WHERE epb.edge_id = %s%s AND epb.key_id = pk.id), "
-            "(SELECT json(epj.value) FROM %sedge_props_json epj WHERE epj.edge_id = %s%s AND epj.key_id = pk.id))) "
-            "FROM %sproperty_keys pk WHERE "
-            "EXISTS (SELECT 1 FROM %sedge_props_text WHERE edge_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %sedge_props_int WHERE edge_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %sedge_props_real WHERE edge_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %sedge_props_bool WHERE edge_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %sedge_props_json WHERE edge_id = %s%s AND key_id = pk.id))",
-            gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix,
-            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
+        char id_e[300];
+        snprintf(id_e, sizeof(id_e), "%s%s", alias, id_suffix);
+        char *pe = gql_sql_props_expr("edge", "edge_id", gprefix, id_e);
+        if (!pe) return -1;
+        append_sql(ctx, "%s", pe);
+        free(pe);
     } else {
         /* For nodes, query node property tables */
         /* Use separate EXISTS checks with OR - SQLite doesn't handle EXISTS with UNION ALL correctly */
-        append_sql(ctx, "(SELECT json_group_object(pk.key, COALESCE("
-            "(SELECT npt.value FROM %snode_props_text npt WHERE npt.node_id = %s%s AND npt.key_id = pk.id), "
-            "(SELECT npi.value FROM %snode_props_int npi WHERE npi.node_id = %s%s AND npi.key_id = pk.id), "
-            "(SELECT npr.value FROM %snode_props_real npr WHERE npr.node_id = %s%s AND npr.key_id = pk.id), "
-            "(SELECT npb.value FROM %snode_props_bool npb WHERE npb.node_id = %s%s AND npb.key_id = pk.id), "
-            "(SELECT json(npj.value) FROM %snode_props_json npj WHERE npj.node_id = %s%s AND npj.key_id = pk.id))) "
-            "FROM %sproperty_keys pk WHERE "
-            "EXISTS (SELECT 1 FROM %snode_props_text WHERE node_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %snode_props_int WHERE node_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %snode_props_real WHERE node_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %snode_props_bool WHERE node_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %snode_props_json WHERE node_id = %s%s AND key_id = pk.id))",
-            gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix,
-            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
+        char id_e[300];
+        snprintf(id_e, sizeof(id_e), "%s%s", alias, id_suffix);
+        char *pe = gql_sql_props_expr("node", "node_id", gprefix, id_e);
+        if (!pe) return -1;
+        append_sql(ctx, "%s", pe);
+        free(pe);
     }
 
     /* Close the NULL guard CASE opened above. */

@@ -96,6 +96,29 @@ for row in result:
 
 ---
 
+### `Connection.iter_rows`
+
+```python
+conn.iter_rows(query: str, params=None) -> Iterator[dict]
+```
+
+Stream a Cypher query's rows through the `cypher_rows` virtual table (see
+the SQL interface reference). Yields one dict per row as SQLite steps the
+result, with the same keys and value shapes `Connection.cypher` produces, so
+peak memory is one row and the consumer can stop early. A write query
+without `RETURN` yields one dict of modification counts.
+
+Raises: `sqlite3.Error` on parse or execution failure.
+
+**Example**
+
+```python
+for row in conn.iter_rows("MATCH (n:Person) RETURN n.name AS name, n.age AS age"):
+    print(row["name"], row["age"])
+```
+
+---
+
 ### `Connection.execute`
 
 ```python

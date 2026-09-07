@@ -27,7 +27,7 @@ static int evaluate_ast_with_context(
     property_type *out_type,
     property_value *out_value)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return -1;
 
     /* Register variables from var_map so property lookups can resolve.
@@ -80,20 +80,18 @@ static int evaluate_ast_with_context(
     const char *joins_str = sql_builder_get_joins(ctx->unified_builder);
     const char *where_str = sql_builder_get_where(ctx->unified_builder);
 
-    char full_sql[8192];
-    size_t pos = 0;
-    pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, "%s", ctx->sql_buffer);
-    if (from_str && from_str[0])
-        pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, " FROM %s", from_str);
-    if (joins_str && joins_str[0])
-        pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, " %s", joins_str);
-    if (where_str && where_str[0])
-        pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, " WHERE %s", where_str);
+    bool has_from = from_str && from_str[0], has_joins = joins_str && joins_str[0],
+         has_where = where_str && where_str[0];
+    char *full_sql = sqlite3_mprintf("%s%s%s%s%s%s%s", ctx->sql_buffer,
+                                     has_from ? " FROM " : "", has_from ? from_str : "",
+                                     has_joins ? " " : "", has_joins ? joins_str : "",
+                                     has_where ? " WHERE " : "", has_where ? where_str : "");
 
-    CYPHER_DEBUG("evaluate_function_with_context SQL: %s", full_sql);
+    CYPHER_DEBUG("evaluate_function_with_context SQL: %s", full_sql ? full_sql : "(oom)");
 
-    sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(executor->db, full_sql, -1, &stmt, NULL);
+    sqlite3_stmt *stmt = NULL;
+    int rc = full_sql ? sqlite3_prepare_v2(executor->db, full_sql, -1, &stmt, NULL) : SQLITE_NOMEM;
+    sqlite3_free(full_sql);
     cypher_transform_free_context(ctx);
     if (rc != SQLITE_OK) return -1;
 
@@ -190,7 +188,7 @@ int evaluate_function_call_via_sqlite(
     property_type *out_type,
     property_value *out_value)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return -1;
 
     append_sql(ctx, "SELECT ");
@@ -329,18 +327,10 @@ static int set_properties_from_json_object(
             while (*p && *p != '"') {
                 if (*p == '\\' && *(p+1)) {
                     p++;
-                    switch (*p) {
-                        case 'n': dyn_str[i++] = '\n'; break;
-                        case 't': dyn_str[i++] = '\t'; break;
-                        case 'r': dyn_str[i++] = '\r'; break;
-                        case '"': dyn_str[i++] = '"'; break;
-                        case '\\': dyn_str[i++] = '\\'; break;
-                        default: dyn_str[i++] = *p; break;
-                    }
+                    i += (size_t)gql_json_decode_escape(&p, dyn_str + i);
                 } else {
-                    dyn_str[i++] = *p;
+                    dyn_str[i++] = *p++;
                 }
-                p++;
             }
             dyn_str[i] = '\0';
             if (*p == '"') p++;
@@ -449,7 +439,7 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
     CYPHER_DEBUG("Executing MATCH+SET query");
 
     /* Transform MATCH clause to get bound variables */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

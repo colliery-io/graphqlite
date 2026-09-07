@@ -57,7 +57,25 @@ typedef struct cypher_schema_manager {
     sqlite3 *db;
     property_key_cache *key_cache;
     bool schema_initialized;
+
+    /* Perf review F9: lazily prepared write statements, reset after every
+     * use. A CREATE used to compile ~26 statements per node. They are
+     * finalized by cypher_schema_release_statements(), which the executor
+     * calls from its SQLITE_TRACE_CLOSE hook (so sqlite3_close() still
+     * succeeds) and from cypher_schema_free_manager(). Property-table slots
+     * are indexed by GQL_PROP_TABLE_* below. */
+    sqlite3_stmt *ps_insert_node;
+    sqlite3_stmt *ps_add_label;
+    sqlite3_stmt *ps_create_edge;
+    sqlite3_stmt *ps_key_lookup;
+    sqlite3_stmt *ps_key_insert;
+    sqlite3_stmt *ps_node_prop_ins[5];
+    sqlite3_stmt *ps_node_prop_del[5];
+    sqlite3_stmt *ps_edge_prop_ins[5];
 } cypher_schema_manager;
+
+/* Finalize every prepared statement held by the manager. */
+void cypher_schema_release_statements(cypher_schema_manager *manager);
 
 /* Property key cache entry */
 typedef struct property_key_entry {
@@ -65,6 +83,7 @@ typedef struct property_key_entry {
     char *key_string;
     time_t last_used;
     int usage_count;
+    struct property_key_entry *next;   /* chained on hash collision */
 } property_key_entry;
 
 /* Property key cache - based on proven archive design */
@@ -97,6 +116,12 @@ int cypher_schema_ensure_property_key(cypher_schema_manager *manager, const char
 const char* cypher_schema_get_property_key_name(cypher_schema_manager *manager, int key_id);
 
 /* Property operations */
+/* Perf review F9: entity_is_new = true skips the cleanup deletes across the
+ * other typed tables (a node created by this statement has no rows there). */
+int cypher_schema_set_node_property_ex(cypher_schema_manager *manager,
+                                      int node_id, const char *key,
+                                      property_type type, const void *value,
+                                      bool entity_is_new);
 int cypher_schema_set_node_property(cypher_schema_manager *manager, 
                                    int node_id, const char *key, 
                                    property_type type, const void *value);

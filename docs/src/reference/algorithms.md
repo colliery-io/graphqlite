@@ -576,6 +576,13 @@ graph.node_similarity(node1_id: Option<i64>, node2_id: Option<i64>, threshold: f
 
 **Algorithm**: Jaccard similarity based on shared neighbors.
 
+**Limits**: with `threshold > 0` only pairs that share at least one neighbor
+can qualify, so candidates are enumerated through shared neighbors and graphs
+up to 50,000 nodes are accepted. With `threshold = 0` every pair (including
+similarity `0.0`) is part of the result, which is O(N²) by definition, so
+all-pairs mode is capped at 5,000 nodes; use a threshold, `top_k`, or the
+specific-pair form above that.
+
 **Return shape**
 
 Python: `list[dict]` with keys `node1`, `node2`, `similarity`

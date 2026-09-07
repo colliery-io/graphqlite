@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "entity_json_sql.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
 #include "transform/transform_func_entity.h"
@@ -106,6 +107,63 @@ static int transform_list_item_value(cypher_transform_context *ctx, ast_node *ex
 size_t get_pending_prop_joins_len(cypher_transform_context *ctx)
 {
     return ctx->pending_prop_joins_len;
+}
+
+/*
+ * ORDER BY on a RETURN alias that shadows one of our own SQL column names.
+ *
+ * `RETURN b.id AS id ORDER BY id` emits `ORDER BY _gql_order_rank(id)`, and
+ * SQLite only substitutes an output-column alias for an ORDER BY term that is
+ * a *bare* identifier. Inside the ordering function the name binds to the
+ * base table instead, so the query silently sorted by the internal node id,
+ * or failed with "ambiguous column name" once two patterns were in scope.
+ *
+ * These are every column name our generated SQL can bring into scope (the
+ * schema in cypher_schema.c). Any other alias is unambiguous and keeps the
+ * cheap bare-alias reference.
+ */
+static char *transform_expression_to_string(cypher_transform_context *ctx, ast_node *expr);
+
+static bool alias_shadows_sql_column(const char *name)
+{
+    static const char *const shadowed[] = {
+        "id", "source_id", "target_id", "type", "node_id",
+        "edge_id", "key_id", "key", "label", "value"
+    };
+    if (!name) return false;
+    for (size_t i = 0; i < sizeof(shadowed) / sizeof(shadowed[0]); i++) {
+        if (strcmp(name, shadowed[i]) == 0) return true;
+    }
+    return false;
+}
+
+/*
+ * Render one ORDER BY term. When it is a bare identifier naming a RETURN alias
+ * that would be captured by a base-table column, render the aliased expression
+ * itself (exactly what `ORDER BY b.id` produces, which has always been
+ * correct). Caller frees the result.
+ */
+static char *transform_order_by_term(cypher_transform_context *ctx,
+                                     cypher_return *ret,
+                                     ast_node *order_expr)
+{
+    if (order_expr && order_expr->type == AST_NODE_IDENTIFIER && ret && ret->items) {
+        const char *name = ((cypher_identifier *)order_expr)->name;
+        if (alias_shadows_sql_column(name)) {
+            for (int i = 0; i < ret->items->count; i++) {
+                cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
+                if (!item || !item->alias || !item->expr) continue;
+                if (strcmp(item->alias, name) != 0) continue;
+                /* `RETURN id AS id` would recurse straight back here. */
+                if (item->expr->type == AST_NODE_IDENTIFIER &&
+                    strcmp(((cypher_identifier *)item->expr)->name, name) == 0) break;
+                char *sub = transform_expression_to_string(ctx, item->expr);
+                if (sub) return sub;
+                break;
+            }
+        }
+    }
+    return transform_expression_to_string(ctx, order_expr);
 }
 
 void add_pending_prop_join(cypher_transform_context *ctx, const char *join_sql)
@@ -306,39 +364,15 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 /* Build expression for this variable based on its kind */
                 if (var->kind == VAR_KIND_NODE) {
                     /* Return full node object using json_object */
-                    char expr_buf[2048];
+                    char expr_buf[4096];
                     const char *alias = var->table_alias;
                     bool skip_id = var->alias_is_id;
-                    snprintf(expr_buf, sizeof(expr_buf),
-                        "(SELECT json_object("
-                        "'id', %s%s, "
-                        "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s%s), json('[]')), "
-                        "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                            "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s%s AND npt.key_id = pk.id), "
-                            "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s%s AND npi.key_id = pk.id), "
-                            "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s%s AND npr.key_id = pk.id), "
-                            "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %s%s AND npb.key_id = pk.id), "
-                            "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %s%s AND npj.key_id = pk.id))) "
-                        "FROM property_keys pk WHERE "
-                            "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s%s AND key_id = pk.id) OR "
-                            "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s%s AND key_id = pk.id) OR "
-                            "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s%s AND key_id = pk.id) OR "
-                            "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s%s AND key_id = pk.id) OR "
-                            "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s%s AND key_id = pk.id)"
-                        "), json('{}'))"
-                        "))",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id",
-                        alias, skip_id ? "" : ".id");
+                    char id_expr[300];
+                    snprintf(id_expr, sizeof(id_expr), "%s%s", alias, skip_id ? "" : ".id");
+                    char *node_json = gql_sql_node_json_expr("", id_expr);
+                    if (!node_json) return -1;
+                    snprintf(expr_buf, sizeof(expr_buf), "(SELECT %s)", node_json);
+                    free(node_json);
                     sql_select(ctx->unified_builder, expr_buf, var->name);
                 } else if (var->kind == VAR_KIND_EDGE) {
                     /* Return edge as its type */
@@ -537,7 +571,7 @@ return_star_done:
         if (ret->order_by && ret->order_by->count > 0) {
             for (int i = 0; i < ret->order_by->count; i++) {
                 cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                char *order_expr = transform_order_by_term(ctx, ret, order_item->expr);
                 if (order_expr) {
                     sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
                     free(order_expr);
@@ -737,7 +771,7 @@ return_star_done:
             if (ret->order_by && ret->order_by->count > 0) {
                 for (int i = 0; i < ret->order_by->count; i++) {
                     cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                    char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                    char *order_expr = transform_order_by_term(ctx, ret, order_item->expr);
                     if (order_expr) {
                         sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
                         free(order_expr);
@@ -823,7 +857,21 @@ return_star_done:
 }
 
 /* Transform an expression */
+static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr);
+
 int transform_expression(cypher_transform_context *ctx, ast_node *expr)
+{
+    /* Perf review F7: the WHERE-conjunct flag survives only through binary
+     * operators (AND keeps it, comparisons consume it, everything else
+     * drops it); any other node type ends the conjunct context. */
+    bool saved_wc = ctx->where_conjunct;
+    if (expr && expr->type != AST_NODE_BINARY_OP) ctx->where_conjunct = false;
+    int rc = transform_expression_inner(ctx, expr);
+    ctx->where_conjunct = saved_wc;
+    return rc;
+}
+
+static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr)
 {
     if (!expr) {
         return -1;
@@ -902,25 +950,14 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     if (!first_n) append_sql(ctx, ", ");
                                     first_n = false;
                                     if (!a) { append_sql(ctx, "null"); continue; }
-                                    append_sql(ctx,
-                                        "json_object("
-                                        "'id', %s.id, "
-                                        "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
-                                        "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                            "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
-                                            "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
-                                            "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
-                                            "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id), "
-                                            "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %s.id AND npj.key_id = pk.id))) "
-                                        "FROM property_keys pk WHERE "
-                                            "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM node_props_int  WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s.id AND key_id = pk.id)"
-                                        "), json('{}'))"
-                                        ")",
-                                        a, a, a, a, a, a, a, a, a, a, a, a);
+                                    {
+                                        char id_expr[300];
+                                        snprintf(id_expr, sizeof(id_expr), "%s.id", a);
+                                        char *nj = gql_sql_node_json_expr("", id_expr);
+                                        if (!nj) return -1;
+                                        append_sql(ctx, "%s", nj);
+                                        free(nj);
+                                    }
                                 }
                                 append_sql(ctx, "), 'rels', json_array(");
                                 bool first_r = true;
@@ -932,27 +969,17 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                     if (!first_r) append_sql(ctx, ", ");
                                     first_r = false;
                                     if (!a) { append_sql(ctx, "null"); continue; }
-                                    append_sql(ctx,
-                                        "json_object("
-                                        "'id', %s.id, "
-                                        "'type', %s.type, "
-                                        "'startNode', %s.source_id, "
-                                        "'endNode', %s.target_id, "
-                                        "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                            "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
-                                            "(SELECT epi.value FROM edge_props_int  epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
-                                            "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
-                                            "(SELECT json(CASE WHEN epb.value THEN 'true' ELSE 'false' END) FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id), "
-                                            "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = %s.id AND epj.key_id = pk.id))) "
-                                        "FROM property_keys pk WHERE "
-                                            "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM edge_props_int  WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                            "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = %s.id AND key_id = pk.id)"
-                                        "), json('{}'))"
-                                        ")",
-                                        a, a, a, a, a, a, a, a, a, a, a, a, a, a);
+                                    {
+                                        char id_e[300], ty_e[300], st_e[300], en_e[300];
+                                        snprintf(id_e, sizeof(id_e), "%s.id", a);
+                                        snprintf(ty_e, sizeof(ty_e), "%s.type", a);
+                                        snprintf(st_e, sizeof(st_e), "%s.source_id", a);
+                                        snprintf(en_e, sizeof(en_e), "%s.target_id", a);
+                                        char *ej = gql_sql_edge_json_expr("", id_e, ty_e, st_e, en_e);
+                                        if (!ej) return -1;
+                                        append_sql(ctx, "%s", ej);
+                                        free(ej);
+                                    }
                                 }
                                 append_sql(ctx, "))");
                             } else if (has_varlen && varlen_alias) {
@@ -1016,54 +1043,28 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                 /* Edge that passed through WITH - build relationship object */
                                 /* Note: After WITH, we only have the id, not type/source/target.
                                  * Guard for NULL (OPTIONAL miss carried across WITH). */
-                                append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE json_object("
-                                    "'id', %s, "
-                                    "'type', (SELECT type FROM edges WHERE id = %s), "
-                                    "'startNodeId', (SELECT source_id FROM edges WHERE id = %s), "
-                                    "'endNodeId', (SELECT target_id FROM edges WHERE id = %s), "
-                                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                        "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s AND ept.key_id = pk.id), "
-                                        "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s AND epi.key_id = pk.id), "
-                                        "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s AND epr.key_id = pk.id), "
-                                        "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s AND epb.key_id = pk.id), "
-                                        "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = %s AND epj.key_id = pk.id))) "
-                                    "FROM property_keys pk WHERE "
-                                        "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = %s AND key_id = pk.id)"
-                                    "), json('{}'))"
-                                ") END)",
-                                alias, alias, alias, alias, alias,
-                                alias, alias, alias, alias, alias,
-                                alias, alias, alias, alias, alias);
+                                {
+                                    char ty_e[400], st_e[400], en_e[400];
+                                    snprintf(ty_e, sizeof(ty_e), "(SELECT type FROM edges WHERE id = %s)", alias);
+                                    snprintf(st_e, sizeof(st_e), "(SELECT source_id FROM edges WHERE id = %s)", alias);
+                                    snprintf(en_e, sizeof(en_e), "(SELECT target_id FROM edges WHERE id = %s)", alias);
+                                    char *ej = gql_sql_edge_json_expr("", alias, ty_e, st_e, en_e);
+                                    if (!ej) return -1;
+                                    append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE %s END)", alias, ej);
+                                    free(ej);
+                                }
                             } else {
                                 /* Node that passed through WITH - build node object using id directly.
                                  * Guard for NULL (the id column can be NULL when the value came
                                  * through an OPTIONAL MATCH miss carried across WITH, e.g.
                                  * Match7 [27]); otherwise json_object('id', NULL, …) renders a
                                  * bogus non-null node instead of SQL NULL. */
-                                append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE json_object("
-                                    "'id', %s, "
-                                    "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s), json('[]')), "
-                                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                        "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s AND npt.key_id = pk.id), "
-                                        "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s AND npi.key_id = pk.id), "
-                                        "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s AND npr.key_id = pk.id), "
-                                        "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %s AND npb.key_id = pk.id), "
-                                        "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %s AND npj.key_id = pk.id))) "
-                                    "FROM property_keys pk WHERE "
-                                        "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s AND key_id = pk.id)"
-                                    "), json('{}'))"
-                                ") END)",
-                                alias, alias, alias,
-                                alias, alias, alias, alias, alias,
-                                alias, alias, alias, alias, alias);
+                                {
+                                    char *nj = gql_sql_node_json_expr("", alias);
+                                    if (!nj) return -1;
+                                    append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE %s END)", alias, nj);
+                                    free(nj);
+                                }
                             }
                         } else if (transform_var_is_edge(ctx->var_ctx, id->name)) {
                             /* T-0309: varlen-bound edge variable holds a path
@@ -1080,84 +1081,46 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                                  * empty array), but openCypher wants NULL for an
                                  * unmatched OPTIONAL relationship list
                                  * (Match9 [9]). */
-                                append_sql(ctx,
-                                  "(CASE WHEN %s.elem_ids IS NULL THEN NULL ELSE "
-                                  "(SELECT json_group_array(json_object("
-                                    "'id', e.id, "
-                                    "'type', e.type, "
-                                    "'startNodeId', e.source_id, "
-                                    "'endNodeId', e.target_id, "
-                                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                      "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = e.id AND ept.key_id = pk.id), "
-                                      "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = e.id AND epi.key_id = pk.id), "
-                                      "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = e.id AND epr.key_id = pk.id), "
-                                      "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = e.id AND epb.key_id = pk.id), "
-                                      "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = e.id AND epj.key_id = pk.id))) "
-                                      "FROM property_keys pk WHERE "
-                                        "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = e.id AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = e.id AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = e.id AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = e.id AND key_id = pk.id) OR "
-                                        "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = e.id AND key_id = pk.id)"
-                                      "), json('{}'))"
-                                  ") ORDER BY je.key) "
-                                  "FROM json_each('[' || %s.elem_ids || ']') je "
-                                  "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1) END)",
-                                  alias, alias);
+                                {
+                                    char *ej = gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
+                                    if (!ej) return -1;
+                                    append_sql(ctx,
+                                      "(CASE WHEN %s.elem_ids IS NULL THEN NULL ELSE "
+                                      "(SELECT json_group_array(%s ORDER BY je.key) "
+                                      "FROM json_each('[' || %s.elem_ids || ']') je "
+                                      "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1) END)",
+                                      alias, ej, alias);
+                                    free(ej);
+                                }
                                 goto edge_alias_projection_done;
                             }
                             /* Edge variable - return full relationship object,
                              * or NULL when the row came from an OPTIONAL MATCH
                              * miss (LEFT JOIN with no match → alias.id IS NULL). */
-                            append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_object("
-                                "'id', %s.id, "
-                                "'type', %s.type, "
-                                "'startNodeId', %s.source_id, "
-                                "'endNodeId', %s.target_id, "
-                                "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                    "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %s.id AND ept.key_id = pk.id), "
-                                    "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %s.id AND epi.key_id = pk.id), "
-                                    "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %s.id AND epr.key_id = pk.id), "
-                                    "(SELECT epb.value FROM edge_props_bool epb WHERE epb.edge_id = %s.id AND epb.key_id = pk.id), "
-                                    "(SELECT json(epj.value) FROM edge_props_json epj WHERE epj.edge_id = %s.id AND epj.key_id = pk.id))) "
-                                "FROM property_keys pk WHERE "
-                                    "EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM edge_props_json WHERE edge_id = %s.id AND key_id = pk.id)"
-                                "), json('{}'))"
-                            ") END)",
-                            alias,
-                            alias, alias, alias, alias,
-                            alias, alias, alias, alias, alias,
-                            alias, alias, alias, alias, alias);
+                            {
+                                char id_e[300], ty_e[300], st_e[300], en_e[300];
+                                snprintf(id_e, sizeof(id_e), "%s.id", alias);
+                                snprintf(ty_e, sizeof(ty_e), "%s.type", alias);
+                                snprintf(st_e, sizeof(st_e), "%s.source_id", alias);
+                                snprintf(en_e, sizeof(en_e), "%s.target_id", alias);
+                                char *ej = gql_sql_edge_json_expr("", id_e, ty_e, st_e, en_e);
+                                if (!ej) return -1;
+                                append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE %s END)", alias, ej);
+                                free(ej);
+                            }
                             edge_alias_projection_done: ;
                         } else {
                             /* This is a node variable - return full node object,
                              * or NULL when the row came from an OPTIONAL MATCH
                              * miss (LEFT JOIN with no match → alias.id IS NULL). */
-                            append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_object("
-                                "'id', %s.id, "
-                                "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %s.id), json('[]')), "
-                                "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                                    "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %s.id AND npt.key_id = pk.id), "
-                                    "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %s.id AND npi.key_id = pk.id), "
-                                    "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %s.id AND npr.key_id = pk.id), "
-                                    "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %s.id AND npb.key_id = pk.id), "
-                                    "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %s.id AND npj.key_id = pk.id))) "
-                                "FROM property_keys pk WHERE "
-                                    "EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %s.id AND key_id = pk.id) OR "
-                                    "EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %s.id AND key_id = pk.id)"
-                                "), json('{}'))"
-                            ") END)",
-                            alias,
-                            alias, alias,
-                            alias, alias, alias, alias, alias,
-                            alias, alias, alias, alias, alias);
+                            {
+                                char id_e[300];
+                                snprintf(id_e, sizeof(id_e), "%s.id", alias);
+                                char *nj = gql_sql_node_json_expr("", id_e);
+                                if (!nj) return -1;
+                                append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE %s END)", alias, nj);
+                                free(nj);
+                            }
                         }
                     } else {
                         /* Unknown identifier */
@@ -1525,24 +1488,14 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
                 if (has_all_props && base_alias) {
                     /* Use properties() function approach for n{.*} */
-                    append_sql(ctx, "(SELECT json_group_object(pk.key, COALESCE("
-                               "npt.value, "
-                               "npi.value, "
-                               "npr.value, "
-                               "CASE npb.value WHEN 1 THEN 'true' WHEN 0 THEN 'false' END, "
-                               "json(npj.value)"
-                               ")) FROM property_keys pk "
-                               "LEFT JOIN node_props_text npt ON npt.key_id = pk.id AND npt.node_id = %s%s "
-                               "LEFT JOIN node_props_int npi ON npi.key_id = pk.id AND npi.node_id = %s%s "
-                               "LEFT JOIN node_props_real npr ON npr.key_id = pk.id AND npr.node_id = %s%s "
-                               "LEFT JOIN node_props_bool npb ON npb.key_id = pk.id AND npb.node_id = %s%s "
-                               "LEFT JOIN node_props_json npj ON npj.key_id = pk.id AND npj.node_id = %s%s "
-                               "WHERE npt.value IS NOT NULL OR npi.value IS NOT NULL OR npr.value IS NOT NULL OR npb.value IS NOT NULL OR npj.value IS NOT NULL)",
-                               base_alias, is_projected ? "" : ".id",
-                               base_alias, is_projected ? "" : ".id",
-                               base_alias, is_projected ? "" : ".id",
-                               base_alias, is_projected ? "" : ".id",
-                               base_alias, is_projected ? "" : ".id");
+                    {
+                        char id_e[300];
+                        snprintf(id_e, sizeof(id_e), "%s%s", base_alias, is_projected ? "" : ".id");
+                        char *pe = gql_sql_props_expr("node", "node_id", "", id_e);
+                        if (!pe) return -1;
+                        append_sql(ctx, "%s", pe);
+                        free(pe);
+                    }
                 } else {
                     append_sql(ctx, "json_object(");
                     if (proj->items) {
@@ -1909,7 +1862,11 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 
                 /* Now we need to go back and fill in the collect expression */
                 /* Create a new buffer for the collect expression */
-                char collect_sql[4096];
+                /* Heap buffer: append_sql may realloc it when the collect
+                 * expression is large (e.g. several entity projections). */
+                size_t collect_cap = 4096;
+                char *collect_sql = malloc(collect_cap);
+                if (!collect_sql) return -1;
 
                 /* Save current buffer state */
                 char *temp_buffer = ctx->sql_buffer;
@@ -1919,17 +1876,19 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                 /* Switch to collect buffer */
                 ctx->sql_buffer = collect_sql;
                 ctx->sql_size = 0;
-                ctx->sql_capacity = sizeof(collect_sql);
+                ctx->sql_capacity = collect_cap;
 
                 /* Transform the collect expression */
                 if (transform_expression(ctx, comp->collect_expr) < 0) {
+                    free(ctx->sql_buffer);
                     ctx->sql_buffer = temp_buffer;
                     ctx->sql_size = temp_size;
                     ctx->sql_capacity = temp_capacity;
                     return -1;
                 }
 
-                /* Null terminate */
+                /* Null terminate (the buffer may have been grown) */
+                collect_sql = ctx->sql_buffer;
                 collect_sql[ctx->sql_size] = '\0';
 
                 /* Restore original buffer */
@@ -1961,6 +1920,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                         if (!new_buffer) {
                             ctx->has_error = true;
                             ctx->error_message = strdup("Out of memory expanding buffer for pattern comprehension");
+                            free(collect_sql);
                             return -1;
                         }
 
@@ -1981,6 +1941,7 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
                     /* Update size */
                     ctx->sql_size = new_size;
                 }
+                free(collect_sql);
 
                 /* Restore variable count (remove pattern-local variables) */
                 transform_var_truncate_to(ctx->var_ctx, saved_var_count);

@@ -12,7 +12,9 @@
 #include <ctype.h>
 
 #include "executor/query_patterns.h"
+#include "gql_thread_local.h"
 #include "executor/executor_internal.h"
+#include "entity_json_sql.h"
 #include "parser/cypher_debug.h"
 
 /* Check if a RETURN clause contains only COUNT aggregates and synthesize
@@ -142,7 +144,7 @@ bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
 /* Return lowercased agg-function name if expr is an aggregating call, else NULL.
  * Caller does NOT own the string (static buffer per call). */
 const char *aggregating_call_name(ast_node *expr) {
-    static char buf[64];
+    static GQL_THREAD_LOCAL char buf[64];
     if (!expr || expr->type != AST_NODE_FUNCTION_CALL) return NULL;
     cypher_function_call *fc = (cypher_function_call*)expr;
     if (!fc->function_name) return NULL;
@@ -452,23 +454,16 @@ void project_return_row_from_var_map(cypher_executor *executor,
             int node_id = get_variable_node_id(var_map, var_name);
             int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
             if (node_id >= 0) {
-                char sql[2048];
-                snprintf(sql, sizeof(sql),
-                    "SELECT json_object('id', %d, "
-                    "'labels', COALESCE((SELECT json_group_array(label) FROM node_labels WHERE node_id = %d), json('[]')), "
-                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                    "(SELECT npt.value FROM node_props_text npt WHERE npt.node_id = %d AND npt.key_id = pk.id), "
-                    "(SELECT npi.value FROM node_props_int npi WHERE npi.node_id = %d AND npi.key_id = pk.id), "
-                    "(SELECT npr.value FROM node_props_real npr WHERE npr.node_id = %d AND npr.key_id = pk.id), "
-                    "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb WHERE npb.node_id = %d AND npb.key_id = pk.id), "
-                    "(SELECT json(npj.value) FROM node_props_json npj WHERE npj.node_id = %d AND npj.key_id = pk.id))) "
-                    "FROM property_keys pk WHERE EXISTS (SELECT 1 FROM node_props_text WHERE node_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM node_props_int WHERE node_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM node_props_real WHERE node_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM node_props_bool WHERE node_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM node_props_json WHERE node_id = %d AND key_id = pk.id)), json('{}')))",
-                    node_id, node_id, node_id, node_id, node_id, node_id, node_id,
-                    node_id, node_id, node_id, node_id, node_id);
+                char *sql;
+                {
+                    char id_e[32];
+                    snprintf(id_e, sizeof(id_e), "%d", node_id);
+                    char *nj = gql_sql_node_json_expr("", id_e);
+                    if (!nj) continue;
+                    sql = sqlite3_mprintf("SELECT %s", nj);
+                    free(nj);
+                    if (!sql) continue;
+                }
                 sqlite3_stmt *stmt;
                 if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
                     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -480,24 +475,21 @@ void project_return_row_from_var_map(cypher_executor *executor,
                     }
                     sqlite3_finalize(stmt);
                 }
+                sqlite3_free(sql);
             } else if (edge_id >= 0) {
-                char sql[2048];
-                snprintf(sql, sizeof(sql),
-                    "SELECT json_object('id', %d, "
-                    "'type', (SELECT type FROM edges WHERE id = %d), "
-                    "'startNode', (SELECT source_id FROM edges WHERE id = %d), "
-                    "'endNode', (SELECT target_id FROM edges WHERE id = %d), "
-                    "'properties', COALESCE((SELECT json_group_object(pk.key, COALESCE("
-                    "(SELECT ept.value FROM edge_props_text ept WHERE ept.edge_id = %d AND ept.key_id = pk.id), "
-                    "(SELECT epi.value FROM edge_props_int epi WHERE epi.edge_id = %d AND epi.key_id = pk.id), "
-                    "(SELECT epr.value FROM edge_props_real epr WHERE epr.edge_id = %d AND epr.key_id = pk.id), "
-                    "(SELECT json(CASE WHEN epb.value THEN 'true' ELSE 'false' END) FROM edge_props_bool epb WHERE epb.edge_id = %d AND epb.key_id = pk.id))) "
-                    "FROM property_keys pk WHERE EXISTS (SELECT 1 FROM edge_props_text WHERE edge_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM edge_props_int WHERE edge_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM edge_props_real WHERE edge_id = %d AND key_id = pk.id) "
-                    "OR EXISTS (SELECT 1 FROM edge_props_bool WHERE edge_id = %d AND key_id = pk.id)), json('{}')))",
-                    edge_id, edge_id, edge_id, edge_id, edge_id, edge_id, edge_id, edge_id,
-                    edge_id, edge_id, edge_id, edge_id);
+                char *sql;
+                {
+                    char id_e[32], ty_e[96], st_e[96], en_e[96];
+                    snprintf(id_e, sizeof(id_e), "%d", edge_id);
+                    snprintf(ty_e, sizeof(ty_e), "(SELECT type FROM edges WHERE id = %d)", edge_id);
+                    snprintf(st_e, sizeof(st_e), "(SELECT source_id FROM edges WHERE id = %d)", edge_id);
+                    snprintf(en_e, sizeof(en_e), "(SELECT target_id FROM edges WHERE id = %d)", edge_id);
+                    char *ej = gql_sql_edge_json_expr("", id_e, ty_e, st_e, en_e);
+                    if (!ej) continue;
+                    sql = sqlite3_mprintf("SELECT %s", ej);
+                    free(ej);
+                    if (!sql) continue;
+                }
                 sqlite3_stmt *stmt;
                 if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
                     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -509,6 +501,7 @@ void project_return_row_from_var_map(cypher_executor *executor,
                     }
                     sqlite3_finalize(stmt);
                 }
+                sqlite3_free(sql);
             }
         } else if (expr && expr->type == AST_NODE_FUNCTION_CALL) {
             /* Handle entity-introspection functions on var_map entries:

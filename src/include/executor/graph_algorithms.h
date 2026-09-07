@@ -3,6 +3,8 @@
 
 #include "graphqlite_sqlite.h"
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include "parser/cypher_ast.h"
 
 /*
@@ -30,7 +32,67 @@ typedef struct csr_graph {
     /* For algorithms needing incoming edges (like PageRank) */
     int *in_row_ptr;      /* Size: node_count + 1. Incoming edge offsets */
     int *in_col_idx;      /* Size: edge_count. Source node IDs for incoming edges */
+
+    /* Perf review (smaller items): open-addressing hash from user id string
+     * to internal index, built at load, so dijkstra/astar/bfs/dfs/knn/
+     * nodeSimilarity endpoints cost O(1) instead of a strcmp scan of every
+     * node. -1 marks an empty slot. */
+    int *user_hash;
+    int user_hash_size;
 } csr_graph;
+
+static inline unsigned int csr_hash_str(const char *s)
+{
+    unsigned int h = 5381u;
+    while (*s) h = ((h << 5) + h) ^ (unsigned char)*s++;
+    return h;
+}
+
+/* O(1) lookup of a node's internal index by its user-defined id property.
+ * Falls back to a linear scan if the hash could not be built. */
+static inline int csr_find_user_id(const csr_graph *graph, const char *user_id)
+{
+    if (!graph || !graph->user_ids || !user_id) return -1;
+    if (graph->user_hash && graph->user_hash_size > 0) {
+        unsigned int mask = (unsigned int)graph->user_hash_size - 1u;
+        unsigned int h = csr_hash_str(user_id) & mask;
+        for (int probes = 0; probes < graph->user_hash_size; probes++) {
+            int idx = graph->user_hash[h];
+            if (idx < 0) return -1;
+            if (graph->user_ids[idx] && strcmp(graph->user_ids[idx], user_id) == 0) return idx;
+            h = (h + 1u) & mask;
+        }
+        return -1;
+    }
+    for (int i = 0; i < graph->node_count; i++) {
+        if (graph->user_ids[i] && strcmp(graph->user_ids[i], user_id) == 0) return i;
+    }
+    return -1;
+}
+
+/* Perf review F4: one sorted copy of col_idx, with each node's adjacency
+ * segment sorted ascending, so set operations on neighbour lists (Jaccard
+ * intersection/union) need no per-pair allocation or sort. Segment i is
+ * sorted[row_ptr[i] .. row_ptr[i+1]). Returns NULL when the graph has no
+ * edges (callers treat every degree as 0 in that case). Caller frees. */
+static inline int csr_cmp_int_asc(const void *a, const void *b)
+{
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
+
+static inline int *csr_sorted_col_idx(const csr_graph *graph)
+{
+    if (!graph || graph->edge_count <= 0 || !graph->col_idx) return NULL;
+    int *sorted = (int *)malloc((size_t)graph->edge_count * sizeof(int));
+    if (!sorted) return NULL;
+    memcpy(sorted, graph->col_idx, (size_t)graph->edge_count * sizeof(int));
+    for (int i = 0; i < graph->node_count; i++) {
+        int start = graph->row_ptr[i], deg = graph->row_ptr[i + 1] - start;
+        if (deg > 1) qsort(sorted + start, (size_t)deg, sizeof(int), csr_cmp_int_asc);
+    }
+    return sorted;
+}
 
 /* Graph algorithm result */
 typedef struct {

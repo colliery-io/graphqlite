@@ -200,7 +200,8 @@ EXECUTOR_OBJS_PIC = $(EXECUTOR_SRCS:$(EXECUTOR_DIR)/%.c=$(BUILD_EXECUTOR_DIR)/%.
 RUNTIME_DIR = $(SRC_DIR)/backend/runtime
 RUNTIME_SRCS = \
 	$(RUNTIME_DIR)/udf_helpers.c \
-	$(RUNTIME_DIR)/udf_register.c
+	$(RUNTIME_DIR)/udf_register.c \
+	$(RUNTIME_DIR)/cypher_rows_vtab.c
 
 RUNTIME_OBJS = $(RUNTIME_SRCS:$(RUNTIME_DIR)/%.c=$(BUILD_RUNTIME_DIR)/%.o)
 RUNTIME_OBJS_COV = $(RUNTIME_SRCS:$(RUNTIME_DIR)/%.c=$(BUILD_RUNTIME_DIR)/%.cov.o)

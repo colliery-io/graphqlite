@@ -147,9 +147,26 @@ graph_algo_result* execute_louvain(sqlite3 *db, csr_graph *cached, double resolu
         comm_info[i].size = 1;
     }
 
-    /* Phase 1: Local optimization */
+    /* Phase 1: Local optimization.
+     *
+     * Perf review F3: `neighbor_comms` is allocated once (not per node per
+     * iteration) and `k_i_in` is cleared only for the communities a node
+     * actually touched, so each local-move pass is O(E) instead of O(n^2).
+     * `k_i_in` starts all-zero from calloc and is restored to all-zero
+     * after every node, which is the invariant the scan below relies on. */
     int max_iterations = 100;
     int improved = 1;
+
+    int *neighbor_comms = malloc(n * sizeof(int));
+    if (!neighbor_comms) {
+        free(k);
+        free(community);
+        free(comm_info);
+        free(k_i_in);
+        if (should_free_graph) csr_graph_free(graph);
+        result->error_message = strdup("Failed to allocate working arrays");
+        return result;
+    }
 
     for (int iter = 0; iter < max_iterations && improved; iter++) {
         improved = 0;
@@ -157,19 +174,8 @@ graph_algo_result* execute_louvain(sqlite3 *db, csr_graph *cached, double resolu
         for (int i = 0; i < n; i++) {
             int current_comm = community[i];
 
-            /* Reset k_i_in for neighbor communities */
-            /* Calculate edges from i to each neighboring community */
-
             /* Collect unique neighboring communities and edges to them */
-            int *neighbor_comms = malloc(n * sizeof(int));
             int num_neighbor_comms = 0;
-
-            if (!neighbor_comms) continue;
-
-            /* Initialize */
-            for (int c = 0; c < n; c++) {
-                k_i_in[c] = 0.0;
-            }
 
             /* Count edges to each community (outgoing) */
             for (int j = graph->row_ptr[i]; j < graph->row_ptr[i + 1]; j++) {
@@ -241,9 +247,14 @@ graph_algo_result* execute_louvain(sqlite3 *db, csr_graph *cached, double resolu
                 improved = 1;
             }
 
-            free(neighbor_comms);
+            /* Restore the all-zero invariant for the entries touched above. */
+            for (int c = 0; c < num_neighbor_comms; c++) {
+                k_i_in[neighbor_comms[c]] = 0.0;
+            }
+            k_i_in[current_comm] = 0.0;
         }
     }
+    free(neighbor_comms);
 
     /* Renumber communities to be consecutive starting from 0 */
     int *comm_map = malloc(n * sizeof(int));

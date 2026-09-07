@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "transform/transform_validate.h"
+#include "gql_thread_local.h"
 #include "parser/cypher_ast.h"
 
 /* The error string we emit matches the openCypher TCK convention:
@@ -2086,7 +2087,7 @@ static const char *column_name_of(cypher_return_item *it)
         return ((cypher_identifier *)it->expr)->name;
     }
     if (it->expr->type == AST_NODE_PROPERTY) {
-        static char buf[256];
+        static GQL_THREAD_LOCAL char buf[256];
         cypher_property *p = (cypher_property *)it->expr;
         const char *base = (p->expr && p->expr->type == AST_NODE_IDENTIFIER)
             ? ((cypher_identifier *)p->expr)->name : "?";

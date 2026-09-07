@@ -22,7 +22,7 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("Executing MATCH+REMOVE query");
 
     /* Transform MATCH clause to get bound variables */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

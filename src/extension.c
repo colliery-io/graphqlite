@@ -25,6 +25,7 @@
 #include "parser/cypher_debug.h"
 #include "runtime/udf_register.h"
 #include "runtime/gql_error.h"
+#include "runtime/cypher_rows_vtab.h"
 
 /*
  * Define the sqlite3_api pointer with external linkage.
@@ -43,6 +44,21 @@ typedef struct {
     cypher_executor *executor;
     csr_graph *cached_graph;  /* Cached CSR graph for algorithm acceleration */
 } connection_cache;
+
+/* Return the connection's executor, creating it on first use, and keep
+ * its CSR-cache pointer in sync. Shared by cypher() and cypher_rows. */
+static cypher_executor *cache_get_executor(void *arg) {
+    connection_cache *cache = (connection_cache *)arg;
+    if (!cache) return NULL;
+    if (!cache->executor) {
+        CYPHER_DEBUG("Creating new executor for db=%p", (void*)cache->db);
+        cache->executor = cypher_executor_create(cache->db);
+        if (!cache->executor) return NULL;
+    }
+    cache->executor->cached_graph = cache->cached_graph;
+    cache->executor->cached_graph_slot = &cache->cached_graph;
+    return cache->executor;
+}
 
 /* Destructor called when database connection closes */
 static void connection_cache_destroy(void *data) {
@@ -98,35 +114,13 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
         }
     }
 
-    /* Get database connection from SQLite context */
-    sqlite3 *db = sqlite3_context_db_handle(context);
-
-    /* Get per-connection cache from user data */
+    /* Get per-connection cache from user data; the executor is created on
+     * first use and shared with the cypher_rows virtual table. */
     connection_cache *cache = (connection_cache *)sqlite3_user_data(context);
-    cypher_executor *executor = NULL;
-
-    if (cache && cache->executor) {
-        /* Reuse cached executor for this connection */
-        executor = cache->executor;
-        CYPHER_DEBUG("Reusing cached executor %p", (void*)executor);
-    } else {
-        /* First call - create new executor */
-        CYPHER_DEBUG("Creating new executor for db=%p", (void*)db);
-        executor = cypher_executor_create(db);
-        if (!executor) {
-            graphqlite_result_error(context, "Failed to create cypher executor", GQL_ERR_INTERNAL);
-            return;
-        }
-
-        /* Cache for reuse */
-        if (cache) {
-            cache->executor = executor;
-        }
-    }
-
-    /* Ensure executor has current cached graph reference */
-    if (cache) {
-        executor->cached_graph = cache->cached_graph;
+    cypher_executor *executor = cache_get_executor(cache);
+    if (!executor) {
+        graphqlite_result_error(context, "Failed to create cypher executor", GQL_ERR_INTERNAL);
+        return;
     }
 
     /* Execute query (with or without parameters) */
@@ -287,8 +281,9 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
             for (int row = 0; row < result->row_count; row++) {
                 for (int col = 0; col < result->column_count; col++) {
                     if (result->data[row][col]) {
-                        /* Account for possible JSON escaping (2x size for worst case) */
-                        buffer_size += strlen(result->data[row][col]) * 2 + 20;
+                        /* Account for JSON escaping: a control character expands
+                         * to a 6-byte \uXXXX sequence in the worst case */
+                        buffer_size += strlen(result->data[row][col]) * 6 + 20;
                     }
                 }
             }
@@ -368,13 +363,36 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             /* NaN sentinel (GQLITE-T-0340) — emit unquoted NaN. */
                             offset += snprintf(json_result + offset, buffer_size - offset, "NaN");
                         } else {
-                            /* String value - quote and escape */
+                            /* String value - quote and escape. Control
+                             * characters must be escaped too or the output is
+                             * not valid JSON (perf review C1: RETURN 'a\\nb' and
+                             * EXPLAIN output were unparseable). */
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");
                             while (*val) {
-                                if (*val == '"' || *val == '\\') {
-                                    if (offset < buffer_size) json_result[offset++] = '\\';
+                                unsigned char ch = (unsigned char)*val;
+                                const char *esc = NULL;
+                                char ubuf[8];
+                                switch (ch) {
+                                    case '"':  esc = "\\\""; break;
+                                    case '\\': esc = "\\\\"; break;
+                                    case '\n': esc = "\\n"; break;
+                                    case '\r': esc = "\\r"; break;
+                                    case '\t': esc = "\\t"; break;
+                                    case '\b': esc = "\\b"; break;
+                                    case '\f': esc = "\\f"; break;
+                                    default:
+                                        if (ch < 0x20) {
+                                            snprintf(ubuf, sizeof(ubuf), "\\u%04x", ch);
+                                            esc = ubuf;
+                                        }
+                                        break;
                                 }
-                                if (offset < buffer_size) json_result[offset++] = *val;
+                                if (esc) {
+                                    size_t elen = strlen(esc);
+                                    if (offset + elen < buffer_size) { memcpy(json_result + offset, esc, elen); offset += elen; }
+                                } else if (offset < buffer_size) {
+                                    json_result[offset++] = *val;
+                                }
                                 val++;
                             }
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");
@@ -488,6 +506,7 @@ static void gql_load_graph_func(sqlite3_context *context, int argc, sqlite3_valu
     /* Also update executor if it exists */
     if (cache->executor) {
         cache->executor->cached_graph = graph;
+        cache->executor->graph_dirty = false;
     }
 
     char response[256];
@@ -553,6 +572,7 @@ static void gql_reload_graph_func(sqlite3_context *context, int argc, sqlite3_va
     /* Also update executor if it exists */
     if (cache->executor) {
         cache->executor->cached_graph = graph;
+        cache->executor->graph_dirty = false;
     }
 
     int new_nodes = graph ? graph->node_count : 0;
@@ -627,6 +647,10 @@ int sqlite3_graphqlite_init(
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = graphqlite_register_helper_udfs(db);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  /* Perf review F10: cypher_rows table-valued interface */
+  rc = graphqlite_register_cypher_rows(db, cache_get_executor, cache);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "gql_load_graph", 0, SQLITE_UTF8, cache,

@@ -85,6 +85,33 @@ struct cypher_transform_context {
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;
 
+    /* Perf review F2: when generate_node_match consumes a node's first inline
+     * literal pair into the driving JOIN it nulls the pair's key. The pair's
+     * `SELECT node_id ...` fragment is remembered here, keyed by node alias,
+     * so a later variable-length CTE can still anchor at that node. */
+    char **anchor_aliases;
+    char **anchor_sqls;
+    int anchor_count;
+    int anchor_cap;
+
+    /* Perf review F6: per-statement cache of property key name -> id (per
+     * graph prefix), so property access filters on key_id directly instead
+     * of joining property_keys by name in every typed-table branch. */
+    char **pk_graphs;
+    char **pk_names;
+    int *pk_ids;
+    int pk_count;
+    int pk_cap;
+
+    /* Perf review F7: true only while transforming a top-level conjunct of a
+     * WHERE clause (the root expression and the operands of ANDs below it).
+     * There NULL and FALSE are equivalent, so `n.prop <op> literal` may be
+     * rewritten into an index-driven `id IN (SELECT ...)` without changing
+     * results; everywhere else (NOT, OR, CASE, RETURN, function args) the
+     * three-valued form is kept. transform_expression() clears it for any
+     * non-binary node; transform_binary_operation() keeps it only for AND. */
+    bool where_conjunct;
+
     /* T-0310: byte length of the CTE prefix that prepend_cte_to_sql
      * wrote at the start of sql_buffer. Zero if no CTE prefix was
      * prepended. Used by cypher_transform_query to know where the
@@ -135,6 +162,15 @@ struct cypher_query_result {
 
 /* Transform context management */
 cypher_transform_context* cypher_transform_create_context(sqlite3 *db);
+/* Perf review F8: the executor registers the helper UDFs once at creation;
+ * re-registering all of them per transform context cost ~10-20 us per
+ * query miss, so executor code passes register_udfs = false. */
+cypher_transform_context* cypher_transform_create_context_ex(sqlite3 *db, bool register_udfs);
+
+/* Perf review F6: resolve a property key to its property_keys.id at
+ * transform time (cached per context). Returns -1 when unknown; callers
+ * then keep the name join, which stays correct if the key is created later. */
+int cypher_transform_property_key_id(cypher_transform_context *ctx, const char *gprefix, const char *key);
 void cypher_transform_free_context(cypher_transform_context *ctx);
 
 /* T-0320 helpers — record/clear OPTIONAL-MATCH defer pairs. */
@@ -270,9 +306,12 @@ int register_parameter(cypher_transform_context *ctx, const char *name);
 int finalize_sql_generation(cypher_transform_context *ctx);
 
 /* Variable-length relationship SQL generation */
+/* anchor_ids_sql: optional `SELECT node_id ...` restricting the start node
+ * of every walk (NULL = unanchored). See build_anchor_ids_sql(). */
 int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                        const char *source_alias, const char *target_alias,
-                       const char *cte_name);
+                       const char *cte_name,
+                        const char *anchor_ids_sql);
 void prepend_cte_to_sql(cypher_transform_context *ctx);
 
 /* Result management */

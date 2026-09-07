@@ -80,6 +80,13 @@ void set_result_error(cypher_result *result, const char *error_msg);
 /* Helper to bind parameters from JSON to a prepared statement */
 int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json);
 
+/* Decode one JSON escape sequence from a parameter string. `*pp` points at the
+ * character after the backslash and is advanced past the sequence; the decoded
+ * UTF-8 bytes (at most 4) are written to `out` and their count returned.
+ * Handles \uXXXX and surrogate pairs, which json.dumps() emits for every
+ * non-ASCII character by default. */
+int gql_json_decode_escape(const char **pp, char *out);
+
 /* Helper to lookup a parameter value from JSON */
 int get_param_value(const char *params_json, const char *param_name,
                     property_type *out_type, property_value *out_value);

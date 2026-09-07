@@ -156,8 +156,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     }
 
     /* Build SQL query with parameterized values */
-    char sql[2048];
-    int offset = 0;
+    sqlite3_str *sqls = sqlite3_str_new(executor->db);
     param_binding bindings[MAX_BINDINGS];
     int bind_count = 0;
     /* Strings resolved from $parameters; must stay alive until after
@@ -165,7 +164,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     char *owned_strs[MAX_BINDINGS];
     int owned_count = 0;
 
-    offset += snprintf(sql + offset, sizeof(sql) - offset,
+    sqlite3_str_appendf(sqls,
                        "SELECT n.id FROM nodes n");
 
     /* Add label joins if specified - one join per label */
@@ -173,7 +172,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
         for (int li = 0; li < node_pattern->labels->count; li++) {
             const char *label = get_label_string(node_pattern->labels->items[li]);
             if (label && bind_count < MAX_BINDINGS) {
-                offset += snprintf(sql + offset, sizeof(sql) - offset,
+                sqlite3_str_appendf(sqls,
                                   " JOIN node_labels nl%d ON n.id = nl%d.node_id AND nl%d.label = ?",
                                   li, li, li);
                 bindings[bind_count].type = BIND_TEXT;
@@ -194,7 +193,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                     /* Resolve value from foreach context (e.g., item.id) */
                     char *resolved = resolve_foreach_value(executor, pair->value);
                     if (resolved && bind_count + 2 <= MAX_BINDINGS) {
-                        offset += snprintf(sql + offset, sizeof(sql) - offset,
+                        sqlite3_str_appendf(sqls,
                                           " JOIN node_props_text np%d ON n.id = np%d.node_id"
                                           " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
                                           " AND np%d.value = ?",
@@ -261,7 +260,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                     }
                     property_value_free(&pv);
                     if (!prop_table) continue;
-                    offset += snprintf(sql + offset, sizeof(sql) - offset,
+                    sqlite3_str_appendf(sqls,
                                       " JOIN %s np%d ON n.id = np%d.node_id"
                                       " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
                                       " AND np%d.value = ?",
@@ -282,7 +281,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                     switch (lit->literal_type) {
                         case LITERAL_STRING:
                             prop_table = "node_props_text";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " JOIN %s np%d ON n.id = np%d.node_id"
                                               " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
                                               " AND np%d.value = ?",
@@ -296,7 +295,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                             break;
                         case LITERAL_INTEGER:
                             prop_table = "node_props_int";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " JOIN %s np%d ON n.id = np%d.node_id"
                                               " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
                                               " AND np%d.value = ?",
@@ -310,7 +309,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                             break;
                         case LITERAL_DECIMAL:
                             prop_table = "node_props_real";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " JOIN %s np%d ON n.id = np%d.node_id"
                                               " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
                                               " AND np%d.value = ?",
@@ -324,7 +323,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                             break;
                         case LITERAL_BOOLEAN:
                             prop_table = "node_props_bool";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " JOIN %s np%d ON n.id = np%d.node_id"
                                               " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
                                               " AND np%d.value = ?",
@@ -344,13 +343,16 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
         }
     }
 
-    offset += snprintf(sql + offset, sizeof(sql) - offset, " LIMIT 1");
+    sqlite3_str_appendf(sqls, " LIMIT 1");
 
+    char *sql = sqlite3_str_finish(sqls);
+    if (!sql) return -1;
     CYPHER_DEBUG("MERGE find query: %s (with %d bound params)", sql, bind_count);
 
     /* Execute the query with bound parameters */
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("MERGE find query prepare failed: %s", sqlite3_errmsg(executor->db));
         for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
@@ -384,8 +386,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     }
 
     /* Build SQL query with parameterized values */
-    char sql[2048];
-    int offset = 0;
+    sqlite3_str *sqls = sqlite3_str_new(executor->db);
     param_binding bindings[MAX_BINDINGS];
     int bind_count = 0;
     /* Strings resolved from $parameters; must stay alive until after
@@ -398,19 +399,19 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
      * way, so match both orientations (Merge5 [12]/[13]). */
     bool undirected = rel_pattern && !rel_pattern->left_arrow && !rel_pattern->right_arrow;
     if (undirected) {
-        offset += snprintf(sql + offset, sizeof(sql) - offset,
+        sqlite3_str_appendf(sqls,
                            "SELECT e.id FROM edges e WHERE ((e.source_id = %d AND e.target_id = %d)"
                            " OR (e.source_id = %d AND e.target_id = %d))",
                            source_id, target_id, target_id, source_id);
     } else {
-        offset += snprintf(sql + offset, sizeof(sql) - offset,
+        sqlite3_str_appendf(sqls,
                            "SELECT e.id FROM edges e WHERE e.source_id = %d AND e.target_id = %d",
                            source_id, target_id);
     }
 
     /* Add type filter if specified - use parameter binding */
     if (type && bind_count < MAX_BINDINGS) {
-        offset += snprintf(sql + offset, sizeof(sql) - offset, " AND e.type = ?");
+        sqlite3_str_appendf(sqls, " AND e.type = ?");
         bindings[bind_count].type = BIND_TEXT;
         bindings[bind_count].value.text = type;
         bind_count++;
@@ -472,7 +473,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                     }
                     property_value_free(&pv);
                     if (!prop_table) continue;
-                    offset += snprintf(sql + offset, sizeof(sql) - offset,
+                    sqlite3_str_appendf(sqls,
                                       " AND EXISTS (SELECT 1 FROM %s ep%d"
                                       " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
                                       " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
@@ -493,7 +494,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                     switch (lit->literal_type) {
                         case LITERAL_STRING:
                             prop_table = "edge_props_text";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " AND EXISTS (SELECT 1 FROM %s ep%d"
                                               " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
                                               " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
@@ -507,7 +508,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                             break;
                         case LITERAL_INTEGER:
                             prop_table = "edge_props_int";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " AND EXISTS (SELECT 1 FROM %s ep%d"
                                               " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
                                               " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
@@ -521,7 +522,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                             break;
                         case LITERAL_DECIMAL:
                             prop_table = "edge_props_real";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " AND EXISTS (SELECT 1 FROM %s ep%d"
                                               " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
                                               " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
@@ -535,7 +536,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                             break;
                         case LITERAL_BOOLEAN:
                             prop_table = "edge_props_bool";
-                            offset += snprintf(sql + offset, sizeof(sql) - offset,
+                            sqlite3_str_appendf(sqls,
                                               " AND EXISTS (SELECT 1 FROM %s ep%d"
                                               " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
                                               " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND ep%d.value = ?)",
@@ -555,13 +556,16 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
         }
     }
 
-    offset += snprintf(sql + offset, sizeof(sql) - offset, " LIMIT 1");
+    sqlite3_str_appendf(sqls, " LIMIT 1");
 
+    char *sql = sqlite3_str_finish(sqls);
+    if (!sql) return -1;
     CYPHER_DEBUG("MERGE find edge query: %s (with %d bound params)", sql, bind_count);
 
     /* Execute the query with bound parameters */
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("MERGE find edge query prepare failed: %s", sqlite3_errmsg(executor->db));
         for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
@@ -1185,7 +1189,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
     CYPHER_DEBUG("Executing MATCH+MERGE query");
 
     /* Transform MATCH clause to get bound variables */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

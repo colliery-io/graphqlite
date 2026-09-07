@@ -10,37 +10,8 @@
 #include <string.h>
 #include "executor/graph_algorithms.h"
 
-/* Helper to get neighbors as a sorted array for efficient intersection */
-static int* get_neighbors_sorted(csr_graph *graph, int node_idx, int *count) {
-    int start = graph->row_ptr[node_idx];
-    int end = graph->row_ptr[node_idx + 1];
-    *count = end - start;
-
-    if (*count == 0) return NULL;
-
-    int *neighbors = malloc(*count * sizeof(int));
-    if (!neighbors) return NULL;
-
-    for (int i = 0; i < *count; i++) {
-        neighbors[i] = graph->col_idx[start + i];
-    }
-
-    /* Sort using insertion sort (typically small degree) */
-    for (int i = 1; i < *count; i++) {
-        int key = neighbors[i];
-        int j = i - 1;
-        while (j >= 0 && neighbors[j] > key) {
-            neighbors[j + 1] = neighbors[j];
-            j--;
-        }
-        neighbors[j + 1] = key;
-    }
-
-    return neighbors;
-}
-
 /* Compute intersection and union sizes of two sorted arrays */
-static void compute_intersection_union(int *a, int count_a, int *b, int count_b,
+static void compute_intersection_union(const int *a, int count_a, const int *b, int count_b,
                                         int *intersection, int *union_size) {
     int i = 0, j = 0;
     *intersection = 0;
@@ -64,29 +35,19 @@ static void compute_intersection_union(int *a, int count_a, int *b, int count_b,
     *union_size += (count_a - i) + (count_b - j);
 }
 
-/* Compute Jaccard similarity between source node and another node */
-static double jaccard_similarity(csr_graph *graph, int node_b,
-                                  int *neighbors_a, int count_a) {
-    int count_b;
-    int *neighbors_b = get_neighbors_sorted(graph, node_b, &count_b);
+/* Compute Jaccard similarity between two nodes using the pre-sorted
+ * adjacency (perf review F4: no per-candidate malloc/sort). */
+static double jaccard_similarity(const csr_graph *graph, const int *sorted, int node_a, int node_b) {
+    int start_a = graph->row_ptr[node_a], count_a = graph->row_ptr[node_a + 1] - start_a;
+    int start_b = graph->row_ptr[node_b], count_b = graph->row_ptr[node_b + 1] - start_b;
 
-    if (count_a == 0 && count_b == 0) {
-        return 0.0;
-    }
-
-    if (count_a == 0 || count_b == 0) {
-        if (neighbors_b) free(neighbors_b);
-        return 0.0;
-    }
+    if (count_a == 0 || count_b == 0 || !sorted) return 0.0;
 
     int intersection, union_size;
-    compute_intersection_union(neighbors_a, count_a, neighbors_b, count_b,
+    compute_intersection_union(sorted + start_a, count_a, sorted + start_b, count_b,
                                &intersection, &union_size);
 
-    free(neighbors_b);
-
     if (union_size == 0) return 0.0;
-
     return (double)intersection / (double)union_size;
 }
 
@@ -133,14 +94,8 @@ graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_
         return result;
     }
 
-    /* Find the source node index */
-    int source_idx = -1;
-    for (int i = 0; i < graph->node_count; i++) {
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], node_id) == 0) {
-            source_idx = i;
-            break;
-        }
-    }
+    /* Find the source node index (O(1) via the user-id hash) */
+    int source_idx = csr_find_user_id(graph, node_id);
 
     if (source_idx < 0) {
         result->success = true;
@@ -149,16 +104,15 @@ graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_
         return result;
     }
 
-    /* Get source node's neighbors once */
-    int source_count;
-    int *source_neighbors = get_neighbors_sorted(graph, source_idx, &source_count);
+    /* Sort every adjacency list once; each candidate is then a linear merge. */
+    int *sorted = csr_sorted_col_idx(graph);
 
     /* Compute similarity to all other nodes */
     neighbor_sim *similarities = malloc((graph->node_count - 1) * sizeof(neighbor_sim));
     if (!similarities) {
         result->success = false;
         result->error_message = strdup("Out of memory");
-        if (source_neighbors) free(source_neighbors);
+        free(sorted);
         if (should_free_graph) csr_graph_free(graph);
         return result;
     }
@@ -167,7 +121,7 @@ graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_
     for (int i = 0; i < graph->node_count; i++) {
         if (i == source_idx) continue;
 
-        double sim = jaccard_similarity(graph, i, source_neighbors, source_count);
+        double sim = jaccard_similarity(graph, sorted, source_idx, i);
 
         /* Only include nodes with non-zero similarity */
         if (sim > 0.0) {
@@ -177,7 +131,7 @@ graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_
         }
     }
 
-    if (source_neighbors) free(source_neighbors);
+    free(sorted);
 
     /* Sort by similarity descending */
     if (sim_count > 0) {

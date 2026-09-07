@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "executor/query_patterns.h"
+#include "gql_thread_local.h"
 #include "executor/executor_internal.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
@@ -548,7 +549,7 @@ const query_pattern *get_pattern_registry(void)
  */
 const char *clause_flags_to_string(clause_flags flags)
 {
-    static char buffer[256];
+    static GQL_THREAD_LOCAL char buffer[256];
     buffer[0] = '\0';
 
     if (flags == CLAUSE_NONE) {
@@ -607,6 +608,14 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Matched pattern: %s (priority %d)", pattern->name, pattern->priority);
 
+    /* Perf review F8: only the pure read handlers may park their statement
+     * for the cache; anything else (writes, CALL, algorithms) runs with
+     * capture disarmed so a nested read cannot be mis-associated with the
+     * outer query's text. */
+    if (pattern->handler != handle_match_return && pattern->handler != handle_generic_transform) {
+        executor->stmt_capture = false;
+    }
+
     /* Execute the pattern handler */
     return pattern->handler(executor, query, result, flags);
 }
@@ -622,7 +631,7 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Using generic transform pipeline");
 
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -719,8 +728,19 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
     }
 
     result->success = true;
+    /* Perf review F8: park a pure read (RETURN, no pre-exec DML) for the
+     * statement cache instead of finalizing it. */
+    if (executor->stmt_capture && !executor->captured_stmt && transform_result->stmt &&
+        !transform_result->pre_exec_dml && find_return_clause(query)) {
+        sqlite3_reset(transform_result->stmt);
+        executor->captured_stmt = transform_result->stmt;
+        executor->captured_ctx = ctx;
+        executor->captured_ret = find_return_clause(query);
+        transform_result->stmt = NULL;
+        ctx = NULL;
+    }
     cypher_free_result(transform_result);
-    cypher_transform_free_context(ctx);
+    if (ctx) cypher_transform_free_context(ctx);
     return 0;
 }
 
@@ -1883,6 +1903,17 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
     graph_algo_params algo_params = detect_graph_algorithm(ret, executor->params_json);
     if (algo_params.type != GRAPH_ALGO_NONE) {
         graph_algo_result *algo_result = NULL;
+
+        /* A CSR graph loaded before a write is stale: rebuild it in place so
+         * gql_load_graph() callers keep seeing current data. */
+        if (executor->cached_graph && executor->graph_dirty && executor->cached_graph_slot) {
+            CYPHER_DEBUG("Cached graph is stale after a write; reloading");
+            csr_graph_free(executor->cached_graph);
+            csr_graph *fresh = csr_graph_load(executor->db);
+            *executor->cached_graph_slot = fresh;
+            executor->cached_graph = fresh;
+            executor->graph_dirty = false;
+        }
 
         switch (algo_params.type) {
             case GRAPH_ALGO_PAGERANK:
