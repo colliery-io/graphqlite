@@ -4,9 +4,18 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.8.0] — 2026-09-07
 
-### Performance (phase 1 of the performance review, Metis GQLITE-I-0051)
+A performance release implementing all ten findings of the performance review
+(Metis initiative GQLITE-I-0051, PR #119). Query results, TCK pass count and
+the `cypher()` output format are unchanged; the release adds one SQL surface,
+the `cypher_rows` table-valued function, and its binding wrappers. Headline
+numbers (release builds, 10K–20K nodes): parameterised point lookups
+7.75 ms → 0.07 ms, anchored variable-length paths 1.3 s → 0.35 ms, Louvain
+1.5 s → 0.17 s, `RETURN n` over 20K nodes 409 ms → 89 ms, repeated point
+queries 66 µs → 8 µs, `CREATE` 81 µs → 14.5 µs.
+
+### Performance (performance review, Metis GQLITE-I-0051)
 
 - **Parameterized inline property matches use the value indexes** (F1).
   `MATCH (n {id: $id})` compiled to four correlated `EXISTS` subqueries that
