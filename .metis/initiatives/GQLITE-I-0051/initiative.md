@@ -4,17 +4,17 @@ level: initiative
 title: "Performance review implementation (PR #118) — read path, varlen, algorithms, write path, result memory"
 short_code: "GQLITE-I-0051"
 created_at: 2026-09-07T01:22:08.248029+00:00
-updated_at: 2026-09-07T01:47:19.489253+00:00
+updated_at: 2026-09-07T13:15:00.000000+00:00
 parent: GQLITE-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/active"
+  - "#phase/completed"
 
 
-exit_criteria_met: false
+exit_criteria_met: true
 estimated_complexity: L
 initiative_id: performance-review-implementation
 ---
@@ -444,3 +444,33 @@ parameterized queries, varlen paths, Louvain, or memory.
 - 2026-09-07: phases 1-3 implemented on `perf/review-phase1` (PR #119): F1-F9 + C1 + H1 + user-id hash. F10 designed as ADR [[GQLITE-A-0006]]; implementation is a separate initiative. A Linux/Windows-only segfault (uninitialised agtype cells from F5) went unnoticed for four pushes because macOS zeroes fresh allocations; fixed in 512fc29 and the Python suite is now also run under MallocScribble locally. Remaining review items not done: flat per-row allocations in cypher_result, shared static buffers in the transform layer (thread-safety), fixed char sql[] truncation, direct-mapped property_key_cache, params-as-literal index comparisons (F7), stale CSR cache across writes.
 
 - 2026-09-07 (later): F10 implemented (T-0366 completed) and the review's smaller items landed on the same PR: chained property-key cache (was replace-on-collision), CSR cache rebuilt before the next algorithm call after a write (`graph_dirty` + owner slot pointer on the executor), thread-local static scratch buffers (`GQL_THREAD_LOCAL`), heap-built SQL in place of fixed `char sql[2048..8192]` buffers (SET-with-function, MERGE lookups, CALL subquery evaluation, aggregation JOINs, entity refetch) and two stack arrays that were handed to the growable `append_sql` API (pattern-comprehension collect buffer, CALL evaluation scratch). Deliberately not done: flattening the per-row `strdup` copies in `build_query_results` (three small allocations per row; not measurable next to F5–F9). Remaining open item from the review: F10 phase B (row-at-a-time stepping inside the virtual table). Local matrix: CUnit 951/951, functional clean, Python 417 (MallocScribble), Rust 304 + clippy/fmt, CLI 19/19, TCK 3788 unchanged, golden entity diff clean.
+
+## Closed — released as v0.8.0 (2026-09-07)
+
+Merged as #119 (squash 184508f on main) and tagged v0.8.0. All twelve tasks
+(T-0357..T-0368) are completed.
+
+Delivered: findings F1-F10 plus the JSON-escaping correctness item, the
+review's smaller items (chained property-key cache, CSR cache rebuilt after
+writes, thread-local scratch buffers, heap-built SQL replacing fixed
+`char sql[N]` buffers, O(1) user-id lookup for algorithm endpoints), and the
+three correctness bugs the review turned up along the way: `\uXXXX` escapes
+in parameters were not decoded (so every non-ASCII parameter from the Python
+binding was corrupted), control characters were replaced by a space on the
+scalar read path, and `ORDER BY` on a RETURN alias shadowing one of our own
+column names sorted by the base-table column instead of the projection.
+
+Deliberately not done: flattening the per-row `strdup` copies in
+`build_query_results` (three small allocations per row, not measurable next
+to F5-F9).
+
+Open follow-up, tracked on ADR GQLITE-A-0006: F10 phase B, stepping the
+underlying statement inside the `cypher_rows` virtual table rather than
+materialising the result in C first. Phase A already cuts peak RSS growth on
+a 50K-node `MATCH (n) RETURN n` from 51 MB to 8 MB; phase B is what makes
+end-to-end time drop as well.
+
+Final state: CUnit 951/951, functional clean, Python 447 under
+MallocScribble, Rust 304 with clippy and fmt clean, CLI 19/19, TCK 3788
+unchanged throughout, 26-query golden entity diff clean, and all 17 CI jobs
+green on the merge commit.
