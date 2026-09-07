@@ -82,7 +82,18 @@ struct cypher_executor {
     struct cypher_transform_context *captured_ctx;
     sqlite3_stmt *captured_stmt;
     struct cypher_return *captured_ret;
+
+    /* Indirection handed to the SQLITE_TRACE_CLOSE hook. The executor and
+     * the connection can be destroyed in either order (tests free the
+     * executor first; the extension frees it from the close path), so the
+     * hook must never dereference a freed executor: freeing the executor
+     * clears trace_ctx->ex, and the hook frees trace_ctx when it fires. */
+    struct executor_trace_ctx *trace_ctx;
 };
+
+typedef struct executor_trace_ctx {
+    cypher_executor *ex;
+} executor_trace_ctx;
 
 /* Finalize every cached statement (called from the SQLITE_TRACE_CLOSE hook
  * before SQLite's unfinalized-statement check, and from executor free). */

@@ -43,3 +43,4 @@ Source: the review findings section of [[GQLITE-I-0051]] (originally PR #118).
 ## Status Updates **[REQUIRED]**
 
 - 2026-09-06: created from the review; not started (phase 2+).
+- 2026-09-07: design written as ADR [[GQLITE-A-0006]] (eponymous virtual table `cypher_rows`, streaming one row at a time, reusing the F8 statement cache, `cypher()` kept as compatibility surface). Not implemented in PR #119 per the review's recommendation to design first.

@@ -217,7 +217,14 @@ void cypher_executor_release_statements(cypher_executor *executor)
 static int executor_trace_close_cb(unsigned type, void *arg, void *p, void *x)
 {
     (void)p; (void)x;
-    if (type == SQLITE_TRACE_CLOSE) cypher_executor_release_statements((cypher_executor *)arg);
+    if (type != SQLITE_TRACE_CLOSE) return 0;
+    executor_trace_ctx *tc = (executor_trace_ctx *)arg;
+    if (!tc) return 0;
+    if (tc->ex) {
+        cypher_executor_release_statements(tc->ex);
+        tc->ex->trace_ctx = NULL;     /* the executor must not touch tc again */
+    }
+    free(tc);
     return 0;
 }
 
@@ -283,7 +290,13 @@ cypher_executor* cypher_executor_create(sqlite3 *db)
         executor->stmt_cache = calloc(GQL_STMT_CACHE_MAX, sizeof(stmt_cache_entry));
         if (!executor->stmt_cache) executor->stmt_cache_enabled = false;
         if (executor->stmt_cache_enabled) {
-            sqlite3_trace_v2(db, SQLITE_TRACE_CLOSE, executor_trace_close_cb, executor);
+            executor->trace_ctx = calloc(1, sizeof(executor_trace_ctx));
+            if (executor->trace_ctx) {
+                executor->trace_ctx->ex = executor;
+                sqlite3_trace_v2(db, SQLITE_TRACE_CLOSE, executor_trace_close_cb, executor->trace_ctx);
+            } else {
+                executor->stmt_cache_enabled = false;
+            }
         }
     }
 
@@ -317,6 +330,9 @@ void cypher_executor_free(cypher_executor *executor)
     cypher_executor_release_statements(executor);
     stmt_cache_clear(executor);
     free(executor->stmt_cache);
+    /* Detach from the close hook; the hook frees trace_ctx when it fires
+     * (or it is leaked harmlessly if the connection is never closed). */
+    if (executor->trace_ctx) executor->trace_ctx->ex = NULL;
     if (executor->captured_stmt) sqlite3_finalize(executor->captured_stmt);
     if (executor->captured_ctx) cypher_transform_free_context(executor->captured_ctx);
 

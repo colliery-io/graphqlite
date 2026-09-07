@@ -441,3 +441,4 @@ the text path needs the same treatment.
 Re-run `tests/performance/python/sweep.sh` after each phase; the
 `RESULTS.md` bash suite depends on the `sqlite3` CLI and does not cover
 parameterized queries, varlen paths, Louvain, or memory.
+- 2026-09-07: phases 1-3 implemented on `perf/review-phase1` (PR #119): F1-F9 + C1 + H1 + user-id hash. F10 designed as ADR [[GQLITE-A-0006]]; implementation is a separate initiative. A Linux/Windows-only segfault (uninitialised agtype cells from F5) went unnoticed for four pushes because macOS zeroes fresh allocations; fixed in 512fc29 and the Python suite is now also run under MallocScribble locally. Remaining review items not done: flat per-row allocations in cypher_result, shared static buffers in the transform layer (thread-safety), fixed char sql[] truncation, direct-mapped property_key_cache, params-as-literal index comparisons (F7), stale CSR cache across writes.

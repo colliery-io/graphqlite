@@ -77,6 +77,11 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   µs per operation: `CREATE (n:Person {4 props})` 81 → 14.5 (raw SQL 8.8),
   `MERGE` 66 → 29, `SET` 43 → 23, `UNWIND $rows CREATE` 5.6 → 2.4 per row.
 
+- **O(1) endpoint lookup for graph algorithms.** `dijkstra`, `astar`, `bfs`,
+  `dfs`, `knn` and the pair form of `nodeSimilarity` resolved user ids with a
+  string scan of every node; the CSR graph now carries a hash from user id to
+  index built at load.
+
 ### Fixed
 
 - **Rust binding re-extracts the bundled extension when its content changes.**
