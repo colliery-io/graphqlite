@@ -29,14 +29,7 @@ static inline int hash_int(int key, int size)
 /* Find internal node index by user-defined ID property */
 static inline int find_node_by_user_id(csr_graph *graph, const char *user_id)
 {
-    if (!graph->user_ids || !user_id) return -1;
-
-    for (int i = 0; i < graph->node_count; i++) {
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], user_id) == 0) {
-            return i;
-        }
-    }
-    return -1;
+    return csr_find_user_id(graph, user_id);
 }
 
 /*

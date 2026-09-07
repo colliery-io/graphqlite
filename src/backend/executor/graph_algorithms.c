@@ -36,7 +36,33 @@ void csr_graph_free(csr_graph *graph)
     free(graph->node_idx);
     free(graph->in_row_ptr);
     free(graph->in_col_idx);
+    free(graph->user_hash);
     free(graph);
+}
+
+/* Build the user-id -> index hash (perf review). Best effort: on OOM the
+ * lookups fall back to a linear scan. */
+static void csr_build_user_hash(csr_graph *graph)
+{
+    if (!graph || !graph->user_ids || graph->node_count <= 0) return;
+    int size = 16;
+    while (size < graph->node_count * 2) size <<= 1;
+    int *table = malloc((size_t)size * sizeof(int));
+    if (!table) return;
+    for (int i = 0; i < size; i++) table[i] = -1;
+    unsigned int mask = (unsigned int)size - 1u;
+    for (int i = 0; i < graph->node_count; i++) {
+        if (!graph->user_ids[i]) continue;
+        unsigned int h = csr_hash_str(graph->user_ids[i]) & mask;
+        while (table[h] >= 0) {
+            /* keep the first node for a duplicated user id */
+            if (strcmp(graph->user_ids[table[h]], graph->user_ids[i]) == 0) break;
+            h = (h + 1u) & mask;
+        }
+        if (table[h] < 0) table[h] = i;
+    }
+    graph->user_hash = table;
+    graph->user_hash_size = size;
 }
 
 /* Load graph from SQLite into CSR format */
@@ -148,6 +174,7 @@ csr_graph* csr_graph_load(sqlite3 *db)
                 }
             }
             sqlite3_finalize(stmt);
+            csr_build_user_hash(graph);
         }
     }
 

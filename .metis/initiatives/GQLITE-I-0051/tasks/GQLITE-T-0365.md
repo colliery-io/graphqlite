@@ -4,14 +4,14 @@ level: task
 title: "F9: CREATE compiles 26 statements per node — known-new flag and schema-manager prepared statements"
 short_code: "GQLITE-T-0365"
 created_at: 2026-09-07T01:25:14.572139+00:00
-updated_at: 2026-09-07T11:18:43.047615+00:00
+updated_at: 2026-09-07T11:19:20.192984+00:00
 parent: GQLITE-I-0051
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -27,6 +27,8 @@ initiative_id: GQLITE-I-0051
 ## Objective **[REQUIRED]**
 
 Perf review finding 9: CREATE issues ~26 prepare/finalize pairs per 4-property node (109 us vs 14 us raw SQL). `cypher_schema_set_node_property` deletes the key from all five typed tables before every insert; `cypher_schema_create_node` uses `sqlite3_exec`.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

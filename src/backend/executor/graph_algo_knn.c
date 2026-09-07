@@ -94,14 +94,8 @@ graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_
         return result;
     }
 
-    /* Find the source node index */
-    int source_idx = -1;
-    for (int i = 0; i < graph->node_count; i++) {
-        if (graph->user_ids[i] && strcmp(graph->user_ids[i], node_id) == 0) {
-            source_idx = i;
-            break;
-        }
-    }
+    /* Find the source node index (O(1) via the user-id hash) */
+    int source_idx = csr_find_user_id(graph, node_id);
 
     if (source_idx < 0) {
         result->success = true;

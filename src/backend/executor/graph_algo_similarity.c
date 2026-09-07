@@ -119,17 +119,9 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, csr_graph *cached, const
 
     /* Case 1: Specific pair requested */
     if (node1_id && node2_id) {
-        int idx1 = -1, idx2 = -1;
-
-        /* Find node indices */
-        for (int i = 0; i < graph->node_count; i++) {
-            if (graph->user_ids[i] && strcmp(graph->user_ids[i], node1_id) == 0) {
-                idx1 = i;
-            }
-            if (graph->user_ids[i] && strcmp(graph->user_ids[i], node2_id) == 0) {
-                idx2 = i;
-            }
-        }
+        /* Find node indices (O(1) via the user-id hash) */
+        int idx1 = csr_find_user_id(graph, node1_id);
+        int idx2 = csr_find_user_id(graph, node2_id);
 
         if (idx1 < 0 || idx2 < 0) {
             result->success = true;

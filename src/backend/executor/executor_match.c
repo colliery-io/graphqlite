@@ -395,7 +395,9 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
         }
         
         if (has_agtype_values) {
-            result->agtype_data[current_row] = malloc(column_count * sizeof(agtype_value*));
+            /* calloc: a NULL cell means "render result->data verbatim"
+             * (entity JSON pass-through, perf review F5). */
+            result->agtype_data[current_row] = calloc(column_count, sizeof(agtype_value*));
             if (!result->agtype_data[current_row]) {
                 set_result_error(result, "Memory allocation failed for agtype row data");
                 return -1;
@@ -453,6 +455,7 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                             if (_evar && _evar->cte_name && value[0] == '[') {
                                 /* No agtype conversion — text result will be
                                  * rendered as the JSON array. */
+                                result->agtype_data[current_row][col] = NULL;
                             } else
                             /* Perf review F5: the SQL already emitted the final
                              * edge JSON; leave the agtype cell NULL so the
@@ -461,6 +464,7 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                              * it again (~300 mallocs per row). */
                             if (value[0] == '{') {
                                 /* verbatim pass-through */
+                                result->agtype_data[current_row][col] = NULL;
                             } else {
                                 /* Legacy path: value is just an edge ID */
                                 int64_t edge_id = atoll(value);
@@ -497,6 +501,7 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                              * through verbatim (see the edge case above). */
                             if (value[0] == '{') {
                                 /* verbatim pass-through */
+                                result->agtype_data[current_row][col] = NULL;
                             } else {
                                 /* Legacy path: value is just a node ID */
                                 int64_t node_id = atoll(value);
