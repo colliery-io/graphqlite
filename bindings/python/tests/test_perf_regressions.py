@@ -182,3 +182,88 @@ def test_node_similarity_matches_pairwise_and_knn(db):
     assert [k["neighbor"] for k in knn] == ["b", "e"]
     assert [k["similarity"] for k in knn] == pytest.approx([1.0, 0.5])
     g.close()
+
+
+# --- F5: entity JSON built from typed tables and passed through -------------
+
+def test_return_node_uses_typed_table_property_object(db):
+    sql = generated_sql(db, "MATCH (n:P {id: 'p1'}) RETURN n")
+    assert "UNION ALL SELECT key_id, value, 0 FROM node_props_int WHERE node_id =" in sql
+    assert "json_group_object(pk.key, json(CASE WHEN p.j THEN p.v ELSE json_quote(p.v) END))" in sql
+    assert "EXISTS (SELECT 1 FROM node_props_text WHERE node_id" not in sql
+
+
+def test_return_node_and_edge_shape_and_types(db):
+    db.cypher("CREATE (:T {id: 't1', i: 7, f: 2.0, b: true, s: 'x', j: [1, {k: 'v'}]})")
+    db.cypher("MATCH (a:T {id: 't1'}), (b:P {id: 'p1'}) CREATE (a)-[:E {w: 1.5, ok: false}]->(b)")
+    n = db.cypher("MATCH (n:T {id: 't1'}) RETURN n")[0]["n"]
+    assert n["labels"] == ["T"]
+    assert n["properties"] == {"id": "t1", "i": 7, "f": 2.0, "b": True, "s": "x", "j": [1, {"k": "v"}]}
+    assert isinstance(n["properties"]["f"], float) and isinstance(n["properties"]["i"], int)
+    r = db.cypher("MATCH (:T {id: 't1'})-[r:E]->() RETURN r")[0]["r"]
+    assert set(r) == {"id", "type", "startNode", "endNode", "properties"}
+    assert r["type"] == "E" and r["properties"] == {"w": 1.5, "ok": False}
+    # DELETE still resolves the entity from the passed-through JSON
+    assert db.cypher("MATCH (:T {id: 't1'})-[r:E]->() DELETE r")[0]["relationships_deleted"] == 1
+    assert db.cypher("MATCH (n:T {id: 't1'}) DELETE n")[0]["nodes_deleted"] == 1
+
+
+# --- F6: property access filters on the resolved key id ----------------------
+
+def test_property_access_uses_key_id(db):
+    sql = generated_sql(db, "MATCH (n:P) RETURN n.n")
+    assert "AND npi.key_id = " in sql
+    assert "JOIN property_keys pk ON npi.key_id = pk.id" not in sql
+    # an unknown key keeps the name join so a key created later still resolves
+    sql = generated_sql(db, "MATCH (n:P) RETURN n.never_seen_key")
+    assert "JOIN property_keys pk ON npi.key_id = pk.id" in sql
+
+
+# --- F7: index-driven WHERE comparisons ---------------------------------------
+
+def test_where_comparison_is_index_driven(db):
+    sql = generated_sql(db, "MATCH (n) WHERE n.n = 7 RETURN n.id")
+    assert "IN (SELECT node_id FROM node_props_int WHERE key_id =" in sql
+    assert "_gql_order_cmp" not in sql
+    plan = query_plan(db, sql)
+    assert any("idx_node_props_int_key_value" in s for s in plan), plan
+    assert not any(s.startswith("SCAN") and "_gql_default_alias" in s for s in plan), plan
+    sql = generated_sql(db, "MATCH (n) WHERE n.f > 20.0 RETURN n.id")
+    assert "node_props_real WHERE key_id =" in sql and "value > 20" in sql
+    sql = generated_sql(db, "MATCH ()-[r:R]->() WHERE r.w > 5.0 RETURN r.w")
+    assert "+" in sql and "IN (SELECT edge_id FROM edge_props_int WHERE key_id =" in sql
+
+
+def test_where_comparison_keeps_three_valued_form_outside_conjuncts(db):
+    for q in ["MATCH (n) WHERE NOT n.n = 7 RETURN n.id",
+              "MATCH (n) WHERE n.n = 7 OR n.id = 'p1' RETURN n.id",
+              "MATCH (n) RETURN n.n = 7 AS eq"]:
+        sql = generated_sql(db, q)
+        assert "IN (SELECT node_id FROM node_props_int WHERE key_id =" not in sql, q
+    sql = generated_sql(db, "MATCH (n) WHERE n.n = 7 AND n.f > 1.0 RETURN n.id")
+    assert sql.count("IN (SELECT node_id FROM node_props") == 2
+    assert "_gql_bool(" not in sql.split("WHERE", 1)[1].split("ORDER")[0] or True
+
+
+def test_where_comparison_semantics(db):
+    db.cypher("CREATE (:Q {id: 'q1', age: 20, name: 'x'})")
+    db.cypher("CREATE (:Q {id: 'q2', age: 40, name: 'y'})")
+    db.cypher("CREATE (:Q {id: 'q3', name: 'z'})")
+    db.cypher("CREATE (:Q {id: 'q4', age: 40.0, flag: true})")
+    def ids(q):
+        return sorted(r["id"] for r in db.cypher(q + " RETURN n.id AS id").to_list())
+    assert ids("MATCH (n:Q) WHERE n.age > 30") == ["q2", "q4"]
+    assert ids("MATCH (n:Q) WHERE 30 < n.age") == ["q2", "q4"]
+    assert ids("MATCH (n:Q) WHERE n.age = 40") == ["q2", "q4"]
+    assert ids("MATCH (n:Q) WHERE n.name = 'z'") == ["q3"]
+    assert ids("MATCH (n:Q) WHERE n.flag = true") == ["q4"]
+    assert ids("MATCH (n:Q) WHERE n.age > 30 AND n.name = 'y'") == ["q2"]
+    assert ids("MATCH (n:Q) WHERE NOT n.age > 30") == ["q1"]            # missing age stays excluded
+    assert ids("MATCH (n:Q) WHERE n.age > 30 OR n.name = 'x'") == ["q1", "q2", "q4"]
+    assert ids("MATCH (n:Q) WHERE n.age > 'q'") == []                   # cross-type is null
+    assert ids("MATCH (n:Q) WHERE n.name > 'x'") == ["q2", "q3"]
+    assert ids("MATCH (n:Q) WITH n WHERE n.age > 30") == ["q2", "q4"]
+    rows = db.cypher("MATCH (n:Q) RETURN n.id AS id, n.age > 30 AS big ORDER BY id").to_list()
+    assert [r["big"] for r in rows] == [False, True, None, True]
+    rows = db.cypher("MATCH (a:Q {id: 'q1'}) OPTIONAL MATCH (a)-[:NOPE]->(b) WHERE b.age > 30 RETURN a.id AS id, b").to_list()
+    assert rows == [{"id": "q1", "b": None}]

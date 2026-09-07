@@ -627,8 +627,12 @@ handle_where_clause:
             ctx->sql_buffer[0] = '\0';
         }
 
-        /* Transform the WHERE expression - appends to sql_buffer */
-        if (transform_expression(ctx, match->where) < 0) {
+        /* Transform the WHERE expression - appends to sql_buffer.
+         * Perf review F7: the root is a top-level conjunct. */
+        ctx->where_conjunct = true;
+        int where_rc = transform_expression(ctx, match->where);
+        ctx->where_conjunct = false;
+        if (where_rc < 0) {
             free(saved_buffer);
             return -1;
         }
@@ -2879,8 +2883,11 @@ int transform_where_clause(cypher_transform_context *ctx, ast_node *where)
                      binop->right ? ast_node_type_name(binop->right->type) : "NULL");
     }
     
-    /* Transform the WHERE expression - caller handles WHERE/AND keywords */
+    /* Transform the WHERE expression - caller handles WHERE/AND keywords.
+     * Perf review F7: the root is a top-level conjunct. */
+    ctx->where_conjunct = true;
     int result = transform_expression(ctx, where);
+    ctx->where_conjunct = false;
     CYPHER_DEBUG("WHERE transformation result: %d, SQL so far: %s", result, ctx->sql_buffer);
     return result;
 }

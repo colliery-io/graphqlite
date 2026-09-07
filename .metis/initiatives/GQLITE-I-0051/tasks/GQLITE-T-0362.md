@@ -4,14 +4,14 @@ level: task
 title: "F6: resolve property key ids at transform time instead of joining property_keys per access"
 short_code: "GQLITE-T-0362"
 created_at: 2026-09-07T01:25:09.935843+00:00
-updated_at: 2026-09-07T10:52:45.187601+00:00
+updated_at: 2026-09-07T10:56:49.047646+00:00
 parent: GQLITE-I-0051
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -27,6 +27,8 @@ initiative_id: GQLITE-I-0051
 ## Objective **[REQUIRED]**
 
 Perf review finding 6: `n.age` compiles to a five-way COALESCE where each branch joins `property_keys` by name. 70 ms vs 41 ms per 18K rows with resolved key ids. Prerequisite for F7.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

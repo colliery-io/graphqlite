@@ -103,6 +103,15 @@ struct cypher_transform_context {
     int pk_count;
     int pk_cap;
 
+    /* Perf review F7: true only while transforming a top-level conjunct of a
+     * WHERE clause (the root expression and the operands of ANDs below it).
+     * There NULL and FALSE are equivalent, so `n.prop <op> literal` may be
+     * rewritten into an index-driven `id IN (SELECT ...)` without changing
+     * results; everywhere else (NOT, OR, CASE, RETURN, function args) the
+     * three-valued form is kept. transform_expression() clears it for any
+     * non-binary node; transform_binary_operation() keeps it only for AND. */
+    bool where_conjunct;
+
     /* T-0310: byte length of the CTE prefix that prepend_cte_to_sql
      * wrote at the start of sql_buffer. Zero if no CTE prefix was
      * prepended. Used by cypher_transform_query to know where the

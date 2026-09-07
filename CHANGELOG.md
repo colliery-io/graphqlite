@@ -31,6 +31,29 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   50,000; `threshold = 0` keeps the 5,000 cap because its output is O(n²).
   Ties in the similarity ordering now break on `(node1, node2)`.
 
+- **One entity-JSON template, built from the typed tables** (F5). `RETURN n`
+  used to scan all of `property_keys` per node and probe ten indexes per key,
+  then parse the JSON back into an agtype tree and serialise it twice. The
+  property object is now a UNION ALL over the five typed tables keyed by the
+  entity id, defined once (`src/include/entity_json_sql.h`) instead of at
+  fourteen sites, and the executor passes entity JSON through verbatim.
+  20K nodes: `RETURN n` 409 ms → 89 ms, `RETURN r` 366 ms → 62 ms. Edge JSON
+  now uses `startNode`/`endNode` keys everywhere (previously `startNodeId`
+  in some SQL paths, normalised by the agtype round trip).
+- **Property key ids are resolved at transform time** (F6). `n.age` filters
+  each typed table on `key_id = N` instead of joining `property_keys` by
+  name in every branch (falls back to the name join for keys that do not
+  exist yet).
+- **WHERE comparisons use the value indexes** (F7). A top-level WHERE
+  conjunct of the form `n.prop <op> literal` (either order, `=`, `<`, `<=`,
+  `>`, `>=`) compiles to `id IN (SELECT ... FROM typed_table WHERE key_id = N
+  AND value <op> literal)` driven by the `(key_id, value, id)` indexes,
+  instead of a UDF over five correlated subqueries per row. Three-valued
+  semantics are preserved: the rewrite applies only where NULL and FALSE
+  are equivalent (WHERE conjuncts, including AND chains, OPTIONAL MATCH and
+  WITH ... WHERE), never under NOT, OR, CASE or in RETURN. 20K nodes:
+  `WHERE n.age > 85` 10.6 ms → 1.7 ms, `WHERE n.name = 'x'` 6.9 ms → 0.08 ms.
+
 ### Fixed
 
 - **`cypher()` emits valid JSON for strings containing control characters.**

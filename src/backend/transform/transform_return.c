@@ -800,7 +800,21 @@ return_star_done:
 }
 
 /* Transform an expression */
+static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr);
+
 int transform_expression(cypher_transform_context *ctx, ast_node *expr)
+{
+    /* Perf review F7: the WHERE-conjunct flag survives only through binary
+     * operators (AND keeps it, comparisons consume it, everything else
+     * drops it); any other node type ends the conjunct context. */
+    bool saved_wc = ctx->where_conjunct;
+    if (expr && expr->type != AST_NODE_BINARY_OP) ctx->where_conjunct = false;
+    int rc = transform_expression_inner(ctx, expr);
+    ctx->where_conjunct = saved_wc;
+    return rc;
+}
+
+static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr)
 {
     if (!expr) {
         return -1;

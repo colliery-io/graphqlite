@@ -347,7 +347,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
      * aliases only. */
     char *with_where_pre = NULL;
     if (with->where) {
+        ctx->where_conjunct = true;   /* perf review F7 */
         with_where_pre = transform_expression_to_string(ctx, with->where);
+        ctx->where_conjunct = false;
         if (!with_where_pre && ctx->has_error) {
             /* Couldn't translate in pre-WITH scope (e.g. only projected
              * variables exist). Clear the error and try again post-projection
@@ -1054,7 +1056,9 @@ with_star_columns_done:
      * translation didn't succeed (i.e., the WHERE references projected
      * aliases only, which weren't in scope earlier). */
     if (with->where && !with_where_pre) {
+        ctx->where_conjunct = true;   /* perf review F7 */
         char *where_str = transform_expression_to_string(ctx, with->where);
+        ctx->where_conjunct = false;
         if (where_str) {
             sql_where(ctx->unified_builder, where_str);
             free(where_str);
