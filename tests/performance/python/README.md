@@ -15,4 +15,7 @@ python3 bench_alt.py 20000                     # generated SQL vs alternative SQ
 ```
 
 Set `GQL_EXT=/path/to/graphqlite.so` to point at a different build
-(for example one compiled with `-g` for callgrind).
+(for example one compiled with `-g` for callgrind). The default picks the
+platform's library name (`.so`, `.dylib`, `.dll`). On macOS there is no
+`/proc`, so the memory columns fall back to `ru_maxrss` (peak RSS only; the
+`rss_delta_kb` column is then peak-to-peak rather than current).

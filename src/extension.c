@@ -287,8 +287,9 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
             for (int row = 0; row < result->row_count; row++) {
                 for (int col = 0; col < result->column_count; col++) {
                     if (result->data[row][col]) {
-                        /* Account for possible JSON escaping (2x size for worst case) */
-                        buffer_size += strlen(result->data[row][col]) * 2 + 20;
+                        /* Account for JSON escaping: a control character expands
+                         * to a 6-byte \uXXXX sequence in the worst case */
+                        buffer_size += strlen(result->data[row][col]) * 6 + 20;
                     }
                 }
             }
@@ -368,13 +369,36 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             /* NaN sentinel (GQLITE-T-0340) — emit unquoted NaN. */
                             offset += snprintf(json_result + offset, buffer_size - offset, "NaN");
                         } else {
-                            /* String value - quote and escape */
+                            /* String value - quote and escape. Control
+                             * characters must be escaped too or the output is
+                             * not valid JSON (perf review C1: RETURN 'a\\nb' and
+                             * EXPLAIN output were unparseable). */
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");
                             while (*val) {
-                                if (*val == '"' || *val == '\\') {
-                                    if (offset < buffer_size) json_result[offset++] = '\\';
+                                unsigned char ch = (unsigned char)*val;
+                                const char *esc = NULL;
+                                char ubuf[8];
+                                switch (ch) {
+                                    case '"':  esc = "\\\""; break;
+                                    case '\\': esc = "\\\\"; break;
+                                    case '\n': esc = "\\n"; break;
+                                    case '\r': esc = "\\r"; break;
+                                    case '\t': esc = "\\t"; break;
+                                    case '\b': esc = "\\b"; break;
+                                    case '\f': esc = "\\f"; break;
+                                    default:
+                                        if (ch < 0x20) {
+                                            snprintf(ubuf, sizeof(ubuf), "\\u%04x", ch);
+                                            esc = ubuf;
+                                        }
+                                        break;
                                 }
-                                if (offset < buffer_size) json_result[offset++] = *val;
+                                if (esc) {
+                                    size_t elen = strlen(esc);
+                                    if (offset + elen < buffer_size) { memcpy(json_result + offset, esc, elen); offset += elen; }
+                                } else if (offset < buffer_size) {
+                                    json_result[offset++] = *val;
+                                }
                                 val++;
                             }
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");

@@ -97,6 +97,18 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
 
 void cypher_transform_free_context(cypher_transform_context *ctx)
 {
+    if (ctx) {
+        for (int i = 0; i < ctx->anchor_count; i++) {
+            free(ctx->anchor_aliases[i]);
+            free(ctx->anchor_sqls[i]);
+        }
+        free(ctx->anchor_aliases);
+        free(ctx->anchor_sqls);
+        ctx->anchor_aliases = NULL;
+        ctx->anchor_sqls = NULL;
+        ctx->anchor_count = ctx->anchor_cap = 0;
+    }
+
     if (!ctx) {
         return;
     }
@@ -1173,7 +1185,7 @@ int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *q
  */
 int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                        const char *source_alias, const char *target_alias,
-                       const char *cte_name)
+                       const char *cte_name, const char *anchor_ids_sql)
 {
     (void)source_alias; /* Mark as intentionally unused for now */
     (void)target_alias; /* Mark as intentionally unused for now */
@@ -1283,7 +1295,9 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         dbuf_appendf(&cte_query,
             "SELECT n.id, n.id, 0, CAST(n.id AS TEXT), ',', "
             "CAST(n.id AS TEXT) "
-            "FROM nodes n UNION ALL ");
+            "FROM nodes n");
+        if (anchor_ids_sql) dbuf_appendf(&cte_query, " WHERE n.id IN (%s)", anchor_ids_sql);
+        dbuf_append(&cte_query, " UNION ALL ");
     }
 
     /* Base case: direct edges (depth = 1).
@@ -1298,7 +1312,16 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
         src_col, tgt_col,
         src_col, tgt_col,
         src_col, tgt_col);
-    if (have_tpred) dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred));
+    /* Perf review F2: anchor the base case at the bound start node. Without
+     * this the CTE expands every path from every edge of the type and only
+     * the outer query filters start_id. */
+    {
+        bool need_where = true;
+        if (have_tpred) { dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred)); need_where = false; }
+        if (anchor_ids_sql) {
+            dbuf_appendf(&cte_query, "%s e.%s IN (%s)", need_where ? " WHERE" : " AND", src_col, anchor_ids_sql);
+        }
+    }
 
     /* Undirected: emit the reverse-orientation base case too, so each
      * edge seeds a walk in both directions. */
@@ -1313,7 +1336,14 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             tgt_col, src_col,
             tgt_col, src_col,
             tgt_col, src_col);
-        if (have_tpred) dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred));
+        {
+            bool need_where = true;
+            if (have_tpred) { dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred)); need_where = false; }
+            if (anchor_ids_sql) {
+                /* Reverse orientation: the walk starts at the edge's other end. */
+                dbuf_appendf(&cte_query, "%s e.%s IN (%s)", need_where ? " WHERE" : " AND", tgt_col, anchor_ids_sql);
+            }
+        }
     }
 
     /* Recursive case — only recurse from depth >= 1 rows. The depth=0

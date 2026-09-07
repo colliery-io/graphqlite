@@ -85,6 +85,15 @@ struct cypher_transform_context {
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;
 
+    /* Perf review F2: when generate_node_match consumes a node's first inline
+     * literal pair into the driving JOIN it nulls the pair's key. The pair's
+     * `SELECT node_id ...` fragment is remembered here, keyed by node alias,
+     * so a later variable-length CTE can still anchor at that node. */
+    char **anchor_aliases;
+    char **anchor_sqls;
+    int anchor_count;
+    int anchor_cap;
+
     /* T-0310: byte length of the CTE prefix that prepend_cte_to_sql
      * wrote at the start of sql_buffer. Zero if no CTE prefix was
      * prepended. Used by cypher_transform_query to know where the
@@ -270,9 +279,12 @@ int register_parameter(cypher_transform_context *ctx, const char *name);
 int finalize_sql_generation(cypher_transform_context *ctx);
 
 /* Variable-length relationship SQL generation */
+/* anchor_ids_sql: optional `SELECT node_id ...` restricting the start node
+ * of every walk (NULL = unanchored). See build_anchor_ids_sql(). */
 int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                        const char *source_alias, const char *target_alias,
-                       const char *cte_name);
+                       const char *cte_name,
+                        const char *anchor_ids_sql);
 void prepend_cte_to_sql(cypher_transform_context *ctx);
 
 /* Result management */

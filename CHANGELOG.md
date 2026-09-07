@@ -4,6 +4,45 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Performance (phase 1 of the review in `docs/internal/performance-review.md`)
+
+- **Parameterized inline property matches use the value indexes** (F1).
+  `MATCH (n {id: $id})` compiled to four correlated `EXISTS` subqueries that
+  SQLite planned as a full node scan; it now compiles to an `IN` semi-join
+  over the typed property tables driven by the `(key_id, value, id)` covering
+  indexes. Point lookups through `$param` go from ~8 ms to ~0.1 ms at 10K
+  nodes, which is every binding convenience method (`get_node`, `has_node`,
+  `upsert_node`, `get_neighbors`, ...). Edge inline parameter filters use the
+  same shape as a post-filter (43 ms → 3 ms).
+- **Variable-length paths are anchored at the bound start node** (F2). The
+  recursive CTE used to seed a walk from every edge of the type and filter
+  `start_id` afterwards; when the pattern's start node carries an inline
+  property map (literal or parameter, one or more pairs) the base case is now
+  restricted to those nodes. `(a {id: 'x'})-[:T*1..3]->(b)` at 10K nodes /
+  50K edges: 1.2 s → 0.4 ms.
+- **Louvain local-move pass is O(E) instead of O(n²)** (F3): 1.5 s → 0.17 s at
+  10K nodes, 44.6 s → 0.84 s at 50K.
+- **nodeSimilarity / knn no longer sort adjacency lists per pair** (F4), and
+  all-pairs mode with `threshold > 0` enumerates candidates through shared
+  neighbors instead of every pair, with a growable result list instead of an
+  n²/2 preallocation. The node cap for that mode is raised from 5,000 to
+  50,000; `threshold = 0` keeps the 5,000 cap because its output is O(n²).
+  Ties in the similarity ordering now break on `(node1, node2)`.
+
+### Fixed
+
+- **`cypher()` emits valid JSON for strings containing control characters.**
+  The text result path escaped only `"` and `\\`; newlines, tabs and other
+  control characters (and therefore all `EXPLAIN` output) produced invalid
+  JSON. They are now escaped as `\\n`, `\\t`, ... or `\\u00XX`.
+
+### Tooling
+
+- `tests/performance/python/` harness runs on macOS (no `/proc`; falls back
+  to `ru_maxrss`) and picks the platform library name by default.
+
 ## [0.7.0] — 2026-09-05
 
 A bindings-correctness release closing the GitHub issue batch #104–#116. Core

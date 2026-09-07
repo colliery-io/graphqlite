@@ -384,6 +384,43 @@ static void test_rel_inline_param_filter(void)
     if (result) cypher_result_free(result);
 }
 
+/* Perf review F1: inline `{k: $p}` filters now compile to an index-driven
+ * IN semi-join over the four typed tables. Every parameter type must still
+ * match the row stored in its own typed table, and only that row. */
+static void test_param_typed_inline_filters(void)
+{
+    cypher_result *r;
+    r = exec("CREATE (:Typed {name: \"t1\", n: 7, f: 2.5, b: true})");
+    if (r) cypher_result_free(r);
+    r = exec("CREATE (:Typed {name: \"t2\", n: 8, f: 3.5, b: false})");
+    if (r) cypher_result_free(r);
+    r = exec("MATCH (a:Typed {name: \"t1\"}), (b:Typed {name: \"t2\"}) CREATE (a)-[:TP {w: 1.5}]->(b)");
+    if (r) cypher_result_free(r);
+
+    struct { const char *q; const char *params; const char *col; const char *val; int rows; } cases[] = {
+        { "MATCH (x:Typed {name: $v}) RETURN x.n AS n", "{\"v\": \"t2\"}", "n", "8", 1 },
+        { "MATCH (x:Typed {n: $v}) RETURN x.name AS name", "{\"v\": 7}", "name", "t1", 1 },
+        { "MATCH (x:Typed {f: $v}) RETURN x.name AS name", "{\"v\": 3.5}", "name", "t2", 1 },
+        { "MATCH (x:Typed {b: $v}) RETURN x.name AS name", "{\"v\": true}", "name", "t1", 1 },
+        { "MATCH (x:Typed {name: $a, n: $b}) RETURN x.name AS name", "{\"a\": \"t1\", \"b\": 7}", "name", "t1", 1 },
+        { "MATCH (x:Typed {name: $a, n: $b}) RETURN x.name AS name", "{\"a\": \"t1\", \"b\": 8}", NULL, NULL, 0 },
+        { "MATCH (x {name: $v}) RETURN x.n AS n", "{\"v\": \"t1\"}", "n", "7", 1 },
+        { "MATCH (x:Typed {name: $v}) RETURN x.n AS n", "{\"v\": \"nope\"}", NULL, NULL, 0 },
+        { "MATCH ()-[e:TP {w: $w}]->() RETURN e.w AS w", "{\"w\": 1.5}", "w", "1.5", 1 },
+        { "MATCH ()-[e:TP {w: $w}]->() RETURN e.w AS w", "{\"w\": 9.5}", NULL, NULL, 0 },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        cypher_result *result = exec_params(cases[i].q, cases[i].params);
+        CU_ASSERT_PTR_NOT_NULL(result);
+        CU_ASSERT_TRUE(result && result->success);
+        CU_ASSERT_EQUAL(get_row_count(result), cases[i].rows);
+        if (cases[i].col) {
+            CU_ASSERT_TRUE(result_contains_value(result, cases[i].col, cases[i].val));
+        }
+        if (result) cypher_result_free(result);
+    }
+}
+
 /* Register all tests */
 int register_params_tests(void)
 {
@@ -424,6 +461,8 @@ int register_params_tests(void)
         return -1;
 
     /* Relationship inline pattern property filter (GitHub #96) */
+    if (!CU_add_test(suite, "Typed inline parameter filters (perf F1 semi-join)", test_param_typed_inline_filters))
+        return CU_get_error();
     if (!CU_add_test(suite, "Relationship inline property filter with parameter", test_rel_inline_param_filter))
         return -1;
 

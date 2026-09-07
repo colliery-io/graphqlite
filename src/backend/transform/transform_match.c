@@ -35,6 +35,10 @@ static void transform_ctx_append_pending_optional_on(cypher_transform_context *c
 
 static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional);
 static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias, bool optional);
+/* Perf review F2 (defined further down, used by generate_node_match) */
+static void stash_consumed_anchor(cypher_transform_context *ctx, const char *alias,
+                                  const char *key, cypher_literal *lit);
+
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node,
                                      int rel_index, bool optional, path_type ptype,
@@ -292,31 +296,38 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                 snprintf(node_id_ref, sizeof(node_id_ref), "%s",
                                          get_node_id_ref(ctx, alias, node->variable));
 
-                                /* Use OR conditions to check each property type table
-                                 * This handles string, int, real, and bool params correctly */
+                                /* Perf review F1: an index-driven semi-join over the four
+                                 * typed tables. The previous OR of four correlated EXISTS
+                                 * subqueries forced SQLite to SCAN nodes and probe per row
+                                 * (~100x slower than a literal at 10K nodes). Each UNION ALL
+                                 * branch is a (key_id, value) lookup on the typed table's
+                                 * covering index; whichever type the parameter binds to at
+                                 * run time finds its rows, so string, int, real, and bool
+                                 * params all still match and the SQL text stays independent
+                                 * of parameter values. */
+                                char *esc_key = escape_sql_string(pair->key);
+                                const char *key_sql = esc_key ? esc_key : pair->key;
                                 dbuf_appendf(&cond,
-                                    "("
-                                    /* String match */
-                                    "EXISTS(SELECT 1 FROM node_props_text npt "
+                                    "%s IN ("
+                                    "SELECT npt.node_id FROM node_props_text npt "
                                     "JOIN property_keys pk ON npt.key_id = pk.id "
-                                    "WHERE npt.node_id = %s AND pk.key = '%s' AND npt.value = :%s) OR "
-                                    /* Integer match */
-                                    "EXISTS(SELECT 1 FROM node_props_int npi "
+                                    "WHERE pk.key = '%s' AND npt.value = :%s "
+                                    "UNION ALL SELECT npi.node_id FROM node_props_int npi "
                                     "JOIN property_keys pk ON npi.key_id = pk.id "
-                                    "WHERE npi.node_id = %s AND pk.key = '%s' AND npi.value = :%s) OR "
-                                    /* Real match */
-                                    "EXISTS(SELECT 1 FROM node_props_real npr "
+                                    "WHERE pk.key = '%s' AND npi.value = :%s "
+                                    "UNION ALL SELECT npr.node_id FROM node_props_real npr "
                                     "JOIN property_keys pk ON npr.key_id = pk.id "
-                                    "WHERE npr.node_id = %s AND pk.key = '%s' AND npr.value = :%s) OR "
-                                    /* Boolean match */
-                                    "EXISTS(SELECT 1 FROM node_props_bool npb "
+                                    "WHERE pk.key = '%s' AND npr.value = :%s "
+                                    "UNION ALL SELECT npb.node_id FROM node_props_bool npb "
                                     "JOIN property_keys pk ON npb.key_id = pk.id "
-                                    "WHERE npb.node_id = %s AND pk.key = '%s' AND npb.value = :%s)"
+                                    "WHERE pk.key = '%s' AND npb.value = :%s"
                                     ")",
-                                    node_id_ref, pair->key, param->name,
-                                    node_id_ref, pair->key, param->name,
-                                    node_id_ref, pair->key, param->name,
-                                    node_id_ref, pair->key, param->name);
+                                    node_id_ref,
+                                    key_sql, param->name,
+                                    key_sql, param->name,
+                                    key_sql, param->name,
+                                    key_sql, param->name);
+                                free(esc_key);
 
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
@@ -530,25 +541,33 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                 const char *key_sql = esc_key ? esc_key : pair->key;
                                 dynamic_buffer cond;
                                 dbuf_init(&cond);
+                                /* Perf review F1: same semi-join shape as the node case.
+                                 * The unary `+` stops SQLite from using the IN-list as an
+                                 * inner rowid term: an edge pattern is usually probed via
+                                 * idx_edges_source from a scanned node, and without `+`
+                                 * the planner looped over every matching edge id per outer
+                                 * node (125 ms vs 3 ms at 10K nodes). As a filter the list
+                                 * is materialised once and checked per row. */
                                 dbuf_appendf(&cond,
-                                    "("
-                                    "EXISTS(SELECT 1 FROM edge_props_text ept "
+                                    "+%s.id IN ("
+                                    "SELECT ept.edge_id FROM edge_props_text ept "
                                     "JOIN property_keys pk ON ept.key_id = pk.id "
-                                    "WHERE ept.edge_id = %s.id AND pk.key = '%s' AND ept.value = :%s) OR "
-                                    "EXISTS(SELECT 1 FROM edge_props_int epi "
+                                    "WHERE pk.key = '%s' AND ept.value = :%s "
+                                    "UNION ALL SELECT epi.edge_id FROM edge_props_int epi "
                                     "JOIN property_keys pk ON epi.key_id = pk.id "
-                                    "WHERE epi.edge_id = %s.id AND pk.key = '%s' AND epi.value = :%s) OR "
-                                    "EXISTS(SELECT 1 FROM edge_props_real epr "
+                                    "WHERE pk.key = '%s' AND epi.value = :%s "
+                                    "UNION ALL SELECT epr.edge_id FROM edge_props_real epr "
                                     "JOIN property_keys pk ON epr.key_id = pk.id "
-                                    "WHERE epr.edge_id = %s.id AND pk.key = '%s' AND epr.value = :%s) OR "
-                                    "EXISTS(SELECT 1 FROM edge_props_bool epb "
+                                    "WHERE pk.key = '%s' AND epr.value = :%s "
+                                    "UNION ALL SELECT epb.edge_id FROM edge_props_bool epb "
                                     "JOIN property_keys pk ON epb.key_id = pk.id "
-                                    "WHERE epb.edge_id = %s.id AND pk.key = '%s' AND epb.value = :%s)"
+                                    "WHERE pk.key = '%s' AND epb.value = :%s"
                                     ")",
-                                    edge_alias, key_sql, param->name,
-                                    edge_alias, key_sql, param->name,
-                                    edge_alias, key_sql, param->name,
-                                    edge_alias, key_sql, param->name);
+                                    edge_alias,
+                                    key_sql, param->name,
+                                    key_sql, param->name,
+                                    key_sql, param->name,
+                                    key_sql, param->name);
                                 free(esc_key);
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
@@ -1568,6 +1587,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     dbuf_free(&on_cond);
 
                     /* Mark first property as handled */
+                    stash_consumed_anchor(ctx, alias, first_pair->key, lit);
                     first_pair->key = NULL;
                 } else {
                     sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
@@ -1666,6 +1686,8 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "nodes"), alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
 
+                    stash_consumed_anchor(ctx, alias, first_pair->key, lit);
+
                     first_pair->key = NULL;
                 } else {
                     sql_join(ctx->unified_builder, jtype, get_graph_table(ctx, "nodes"), alias, "1=1");
@@ -1744,6 +1766,128 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
  *      preserves OPTIONAL semantics (X is null when no edge matched).
  *
  * Both flags are zero on the non-OPTIONAL / non-deferred path. */
+/* Perf review F2: build a `SELECT node_id ...` set of the nodes matching a
+ * pattern node's inline property map (literals and parameters), so the
+ * varlen CTE can anchor its base case at the bound start node instead of
+ * seeding a walk from every edge in the graph. Multiple pairs are
+ * INTERSECTed; each pair is wrapped in its own subquery so compound
+ * associativity cannot mix INTERSECT into a UNION ALL chain. Returns true
+ * if at least one usable pair was emitted into `out`. */
+static bool literal_anchor_fragment(const char *key, cypher_literal *lit, dynamic_buffer *out)
+{
+    const char *tbl = NULL;
+    char val_buf[256] = "";
+    switch (lit->literal_type) {
+        case LITERAL_STRING: tbl = "node_props_text";
+            { char *esc = escape_sql_string(lit->value.string);
+              snprintf(val_buf, sizeof(val_buf), "'%s'", esc ? esc : lit->value.string);
+              free(esc); } break;
+        case LITERAL_INTEGER: tbl = "node_props_int";
+            snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
+        case LITERAL_DECIMAL: tbl = "node_props_real";
+            snprintf(val_buf, sizeof(val_buf), "%.17g", lit->value.decimal); break;
+        case LITERAL_BOOLEAN: tbl = "node_props_bool";
+            snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
+        default: break;
+    }
+    if (!tbl) return false;
+    char *esc_key = escape_sql_string(key);
+    dbuf_appendf(out,
+        "SELECT t.node_id FROM %s t JOIN property_keys pk ON pk.id = t.key_id "
+        "WHERE pk.key = '%s' AND t.value = %s",
+        tbl, esc_key ? esc_key : key, val_buf);
+    free(esc_key);
+    return true;
+}
+
+/* Remember the anchor fragment for a literal pair that generate_node_match
+ * is about to consume (it nulls the pair's key), keyed by the node alias. */
+static void stash_consumed_anchor(cypher_transform_context *ctx, const char *alias,
+                                  const char *key, cypher_literal *lit)
+{
+    if (!ctx || !alias || !key || !lit) return;
+    dynamic_buffer one;
+    dbuf_init(&one);
+    if (!literal_anchor_fragment(key, lit, &one)) { dbuf_free(&one); return; }
+    if (ctx->anchor_count == ctx->anchor_cap) {
+        int cap = ctx->anchor_cap ? ctx->anchor_cap * 2 : 4;
+        char **a = realloc(ctx->anchor_aliases, (size_t)cap * sizeof(char *));
+        char **s = realloc(ctx->anchor_sqls, (size_t)cap * sizeof(char *));
+        if (!a || !s) { free(a); free(s); dbuf_free(&one); return; }
+        ctx->anchor_aliases = a;
+        ctx->anchor_sqls = s;
+        ctx->anchor_cap = cap;
+    }
+    ctx->anchor_aliases[ctx->anchor_count] = strdup(alias);
+    ctx->anchor_sqls[ctx->anchor_count] = strdup(dbuf_get(&one));
+    if (ctx->anchor_aliases[ctx->anchor_count] && ctx->anchor_sqls[ctx->anchor_count]) {
+        ctx->anchor_count++;
+    } else {
+        free(ctx->anchor_aliases[ctx->anchor_count]);
+        free(ctx->anchor_sqls[ctx->anchor_count]);
+    }
+    dbuf_free(&one);
+}
+
+static bool build_anchor_ids_sql(cypher_transform_context *ctx, const char *alias,
+                                 cypher_node_pattern *node, dynamic_buffer *out)
+{
+    int emitted = 0;
+
+    /* Pairs already consumed into the node's driving JOIN (see
+     * stash_consumed_anchor) — the AST no longer carries their key. */
+    if (ctx && alias) {
+        for (int i = 0; i < ctx->anchor_count; i++) {
+            if (strcmp(ctx->anchor_aliases[i], alias) != 0) continue;
+            if (emitted > 0) dbuf_append(out, " INTERSECT ");
+            dbuf_appendf(out, "SELECT node_id FROM (%s)", ctx->anchor_sqls[i]);
+            emitted++;
+        }
+    }
+
+    if (!node || !node->properties || node->properties->type != AST_NODE_MAP) return emitted > 0;
+    cypher_map *map = (cypher_map*)node->properties;
+    if (!map->pairs) return emitted > 0;
+
+    for (int k = 0; k < map->pairs->count; k++) {
+        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[k];
+        if (!pair || !pair->key || !pair->value) continue;
+
+        dynamic_buffer one;
+        dbuf_init(&one);
+        char *esc_key = escape_sql_string(pair->key);
+        const char *key_sql = esc_key ? esc_key : pair->key;
+
+        if (pair->value->type == AST_NODE_LITERAL) {
+            if (!literal_anchor_fragment(pair->key, (cypher_literal*)pair->value, &one)) {
+                dbuf_free(&one); free(esc_key); continue;
+            }
+        } else if (pair->value->type == AST_NODE_PARAMETER) {
+            cypher_parameter *param = (cypher_parameter*)pair->value;
+            dbuf_appendf(&one,
+                "SELECT npt.node_id FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id "
+                "WHERE pk.key = '%s' AND npt.value = :%s "
+                "UNION ALL SELECT npi.node_id FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id "
+                "WHERE pk.key = '%s' AND npi.value = :%s "
+                "UNION ALL SELECT npr.node_id FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id "
+                "WHERE pk.key = '%s' AND npr.value = :%s "
+                "UNION ALL SELECT npb.node_id FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id "
+                "WHERE pk.key = '%s' AND npb.value = :%s",
+                key_sql, param->name, key_sql, param->name,
+                key_sql, param->name, key_sql, param->name);
+        } else {
+            dbuf_free(&one); free(esc_key); continue;
+        }
+
+        if (emitted > 0) dbuf_append(out, " INTERSECT ");
+        dbuf_appendf(out, "SELECT node_id FROM (%s)", dbuf_get(&one));
+        emitted++;
+        dbuf_free(&one);
+        free(esc_key);
+    }
+    return emitted > 0;
+}
+
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node,
                                      int rel_index, bool optional, path_type ptype,
@@ -1871,8 +2015,17 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             transform_var_set_cte(ctx->var_ctx, rel->variable, cte_name);
         }
 
-        /* Generate the recursive CTE (added to unified builder) */
-        if (generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name) < 0) {
+        /* Generate the recursive CTE (added to unified builder). When the
+         * pattern's start node carries an inline property map, pass the
+         * matching-node-id set so the CTE base case is anchored there
+         * (perf review F2: 1.5 s -> sub-millisecond at 10K nodes). */
+        dynamic_buffer anchor_ids;
+        dbuf_init(&anchor_ids);
+        bool have_anchor = build_anchor_ids_sql(ctx, source_alias, source_node, &anchor_ids);
+        int cte_rc = generate_varlen_cte(ctx, rel, source_alias, target_alias, cte_name,
+                                         have_anchor ? dbuf_get(&anchor_ids) : NULL);
+        dbuf_free(&anchor_ids);
+        if (cte_rc < 0) {
             ctx->has_error = true;
             ctx->error_message = strdup("Failed to generate variable-length CTE");
             return -1;
@@ -2029,6 +2182,8 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                     dbuf_appendf(&on_cond, "%s.id = %s.node_id", target_alias, prop_alias);
                     sql_join(ctx->unified_builder, SQL_JOIN_INNER, get_graph_table(ctx, "nodes"), target_alias, dbuf_get(&on_cond));
                     dbuf_free(&on_cond);
+
+                    stash_consumed_anchor(ctx, target_alias, first_pair->key, lit);
 
                     first_pair->key = NULL;
                 } else {

@@ -1,18 +1,31 @@
-import sqlite3, sys, time, json, os, random, statistics
+import sqlite3, sys, time, json, os, random, statistics, platform, resource
 
-EXT = os.environ.get("GQL_EXT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "build", "graphqlite.so"))
+_EXT_NAME = {"Darwin": "graphqlite.dylib", "Windows": "graphqlite.dll"}.get(platform.system(), "graphqlite.so")
+EXT = os.environ.get("GQL_EXT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "build", _EXT_NAME))
+
+def _proc_status_kb(field):
+    """Read a /proc/self/status field in kB (Linux); None elsewhere."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith(field + ":"):
+                    return int(line.split()[1])
+    except OSError:
+        return None
+    return None
+
+def _maxrss_kb():
+    ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # macOS reports bytes, Linux kilobytes
+    return ru // 1024 if platform.system() == "Darwin" else ru
 
 def rss_kb():
-    with open("/proc/self/status") as f:
-        for line in f:
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1])
+    v = _proc_status_kb("VmRSS")
+    return v if v is not None else _maxrss_kb()
 
 def hwm_kb():
-    with open("/proc/self/status") as f:
-        for line in f:
-            if line.startswith("VmHWM:"):
-                return int(line.split()[1])
+    v = _proc_status_kb("VmHWM")
+    return v if v is not None else _maxrss_kb()
 
 def open_db(path=":memory:"):
     c = sqlite3.connect(path, isolation_level=None)

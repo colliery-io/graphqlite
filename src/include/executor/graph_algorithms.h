@@ -3,6 +3,8 @@
 
 #include "graphqlite_sqlite.h"
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include "parser/cypher_ast.h"
 
 /*
@@ -31,6 +33,30 @@ typedef struct csr_graph {
     int *in_row_ptr;      /* Size: node_count + 1. Incoming edge offsets */
     int *in_col_idx;      /* Size: edge_count. Source node IDs for incoming edges */
 } csr_graph;
+
+/* Perf review F4: one sorted copy of col_idx, with each node's adjacency
+ * segment sorted ascending, so set operations on neighbour lists (Jaccard
+ * intersection/union) need no per-pair allocation or sort. Segment i is
+ * sorted[row_ptr[i] .. row_ptr[i+1]). Returns NULL when the graph has no
+ * edges (callers treat every degree as 0 in that case). Caller frees. */
+static inline int csr_cmp_int_asc(const void *a, const void *b)
+{
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
+
+static inline int *csr_sorted_col_idx(const csr_graph *graph)
+{
+    if (!graph || graph->edge_count <= 0 || !graph->col_idx) return NULL;
+    int *sorted = (int *)malloc((size_t)graph->edge_count * sizeof(int));
+    if (!sorted) return NULL;
+    memcpy(sorted, graph->col_idx, (size_t)graph->edge_count * sizeof(int));
+    for (int i = 0; i < graph->node_count; i++) {
+        int start = graph->row_ptr[i], deg = graph->row_ptr[i + 1] - start;
+        if (deg > 1) qsort(sorted + start, (size_t)deg, sizeof(int), csr_cmp_int_asc);
+    }
+    return sorted;
+}
 
 /* Graph algorithm result */
 typedef struct {
