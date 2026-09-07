@@ -445,10 +445,13 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                                 /* No agtype conversion — text result will be
                                  * rendered as the JSON array. */
                             } else
-                            /* Check if value is already a JSON object (from new RETURN format) */
+                            /* Perf review F5: the SQL already emitted the final
+                             * edge JSON; leave the agtype cell NULL so the
+                             * renderer passes the text through verbatim instead
+                             * of parsing it into an agtype tree and serialising
+                             * it again (~300 mallocs per row). */
                             if (value[0] == '{') {
-                                /* Parse the JSON object directly */
-                                result->agtype_data[current_row][col] = agtype_value_from_edge_json(executor->db, value);
+                                /* verbatim pass-through */
                             } else {
                                 /* Legacy path: value is just an edge ID */
                                 int64_t edge_id = atoll(value);
@@ -481,10 +484,10 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                             }
                         } else if (ctx && transform_var_lookup_node(ctx->var_ctx, ident->name)) {
                             /* This is a node variable */
-                            /* Check if value is already a JSON object (from new RETURN format) */
+                            /* Perf review F5: pass the SQL-built node JSON
+                             * through verbatim (see the edge case above). */
                             if (value[0] == '{') {
-                                /* Parse the JSON object directly */
-                                result->agtype_data[current_row][col] = agtype_value_from_vertex_json(executor->db, value);
+                                /* verbatim pass-through */
                             } else {
                                 /* Legacy path: value is just a node ID */
                                 int64_t node_id = atoll(value);

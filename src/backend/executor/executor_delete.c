@@ -11,6 +11,24 @@
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
 
+/* Perf review F5: entity JSON is passed through as text, so DELETE reads the
+ * id and kind straight from the object. json_object() emits the id first and
+ * then either "labels" (node) or "type" (edge), with no whitespace. */
+static bool entity_ref_from_json(const char *txt, int64_t *id_out, bool *is_edge_out)
+{
+    if (!txt || txt[0] != '{') return false;
+    const char *p = strstr(txt, "\"id\":");
+    if (!p) return false;
+    p += 5;
+    char *end = NULL;
+    long long v = strtoll(p, &end, 10);
+    if (end == p) return false;
+    *id_out = (int64_t)v;
+    if (strncmp(end, ",\"labels\"", 9) == 0) { *is_edge_out = false; return true; }
+    if (strncmp(end, ",\"type\"", 7) == 0) { *is_edge_out = true; return true; }
+    return false;
+}
+
 /* Execute MATCH+DELETE query combination */
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result)
 {
@@ -89,15 +107,30 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
                 if (match_result->column_names[col] &&
                     strcmp(match_result->column_names[col], item->variable) == 0) {
 
-                    /* Found the variable's column - get the entity */
+                    /* Found the variable's column - get the entity. The
+                     * agtype cell is set only for legacy id-only values;
+                     * entity JSON is passed through as text (perf review F5),
+                     * so derive the id/kind from the JSON in that case. */
+                    int64_t entity_id = -1;
+                    bool entity_is_edge = false;
+                    bool entity_known = false;
                     if (match_result->agtype_data && match_result->agtype_data[row][col]) {
                         agtype_value *entity = match_result->agtype_data[row][col];
-
-                        /* Extract entity following AGE's pattern */
-
                         if (entity->type == AGTV_VERTEX) {
-                            /* For vertex, use the entity structure */
-                            int64_t entity_id = entity->val.entity.id;
+                            entity_id = entity->val.entity.id;
+                            entity_known = true;
+                        } else if (entity->type == AGTV_EDGE) {
+                            entity_id = entity->val.edge.id;
+                            entity_is_edge = true;
+                            entity_known = true;
+                        }
+                    } else if (match_result->data && match_result->data[row] &&
+                               match_result->data[row][col]) {
+                        entity_known = entity_ref_from_json(match_result->data[row][col],
+                                                            &entity_id, &entity_is_edge);
+                    }
+                    if (entity_known) {
+                        if (!entity_is_edge) {
 
                             CYPHER_DEBUG("Deleting node '%s' with ID %lld", item->variable, entity_id);
 
@@ -119,9 +152,7 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
 
                                 return -1;
                             }
-                        } else if (entity->type == AGTV_EDGE) {
-                            /* For edge, use the edge structure */
-                            int64_t entity_id = entity->val.edge.id;
+                        } else {
 
                             CYPHER_DEBUG("Deleting edge '%s' with ID %lld", item->variable, entity_id);
 
