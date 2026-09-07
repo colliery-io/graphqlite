@@ -269,6 +269,79 @@ cypher_schema_manager* cypher_schema_create_manager(sqlite3 *db)
     return manager;
 }
 
+/* ---- Perf review F9: prepared-statement helpers --------------------------- */
+
+static const char *const gql_node_prop_tables[5] = {
+    "node_props_int", "node_props_text", "node_props_real", "node_props_bool", "node_props_json"
+};
+static const char *const gql_edge_prop_tables[5] = {
+    "edge_props_int", "edge_props_text", "edge_props_real", "edge_props_bool", "edge_props_json"
+};
+
+static int prop_table_index(property_type type)
+{
+    switch (type) {
+        case PROP_TYPE_INTEGER: return 0;
+        case PROP_TYPE_TEXT:    return 1;
+        case PROP_TYPE_REAL:    return 2;
+        case PROP_TYPE_BOOLEAN: return 3;
+        case PROP_TYPE_JSON:    return 4;
+        default: return -1;
+    }
+}
+
+/* Return the statement in *slot, preparing it on first use and resetting
+ * it (with bindings cleared) on later uses. NULL on prepare failure. */
+static sqlite3_stmt *sm_stmt(cypher_schema_manager *m, sqlite3_stmt **slot, const char *sql)
+{
+    if (!*slot) {
+        if (sqlite3_prepare_v2(m->db, sql, -1, slot, NULL) != SQLITE_OK) {
+            CYPHER_DEBUG("Failed to prepare '%s': %s", sql, sqlite3_errmsg(m->db));
+            *slot = NULL;
+            return NULL;
+        }
+        return *slot;
+    }
+    sqlite3_reset(*slot);
+    sqlite3_clear_bindings(*slot);
+    return *slot;
+}
+
+/* Step a write statement to completion and reset it so it holds no cursor. */
+static int sm_step_done(sqlite3_stmt *stmt)
+{
+    int rc = sqlite3_step(stmt);
+    sqlite3_reset(stmt);
+    return rc;
+}
+
+static void bind_prop_value(sqlite3_stmt *stmt, int idx, property_type type, const void *value)
+{
+    switch (type) {
+        case PROP_TYPE_INTEGER: sqlite3_bind_int64(stmt, idx, *(const int64_t*)value); break;
+        case PROP_TYPE_TEXT:    sqlite3_bind_text(stmt, idx, (const char*)value, -1, SQLITE_TRANSIENT); break;
+        case PROP_TYPE_REAL:    sqlite3_bind_double(stmt, idx, *(const double*)value); break;
+        case PROP_TYPE_BOOLEAN: sqlite3_bind_int(stmt, idx, *(const int*)value ? 1 : 0); break;
+        case PROP_TYPE_JSON:    sqlite3_bind_text(stmt, idx, (const char*)value, -1, SQLITE_TRANSIENT); break;
+        default: break;
+    }
+}
+
+void cypher_schema_release_statements(cypher_schema_manager *manager)
+{
+    if (!manager) return;
+    sqlite3_stmt **singles[] = { &manager->ps_insert_node, &manager->ps_add_label, &manager->ps_create_edge,
+                                 &manager->ps_key_lookup, &manager->ps_key_insert };
+    for (size_t i = 0; i < sizeof(singles) / sizeof(singles[0]); i++) {
+        if (*singles[i]) { sqlite3_finalize(*singles[i]); *singles[i] = NULL; }
+    }
+    for (int i = 0; i < 5; i++) {
+        if (manager->ps_node_prop_ins[i]) { sqlite3_finalize(manager->ps_node_prop_ins[i]); manager->ps_node_prop_ins[i] = NULL; }
+        if (manager->ps_node_prop_del[i]) { sqlite3_finalize(manager->ps_node_prop_del[i]); manager->ps_node_prop_del[i] = NULL; }
+        if (manager->ps_edge_prop_ins[i]) { sqlite3_finalize(manager->ps_edge_prop_ins[i]); manager->ps_edge_prop_ins[i] = NULL; }
+    }
+}
+
 void cypher_schema_free_manager(cypher_schema_manager *manager)
 {
     if (!manager) {
@@ -277,6 +350,7 @@ void cypher_schema_free_manager(cypher_schema_manager *manager)
     
     CYPHER_DEBUG("Freeing schema manager %p", (void*)manager);
     
+    cypher_schema_release_statements(manager);
     free_property_key_cache(manager->key_cache);
     free(manager);
 }
@@ -524,16 +598,15 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
     /* Cache miss - query database */
     cache->cache_misses++;
 
-    /* Prepare statement locally to avoid caching issues with sqlite3_close */
-    sqlite3_stmt *lookup_stmt = NULL;
-    const char *lookup_sql = "SELECT id FROM property_keys WHERE key = ?";
-    int rc = sqlite3_prepare_v2(manager->db, lookup_sql, -1, &lookup_stmt, NULL);
-    if (rc != SQLITE_OK) {
+    /* Perf review F9: prepared once per manager */
+    sqlite3_stmt *lookup_stmt = sm_stmt(manager, &manager->ps_key_lookup,
+                                        "SELECT id FROM property_keys WHERE key = ?");
+    if (!lookup_stmt) {
         CYPHER_DEBUG("Failed to prepare property key lookup");
         return -1;
     }
 
-    sqlite3_bind_text(lookup_stmt, 1, key, -1, SQLITE_STATIC);
+    sqlite3_bind_text(lookup_stmt, 1, key, -1, SQLITE_TRANSIENT);
 
     int key_id = -1;
     if (sqlite3_step(lookup_stmt) == SQLITE_ROW) {
@@ -547,7 +620,7 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
             /* Create new entry */
             entry = malloc(sizeof(property_key_entry));
             if (!entry) {
-                sqlite3_finalize(lookup_stmt);
+                sqlite3_reset(lookup_stmt);
                 return key_id;
             }
             cache->slots[slot] = entry;
@@ -561,7 +634,7 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
         CYPHER_DEBUG("Property key '%s' found in DB -> id %d", key, key_id);
     }
 
-    sqlite3_finalize(lookup_stmt);
+    sqlite3_reset(lookup_stmt);
     return key_id;
 }
 
@@ -580,19 +653,17 @@ int cypher_schema_ensure_property_key(cypher_schema_manager *manager, const char
     /* Key doesn't exist - create it */
     property_key_cache *cache = manager->key_cache;
 
-    /* Prepare statement locally to avoid caching issues with sqlite3_close */
-    sqlite3_stmt *insert_stmt = NULL;
-    const char *insert_sql = "INSERT INTO property_keys (key) VALUES (?)";
-    int rc = sqlite3_prepare_v2(manager->db, insert_sql, -1, &insert_stmt, NULL);
-    if (rc != SQLITE_OK) {
+    /* Perf review F9: prepared once per manager */
+    sqlite3_stmt *insert_stmt = sm_stmt(manager, &manager->ps_key_insert,
+                                        "INSERT INTO property_keys (key) VALUES (?)");
+    if (!insert_stmt) {
         CYPHER_DEBUG("Failed to prepare property key insert");
         return -1;
     }
 
-    sqlite3_bind_text(insert_stmt, 1, key, -1, SQLITE_STATIC);
+    sqlite3_bind_text(insert_stmt, 1, key, -1, SQLITE_TRANSIENT);
 
-    rc = sqlite3_step(insert_stmt);
-    sqlite3_finalize(insert_stmt);
+    int rc = sm_step_done(insert_stmt);
 
     if (rc != SQLITE_DONE) {
         CYPHER_DEBUG("Failed to insert property key '%s': %s", key, sqlite3_errmsg(manager->db));
@@ -664,14 +735,11 @@ int cypher_schema_create_node(cypher_schema_manager *manager)
         return -1;
     }
     
-    /* Insert into nodes table */
-    const char *sql = "INSERT INTO nodes DEFAULT VALUES";
-    char *error_message;
-    int rc = sqlite3_exec(manager->db, sql, NULL, NULL, &error_message);
-    
-    if (rc != SQLITE_OK) {
-        CYPHER_DEBUG("Failed to create node: %s", error_message);
-        sqlite3_free(error_message);
+    /* Insert into nodes table (perf review F9: prepared, not sqlite3_exec) */
+    sqlite3_stmt *stmt = sm_stmt(manager, &manager->ps_insert_node, "INSERT INTO nodes DEFAULT VALUES");
+    if (!stmt) return -1;
+    if (sm_step_done(stmt) != SQLITE_DONE) {
+        CYPHER_DEBUG("Failed to create node: %s", sqlite3_errmsg(manager->db));
         return -1;
     }
     
@@ -688,21 +756,18 @@ int cypher_schema_add_node_label(cypher_schema_manager *manager, int node_id, co
         return -1;
     }
     
-    /* Insert into node_labels table */
-    const char *sql = "INSERT OR IGNORE INTO node_labels (node_id, label) VALUES (?, ?)";
-    sqlite3_stmt *stmt;
-    
-    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
+    /* Insert into node_labels table (perf review F9: prepared once) */
+    sqlite3_stmt *stmt = sm_stmt(manager, &manager->ps_add_label,
+                                 "INSERT OR IGNORE INTO node_labels (node_id, label) VALUES (?, ?)");
+    if (!stmt) {
         CYPHER_DEBUG("Failed to prepare label insert statement: %s", sqlite3_errmsg(manager->db));
         return -1;
     }
     
     sqlite3_bind_int(stmt, 1, node_id);
-    sqlite3_bind_text(stmt, 2, label, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, label, -1, SQLITE_TRANSIENT);
     
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    int rc = sm_step_done(stmt);
     
     if (rc != SQLITE_DONE) {
         CYPHER_DEBUG("Failed to add label '%s' to node %d: %s", label, node_id, sqlite3_errmsg(manager->db));
@@ -717,6 +782,14 @@ int cypher_schema_set_node_property(cypher_schema_manager *manager,
                                    int node_id, const char *key, 
                                    property_type type, const void *value)
 {
+    return cypher_schema_set_node_property_ex(manager, node_id, key, type, value, false);
+}
+
+int cypher_schema_set_node_property_ex(cypher_schema_manager *manager,
+                                      int node_id, const char *key,
+                                      property_type type, const void *value,
+                                      bool entity_is_new)
+{
     if (!manager || !manager->db || !key || !value || node_id < 0) {
         return -1;
     }
@@ -726,83 +799,49 @@ int cypher_schema_set_node_property(cypher_schema_manager *manager,
     if (key_id < 0) {
         return -1;
     }
-    
-    /* Clean up the property from all other type tables to avoid COALESCE conflicts */
-    const char *cleanup_tables[] = {"node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json"};
-    const char *cleanup_sql = "DELETE FROM %s WHERE node_id = ? AND key_id = ?";
 
-    for (int i = 0; i < 5; i++) {
-        char cleanup_query[256];
-        snprintf(cleanup_query, sizeof(cleanup_query), cleanup_sql, cleanup_tables[i]);
-        
-        sqlite3_stmt *cleanup_stmt;
-        int rc = sqlite3_prepare_v2(manager->db, cleanup_query, -1, &cleanup_stmt, NULL);
-        if (rc == SQLITE_OK) {
+    int ti = prop_table_index(type);
+    if (ti < 0) return -1;
+
+    /* Clean up the property from all other type tables to avoid COALESCE
+     * conflicts. Perf review F9: skipped for an entity created by this
+     * statement, which cannot have rows in any typed table yet. */
+    if (!entity_is_new) {
+        for (int i = 0; i < 5; i++) {
+            if (!manager->ps_node_prop_del[i]) {
+                char cleanup_query[128];
+                snprintf(cleanup_query, sizeof(cleanup_query),
+                         "DELETE FROM %s WHERE node_id = ? AND key_id = ?", gql_node_prop_tables[i]);
+                if (!sm_stmt(manager, &manager->ps_node_prop_del[i], cleanup_query)) continue;
+            } else {
+                sm_stmt(manager, &manager->ps_node_prop_del[i], NULL);
+            }
+            sqlite3_stmt *cleanup_stmt = manager->ps_node_prop_del[i];
             sqlite3_bind_int(cleanup_stmt, 1, node_id);
             sqlite3_bind_int(cleanup_stmt, 2, key_id);
-            sqlite3_step(cleanup_stmt);
-            sqlite3_finalize(cleanup_stmt);
+            sm_step_done(cleanup_stmt);
         }
     }
-    
-    /* Determine the appropriate table and SQL based on type */
-    const char *table_name;
-    const char *sql_template = "INSERT INTO %s (node_id, key_id, value) VALUES (?, ?, ?)";
-    char sql[256];
-    
-    switch (type) {
-        case PROP_TYPE_INTEGER:
-            table_name = "node_props_int";
-            break;
-        case PROP_TYPE_TEXT:
-            table_name = "node_props_text";
-            break;
-        case PROP_TYPE_REAL:
-            table_name = "node_props_real";
-            break;
-        case PROP_TYPE_BOOLEAN:
-            table_name = "node_props_bool";
-            break;
-        case PROP_TYPE_JSON:
-            table_name = "node_props_json";
-            break;
-        default:
-            return -1;
-    }
-
-    snprintf(sql, sizeof(sql), sql_template, table_name);
 
     sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
+    if (!manager->ps_node_prop_ins[ti]) {
+        char sql[128];
+        snprintf(sql, sizeof(sql), "INSERT OR REPLACE INTO %s (node_id, key_id, value) VALUES (?, ?, ?)",
+                 gql_node_prop_tables[ti]);
+        stmt = sm_stmt(manager, &manager->ps_node_prop_ins[ti], sql);
+    } else {
+        stmt = sm_stmt(manager, &manager->ps_node_prop_ins[ti], NULL);
+    }
+    if (!stmt) {
         CYPHER_DEBUG("Failed to prepare property insert statement: %s", sqlite3_errmsg(manager->db));
         return -1;
     }
 
     sqlite3_bind_int(stmt, 1, node_id);
     sqlite3_bind_int(stmt, 2, key_id);
-
-    /* Bind value based on type */
-    switch (type) {
-        case PROP_TYPE_INTEGER:
-            sqlite3_bind_int64(stmt, 3, *(const int64_t*)value);
-            break;
-        case PROP_TYPE_TEXT:
-            sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);
-            break;
-        case PROP_TYPE_REAL:
-            sqlite3_bind_double(stmt, 3, *(const double*)value);
-            break;
-        case PROP_TYPE_BOOLEAN:
-            sqlite3_bind_int(stmt, 3, *(const int*)value ? 1 : 0);
-            break;
-        case PROP_TYPE_JSON:
-            sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);
-            break;
-    }
+    bind_prop_value(stmt, 3, type, value);
     
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    int rc = sm_step_done(stmt);
     
     if (rc != SQLITE_DONE) {
         CYPHER_DEBUG("Failed to set property '%s' on node %d: %s", key, node_id, sqlite3_errmsg(manager->db));
@@ -812,8 +851,6 @@ int cypher_schema_set_node_property(cypher_schema_manager *manager,
     CYPHER_DEBUG("Set property '%s' on node %d (type %s)", key, node_id, cypher_schema_property_type_name(type));
     return 0;
 }
-
-/* Edge operations */
 
 int cypher_schema_create_edge(cypher_schema_manager *manager, 
                              int source_id, int target_id, const char *type)
@@ -827,21 +864,19 @@ int cypher_schema_create_edge(cypher_schema_manager *manager,
         return -1;
     }
     
-    const char *sql = "INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)";
-    sqlite3_stmt *stmt;
-    
-    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
+    /* Perf review F9: prepared once */
+    sqlite3_stmt *stmt = sm_stmt(manager, &manager->ps_create_edge,
+                                 "INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)");
+    if (!stmt) {
         CYPHER_DEBUG("Failed to prepare edge insert statement: %s", sqlite3_errmsg(manager->db));
         return -1;
     }
     
     sqlite3_bind_int(stmt, 1, source_id);
     sqlite3_bind_int(stmt, 2, target_id);
-    sqlite3_bind_text(stmt, 3, type, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, type, -1, SQLITE_TRANSIENT);
     
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    int rc = sm_step_done(stmt);
     
     if (rc != SQLITE_DONE) {
         CYPHER_DEBUG("Failed to insert edge: %s", sqlite3_errmsg(manager->db));
@@ -888,79 +923,45 @@ int cypher_schema_set_edge_property(cypher_schema_manager *manager,
                                    property_type type, const void *value)
 {
     if (!manager || !manager->db || !key || !value || edge_id < 0) {
+        CYPHER_DEBUG("set_edge_property: bad args manager=%p key=%p value=%p edge_id=%d", (void*)manager, (const void*)key, value, edge_id);
         return -1;
     }
     
     /* Get or create property key ID */
     int key_id = cypher_schema_ensure_property_key(manager, key);
     if (key_id < 0) {
+        CYPHER_DEBUG("set_edge_property: ensure_property_key failed for '%s'", key);
         return -1;
     }
-    
-    /* Determine the appropriate table and SQL based on type */
-    const char *table_name;
-    const char *sql_template = "INSERT OR REPLACE INTO %s (edge_id, key_id, value) VALUES (?, ?, ?)";
-    char sql[256];
-    
-    switch (type) {
-        case PROP_TYPE_INTEGER:
-            table_name = "edge_props_int";
-            break;
-        case PROP_TYPE_TEXT:
-            table_name = "edge_props_text";
-            break;
-        case PROP_TYPE_REAL:
-            table_name = "edge_props_real";
-            break;
-        case PROP_TYPE_BOOLEAN:
-            table_name = "edge_props_bool";
-            break;
-        case PROP_TYPE_JSON:
-            table_name = "edge_props_json";
-            break;
-        default:
-            return -1;
-    }
 
-    snprintf(sql, sizeof(sql), sql_template, table_name);
+    int ti = prop_table_index(type);
+    if (ti < 0) { CYPHER_DEBUG("set_edge_property: unknown type %d", (int)type); return -1; }
 
     sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(manager->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
+    if (!manager->ps_edge_prop_ins[ti]) {
+        char sql[128];
+        snprintf(sql, sizeof(sql), "INSERT OR REPLACE INTO %s (edge_id, key_id, value) VALUES (?, ?, ?)",
+                 gql_edge_prop_tables[ti]);
+        stmt = sm_stmt(manager, &manager->ps_edge_prop_ins[ti], sql);
+    } else {
+        stmt = sm_stmt(manager, &manager->ps_edge_prop_ins[ti], NULL);
+    }
+    if (!stmt) {
         CYPHER_DEBUG("Failed to prepare edge property insert statement: %s", sqlite3_errmsg(manager->db));
         return -1;
     }
 
     sqlite3_bind_int(stmt, 1, edge_id);
     sqlite3_bind_int(stmt, 2, key_id);
-
-    /* Bind value based on type */
-    switch (type) {
-        case PROP_TYPE_INTEGER:
-            sqlite3_bind_int64(stmt, 3, *(const int64_t*)value);
-            break;
-        case PROP_TYPE_TEXT:
-            sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);
-            break;
-        case PROP_TYPE_REAL:
-            sqlite3_bind_double(stmt, 3, *(const double*)value);
-            break;
-        case PROP_TYPE_BOOLEAN:
-            sqlite3_bind_int(stmt, 3, *(const int*)value ? 1 : 0);
-            break;
-        case PROP_TYPE_JSON:
-            sqlite3_bind_text(stmt, 3, (const char*)value, -1, SQLITE_STATIC);
-            break;
-    }
+    bind_prop_value(stmt, 3, type, value);
     
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    int rc = sm_step_done(stmt);
     
     if (rc != SQLITE_DONE) {
         CYPHER_DEBUG("Failed to set property '%s' on edge %d: %s", key, edge_id, sqlite3_errmsg(manager->db));
         return -1;
     }
-    
+
     CYPHER_DEBUG("Set property '%s' on edge %d (type %s)", key, edge_id, cypher_schema_property_type_name(type));
     return 0;
 }

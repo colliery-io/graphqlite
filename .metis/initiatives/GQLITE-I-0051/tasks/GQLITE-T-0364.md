@@ -4,14 +4,14 @@ level: task
 title: "F8: per-connection prepared-statement cache keyed by Cypher text"
 short_code: "GQLITE-T-0364"
 created_at: 2026-09-07T01:25:12.930848+00:00
-updated_at: 2026-09-07T11:06:43.860714+00:00
+updated_at: 2026-09-07T11:18:42.989242+00:00
 parent: GQLITE-I-0051
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -27,6 +27,8 @@ initiative_id: GQLITE-I-0051
 ## Objective **[REQUIRED]**
 
 Perf review finding 8: 91% of per-query instructions are `sqlite3_prepare_v2` on the generated 1-3 KB statement (~80 us fixed cost, ~12K point queries/s per connection).
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

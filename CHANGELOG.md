@@ -67,8 +67,23 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   re-registering all 51 helper UDFs on every query. 20K nodes:
   `MATCH (n {id: $id}) RETURN n.name` 66 µs → 8 µs on a hit, 51 µs on a miss.
 
+- **Write path keeps its statements prepared** (F9). The schema manager
+  compiled ~26 statements per created node (`sqlite3_exec` for the node
+  insert, and five cleanup deletes plus an insert per property). It now
+  holds lazily prepared statements for node/edge/label/key inserts and the
+  cleanup deletes, reset after every use and finalised through the same
+  close hook as the statement cache; properties of an entity created by the
+  same CREATE clause skip the cleanup deletes entirely. 10K-node graph,
+  µs per operation: `CREATE (n:Person {4 props})` 81 → 14.5 (raw SQL 8.8),
+  `MERGE` 66 → 29, `SET` 43 → 23, `UNWIND $rows CREATE` 5.6 → 2.4 per row.
+
 ### Fixed
 
+- **Rust binding re-extracts the bundled extension when its content changes.**
+  The extracted copy was reused whenever the file size matched, so a rebuilt
+  library of identical size (any development build, or a patched release of
+  the same version) kept loading the stale extract. It is now compared
+  byte-for-byte.
 - **`cypher()` emits valid JSON for strings containing control characters.**
   The text result path escaped only `"` and `\\`; newlines, tabs and other
   control characters (and therefore all `EXPLAIN` output) produced invalid

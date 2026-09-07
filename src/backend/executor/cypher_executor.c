@@ -210,6 +210,8 @@ void cypher_executor_release_statements(cypher_executor *executor)
         sqlite3_finalize(executor->captured_stmt);
         executor->captured_stmt = NULL;
     }
+    /* Perf review F9: the schema manager's write statements too */
+    cypher_schema_release_statements(executor->schema_mgr);
 }
 
 static int executor_trace_close_cb(unsigned type, void *arg, void *p, void *x)
