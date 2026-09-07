@@ -4,14 +4,14 @@ level: task
 title: "F5: RETURN n materialisation — entity JSON pass-through and typed-table property object"
 short_code: "GQLITE-T-0361"
 created_at: 2026-09-07T01:25:08.446195+00:00
-updated_at: 2026-09-07T02:22:40.488875+00:00
+updated_at: 2026-09-07T10:48:52.455507+00:00
 parent: GQLITE-I-0051
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -27,6 +27,8 @@ initiative_id: GQLITE-I-0051
 ## Objective **[REQUIRED]**
 
 Perf review finding 5: `RETURN n` costs ~35 us and ~300 mallocs per node (757 ms at 20K). The SQL scans all of `property_keys` per node and probes ten indexes per key; the executor then parses the JSON back into an agtype tree and serialises it twice.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

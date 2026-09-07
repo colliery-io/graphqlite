@@ -680,6 +680,25 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
 
 
 /* Transform property access (e.g., n.name) */
+/* Perf review F6: one typed-table lookup branch of a property access.
+ * With a resolved key id the branch is a single (id, key_id) primary-key
+ * probe; otherwise it keeps the property_keys name join. */
+static void append_prop_branch(cypher_transform_context *ctx, const char *gprefix,
+                               const char *table, const char *ab, const char *id_col,
+                               const char *id_expr, const char *value_expr,
+                               const char *key, int key_id)
+{
+    if (key_id >= 0) {
+        append_sql(ctx, "(SELECT %s FROM %s%s %s WHERE %s.%s = %s AND %s.key_id = %d)",
+                   value_expr, gprefix, table, ab, ab, id_col, id_expr, ab, key_id);
+    } else {
+        append_sql(ctx, "(SELECT %s FROM %s%s %s JOIN %sproperty_keys pk ON %s.key_id = pk.id WHERE %s.%s = %s AND pk.key = ",
+                   value_expr, gprefix, table, ab, gprefix, ab, ab, id_col, id_expr);
+        append_string_literal(ctx, key);
+        append_sql(ctx, ")");
+    }
+}
+
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop)
 {
     CYPHER_DEBUG("Transforming property access");
@@ -720,34 +739,29 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
              strcasecmp(func->function_name, "endNode") == 0)) {
             /* Generate property lookup using the node ID from startNode/endNode.
              * The function generates (SELECT source_id/target_id FROM edges WHERE id = alias.id)
-             * so we use that as the node_id in the property lookup. */
-            const char *gprefix = "";
+             * so we use that as the node_id in the property lookup. Perf review
+             * F6: filter on the resolved key_id when the key is known. */
+            int fkey_id = cypher_transform_property_key_id(ctx, "", prop->property_name);
+            static const char *ftbls[5] = {"node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json"};
+            static const char *fabs[5]  = {"npt", "npi", "npr", "npb", "npj"};
+            static const char *fvals[5] = {"npt.value", "npi.value", "npr.value", "_gql_bool_str(npb.value)", "npj.value"};
             append_sql(ctx, "(SELECT COALESCE(");
-            append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = ", gprefix, gprefix);
-            if (transform_expression(ctx, prop->expr) < 0) return -1;
-            append_sql(ctx, " AND pk.key = ");
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = ", gprefix, gprefix);
-            if (transform_expression(ctx, prop->expr) < 0) return -1;
-            append_sql(ctx, " AND pk.key = ");
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = ", gprefix, gprefix);
-            if (transform_expression(ctx, prop->expr) < 0) return -1;
-            append_sql(ctx, " AND pk.key = ");
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT _gql_bool_str(npb.value) FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = ", gprefix, gprefix);
-            if (transform_expression(ctx, prop->expr) < 0) return -1;
-            append_sql(ctx, " AND pk.key = ");
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT npj.value FROM %snode_props_json npj JOIN %sproperty_keys pk ON npj.key_id = pk.id WHERE npj.node_id = ", gprefix, gprefix);
-            if (transform_expression(ctx, prop->expr) < 0) return -1;
-            append_sql(ctx, " AND pk.key = ");
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, ")))");
+            for (int fi = 0; fi < 5; fi++) {
+                if (fi > 0) append_sql(ctx, ", ");
+                if (fkey_id >= 0) {
+                    append_sql(ctx, "(SELECT %s FROM %s %s WHERE %s.node_id = ", fvals[fi], ftbls[fi], fabs[fi], fabs[fi]);
+                    if (transform_expression(ctx, prop->expr) < 0) return -1;
+                    append_sql(ctx, " AND %s.key_id = %d)", fabs[fi], fkey_id);
+                } else {
+                    append_sql(ctx, "(SELECT %s FROM %s %s JOIN property_keys pk ON %s.key_id = pk.id WHERE %s.node_id = ",
+                               fvals[fi], ftbls[fi], fabs[fi], fabs[fi], fabs[fi]);
+                    if (transform_expression(ctx, prop->expr) < 0) return -1;
+                    append_sql(ctx, " AND pk.key = ");
+                    append_string_literal(ctx, prop->property_name);
+                    append_sql(ctx, ")");
+                }
+            }
+            append_sql(ctx, "))");
             return 0;
         }
         ctx->has_error = true;
@@ -824,97 +838,41 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     /* Generate property access query using our actual schema */
     /* We need to check multiple property tables based on type */
 
+    /* Perf review F6: each typed-table branch becomes a single (id, key_id)
+     * primary-key probe when the key id is known at transform time; the
+     * property_keys name join is kept only for keys that do not exist yet. */
+    char id_expr[300];
+    snprintf(id_expr, sizeof(id_expr), "%s%s", alias, skip_id_suffix ? "" : ".id");
+    int key_id = cypher_transform_property_key_id(ctx, gprefix, prop->property_name);
+    const char *key = prop->property_name;
+
+    append_sql(ctx, "(SELECT COALESCE(");
     if (is_edge) {
-        /* Edge property access - use edge_props_* tables */
-        const char *id_suffix = skip_id_suffix ? "" : ".id";
-        if (ctx->in_comparison) {
-            append_sql(ctx, "(SELECT COALESCE(");
-            append_sql(ctx, "(SELECT ept.value FROM %sedge_props_text ept JOIN %sproperty_keys pk ON ept.key_id = pk.id WHERE ept.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT epi.value FROM %sedge_props_int epi JOIN %sproperty_keys pk ON epi.key_id = pk.id WHERE epi.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT epr.value FROM %sedge_props_real epr JOIN %sproperty_keys pk ON epr.key_id = pk.id WHERE epr.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(epb.value AS INTEGER) FROM %sedge_props_bool epb JOIN %sproperty_keys pk ON epb.key_id = pk.id WHERE epb.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT epj.value FROM %sedge_props_json epj JOIN %sproperty_keys pk ON epj.key_id = pk.id WHERE epj.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, ")))");
-        } else {
-            append_sql(ctx, "(SELECT COALESCE(");
-            append_sql(ctx, "(SELECT ept.value FROM %sedge_props_text ept JOIN %sproperty_keys pk ON ept.key_id = pk.id WHERE ept.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(epi.value AS TEXT) FROM %sedge_props_int epi JOIN %sproperty_keys pk ON epi.key_id = pk.id WHERE epi.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT CAST(epr.value AS TEXT) FROM %sedge_props_real epr JOIN %sproperty_keys pk ON epr.key_id = pk.id WHERE epr.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT _gql_bool_str(epb.value) FROM %sedge_props_bool epb JOIN %sproperty_keys pk ON epb.key_id = pk.id WHERE epb.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, "), ");
-            append_sql(ctx, "(SELECT epj.value FROM %sedge_props_json epj JOIN %sproperty_keys pk ON epj.key_id = pk.id WHERE epj.edge_id = %s%s AND pk.key = ", gprefix, gprefix, alias, id_suffix);
-            append_string_literal(ctx, prop->property_name);
-            append_sql(ctx, ")))");
-        }
-    } else if (ctx->in_comparison) {
-        /* Node property access for comparisons - preserve proper types */
-        append_sql(ctx, "(SELECT COALESCE(");
-        /* Text properties (both numeric and non-numeric strings) */
-        append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        /* Integer properties */
-        append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        /* Real properties */
-        append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        /* Boolean properties (cast to integer for comparison) */
-        append_sql(ctx, "(SELECT CAST(npb.value AS INTEGER) FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        /* JSON properties */
-        append_sql(ctx, "(SELECT npj.value FROM %snode_props_json npj JOIN %sproperty_keys pk ON npj.key_id = pk.id WHERE npj.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, ")))");
+        const char *bool_expr = ctx->in_comparison ? "CAST(epb.value AS INTEGER)" : "_gql_bool_str(epb.value)";
+        const char *int_expr  = ctx->in_comparison ? "epi.value" : "CAST(epi.value AS TEXT)";
+        const char *real_expr = ctx->in_comparison ? "epr.value" : "CAST(epr.value AS TEXT)";
+        append_prop_branch(ctx, gprefix, "edge_props_text", "ept", "edge_id", id_expr, "ept.value", key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "edge_props_int", "epi", "edge_id", id_expr, int_expr, key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "edge_props_real", "epr", "edge_id", id_expr, real_expr, key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "edge_props_bool", "epb", "edge_id", id_expr, bool_expr, key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr, "epj.value", key, key_id);
     } else {
-        /* Node property access for RETURN clauses - convert everything to text */
-        append_sql(ctx, "(SELECT COALESCE(");
-        append_sql(ctx, "(SELECT npt.value FROM %snode_props_text npt JOIN %sproperty_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT npi.value FROM %snode_props_int npi JOIN %sproperty_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT npr.value FROM %snode_props_real npr JOIN %sproperty_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        append_sql(ctx, "(SELECT _gql_bool_str(npb.value) FROM %snode_props_bool npb JOIN %sproperty_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, "), ");
-        /* JSON properties (already TEXT) */
-        append_sql(ctx, "(SELECT npj.value FROM %snode_props_json npj JOIN %sproperty_keys pk ON npj.key_id = pk.id WHERE npj.node_id = %s%s AND pk.key = ",
-                   gprefix, gprefix, alias, skip_id_suffix ? "" : ".id");
-        append_string_literal(ctx, prop->property_name);
-        append_sql(ctx, ")))");
+        const char *bool_expr = ctx->in_comparison ? "CAST(npb.value AS INTEGER)" : "_gql_bool_str(npb.value)";
+        append_prop_branch(ctx, gprefix, "node_props_text", "npt", "node_id", id_expr, "npt.value", key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "node_props_int", "npi", "node_id", id_expr, "npi.value", key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "node_props_real", "npr", "node_id", id_expr, "npr.value", key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "node_props_bool", "npb", "node_id", id_expr, bool_expr, key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr, "npj.value", key, key_id);
     }
+    append_sql(ctx, "))");
 
     return 0;
 }

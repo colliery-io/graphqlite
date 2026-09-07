@@ -94,6 +94,15 @@ struct cypher_transform_context {
     int anchor_count;
     int anchor_cap;
 
+    /* Perf review F6: per-statement cache of property key name -> id (per
+     * graph prefix), so property access filters on key_id directly instead
+     * of joining property_keys by name in every typed-table branch. */
+    char **pk_graphs;
+    char **pk_names;
+    int *pk_ids;
+    int pk_count;
+    int pk_cap;
+
     /* T-0310: byte length of the CTE prefix that prepend_cte_to_sql
      * wrote at the start of sql_buffer. Zero if no CTE prefix was
      * prepended. Used by cypher_transform_query to know where the
@@ -144,6 +153,11 @@ struct cypher_query_result {
 
 /* Transform context management */
 cypher_transform_context* cypher_transform_create_context(sqlite3 *db);
+
+/* Perf review F6: resolve a property key to its property_keys.id at
+ * transform time (cached per context). Returns -1 when unknown; callers
+ * then keep the name join, which stays correct if the key is created later. */
+int cypher_transform_property_key_id(cypher_transform_context *ctx, const char *gprefix, const char *key);
 void cypher_transform_free_context(cypher_transform_context *ctx);
 
 /* T-0320 helpers — record/clear OPTIONAL-MATCH defer pairs. */

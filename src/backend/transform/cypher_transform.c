@@ -95,6 +95,49 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
     return ctx;
 }
 
+int cypher_transform_property_key_id(cypher_transform_context *ctx, const char *gprefix, const char *key)
+{
+    if (!ctx || !ctx->db || !key) return -1;
+    const char *g = gprefix ? gprefix : "";
+    for (int i = 0; i < ctx->pk_count; i++) {
+        if (strcmp(ctx->pk_graphs[i], g) == 0 && strcmp(ctx->pk_names[i], key) == 0) {
+            return ctx->pk_ids[i];
+        }
+    }
+
+    char sql[320];
+    snprintf(sql, sizeof(sql), "SELECT id FROM %sproperty_keys WHERE key = ?", g);
+    sqlite3_stmt *stmt = NULL;
+    int id = -1;
+    if (sqlite3_prepare_v2(ctx->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) id = sqlite3_column_int(stmt, 0);
+    }
+    if (stmt) sqlite3_finalize(stmt);
+
+    /* Cache negative results too: the transform of one statement runs
+     * entirely before that statement executes, so "unknown" cannot change
+     * within the lifetime of this context. */
+    if (ctx->pk_count == ctx->pk_cap) {
+        int cap = ctx->pk_cap ? ctx->pk_cap * 2 : 8;
+        char **gs = realloc(ctx->pk_graphs, (size_t)cap * sizeof(char *));
+        char **ns = realloc(ctx->pk_names, (size_t)cap * sizeof(char *));
+        int *ids = realloc(ctx->pk_ids, (size_t)cap * sizeof(int));
+        if (!gs || !ns || !ids) { free(gs); free(ns); free(ids); return id; }
+        ctx->pk_graphs = gs; ctx->pk_names = ns; ctx->pk_ids = ids; ctx->pk_cap = cap;
+    }
+    ctx->pk_graphs[ctx->pk_count] = strdup(g);
+    ctx->pk_names[ctx->pk_count] = strdup(key);
+    ctx->pk_ids[ctx->pk_count] = id;
+    if (ctx->pk_graphs[ctx->pk_count] && ctx->pk_names[ctx->pk_count]) {
+        ctx->pk_count++;
+    } else {
+        free(ctx->pk_graphs[ctx->pk_count]);
+        free(ctx->pk_names[ctx->pk_count]);
+    }
+    return id;
+}
+
 void cypher_transform_free_context(cypher_transform_context *ctx)
 {
     if (ctx) {
@@ -107,6 +150,17 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         ctx->anchor_aliases = NULL;
         ctx->anchor_sqls = NULL;
         ctx->anchor_count = ctx->anchor_cap = 0;
+        for (int i = 0; i < ctx->pk_count; i++) {
+            free(ctx->pk_graphs[i]);
+            free(ctx->pk_names[i]);
+        }
+        free(ctx->pk_graphs);
+        free(ctx->pk_names);
+        free(ctx->pk_ids);
+        ctx->pk_graphs = NULL;
+        ctx->pk_names = NULL;
+        ctx->pk_ids = NULL;
+        ctx->pk_count = ctx->pk_cap = 0;
     }
 
     if (!ctx) {
