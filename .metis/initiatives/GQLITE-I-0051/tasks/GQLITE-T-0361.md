@@ -42,7 +42,7 @@ Perf review finding 5: `RETURN n` costs ~35 us and ~300 mallocs per node (757 ms
 
 Expected ~757 ms -> ~120 ms at 20K nodes; also shrinks finding 10's memory amplification.
 
-Source: `docs/internal/performance-review.md` (PR #118).
+Source: the review findings section of [[GQLITE-I-0051]] (originally PR #118).
 
 ## Status Updates **[REQUIRED]**
 

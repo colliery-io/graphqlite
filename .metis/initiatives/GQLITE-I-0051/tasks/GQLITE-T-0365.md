@@ -38,7 +38,7 @@ Perf review finding 9: CREATE issues ~26 prepare/finalize pairs per 4-property n
 
 A known-new-entity flag on the create path that skips the cleanup deletes, plus prepared statements owned by the schema manager and finalised in `connection_cache_destroy` (restores the caching removed because it blocked `sqlite3_close`). Bindings should batch multi-row writes with UNWIND (13x cheaper per row).
 
-Source: `docs/internal/performance-review.md` (PR #118).
+Source: the review findings section of [[GQLITE-I-0051]] (originally PR #118).
 
 ## Status Updates **[REQUIRED]**
 

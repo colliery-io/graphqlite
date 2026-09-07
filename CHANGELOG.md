@@ -6,7 +6,7 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 
 ## [Unreleased]
 
-### Performance (phase 1 of the review in `docs/internal/performance-review.md`)
+### Performance (phase 1 of the performance review, Metis GQLITE-I-0051)
 
 - **Parameterized inline property matches use the value indexes** (F1).
   `MATCH (n {id: $id})` compiled to four correlated `EXISTS` subqueries that

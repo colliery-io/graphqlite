@@ -1,6 +1,6 @@
 # Python performance harness
 
-Companion scripts for `docs/internal/performance-review.md`. They load the
+Companion scripts for the performance review tracked in Metis as GQLITE-I-0051. They load the
 built extension into Python's `sqlite3` module (no `sqlite3` CLI needed),
 build a synthetic graph with typed properties, and time individual Cypher
 query shapes in isolated subprocesses so peak memory can be attributed.

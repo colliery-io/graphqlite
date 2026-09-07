@@ -38,7 +38,7 @@ Perf review finding 8: 91% of per-query instructions are `sqlite3_prepare_v2` on
 
 Per-connection LRU from Cypher text to (generated SQL, prepared statement, column metadata) with reset + rebind on hit; finalised from `connection_cache_destroy`. Requires SQL independent of parameter values (F1 chose that form). Also: stop calling `graphqlite_register_helper_udfs` per query and `cypher_schema_initialize` twice per connection.
 
-Source: `docs/internal/performance-review.md` (PR #118).
+Source: the review findings section of [[GQLITE-I-0051]] (originally PR #118).
 
 ## Status Updates **[REQUIRED]**
 

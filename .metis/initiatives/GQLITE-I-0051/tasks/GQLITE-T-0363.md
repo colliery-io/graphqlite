@@ -38,7 +38,7 @@ Perf review finding 7: `WHERE n.age > 85` compiles to `_gql_order_cmp(<COALESCE>
 
 For `<var>.<prop> <op> <literal-or-param>` with a resolvable key id, emit an index-driven EXISTS/semi-join against the typed table matching the literal's type; keep `_gql_order_cmp` as the fallback for mixed-type or computed operands. Depends on F6.
 
-Source: `docs/internal/performance-review.md` (PR #118).
+Source: the review findings section of [[GQLITE-I-0051]] (originally PR #118).
 
 ## Status Updates **[REQUIRED]**
 

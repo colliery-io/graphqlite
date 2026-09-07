@@ -38,7 +38,7 @@ Perf review finding 6: `n.age` compiles to a five-way COALESCE where each branch
 
 Give the transform a handle to the schema manager's key cache (or have the executor pre-resolve the keys referenced by the AST and pass a map), then emit `key_id = <n>` and drop the join.
 
-Source: `docs/internal/performance-review.md` (PR #118).
+Source: the review findings section of [[GQLITE-I-0051]] (originally PR #118).
 
 ## Status Updates **[REQUIRED]**
 
