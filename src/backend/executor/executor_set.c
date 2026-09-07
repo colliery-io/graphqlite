@@ -27,7 +27,7 @@ static int evaluate_ast_with_context(
     property_type *out_type,
     property_value *out_value)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return -1;
 
     /* Register variables from var_map so property lookups can resolve.
@@ -190,7 +190,7 @@ int evaluate_function_call_via_sqlite(
     property_type *out_type,
     property_value *out_value)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return -1;
 
     append_sql(ctx, "SELECT ");
@@ -449,7 +449,7 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
     CYPHER_DEBUG("Executing MATCH+SET query");
 
     /* Transform MATCH clause to get bound variables */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

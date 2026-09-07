@@ -308,6 +308,41 @@ static void test_cache_invalidation_pattern(void)
 }
 
 /* Initialize cache test suite */
+/* Perf review F8: the statement cache keeps prepared statements alive across
+ * calls. sqlite3_close() (v1) refuses to close a connection with unfinalized
+ * statements, so the executor finalizes them from the SQLITE_TRACE_CLOSE
+ * callback. This test would fail with SQLITE_BUSY without that hook. */
+static void test_stmt_cache_allows_v1_close(void)
+{
+    sqlite3 *db = NULL;
+    CU_ASSERT_EQUAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+    cypher_executor *ex = cypher_executor_create(db);
+    CU_ASSERT_PTR_NOT_NULL(ex);
+    if (!ex) { sqlite3_close(db); return; }
+
+    cypher_result *r = cypher_executor_execute(ex, "CREATE (:SC {id: 'x', v: 1})");
+    if (r) cypher_result_free(r);
+    r = cypher_executor_execute(ex, "MATCH (n:SC {id: 'x'}) RETURN n.v AS v");
+    CU_ASSERT_TRUE(r && r->success && r->row_count == 1);
+    if (r) cypher_result_free(r);
+    /* second execution is a cache hit and must still see the row */
+    r = cypher_executor_execute(ex, "MATCH (n:SC {id: 'x'}) RETURN n.v AS v");
+    CU_ASSERT_TRUE(r && r->success && r->row_count == 1);
+    if (r) cypher_result_free(r);
+    /* a write followed by the cached read reflects the change */
+    r = cypher_executor_execute(ex, "MATCH (n:SC {id: 'x'}) SET n.v = 2");
+    if (r) cypher_result_free(r);
+    r = cypher_executor_execute(ex, "MATCH (n:SC {id: 'x'}) RETURN n.v AS v");
+    CU_ASSERT_TRUE(r && r->success && r->row_count == 1 && r->data[0][0] && strcmp(r->data[0][0], "2") == 0);
+    if (r) cypher_result_free(r);
+    CU_ASSERT_TRUE(ex->stmt_cache_count >= 1);
+
+    /* v1 close must succeed while cache entries hold statements */
+    int rc = sqlite3_close(db);
+    CU_ASSERT_EQUAL(rc, SQLITE_OK);
+    cypher_executor_free(ex);
+}
+
 int init_cache_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Graph Cache Tests",
@@ -324,7 +359,8 @@ int init_cache_suite(void)
         CU_add_test(suite, "PageRank without cached graph", test_pagerank_without_cached_graph) == NULL ||
         CU_add_test(suite, "Cache reuse across algorithms", test_cache_reuse_across_algorithms) == NULL ||
         CU_add_test(suite, "Empty graph cache", test_empty_graph_cache) == NULL ||
-        CU_add_test(suite, "Cache invalidation pattern", test_cache_invalidation_pattern) == NULL) {
+        CU_add_test(suite, "Cache invalidation pattern", test_cache_invalidation_pattern) == NULL ||
+        CU_add_test(suite, "Statement cache allows sqlite3_close (perf F8)", test_stmt_cache_allows_v1_close) == NULL) {
         return CU_get_error();
     }
 

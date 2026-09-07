@@ -162,6 +162,10 @@ struct cypher_query_result {
 
 /* Transform context management */
 cypher_transform_context* cypher_transform_create_context(sqlite3 *db);
+/* Perf review F8: the executor registers the helper UDFs once at creation;
+ * re-registering all of them per transform context cost ~10-20 us per
+ * query miss, so executor code passes register_udfs = false. */
+cypher_transform_context* cypher_transform_create_context_ex(sqlite3 *db, bool register_udfs);
 
 /* Perf review F6: resolve a property key to its property_keys.id at
  * transform time (cached per context). Returns -1 when unknown; callers

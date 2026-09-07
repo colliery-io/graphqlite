@@ -45,7 +45,7 @@ static bool ast_contains_function_call(ast_node *expr)
  * serialization can't evaluate. */
 static char* evaluate_expr_to_json(cypher_executor *executor, ast_node *expr)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return NULL;
 
     append_sql(ctx, "SELECT ");

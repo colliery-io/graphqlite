@@ -133,7 +133,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
     CYPHER_DEBUG("CALL with outer MATCH at position %d", call_pos);
 
     /* Build a temporary query from pre-CALL clauses to get outer row data */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context for outer query");
         return -1;
@@ -251,7 +251,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                 ast_node *c = inner_query->clauses->items[ci];
                 if (!c || c->type != AST_NODE_MATCH) continue;
                 cypher_match *im = (cypher_match*)c;
-                cypher_transform_context *mctx = cypher_transform_create_context(executor->db);
+                cypher_transform_context *mctx = cypher_transform_create_context_ex(executor->db, false);
                 if (!mctx) continue;
                 if (transform_match_clause(mctx, im) == 0) {
                     sql_builder *sb = mctx->unified_builder;
@@ -546,7 +546,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                 size_t ipos = 0;
                 ipos += snprintf(inner_sql + ipos, sizeof(inner_sql) - ipos, "SELECT ");
 
-                cypher_transform_context *ret_ctx = cypher_transform_create_context(executor->db);
+                cypher_transform_context *ret_ctx = cypher_transform_create_context_ex(executor->db, false);
                 if (ret_ctx) {
                     /* Register scoped_map variables with unique aliases */
                     for (int si = 0; si < scoped_map->count; si++) {
@@ -680,7 +680,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
 
                             /* Evaluate outer expressions via SQL */
                             if (!resolved) {
-                                cypher_transform_context *eval_ctx = cypher_transform_create_context(executor->db);
+                                cypher_transform_context *eval_ctx = cypher_transform_create_context_ex(executor->db, false);
                                 if (eval_ctx) {
                                     for (int si = 0; si < var_map->count; si++) {
                                         variable_mapping *m = &var_map->mappings[si];

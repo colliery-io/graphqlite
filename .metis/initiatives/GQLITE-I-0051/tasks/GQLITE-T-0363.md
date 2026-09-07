@@ -4,14 +4,14 @@ level: task
 title: "F7: index-driven WHERE comparisons instead of _gql_order_cmp over COALESCE"
 short_code: "GQLITE-T-0363"
 created_at: 2026-09-07T01:25:11.494202+00:00
-updated_at: 2026-09-07T10:56:49.174431+00:00
+updated_at: 2026-09-07T10:57:21.396905+00:00
 parent: GQLITE-I-0051
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -27,6 +27,8 @@ initiative_id: GQLITE-I-0051
 ## Objective **[REQUIRED]**
 
 Perf review finding 7: `WHERE n.age > 85` compiles to `_gql_order_cmp(<COALESCE>, 85, '>')`, a UDF wrapper that makes the `(key_id, value, node_id)` indexes unusable. 24 ms vs 1.6 ms range filter at 20K nodes.
+
+## Acceptance Criteria
 
 ## Acceptance Criteria
 

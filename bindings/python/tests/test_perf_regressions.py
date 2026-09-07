@@ -267,3 +267,26 @@ def test_where_comparison_semantics(db):
     assert [r["big"] for r in rows] == [False, True, None, True]
     rows = db.cypher("MATCH (a:Q {id: 'q1'}) OPTIONAL MATCH (a)-[:NOPE]->(b) WHERE b.age > 30 RETURN a.id AS id, b").to_list()
     assert rows == [{"id": "q1", "b": None}]
+
+
+# --- F8: per-connection statement cache ---------------------------------------
+
+def test_statement_cache_reflects_params_and_writes(db):
+    q = "MATCH (n:P {id: $id}) RETURN n.n AS n"
+    assert db.cypher(q, {"id": "p3"})[0]["n"] == 3
+    assert db.cypher(q, {"id": "p4"})[0]["n"] == 4          # same text, new binding
+    db.cypher("MATCH (n:P {id: 'p3'}) SET n.n = 300")
+    assert db.cypher(q, {"id": "p3"})[0]["n"] == 300        # cached statement sees the write
+    db.cypher("CREATE (:P {id: 'p_new', n: 77})")
+    assert db.cypher(q, {"id": "p_new"})[0]["n"] == 77      # and new rows
+    db.cypher("MATCH (n:P {id: 'p_new'}) DELETE n")
+    assert db.cypher(q, {"id": "p_new"}).to_list() == []    # and deletions
+    # a missing parameter binds NULL (no match), never a stale value from the last call
+    assert db.cypher(q, {"other": 1}).to_list() == []
+    assert db.cypher(q, {"id": "p4"})[0]["n"] == 4           # cache still healthy afterwards
+
+
+def test_statement_cache_survives_many_distinct_queries(db):
+    for i in range(100):
+        assert db.cypher(f"MATCH (n:P {{id: 'p{i % 50}'}}) RETURN n.n AS n")[0]["n"] == i % 50
+    assert db.cypher("MATCH (n:P {id: 'p7'}) RETURN n.n AS n")[0]["n"] == 7

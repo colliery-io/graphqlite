@@ -1185,7 +1185,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
     CYPHER_DEBUG("Executing MATCH+MERGE query");
 
     /* Transform MATCH clause to get bound variables */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

@@ -607,6 +607,14 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Matched pattern: %s (priority %d)", pattern->name, pattern->priority);
 
+    /* Perf review F8: only the pure read handlers may park their statement
+     * for the cache; anything else (writes, CALL, algorithms) runs with
+     * capture disarmed so a nested read cannot be mis-associated with the
+     * outer query's text. */
+    if (pattern->handler != handle_match_return && pattern->handler != handle_generic_transform) {
+        executor->stmt_capture = false;
+    }
+
     /* Execute the pattern handler */
     return pattern->handler(executor, query, result, flags);
 }
@@ -622,7 +630,7 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Using generic transform pipeline");
 
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -719,8 +727,19 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
     }
 
     result->success = true;
+    /* Perf review F8: park a pure read (RETURN, no pre-exec DML) for the
+     * statement cache instead of finalizing it. */
+    if (executor->stmt_capture && !executor->captured_stmt && transform_result->stmt &&
+        !transform_result->pre_exec_dml && find_return_clause(query)) {
+        sqlite3_reset(transform_result->stmt);
+        executor->captured_stmt = transform_result->stmt;
+        executor->captured_ctx = ctx;
+        executor->captured_ret = find_return_clause(query);
+        transform_result->stmt = NULL;
+        ctx = NULL;
+    }
     cypher_free_result(transform_result);
-    cypher_transform_free_context(ctx);
+    if (ctx) cypher_transform_free_context(ctx);
     return 0;
 }
 

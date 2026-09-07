@@ -54,6 +54,19 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   WITH ... WHERE), never under NOT, OR, CASE or in RETURN. 20K nodes:
   `WHERE n.age > 85` 10.6 ms → 1.7 ms, `WHERE n.name = 'x'` 6.9 ms → 0.08 ms.
 
+- **Per-connection statement cache for read queries** (F8). Parsing,
+  transforming and preparing a 1–2 KB statement was ~90% of a point query.
+  The executor now keeps up to 64 pure read queries (MATCH … RETURN and the
+  generic read pipeline, never writes, CALL or algorithms) keyed by exact
+  Cypher text, with their AST, transform state and prepared statement, and
+  re-executes them with fresh bindings. Cached statements are finalised from
+  SQLite's `SQLITE_TRACE_CLOSE` callback so `sqlite3_close()` still succeeds;
+  an application that installs its own `sqlite3_trace_v2` hook afterwards
+  replaces that callback and should close with `sqlite3_close_v2()`. Set
+  `GQL_STMT_CACHE=0` in the environment to disable. The executor also stops
+  re-registering all 51 helper UDFs on every query. 20K nodes:
+  `MATCH (n {id: $id}) RETURN n.name` 66 µs → 8 µs on a hit, 51 µs on a miss.
+
 ### Fixed
 
 - **`cypher()` emits valid JSON for strings containing control characters.**

@@ -25,7 +25,7 @@ static int merge_with_execute_return(cypher_executor *executor,
                                      variable_map *var_map,
                                      cypher_result *result)
 {
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "MERGE+WITH RETURN: failed to create transform context");
         return -1;
@@ -192,7 +192,7 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
             if (query->clauses->items[i]->type != AST_NODE_MATCH) continue;
             cypher_match *m = (cypher_match*)query->clauses->items[i];
 
-            cypher_transform_context *mctx = cypher_transform_create_context(executor->db);
+            cypher_transform_context *mctx = cypher_transform_create_context_ex(executor->db, false);
             if (!mctx) continue;
 
             if (transform_match_clause(mctx, m) == 0) {
@@ -380,7 +380,7 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
     if (post_match && post_merge) {
         /* Execute MATCH to find additional variables, then MERGE with combined var_map */
         /* Transform MATCH to SQL and execute to get matched node IDs */
-        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+        cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
         if (!ctx) {
             free_variable_map(post_var_map);
             set_result_error(result, "Failed to create transform context for post-WITH");

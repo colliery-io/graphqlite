@@ -26,7 +26,7 @@ int execute_match_clause(cypher_executor *executor, cypher_match *match, cypher_
     }
     
     /* Transform MATCH to SQL */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -70,7 +70,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("Executing MATCH+RETURN query");
 
     /* Build SQL query from MATCH and RETURN clauses */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -184,6 +184,15 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("MATCH+RETURN TIMING: transform=%.2fms, prepare=%.2fms, build_results=%.2fms", transform_ms, prepare_ms, execute_ms);
 #endif
 
+    /* Perf review F8: park the statement + transform context for the
+     * statement cache when the entry point asked for it. */
+    if (executor->stmt_capture && !executor->captured_stmt) {
+        sqlite3_reset(stmt);
+        executor->captured_stmt = stmt;
+        executor->captured_ctx = ctx;
+        executor->captured_ret = return_clause;
+        return 0;
+    }
     sqlite3_finalize(stmt);
     cypher_transform_free_context(ctx);
     return 0;
@@ -864,7 +873,7 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
 {
     if (!executor || !match || !var_map || !result) return -1;
 
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;
@@ -1009,7 +1018,7 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
      * from bleeding across rows. Multi-MATCH keeps the legacy first-row
      * behavior (a separate, larger fix). */
     if (match_count == 1 && single_match) {
-        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+        cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
         if (!ctx) {
             set_result_error(result, "Failed to create transform context");
             free_variable_map(var_map);
@@ -1230,7 +1239,7 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("Executing MATCH+CREATE query");
     
     /* First, execute the MATCH to bind variables to existing nodes */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         set_result_error(result, "Failed to create transform context");
         return -1;

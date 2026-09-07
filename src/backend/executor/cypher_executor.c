@@ -87,6 +87,8 @@ static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_valu
 }
 
 #include "runtime/udf_register.h"
+#include "transform/cypher_transform.h"
+#include "parser/cypher_parser.h"
 #include "runtime/gql_error.h"
 
 /* Register custom SQLite functions needed for Cypher execution */
@@ -117,6 +119,135 @@ static int register_custom_functions(sqlite3 *db)
 /* Performance timing instrumentation - enable with -DGRAPHQLITE_PERF_TIMING */
 
 
+/* ---- Perf review F8: statement cache --------------------------------- */
+
+static void stmt_cache_entry_free(stmt_cache_entry *e)
+{
+    if (e->stmt) sqlite3_finalize(e->stmt);
+    if (e->ctx) cypher_transform_free_context(e->ctx);
+    if (e->ast) cypher_parser_free_result(e->ast);
+    free(e->text);
+    memset(e, 0, sizeof(*e));
+}
+
+/* Remove entry i by swapping the last entry into its slot. */
+static void stmt_cache_evict(cypher_executor *ex, int i)
+{
+    if (i < 0 || i >= ex->stmt_cache_count) return;
+    stmt_cache_entry_free(&ex->stmt_cache[i]);
+    ex->stmt_cache_count--;
+    if (i != ex->stmt_cache_count) {
+        ex->stmt_cache[i] = ex->stmt_cache[ex->stmt_cache_count];
+        memset(&ex->stmt_cache[ex->stmt_cache_count], 0, sizeof(stmt_cache_entry));
+    }
+}
+
+static void stmt_cache_clear(cypher_executor *ex)
+{
+    if (!ex->stmt_cache) return;
+    for (int i = 0; i < ex->stmt_cache_count; i++) stmt_cache_entry_free(&ex->stmt_cache[i]);
+    ex->stmt_cache_count = 0;
+}
+
+static stmt_cache_entry *stmt_cache_find(cypher_executor *ex, const char *text)
+{
+    if (!ex->stmt_cache_enabled || !ex->stmt_cache || !text) return NULL;
+    for (int i = 0; i < ex->stmt_cache_count; i++) {
+        stmt_cache_entry *e = &ex->stmt_cache[i];
+        if (e->stmt && !e->in_use && strcmp(e->text, text) == 0) return e;
+    }
+    return NULL;
+}
+
+static void stmt_cache_insert(cypher_executor *ex, const char *text, ast_node *ast,
+                              struct cypher_transform_context *ctx, sqlite3_stmt *stmt,
+                              struct cypher_return *ret)
+{
+    if (ex->stmt_cache_count == GQL_STMT_CACHE_MAX) {
+        int victim = -1;
+        unsigned long long oldest = ~0ULL;
+        for (int i = 0; i < ex->stmt_cache_count; i++) {
+            if (!ex->stmt_cache[i].in_use && ex->stmt_cache[i].last_used < oldest) {
+                oldest = ex->stmt_cache[i].last_used;
+                victim = i;
+            }
+        }
+        if (victim < 0) { /* everything in use: do not cache */
+            sqlite3_finalize(stmt);
+            cypher_transform_free_context(ctx);
+            cypher_parser_free_result(ast);
+            return;
+        }
+        stmt_cache_evict(ex, victim);
+    }
+    stmt_cache_entry *e = &ex->stmt_cache[ex->stmt_cache_count];
+    e->text = strdup(text);
+    if (!e->text) {
+        sqlite3_finalize(stmt);
+        cypher_transform_free_context(ctx);
+        cypher_parser_free_result(ast);
+        return;
+    }
+    e->ast = ast;
+    e->ctx = ctx;
+    e->stmt = stmt;
+    e->ret = ret;
+    e->last_used = ++ex->stmt_cache_tick;
+    e->in_use = false;
+    ex->stmt_cache_count++;
+}
+
+void cypher_executor_release_statements(cypher_executor *executor)
+{
+    if (!executor || !executor->stmt_cache) return;
+    for (int i = 0; i < executor->stmt_cache_count; i++) {
+        if (executor->stmt_cache[i].stmt) {
+            sqlite3_finalize(executor->stmt_cache[i].stmt);
+            executor->stmt_cache[i].stmt = NULL;   /* entry is now a miss */
+        }
+    }
+    if (executor->captured_stmt) {
+        sqlite3_finalize(executor->captured_stmt);
+        executor->captured_stmt = NULL;
+    }
+}
+
+static int executor_trace_close_cb(unsigned type, void *arg, void *p, void *x)
+{
+    (void)p; (void)x;
+    if (type == SQLITE_TRACE_CLOSE) cypher_executor_release_statements((cypher_executor *)arg);
+    return 0;
+}
+
+/* Run a cached read query: rebind, build rows, reset. */
+static cypher_result *stmt_cache_execute(cypher_executor *ex, stmt_cache_entry *e)
+{
+    cypher_result *result = create_empty_result();
+    if (!result) return NULL;
+    e->in_use = true;
+    sqlite3_reset(e->stmt);
+    sqlite3_clear_bindings(e->stmt);
+    if (ex->params_json && bind_params_from_json(e->stmt, ex->params_json) < 0) {
+        set_result_error(result, "Failed to bind query parameters");
+        e->in_use = false;
+        return result;
+    }
+    int rc = build_query_results(ex, e->stmt, e->ret, result, e->ctx);
+    sqlite3_reset(e->stmt);
+    e->in_use = false;
+    if (rc < 0) {
+        /* Anything that broke a previously working statement (e.g. an
+         * attached graph went away) invalidates the entry. */
+        for (int i = 0; i < ex->stmt_cache_count; i++) {
+            if (&ex->stmt_cache[i] == e) { stmt_cache_evict(ex, i); break; }
+        }
+        return result;
+    }
+    result->success = true;
+    e->last_used = ++ex->stmt_cache_tick;
+    return result;
+}
+
 /* Create execution engine */
 cypher_executor* cypher_executor_create(sqlite3 *db)
 {
@@ -137,6 +268,21 @@ cypher_executor* cypher_executor_create(sqlite3 *db)
     if (register_custom_functions(db) < 0) {
         free(executor);
         return NULL;
+    }
+
+    /* Perf review F8: statement cache. Live prepared statements make
+     * sqlite3_close() (v1) fail with SQLITE_BUSY, so finalize them from the
+     * SQLITE_TRACE_CLOSE callback, which SQLite invokes before that check.
+     * An application that installs its own trace hook afterwards replaces
+     * this one; sqlite3_close_v2() callers are unaffected either way. */
+    {
+        const char *env = getenv("GQL_STMT_CACHE");
+        executor->stmt_cache_enabled = !(env && env[0] == '0');
+        executor->stmt_cache = calloc(GQL_STMT_CACHE_MAX, sizeof(stmt_cache_entry));
+        if (!executor->stmt_cache) executor->stmt_cache_enabled = false;
+        if (executor->stmt_cache_enabled) {
+            sqlite3_trace_v2(db, SQLITE_TRACE_CLOSE, executor_trace_close_cb, executor);
+        }
     }
 
     /* Create schema manager */
@@ -165,7 +311,13 @@ void cypher_executor_free(cypher_executor *executor)
     if (!executor) {
         return;
     }
-    
+
+    cypher_executor_release_statements(executor);
+    stmt_cache_clear(executor);
+    free(executor->stmt_cache);
+    if (executor->captured_stmt) sqlite3_finalize(executor->captured_stmt);
+    if (executor->captured_ctx) cypher_transform_free_context(executor->captured_ctx);
+
     cypher_schema_free_manager(executor->schema_mgr);
     free(executor);
     
@@ -297,7 +449,7 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         const char *pattern_name = pattern ? pattern->name : "NONE";
                         const char *flags_str = clause_flags_to_string(flags);
 
-                        cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                        cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
                         if (!ctx) {
                             set_result_error(result, "Failed to create transform context");
                             return result;
@@ -378,7 +530,7 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                         return result;
                     }
                 }
-                cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+                cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
                 if (!ctx) {
                     set_result_error(result, "Failed to create transform context");
                     return result;
@@ -500,6 +652,15 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
 
     CYPHER_DEBUG("Executing query: %s", query);
 
+    /* Perf review F8: cached read query? */
+    {
+        stmt_cache_entry *hit = stmt_cache_find(executor, query);
+        if (hit) {
+            CYPHER_DEBUG("Statement cache hit");
+            return stmt_cache_execute(executor, hit);
+        }
+    }
+
 #ifdef GRAPHQLITE_PERF_TIMING
     struct timespec t_start, t_parse, t_exec, t_cleanup;
     clock_gettime(CLOCK_MONOTONIC, &t_start);
@@ -537,8 +698,15 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
 
     CYPHER_DEBUG("Parser returned AST with type=%d, data=%p", ast->type, ast->data);
 
-    /* Execute AST */
+    /* Execute AST. Perf review F8: arm statement capture for this one
+     * text-path execution; a read handler parks its statement instead of
+     * finalizing it, and it becomes a cache entry below. */
+    executor->stmt_capture = executor->stmt_cache_enabled;
+    executor->captured_ctx = NULL;
+    executor->captured_stmt = NULL;
+    executor->captured_ret = NULL;
     cypher_result *result = cypher_executor_execute_ast(executor, ast);
+    executor->stmt_capture = false;
 
 #ifdef GRAPHQLITE_PERF_TIMING
     clock_gettime(CLOCK_MONOTONIC, &t_exec);
@@ -548,8 +716,19 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
     parse_result->ast = NULL;  /* Prevent double-free since execute_ast may have taken ownership */
     cypher_parse_result_free(parse_result);
 
-    /* Clean up AST */
-    cypher_parser_free_result(ast);
+    if (executor->captured_stmt && result && result->success) {
+        /* The AST now belongs to the cache entry. */
+        stmt_cache_insert(executor, query, ast, executor->captured_ctx,
+                          executor->captured_stmt, executor->captured_ret);
+    } else {
+        if (executor->captured_stmt) sqlite3_finalize(executor->captured_stmt);
+        if (executor->captured_ctx) cypher_transform_free_context(executor->captured_ctx);
+        /* Clean up AST */
+        cypher_parser_free_result(ast);
+    }
+    executor->captured_ctx = NULL;
+    executor->captured_stmt = NULL;
+    executor->captured_ret = NULL;
 
 #ifdef GRAPHQLITE_PERF_TIMING
     clock_gettime(CLOCK_MONOTONIC, &t_cleanup);

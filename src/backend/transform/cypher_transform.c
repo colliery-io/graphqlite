@@ -22,6 +22,11 @@
 
 cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
 {
+    return cypher_transform_create_context_ex(db, true);
+}
+
+cypher_transform_context* cypher_transform_create_context_ex(sqlite3 *db, bool register_udfs)
+{
     cypher_transform_context *ctx = calloc(1, sizeof(cypher_transform_context));
     if (!ctx) {
         return NULL;
@@ -33,8 +38,9 @@ cypher_transform_context* cypher_transform_create_context(sqlite3 *db)
      * are registered on this connection — the transform layer validates
      * by preparing SQL that references them. sqlite3_create_function is
      * idempotent (a repeat call just replaces the binding), so this is
-     * safe to call even when the SQLite extension already registered them. */
-    if (db) {
+     * safe to call even when the SQLite extension already registered them.
+     * The executor skips this (perf review F8): it registered at creation. */
+    if (db && register_udfs) {
         graphqlite_register_helper_udfs(db);
     }
 

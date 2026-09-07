@@ -201,7 +201,7 @@ static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
     *count = 0;
 
     /* Create a transform context to generate SQL for the expression */
-    cypher_transform_context *ctx = cypher_transform_create_context(executor->db);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         return -1;
     }
