@@ -390,3 +390,129 @@ def test_property_keys_sharing_a_hash_slot_stay_cached(db):
         for i in (0, 199, 399):
             key = f"k{batch}_{i}"
             assert db.cypher(f"MATCH (n:K) WHERE n.{key} = {i} RETURN count(*) AS c")[0]["c"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Correctness bugs found during the performance review
+# ---------------------------------------------------------------------------
+
+SOH = chr(1)
+
+
+class TestParameterEscapes:
+    """json.dumps() escapes every non-ASCII character as \\uXXXX by default and
+    the parameter decoder copied the escape through literally, so "cafe'"
+    arrived as "cafu00e9" and every non-ASCII parameter was corrupted."""
+
+    @pytest.fixture
+    def conn(self):
+        c = connect(":memory:", extension_path=get_extension_path())
+        yield c
+        c.close()
+
+    @pytest.mark.parametrize(
+        "value",
+        ["café", "中文", "a\U0001F600b", "naïve→",
+         "a\x01b", "tab\there", "nl\nhere", 'quote"here', "back\\slash",
+         "sol/idus", "\x1f\x08\x0c"],
+    )
+    def test_parameter_round_trip(self, conn, value):
+        assert conn.cypher("RETURN $s AS s", {"s": value})[0]["s"] == value
+        assert conn.cypher("RETURN size($s) AS n", {"s": value})[0]["n"] == len(value)
+
+    @pytest.mark.parametrize("value", ["café", "中文", "a\U0001F600b", "a\x01b"])
+    def test_stored_property_round_trip(self, conn, value):
+        conn.cypher("CREATE (:U {v: $v})", {"v": value})
+        assert conn.cypher("MATCH (n:U) RETURN n.v AS v")[0]["v"] == value
+        assert conn.cypher("MATCH (n:U) RETURN n")[0]["n"]["properties"]["v"] == value
+        assert conn.cypher("MATCH (n:U {v: $v}) RETURN count(*) AS c", {"v": value})[0]["c"] == 1
+
+    def test_set_property_via_parameter(self, conn):
+        conn.cypher("CREATE (:W {id: 1})")
+        conn.cypher("MATCH (n:W) SET n.v = $v", {"v": "café"})
+        assert conn.cypher("MATCH (n:W) RETURN n.v AS v")[0]["v"] == "café"
+
+    def test_lone_surrogate_and_truncated_escape_do_not_crash(self, conn):
+        # Neither can come from json.dumps, but the decoder must not read past
+        # the end of the string if it is handed one.
+        got = conn.execute("SELECT cypher(?, ?)",
+                           ("RETURN $s AS s", '{"s": "a\\uD800b"}')).fetchone()[0]
+        assert json.loads(got)[0]["s"] == "a�b"
+        conn.execute("SELECT cypher(?, ?)",
+                     ("RETURN $s AS s", '{"s": "a\\u00"}')).fetchone()
+
+
+class TestControlCharacterOutput:
+    """The agtype serializer replaced control characters with a space, silently
+    corrupting the value on the way out of the scalar path."""
+
+    @pytest.fixture
+    def conn(self):
+        c = connect(":memory:", extension_path=get_extension_path())
+        yield c
+        c.close()
+
+    def test_control_characters_are_escaped_not_blanked_on_the_wire(self, conn):
+        expected = "p" + SOH + "q"
+        conn.cypher("CREATE (:C {v: $v})", {"v": expected})
+        # The scalar read path used to emit a space in place of the control
+        # character, which is valid JSON and therefore silently wrong.
+        raw = conn.execute(
+            "SELECT cypher('MATCH (n:C) RETURN n.v AS v')").fetchone()[0]
+        assert "\\u0001" in raw
+        assert '"p q"' not in raw
+        assert json.loads(raw)[0]["v"] == expected
+        assert conn.cypher("MATCH (n:C) RETURN n")[0]["n"]["properties"]["v"] == expected
+
+    def test_every_control_character_round_trips(self, conn):
+        value = "".join(chr(i) for i in range(1, 32))
+        conn.cypher("CREATE (:D {v: $v})", {"v": value})
+        assert conn.cypher("MATCH (n:D) RETURN n.v AS v")[0]["v"] == value
+        assert conn.cypher("MATCH (n:D) RETURN n")[0]["n"]["properties"]["v"] == value
+
+
+class TestOrderByAliasShadowing:
+    """ORDER BY wraps its term in _gql_order_rank(), and SQLite only substitutes
+    an output alias for a bare ORDER BY term, so an alias named like one of our
+    own columns bound to the base table instead: `AS id ORDER BY id` sorted by
+    the internal node id, and two patterns in scope failed as ambiguous."""
+
+    @pytest.fixture
+    def conn(self):
+        c = connect(":memory:", extension_path=get_extension_path())
+        # inserted out of order so the internal ids disagree with the property
+        for v in ("b3", "b1", "b2"):
+            c.cypher("CREATE (:B {id: $v, type: $v, value: $v})", {"v": v})
+        yield c
+        c.close()
+
+    @pytest.mark.parametrize("alias", ["id", "type", "value", "label", "key", "node_id"])
+    def test_shadowing_alias_sorts_by_the_projection(self, conn, alias):
+        rows = conn.cypher("MATCH (b:B) RETURN b.id AS %s ORDER BY %s" % (alias, alias)).to_list()
+        assert [r[alias] for r in rows] == ["b1", "b2", "b3"]
+        rows = conn.cypher("MATCH (b:B) RETURN b.id AS %s ORDER BY %s DESC" % (alias, alias)).to_list()
+        assert [r[alias] for r in rows] == ["b3", "b2", "b1"]
+
+    def test_two_patterns_in_scope_is_not_ambiguous(self, conn):
+        rows = conn.cypher(
+            "MATCH (a:B), (b:B) WHERE a.id = 'b1' RETURN b.id AS id ORDER BY id"
+        ).to_list()
+        assert [r["id"] for r in rows] == ["b1", "b2", "b3"]
+
+    def test_non_shadowing_alias_still_works(self, conn):
+        rows = conn.cypher("MATCH (b:B) RETURN b.id AS bid ORDER BY bid").to_list()
+        assert [r["bid"] for r in rows] == ["b1", "b2", "b3"]
+
+    def test_order_by_a_property_is_unchanged(self, conn):
+        rows = conn.cypher("MATCH (b:B) RETURN b.id AS id ORDER BY b.id DESC").to_list()
+        assert [r["id"] for r in rows] == ["b3", "b2", "b1"]
+
+    def test_order_by_alias_with_skip_and_limit(self, conn):
+        rows = conn.cypher("MATCH (b:B) RETURN b.id AS id ORDER BY id SKIP 1 LIMIT 1").to_list()
+        assert [r["id"] for r in rows] == ["b2"]
+
+    def test_order_by_aggregate_alias(self, conn):
+        rows = conn.cypher(
+            "MATCH (b:B) RETURN b.id AS id, count(*) AS value ORDER BY value, id"
+        ).to_list()
+        assert [r["id"] for r in rows] == ["b1", "b2", "b3"]

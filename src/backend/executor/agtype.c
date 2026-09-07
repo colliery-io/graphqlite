@@ -922,17 +922,21 @@ char* agtype_value_to_string(agtype_value *val)
             const char *src = val->val.string.val;
             int src_len = val->val.string.len;
 
-            /* Count how many characters need escaping */
-            int escape_count = 0;
+            /* Count the extra bytes escaping needs: one for the two-character
+             * forms, five for a control character rendered as \u00XX. */
+            int extra = 0;
             for (int i = 0; i < src_len; i++) {
                 unsigned char c = (unsigned char)src[i];
-                if (c == '"' || c == '\\' || c < 32) {
-                    escape_count++;
+                if (c == '"' || c == '\\' || c == '\n' || c == '\r' ||
+                    c == '\t' || c == '\b' || c == '\f') {
+                    extra += 1;
+                } else if (c < 32) {
+                    extra += 5;
                 }
             }
 
             /* Allocate: original + escapes + quotes + null */
-            result = malloc(src_len + escape_count + 3);
+            result = malloc(src_len + extra + 3);
             if (result) {
                 char *dst = result;
                 *dst++ = '"';
@@ -953,9 +957,23 @@ char* agtype_value_to_string(agtype_value *val)
                     } else if (c == '\t') {
                         *dst++ = '\\';
                         *dst++ = 't';
+                    } else if (c == '\b') {
+                        *dst++ = '\\';
+                        *dst++ = 'b';
+                    } else if (c == '\f') {
+                        *dst++ = '\\';
+                        *dst++ = 'f';
                     } else if (c < 32) {
-                        /* Skip other control characters */
-                        *dst++ = ' ';
+                        /* Any other control character: \u00XX. It used to be
+                         * replaced by a space, which silently corrupted the
+                         * value on the way out. */
+                        static const char hex[] = "0123456789abcdef";
+                        *dst++ = '\\';
+                        *dst++ = 'u';
+                        *dst++ = '0';
+                        *dst++ = '0';
+                        *dst++ = hex[(c >> 4) & 0xF];
+                        *dst++ = hex[c & 0xF];
                     } else {
                         *dst++ = c;
                     }

@@ -126,6 +126,26 @@ queries 66 µs → 8 µs, `CREATE` 81 µs → 14.5 µs.
 
 ### Fixed
 
+- **Non-ASCII query parameters are no longer corrupted.** The parameter
+  decoder handled `\n`, `\t`, `\r`, `\"` and `\\` but copied any other escape
+  through literally, and `json.dumps()` spells every non-ASCII character as
+  `\uXXXX` by default — so `{"name": "café"}` from the Python binding arrived
+  as the eight-character string `cafu00e9`, matched nothing, and was stored
+  that way by `CREATE`/`SET`. `\uXXXX` is now decoded to UTF-8, including
+  surrogate pairs, along with `\b`, `\f` and `\/`. One decoder is shared by
+  the three places that read parameter strings.
+- **Control characters in stored strings survive a scalar read.** The agtype
+  serializer replaced every control character below `\t`-range with a space,
+  so a value written correctly came back altered — valid JSON, silently wrong
+  data. They are now escaped as `\u00XX` (and `\b`/`\f` by name), matching
+  what the entity path already emitted.
+- **`ORDER BY` on a RETURN alias that shadows a column name.** `RETURN b.id
+  AS id ORDER BY id` sorted by the internal node id rather than the projected
+  value, because the ordering functions wrap the term and SQLite only
+  substitutes an output alias for a *bare* ORDER BY term; with two patterns in
+  scope the same query failed with "ambiguous column name". Such a term now
+  renders the aliased expression itself. Aliases that cannot collide keep the
+  cheap bare-alias reference.
 - **Rust binding re-extracts the bundled extension when its content changes.**
   The extracted copy was reused whenever the file size matched, so a rebuilt
   library of identical size (any development build, or a patched release of

@@ -109,6 +109,63 @@ size_t get_pending_prop_joins_len(cypher_transform_context *ctx)
     return ctx->pending_prop_joins_len;
 }
 
+/*
+ * ORDER BY on a RETURN alias that shadows one of our own SQL column names.
+ *
+ * `RETURN b.id AS id ORDER BY id` emits `ORDER BY _gql_order_rank(id)`, and
+ * SQLite only substitutes an output-column alias for an ORDER BY term that is
+ * a *bare* identifier. Inside the ordering function the name binds to the
+ * base table instead, so the query silently sorted by the internal node id,
+ * or failed with "ambiguous column name" once two patterns were in scope.
+ *
+ * These are every column name our generated SQL can bring into scope (the
+ * schema in cypher_schema.c). Any other alias is unambiguous and keeps the
+ * cheap bare-alias reference.
+ */
+static char *transform_expression_to_string(cypher_transform_context *ctx, ast_node *expr);
+
+static bool alias_shadows_sql_column(const char *name)
+{
+    static const char *const shadowed[] = {
+        "id", "source_id", "target_id", "type", "node_id",
+        "edge_id", "key_id", "key", "label", "value"
+    };
+    if (!name) return false;
+    for (size_t i = 0; i < sizeof(shadowed) / sizeof(shadowed[0]); i++) {
+        if (strcmp(name, shadowed[i]) == 0) return true;
+    }
+    return false;
+}
+
+/*
+ * Render one ORDER BY term. When it is a bare identifier naming a RETURN alias
+ * that would be captured by a base-table column, render the aliased expression
+ * itself (exactly what `ORDER BY b.id` produces, which has always been
+ * correct). Caller frees the result.
+ */
+static char *transform_order_by_term(cypher_transform_context *ctx,
+                                     cypher_return *ret,
+                                     ast_node *order_expr)
+{
+    if (order_expr && order_expr->type == AST_NODE_IDENTIFIER && ret && ret->items) {
+        const char *name = ((cypher_identifier *)order_expr)->name;
+        if (alias_shadows_sql_column(name)) {
+            for (int i = 0; i < ret->items->count; i++) {
+                cypher_return_item *item = (cypher_return_item *)ret->items->items[i];
+                if (!item || !item->alias || !item->expr) continue;
+                if (strcmp(item->alias, name) != 0) continue;
+                /* `RETURN id AS id` would recurse straight back here. */
+                if (item->expr->type == AST_NODE_IDENTIFIER &&
+                    strcmp(((cypher_identifier *)item->expr)->name, name) == 0) break;
+                char *sub = transform_expression_to_string(ctx, item->expr);
+                if (sub) return sub;
+                break;
+            }
+        }
+    }
+    return transform_expression_to_string(ctx, order_expr);
+}
+
 void add_pending_prop_join(cypher_transform_context *ctx, const char *join_sql)
 {
     if (!join_sql) return;
@@ -514,7 +571,7 @@ return_star_done:
         if (ret->order_by && ret->order_by->count > 0) {
             for (int i = 0; i < ret->order_by->count; i++) {
                 cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                char *order_expr = transform_order_by_term(ctx, ret, order_item->expr);
                 if (order_expr) {
                     sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
                     free(order_expr);
@@ -714,7 +771,7 @@ return_star_done:
             if (ret->order_by && ret->order_by->count > 0) {
                 for (int i = 0; i < ret->order_by->count; i++) {
                     cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
-                    char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                    char *order_expr = transform_order_by_term(ctx, ret, order_item->expr);
                     if (order_expr) {
                         sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
                         free(order_expr);

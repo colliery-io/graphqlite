@@ -327,18 +327,10 @@ static int set_properties_from_json_object(
             while (*p && *p != '"') {
                 if (*p == '\\' && *(p+1)) {
                     p++;
-                    switch (*p) {
-                        case 'n': dyn_str[i++] = '\n'; break;
-                        case 't': dyn_str[i++] = '\t'; break;
-                        case 'r': dyn_str[i++] = '\r'; break;
-                        case '"': dyn_str[i++] = '"'; break;
-                        case '\\': dyn_str[i++] = '\\'; break;
-                        default: dyn_str[i++] = *p; break;
-                    }
+                    i += (size_t)gql_json_decode_escape(&p, dyn_str + i);
                 } else {
-                    dyn_str[i++] = *p;
+                    dyn_str[i++] = *p++;
                 }
-                p++;
             }
             dyn_str[i] = '\0';
             if (*p == '"') p++;

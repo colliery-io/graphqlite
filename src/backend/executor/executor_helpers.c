@@ -12,6 +12,93 @@
 #include "transform/transform_helpers.h"
 #include "parser/cypher_ast.h"
 
+/* Encode one Unicode code point as UTF-8. Writes at most 4 bytes. */
+static int utf8_encode(unsigned int cp, char *out)
+{
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* Read exactly four hex digits. Returns -1 (leaving *out untouched) if any of
+ * them is not a hex digit, which includes running into the terminating NUL. */
+static int hex4(const char *s, unsigned int *out)
+{
+    unsigned int v = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = s[i];
+        v <<= 4;
+        if (c >= '0' && c <= '9') v |= (unsigned int)(c - '0');
+        else if (c >= 'a' && c <= 'f') v |= (unsigned int)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v |= (unsigned int)(c - 'A' + 10);
+        else return -1;
+    }
+    *out = v;
+    return 0;
+}
+
+/*
+ * Decode one JSON escape sequence. `*pp` points at the character *after* the
+ * backslash; on return it points past the sequence. Writes the decoded bytes
+ * to `out` (at most 4) and returns how many were written.
+ *
+ * `\uXXXX` is decoded to UTF-8, including surrogate pairs, because
+ * json.dumps() escapes every non-ASCII character that way by default: without
+ * this, "café" arrived as the literal text "cafu00e9" and any control
+ * character in a parameter was mangled. A lone surrogate becomes U+FFFD and an
+ * unknown escape is copied through as its own character.
+ */
+int gql_json_decode_escape(const char **pp, char *out)
+{
+    const char *p = *pp;
+    switch (*p) {
+        case 'n':  *pp = p + 1; out[0] = '\n'; return 1;
+        case 't':  *pp = p + 1; out[0] = '\t'; return 1;
+        case 'r':  *pp = p + 1; out[0] = '\r'; return 1;
+        case 'b':  *pp = p + 1; out[0] = '\b'; return 1;
+        case 'f':  *pp = p + 1; out[0] = '\f'; return 1;
+        case '/':  *pp = p + 1; out[0] = '/';  return 1;
+        case '"':  *pp = p + 1; out[0] = '"';  return 1;
+        case '\\': *pp = p + 1; out[0] = '\\'; return 1;
+        case 'u': {
+            unsigned int cp;
+            if (hex4(p + 1, &cp) < 0) break;  /* malformed: copy literally */
+            const char *after = p + 5;
+            if (cp >= 0xD800 && cp <= 0xDBFF && after[0] == '\\' && after[1] == 'u') {
+                unsigned int lo;
+                if (hex4(after + 2, &lo) == 0 && lo >= 0xDC00 && lo <= 0xDFFF) {
+                    cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                    after += 6;
+                }
+            }
+            if (cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;  /* unpaired surrogate */
+            *pp = after;
+            return utf8_encode(cp, out);
+        }
+        default: break;
+    }
+    *pp = p + 1;
+    out[0] = *p;
+    return 1;
+}
+
 /* Helper to lookup a parameter value from JSON */
 int get_param_value(const char *params_json, const char *param_name,
                     property_type *out_type, property_value *out_value)
@@ -68,18 +155,10 @@ int get_param_value(const char *params_json, const char *param_name,
                 while (*p && *p != '"') {
                     if (*p == '\\' && *(p+1)) {
                         p++;
-                        switch (*p) {
-                            case 'n': buf[i++] = '\n'; break;
-                            case 't': buf[i++] = '\t'; break;
-                            case 'r': buf[i++] = '\r'; break;
-                            case '"': buf[i++] = '"'; break;
-                            case '\\': buf[i++] = '\\'; break;
-                            default: buf[i++] = *p; break;
-                        }
+                        i += (size_t)gql_json_decode_escape(&p, buf + i);
                     } else {
-                        buf[i++] = *p;
+                        buf[i++] = *p++;
                     }
-                    p++;
                 }
                 buf[i] = '\0';
                 if (*p) p++;  /* Skip closing quote */
@@ -259,21 +338,13 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
         if (*p == '"') {
             /* String value */
             p++;
-            const char *val_start = p;
             char *unescaped = malloc(strlen(p) + 1);
+            if (!unescaped) return -1;
             char *out = unescaped;
             while (*p && *p != '"') {
                 if (*p == '\\' && *(p+1)) {
                     p++;
-                    switch (*p) {
-                        case 'n': *out++ = '\n'; break;
-                        case 't': *out++ = '\t'; break;
-                        case 'r': *out++ = '\r'; break;
-                        case '\\': *out++ = '\\'; break;
-                        case '"': *out++ = '"'; break;
-                        default: *out++ = *p; break;
-                    }
-                    p++;
+                    out += gql_json_decode_escape(&p, out);
                 } else {
                     *out++ = *p++;
                 }
