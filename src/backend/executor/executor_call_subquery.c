@@ -542,9 +542,8 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
             if (post_ret && post_ret->items) {
                 /* Evaluate inner RETURN items by building a single SQL query
                  * that resolves all expressions against the scoped variables. */
-                char inner_sql[4096];
-                size_t ipos = 0;
-                ipos += snprintf(inner_sql + ipos, sizeof(inner_sql) - ipos, "SELECT ");
+                sqlite3_str *inner_str = sqlite3_str_new(executor->db);
+                sqlite3_str_appendall(inner_str, "SELECT ");
 
                 cypher_transform_context *ret_ctx = cypher_transform_create_context_ex(executor->db, false);
                 if (ret_ctx) {
@@ -565,7 +564,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                     bool inner_ok = true;
                     for (int ri = 0; ri < inner_return_clause->items->count; ri++) {
                         cypher_return_item *ret_item = (cypher_return_item*)inner_return_clause->items->items[ri];
-                        if (ri > 0) ipos += snprintf(inner_sql + ipos, sizeof(inner_sql) - ipos, ", ");
+                        if (ri > 0) sqlite3_str_appendf(inner_str, ", ");
 
                         char *saved_buf = ret_ctx->sql_buffer;
                         int saved_size = ret_ctx->sql_size;
@@ -577,7 +576,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
 
                         if (transform_expression(ret_ctx, ret_item->expr) == 0 && ret_ctx->sql_size > 0) {
                             const char *col_name = ret_item->alias ? ret_item->alias : temp_buf;
-                            ipos += snprintf(inner_sql + ipos, sizeof(inner_sql) - ipos, "%s AS \"%s\"",
+                            sqlite3_str_appendf(inner_str, "%s AS \"%s\"",
                                              temp_buf, col_name);
                         } else {
                             inner_ok = false;
@@ -596,11 +595,11 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                             snprintf(var_alias, sizeof(var_alias), "_cv_%d", si);
                             const char *table = m->type == VAR_MAP_TYPE_NODE ? "nodes" : "edges";
                             if (si == 0) {
-                                ipos += snprintf(inner_sql + ipos, sizeof(inner_sql) - ipos,
+                                sqlite3_str_appendf(inner_str,
                                                  " FROM %s AS %s WHERE %s.id = %d",
                                                  table, var_alias, var_alias, m->entity_id);
                             } else {
-                                ipos += snprintf(inner_sql + ipos, sizeof(inner_sql) - ipos,
+                                sqlite3_str_appendf(inner_str,
                                                  " JOIN %s AS %s ON %s.id = %d",
                                                  table, var_alias, var_alias, m->entity_id);
                             }
@@ -608,6 +607,8 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                     }
 
                     cypher_transform_free_context(ret_ctx);
+                    char *inner_sql = sqlite3_str_finish(inner_str);
+                    if (!inner_sql) inner_ok = false;
 
                     /* Store inner RETURN name→value pairs */
                     int inner_col_count = 0;
@@ -635,6 +636,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                             sqlite3_finalize(inner_stmt);
                         }
                     }
+                    sqlite3_free(inner_sql);
 
                     /* Build combined row for post-CALL RETURN */
                     if (inner_col_values) {
@@ -693,20 +695,21 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                         transform_var_set_bound(eval_ctx->var_ctx, m->variable, true);
                                     }
 
-                                    char eval_sql[2048];
-                                    size_t epos = 0;
-                                    epos += snprintf(eval_sql + epos, sizeof(eval_sql) - epos, "SELECT ");
+                                    sqlite3_str *eval_str = sqlite3_str_new(executor->db);
+                                    sqlite3_str_appendall(eval_str, "SELECT ");
 
                                     char *sb = eval_ctx->sql_buffer;
                                     int ss = eval_ctx->sql_size;
                                     int sc = eval_ctx->sql_capacity;
-                                    char tb[1024] = {0};
+                                    /* Heap scratch: append_sql may realloc it */
+                                    char *tb = calloc(1, 1024);
                                     eval_ctx->sql_buffer = tb;
                                     eval_ctx->sql_size = 0;
-                                    eval_ctx->sql_capacity = sizeof(tb);
+                                    eval_ctx->sql_capacity = tb ? 1024 : 0;
 
-                                    if (transform_expression(eval_ctx, item->expr) == 0 && eval_ctx->sql_size > 0) {
-                                        epos += snprintf(eval_sql + epos, sizeof(eval_sql) - epos, "%s", tb);
+                                    if (tb && transform_expression(eval_ctx, item->expr) == 0 && eval_ctx->sql_size > 0) {
+                                        sqlite3_str_appendall(eval_str, eval_ctx->sql_buffer);
+                                        free(eval_ctx->sql_buffer);
                                         eval_ctx->sql_buffer = sb;
                                         eval_ctx->sql_size = ss;
                                         eval_ctx->sql_capacity = sc;
@@ -717,15 +720,16 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                             snprintf(va, sizeof(va), "_ov_%d", si);
                                             const char *tbl = m->type == VAR_MAP_TYPE_NODE ? "nodes" : "edges";
                                             if (si == 0)
-                                                epos += snprintf(eval_sql + epos, sizeof(eval_sql) - epos,
+                                                sqlite3_str_appendf(eval_str,
                                                                  " FROM %s AS %s WHERE %s.id = %d", tbl, va, va, m->entity_id);
                                             else
-                                                epos += snprintf(eval_sql + epos, sizeof(eval_sql) - epos,
+                                                sqlite3_str_appendf(eval_str,
                                                                  " JOIN %s AS %s ON %s.id = %d", tbl, va, va, m->entity_id);
                                         }
 
+                                        char *eval_sql = sqlite3_str_finish(eval_str);
                                         sqlite3_stmt *ev;
-                                        if (sqlite3_prepare_v2(executor->db, eval_sql, -1, &ev, NULL) == SQLITE_OK) {
+                                        if (eval_sql && sqlite3_prepare_v2(executor->db, eval_sql, -1, &ev, NULL) == SQLITE_OK) {
                                             if (executor->params_json) {
                                                 bind_params_from_json(ev, executor->params_json);
                                             }
@@ -735,7 +739,10 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                             }
                                             sqlite3_finalize(ev);
                                         }
+                                        sqlite3_free(eval_sql);
                                     } else {
+                                        sqlite3_free(sqlite3_str_finish(eval_str));
+                                        free(eval_ctx->sql_buffer);
                                         eval_ctx->sql_buffer = sb;
                                         eval_ctx->sql_size = ss;
                                         eval_ctx->sql_capacity = sc;

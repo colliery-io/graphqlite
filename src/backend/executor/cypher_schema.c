@@ -227,9 +227,11 @@ void free_property_key_cache(property_key_cache *cache)
     /* TODO: Implement proper linked list structure */
     for (int i = 0; i < cache->slot_count; i++) {
         property_key_entry *entry = cache->slots[i];
-        if (entry) {
+        while (entry) {
+            property_key_entry *next = entry->next;
             free(entry->key_string);
             free(entry);
+            entry = next;
         }
     }
     
@@ -569,8 +571,23 @@ const char* cypher_schema_property_type_name(property_type type)
     }
 }
 
-/* Stub implementations for property and node operations */
-/* TODO: Implement these in next phase */
+/* Insert a key at the head of its slot chain (perf review: the cache used
+ * to hold one entry per slot and replaced it on every collision, so two
+ * hot keys sharing a slot missed alternately). */
+static void key_cache_insert(property_key_cache *cache, const char *key, int key_id)
+{
+    property_key_entry *entry = malloc(sizeof(property_key_entry));
+    if (!entry) return;
+    entry->key_id = key_id;
+    entry->key_string = strdup(key);
+    if (!entry->key_string) { free(entry); return; }
+    entry->last_used = time(NULL);
+    entry->usage_count = 1;
+    int slot = hash_string(key) % cache->slot_count;
+    entry->next = cache->slots[slot];
+    cache->slots[slot] = entry;
+    cache->total_entries++;
+}
 
 int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char *key)
 {
@@ -585,14 +602,14 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
     int slot = hash % cache->slot_count;
     
     /* Check cache first */
-    property_key_entry *entry = cache->slots[slot];
-    if (entry && entry->key_string && strcmp(entry->key_string, key) == 0) {
-        /* Cache hit */
-        cache->cache_hits++;
-        entry->usage_count++;
-        entry->last_used = time(NULL);
-        CYPHER_DEBUG("Property key cache hit for '%s' -> id %d", key, entry->key_id);
-        return entry->key_id;
+    for (property_key_entry *entry = cache->slots[slot]; entry; entry = entry->next) {
+        if (entry->key_string && strcmp(entry->key_string, key) == 0) {
+            cache->cache_hits++;
+            entry->usage_count++;
+            entry->last_used = time(NULL);
+            CYPHER_DEBUG("Property key cache hit for '%s' -> id %d", key, entry->key_id);
+            return entry->key_id;
+        }
     }
     
     /* Cache miss - query database */
@@ -611,25 +628,7 @@ int cypher_schema_get_property_key_id(cypher_schema_manager *manager, const char
     int key_id = -1;
     if (sqlite3_step(lookup_stmt) == SQLITE_ROW) {
         key_id = sqlite3_column_int(lookup_stmt, 0);
-
-        /* Add to cache */
-        if (entry) {
-            /* Replace existing entry */
-            free(entry->key_string);
-        } else {
-            /* Create new entry */
-            entry = malloc(sizeof(property_key_entry));
-            if (!entry) {
-                sqlite3_reset(lookup_stmt);
-                return key_id;
-            }
-            cache->slots[slot] = entry;
-        }
-
-        entry->key_id = key_id;
-        entry->key_string = strdup(key);
-        entry->last_used = time(NULL);
-        entry->usage_count = 1;
+        key_cache_insert(cache, key, key_id);
 
         CYPHER_DEBUG("Property key '%s' found in DB -> id %d", key, key_id);
     }
@@ -675,27 +674,8 @@ int cypher_schema_ensure_property_key(cypher_schema_manager *manager, const char
     cache->key_insertions++;
     
     /* Add to cache */
-    unsigned long hash = hash_string(key);
-    int slot = hash % cache->slot_count;
-    
-    property_key_entry *entry = cache->slots[slot];
-    if (entry) {
-        /* Replace existing entry */
-        free(entry->key_string);
-    } else {
-        /* Create new entry */
-        entry = malloc(sizeof(property_key_entry));
-        if (!entry) {
-            return key_id; /* Still return the ID even if caching fails */
-        }
-        cache->slots[slot] = entry;
-    }
-    
-    entry->key_id = key_id;
-    entry->key_string = strdup(key);
-    entry->last_used = time(NULL);
-    entry->usage_count = 1;
-    
+    key_cache_insert(cache, key, key_id);
+
     CYPHER_DEBUG("Created new property key '%s' -> id %d", key, key_id);
     
     return key_id;
@@ -711,8 +691,8 @@ const char* cypher_schema_get_property_key_name(cypher_schema_manager *manager, 
     
     /* Search cache first */
     for (int i = 0; i < cache->slot_count; i++) {
-        property_key_entry *entry = cache->slots[i];
-        if (entry && entry->key_id == key_id) {
+        for (property_key_entry *entry = cache->slots[i]; entry; entry = entry->next) {
+            if (entry->key_id != key_id) continue;
             entry->usage_count++;
             entry->last_used = time(NULL);
             cache->cache_hits++;

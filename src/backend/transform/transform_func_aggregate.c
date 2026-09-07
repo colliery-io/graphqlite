@@ -220,8 +220,7 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
      */
     if (ctx->unified_builder) {
         /* Build the JOIN clauses and add to pending buffer */
-        char join_sql[2048];
-        snprintf(join_sql, sizeof(join_sql),
+        char *join_sql = sqlite3_mprintf(
                  " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s"
                  " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s"
                  " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s",
@@ -229,7 +228,8 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
                  agg_real_table, join_alias_real, join_alias_real, agg_id_col, node_id_ref, join_alias_real, pk_subquery,
                  agg_text_table, join_alias_text, join_alias_text, agg_id_col, node_id_ref, join_alias_text, pk_subquery);
 
-        add_pending_prop_join(ctx, join_sql);
+        if (join_sql) add_pending_prop_join(ctx, join_sql);
+        sqlite3_free(join_sql);
         CYPHER_DEBUG("Added pending property JOINs for %s aggregation", upper_func);
 
         /* Generate the aggregation expression using joined columns */

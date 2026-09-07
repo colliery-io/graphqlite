@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "gql_thread_local.h"
 #include "transform/transform_helpers.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
@@ -599,7 +600,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             const char *col_name = item->alias;
             if (!col_name) {
                 /* Generate a column name for expressions without alias */
-                static char auto_col[32];
+                static GQL_THREAD_LOCAL char auto_col[32];
                 snprintf(auto_col, sizeof(auto_col), "expr_%d", i);
                 col_name = auto_col;
             }

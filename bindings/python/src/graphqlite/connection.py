@@ -191,6 +191,37 @@ class Connection:
         else:
             return CypherResult([{"result": data}], ["result"])
 
+    def iter_rows(self, query: str, params: Optional[dict[str, Any]] = None) -> Iterator[dict[str, Any]]:
+        """
+        Stream a Cypher query's rows through the ``cypher_rows`` virtual table.
+
+        Unlike :meth:`cypher`, which receives the whole result as one JSON
+        string and decodes it, this yields one dict per row as SQLite steps
+        the table, so peak memory is one row and consumers can stop early.
+        Each dict has the same keys and value shapes ``cypher()`` produces
+        (nodes, relationships, paths, lists and maps decoded from JSON).
+
+        A write query without RETURN yields one dict of modification counts.
+
+        Example:
+            >>> for row in db.iter_rows("MATCH (n:Person) RETURN n.name AS name"):
+            ...     print(row["name"])
+        """
+        params_json = json.dumps(params) if params else None
+        try:
+            cursor = self._conn.execute("SELECT row FROM cypher_rows(?, ?)", (query, params_json))
+            for (row_json,) in cursor:
+                yield json.loads(row_json)
+        except sqlite3.Error as e:
+            err_str = str(e)
+            try:
+                err_data = json.loads(err_str)
+                if isinstance(err_data, dict) and "error" in err_data:
+                    raise sqlite3.Error(err_data["error"]) from None
+            except (json.JSONDecodeError, TypeError):
+                pass
+            raise
+
     def execute(self, sql: str, parameters: tuple = ()) -> sqlite3.Cursor:
         """Execute a raw SQL query."""
         return self._conn.execute(sql, parameters)

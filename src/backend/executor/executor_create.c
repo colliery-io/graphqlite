@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "executor/executor_internal.h"
+#include "gql_thread_local.h"
 #include "executor/cypher_executor.h"
 #include "transform/cypher_transform.h"
 #include "parser/cypher_debug.h"
@@ -267,7 +268,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             static int64_t int_buf;
                                             static double real_buf;
                                             static int bool_buf;
-                                            static char text_buf[256];
+                                            static GQL_THREAD_LOCAL char text_buf[256];
                                             bool found = false;
                                             for (int t = 0; tables[t] && !found; t++) {
                                                 char sql[512];

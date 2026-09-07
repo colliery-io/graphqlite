@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "executor/query_patterns.h"
+#include "gql_thread_local.h"
 #include "executor/executor_internal.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
@@ -548,7 +549,7 @@ const query_pattern *get_pattern_registry(void)
  */
 const char *clause_flags_to_string(clause_flags flags)
 {
-    static char buffer[256];
+    static GQL_THREAD_LOCAL char buffer[256];
     buffer[0] = '\0';
 
     if (flags == CLAUSE_NONE) {
@@ -1902,6 +1903,17 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
     graph_algo_params algo_params = detect_graph_algorithm(ret, executor->params_json);
     if (algo_params.type != GRAPH_ALGO_NONE) {
         graph_algo_result *algo_result = NULL;
+
+        /* A CSR graph loaded before a write is stale: rebuild it in place so
+         * gql_load_graph() callers keep seeing current data. */
+        if (executor->cached_graph && executor->graph_dirty && executor->cached_graph_slot) {
+            CYPHER_DEBUG("Cached graph is stale after a write; reloading");
+            csr_graph_free(executor->cached_graph);
+            csr_graph *fresh = csr_graph_load(executor->db);
+            *executor->cached_graph_slot = fresh;
+            executor->cached_graph = fresh;
+            executor->graph_dirty = false;
+        }
 
         switch (algo_params.type) {
             case GRAPH_ALGO_PAGERANK:

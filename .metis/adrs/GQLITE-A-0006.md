@@ -6,14 +6,14 @@ number: 1
 short_code: "GQLITE-A-0006"
 created_at: 2026-09-07T11:19:44.035854+00:00
 updated_at: 2026-09-07T11:19:44.035854+00:00
-decision_date: 
+decision_date: 2026-09-07
 decision_maker: 
 parent: 
 archived: false
 
 tags:
   - "#adr"
-  - "#phase/draft"
+  - "#phase/decided"
 
 
 exit_criteria_met: false
@@ -68,7 +68,13 @@ The scalar function's contract ("one string") is the amplification. A virtual ta
 ### Neutral
 - The scalar path's remaining copies (`result->data` per-row arrays, `SQLITE_TRANSIENT`) can still be trimmed independently; tracked as follow-ups under GQLITE-I-0051.
 
-## Implementation notes (for the follow-up task)
+## Implementation status (2026-09-07, GQLITE-T-0366, PR #119)
+
+Implemented in `src/backend/runtime/cypher_rows_vtab.c` with one deliberate deviation from the decision above: the column set is **fixed** rather than declared per query. SQLite's eponymous virtual tables declare their schema once at `xConnect`, before the query text is known (it only arrives at `xFilter`), so per-query columns would require `CREATE VIRTUAL TABLE` per statement. The table therefore exposes `row` (the JSON row object), `cols`, `ncols`, and positional `c0`…`c31` with native types, plus the hidden `query`/`params`. Callers alias positional columns in SQL (`SELECT c0 AS name ...`) or use `row`.
+
+Phase A (this PR) materialises the result in C as before and streams from there: no output buffer assembly, no `SQLITE_TRANSIENT` copy of the whole result, no host string, no whole-payload JSON decode. Measured on a 50K-node `MATCH (n) RETURN n` from Python: peak RSS growth 51 MB → 8 MB, first row in 165 ms instead of 198 ms; end-to-end time unchanged (212 vs 220 ms) because the result is still materialised in C. Phase B (stepping the underlying statement row by row inside `xNext`) stays open on the same module boundary.
+
+## Implementation notes (original plan)
 
 1. `src/backend/runtime/cypher_rows_vtab.c`: `sqlite3_module` with `xConnect` (eponymous), `xBestIndex` (require `query` hidden column `=` constraint, optional `params`), `xFilter` (executor lookup via the connection cache, F8 statement cache), `xNext`/`xEof`/`xColumn`/`xRowid`, `xClose`.
 2. Reuse `build_query_results`' per-cell logic as a per-row function (`render_cell`) so `cypher()` and `cypher_rows` share one value-rendering path.

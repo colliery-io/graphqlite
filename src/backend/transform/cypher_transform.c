@@ -9,6 +9,7 @@
 #include <stdarg.h>
 
 #include "transform/cypher_transform.h"
+#include "gql_thread_local.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
@@ -316,7 +317,7 @@ void append_var_table(cypher_transform_context *ctx, const char *var_name, const
 
 const char *get_graph_table(cypher_transform_context *ctx, const char *table)
 {
-    static char table_buf[256];
+    static GQL_THREAD_LOCAL char table_buf[256];
 
     if (ctx->current_graph && ctx->current_graph[0] != '\0') {
         snprintf(table_buf, sizeof(table_buf), "%s.%s", ctx->current_graph, table);

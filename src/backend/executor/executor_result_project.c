@@ -12,6 +12,7 @@
 #include <ctype.h>
 
 #include "executor/query_patterns.h"
+#include "gql_thread_local.h"
 #include "executor/executor_internal.h"
 #include "entity_json_sql.h"
 #include "parser/cypher_debug.h"
@@ -143,7 +144,7 @@ bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
 /* Return lowercased agg-function name if expr is an aggregating call, else NULL.
  * Caller does NOT own the string (static buffer per call). */
 const char *aggregating_call_name(ast_node *expr) {
-    static char buf[64];
+    static GQL_THREAD_LOCAL char buf[64];
     if (!expr || expr->type != AST_NODE_FUNCTION_CALL) return NULL;
     cypher_function_call *fc = (cypher_function_call*)expr;
     if (!fc->function_name) return NULL;
@@ -453,14 +454,15 @@ void project_return_row_from_var_map(cypher_executor *executor,
             int node_id = get_variable_node_id(var_map, var_name);
             int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
             if (node_id >= 0) {
-                char sql[4096];
+                char *sql;
                 {
                     char id_e[32];
                     snprintf(id_e, sizeof(id_e), "%d", node_id);
                     char *nj = gql_sql_node_json_expr("", id_e);
                     if (!nj) continue;
-                    snprintf(sql, sizeof(sql), "SELECT %s", nj);
+                    sql = sqlite3_mprintf("SELECT %s", nj);
                     free(nj);
+                    if (!sql) continue;
                 }
                 sqlite3_stmt *stmt;
                 if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -473,8 +475,9 @@ void project_return_row_from_var_map(cypher_executor *executor,
                     }
                     sqlite3_finalize(stmt);
                 }
+                sqlite3_free(sql);
             } else if (edge_id >= 0) {
-                char sql[4096];
+                char *sql;
                 {
                     char id_e[32], ty_e[96], st_e[96], en_e[96];
                     snprintf(id_e, sizeof(id_e), "%d", edge_id);
@@ -483,8 +486,9 @@ void project_return_row_from_var_map(cypher_executor *executor,
                     snprintf(en_e, sizeof(en_e), "(SELECT target_id FROM edges WHERE id = %d)", edge_id);
                     char *ej = gql_sql_edge_json_expr("", id_e, ty_e, st_e, en_e);
                     if (!ej) continue;
-                    snprintf(sql, sizeof(sql), "SELECT %s", ej);
+                    sql = sqlite3_mprintf("SELECT %s", ej);
                     free(ej);
+                    if (!sql) continue;
                 }
                 sqlite3_stmt *stmt;
                 if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -497,6 +501,7 @@ void project_return_row_from_var_map(cypher_executor *executor,
                     }
                     sqlite3_finalize(stmt);
                 }
+                sqlite3_free(sql);
             }
         } else if (expr && expr->type == AST_NODE_FUNCTION_CALL) {
             /* Handle entity-introspection functions on var_map entries:

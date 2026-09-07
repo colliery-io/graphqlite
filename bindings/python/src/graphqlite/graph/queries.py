@@ -1,6 +1,6 @@
 """Query operations mixin for Graph class."""
 
-from typing import Optional
+from typing import Iterator, Optional
 
 from ._base import BaseMixin
 
@@ -153,3 +153,12 @@ class QueriesMixin(BaseMixin):
         """
         result = self._conn.cypher(cypher, params)
         return result.to_list()
+
+    def iter_query(self, cypher: str, params: Optional[dict] = None) -> Iterator[dict]:
+        """
+        Stream a raw Cypher query's rows one dict at a time.
+
+        Uses the ``cypher_rows`` virtual table, so large results are not
+        materialised as one JSON string (see ``Connection.iter_rows``).
+        """
+        return self._conn.iter_rows(cypher, params)

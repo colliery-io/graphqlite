@@ -1,7 +1,7 @@
 //! GraphQLite connection wrapper.
 
 use crate::query_builder::CypherQuery;
-use crate::{CypherResult, Error, Result};
+use crate::{CypherResult, Error, Result, Row};
 
 use std::path::Path;
 #[cfg(not(feature = "bundled-extension"))]
@@ -188,6 +188,73 @@ impl Connection {
             }
             None => Ok(CypherResult::empty()),
         }
+    }
+
+    /// Stream a Cypher query's rows through the `cypher_rows` virtual table.
+    ///
+    /// Unlike [`cypher`](Self::cypher), which receives the whole result as
+    /// one JSON string, this hands each [`Row`] to `f` as SQLite steps the
+    /// table, so peak memory is one row and the callback can stop early by
+    /// returning an error. `params` is an optional JSON object bound to
+    /// `$name` placeholders. A write query without RETURN yields one row of
+    /// modification counts.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Connection;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// conn.cypher("CREATE (n:Person {name: 'Alice'})")?;
+    /// conn.cypher_rows_each("MATCH (n:Person) RETURN n.name AS name", None, |row| {
+    ///     let name: String = row.get("name")?;
+    ///     println!("{name}");
+    ///     Ok(())
+    /// })?;
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn cypher_rows_each<F>(
+        &self,
+        query: &str,
+        params: Option<&serde_json::Value>,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&Row) -> Result<()>,
+    {
+        let params_json = match params {
+            Some(p) => Some(
+                serde_json::to_string(p)
+                    .map_err(|e| Error::Cypher(format!("Failed to serialize params: {}", e)))?,
+            ),
+            None => None,
+        };
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT row FROM cypher_rows(?1, ?2)")?;
+        let mut rows = stmt.query(rusqlite::params![query, params_json])?;
+        loop {
+            let row = match rows.next() {
+                Ok(Some(r)) => r,
+                Ok(None) => break,
+                Err(rusqlite::Error::SqliteFailure(_, Some(msg))) => {
+                    return Err(parse_structured_error(&msg))
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let json_str: String = row.get(0)?;
+            let obj = match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Ok(serde_json::Value::Object(obj)) => obj,
+                Ok(_) => {
+                    return Err(Error::Cypher(
+                        "cypher_rows produced a non-object row".into(),
+                    ))
+                }
+                Err(e) => return Err(Error::Cypher(format!("Failed to parse row JSON: {}", e))),
+            };
+            f(&Row::from_json_object(obj))?;
+        }
+        Ok(())
     }
 
     /// Create a builder for a parameterized Cypher query.

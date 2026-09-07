@@ -82,6 +82,39 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   string scan of every node; the CSR graph now carries a hash from user id to
   index built at load.
 
+- **`cypher_rows` table-valued interface** (F10, ADR GQLITE-A-0006).
+  `SELECT ... FROM cypher_rows(query [, params])` exposes a Cypher result as
+  SQL rows: `row` is the JSON object `cypher()` would emit for that row,
+  `cols`/`ncols` describe the projection, and `c0`…`c31` carry the values
+  with native SQLite types (integers, reals, booleans, text; entities, lists
+  and maps as JSON text). SQLite steps the table one row at a time, so peak
+  memory is one row instead of the whole JSON string, `LIMIT` stops the scan,
+  and results compose with `WHERE`, joins and `json_each`. Write queries
+  without RETURN yield one statistics row; errors carry the same structured
+  message as `cypher()`. The table shares the connection's executor and
+  statement cache with `cypher()`. Bindings: Python `Connection.iter_rows()`
+  / `Graph.iter_query()` generators, Rust `Connection::cypher_rows_each()`.
+  50K-node `MATCH (n) RETURN n` consumed from Python: peak RSS growth
+  51 MB → 8 MB, first row in 165 ms instead of 198 ms; end-to-end time is
+  unchanged because this phase still materialises the result in C before
+  streaming it (stepping the statement inside the table is the follow-up).
+
+- **Smaller items from the review.** The property-key cache chains entries
+  on hash collision instead of evicting (two hot keys sharing one of the
+  1,024 slots used to miss alternately). A CSR graph loaded with
+  `gql_load_graph()` is rebuilt automatically before the next algorithm call
+  when a write has run since, instead of serving stale topology. Transform
+  and executor scratch buffers that were `static` are now thread-local, so
+  connections on different threads no longer share them. Fixed-size SQL
+  buffers (`char sql[2048…8192]`, silently truncating) in SET-with-function,
+  MERGE lookups, CALL subquery evaluation, aggregation JOINs and entity
+  refetch are built on the heap; the pattern-comprehension collect buffer
+  and the CALL evaluation scratch were stack arrays handed to a growable
+  buffer API, which could `realloc` a stack pointer for large projections
+  such as `[(a)-->(b) | {x: b, y: b, z: b, w: b}]`. The per-row `strdup`
+  copies in `build_query_results` are left alone: at three small
+  allocations per row they were not measurable next to the items above.
+
 ### Fixed
 
 - **Rust binding re-extracts the bundled extension when its content changes.**

@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "gql_thread_local.h"
 #include "transform/transform_helpers.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
@@ -69,7 +70,7 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
                                    const char *alias,
                                    const char *var_name)
 {
-    static char id_ref_buf[256];
+    static GQL_THREAD_LOCAL char id_ref_buf[256];
 
     /* Check if this is a projected variable or a post-WITH node/edge (alias_is_id) */
     bool skip_id_suffix = var_name &&
@@ -414,7 +415,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     }
                     if (!source_alias) continue;
                 } else {
-                    static char temp_source[32];
+                    static GQL_THREAD_LOCAL char temp_source[32];
                     snprintf(temp_source, sizeof(temp_source), "n_%d", ctx->anon_node_base + (j - 1));
                     source_alias = temp_source;
                 }
@@ -433,7 +434,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     }
                     if (!target_alias) continue;
                 } else {
-                    static char temp_target[32];
+                    static GQL_THREAD_LOCAL char temp_target[32];
                     snprintf(temp_target, sizeof(temp_target), "n_%d", ctx->anon_node_base + (j + 1));
                     target_alias = temp_target;
                 }
@@ -1001,7 +1002,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 }
                 node_alias[j] = al;
             } else {
-                static char anon_buf[64][32];
+                static GQL_THREAD_LOCAL char anon_buf[64][32];
                 snprintf(anon_buf[j], sizeof(anon_buf[j]), "n_%d", ctx->anon_node_base + j);
                 node_alias[j] = anon_buf[j];
             }
@@ -1293,7 +1294,7 @@ skip_combined_exists:
                 }
             } else {
                 /* Anonymous node - use generated alias */
-                static char temp_alias[32];
+                static GQL_THREAD_LOCAL char temp_alias[32];
                 snprintf(temp_alias, sizeof(temp_alias), "n_%d", ctx->anon_node_base + i);
                 alias = temp_alias;
                 need_from_clause = true;
@@ -1413,7 +1414,7 @@ skip_combined_exists:
                 if (end > as) {
                     /* dup the alias substring into a small static pool so
                      * its lifetime spans the WHERE emission. */
-                    static char pool[16][80];
+                    static GQL_THREAD_LOCAL char pool[16][80];
                     static int pool_idx = 0;
                     int slot = pool_idx++ % 16;
                     size_t alen = (size_t)(end - as);
@@ -1930,7 +1931,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         }
         if (!source_alias) return -1;
     } else {
-        static char temp_source[32];
+        static GQL_THREAD_LOCAL char temp_source[32];
         snprintf(temp_source, sizeof(temp_source), "n_%d", ctx->anon_node_base + (rel_index - 1));
         source_alias = temp_source;
     }
@@ -1960,7 +1961,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         }
         if (!target_alias) return -1;
     } else {
-        static char temp_target[32];
+        static GQL_THREAD_LOCAL char temp_target[32];
         snprintf(temp_target, sizeof(temp_target), "n_%d", ctx->anon_node_base + (rel_index + 1));
         target_alias = temp_target;
     }

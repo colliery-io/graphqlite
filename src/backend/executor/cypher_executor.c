@@ -348,6 +348,8 @@ void cypher_executor_free(cypher_executor *executor)
 
 
 /* Execute AST node */
+static void note_write(cypher_executor *executor, const cypher_result *result);
+
 cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *ast)
 {
     if (!executor || !ast) {
@@ -748,6 +750,8 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
     executor->captured_stmt = NULL;
     executor->captured_ret = NULL;
 
+    note_write(executor, result);
+
 #ifdef GRAPHQLITE_PERF_TIMING
     clock_gettime(CLOCK_MONOTONIC, &t_cleanup);
     double parse_ms = (t_parse.tv_sec - t_start.tv_sec) * 1000.0 + (t_parse.tv_nsec - t_start.tv_nsec) / 1000000.0;
@@ -757,6 +761,18 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
 #endif
 
     return result;
+}
+
+/* Mark the connection's CSR graph cache stale after a successful write, so
+ * the next algorithm call rebuilds it (perf review: cache did not track
+ * writes). */
+static void note_write(cypher_executor *executor, const cypher_result *result)
+{
+    if (!executor || !result || !result->success) return;
+    if (result->nodes_created || result->relationships_created ||
+        result->nodes_deleted || result->relationships_deleted || result->properties_set) {
+        executor->graph_dirty = true;
+    }
 }
 
 /* Execute Cypher query with parameters */
@@ -798,6 +814,7 @@ cypher_result* cypher_executor_execute_ast_params(cypher_executor *executor, ast
 
     /* Execute the AST */
     cypher_result *result = cypher_executor_execute_ast(executor, ast);
+    note_write(executor, result);
 
     /* Clear params */
     executor->params_json = NULL;

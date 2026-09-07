@@ -46,6 +46,27 @@ fn cypher_with_params(&self, query: &str, params: &serde_json::Value) -> Result<
 
 Execute a Cypher query with parameters. `params` must be a JSON object; keys correspond to `$name` placeholders.
 
+#### `Connection::cypher_rows_each`
+
+```rust
+fn cypher_rows_each<F>(&self, query: &str, params: Option<&serde_json::Value>, f: F) -> Result<()>
+where
+    F: FnMut(&Row) -> Result<()>
+```
+
+Stream a Cypher query's rows through the `cypher_rows` virtual table. `f`
+receives each `Row` as SQLite steps the result, so peak memory is one row;
+returning an error from `f` stops the scan and propagates. A write query
+without `RETURN` yields one row of modification counts.
+
+```rust
+conn.cypher_rows_each("MATCH (n:Person) RETURN n.name AS name", None, |row| {
+    let name: String = row.get("name")?;
+    println!("{name}");
+    Ok(())
+})?;
+```
+
 #### `Connection::cypher_builder`
 
 ```rust

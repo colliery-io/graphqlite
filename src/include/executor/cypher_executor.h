@@ -63,6 +63,8 @@ struct cypher_executor {
     bool schema_initialized;
     const char *params_json;  /* Current query parameters (NULL if no params) */
     struct csr_graph *cached_graph;  /* Cached graph for algorithm acceleration (managed by connection) */
+    struct csr_graph **cached_graph_slot; /* Owner's pointer, so a stale cache can be rebuilt in place */
+    bool graph_dirty;                /* A write ran since cached_graph was loaded */
 
     /* Perf review F8: per-connection cache of pure read queries keyed by
      * Cypher text (parse + transform + prepare are ~90% of a point query).

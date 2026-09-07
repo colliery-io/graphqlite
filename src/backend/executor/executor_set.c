@@ -80,20 +80,18 @@ static int evaluate_ast_with_context(
     const char *joins_str = sql_builder_get_joins(ctx->unified_builder);
     const char *where_str = sql_builder_get_where(ctx->unified_builder);
 
-    char full_sql[8192];
-    size_t pos = 0;
-    pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, "%s", ctx->sql_buffer);
-    if (from_str && from_str[0])
-        pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, " FROM %s", from_str);
-    if (joins_str && joins_str[0])
-        pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, " %s", joins_str);
-    if (where_str && where_str[0])
-        pos += snprintf(full_sql + pos, sizeof(full_sql) - pos, " WHERE %s", where_str);
+    bool has_from = from_str && from_str[0], has_joins = joins_str && joins_str[0],
+         has_where = where_str && where_str[0];
+    char *full_sql = sqlite3_mprintf("%s%s%s%s%s%s%s", ctx->sql_buffer,
+                                     has_from ? " FROM " : "", has_from ? from_str : "",
+                                     has_joins ? " " : "", has_joins ? joins_str : "",
+                                     has_where ? " WHERE " : "", has_where ? where_str : "");
 
-    CYPHER_DEBUG("evaluate_function_with_context SQL: %s", full_sql);
+    CYPHER_DEBUG("evaluate_function_with_context SQL: %s", full_sql ? full_sql : "(oom)");
 
-    sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(executor->db, full_sql, -1, &stmt, NULL);
+    sqlite3_stmt *stmt = NULL;
+    int rc = full_sql ? sqlite3_prepare_v2(executor->db, full_sql, -1, &stmt, NULL) : SQLITE_NOMEM;
+    sqlite3_free(full_sql);
     cypher_transform_free_context(ctx);
     if (rc != SQLITE_OK) return -1;
 

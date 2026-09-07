@@ -83,6 +83,7 @@ typedef struct property_key_entry {
     char *key_string;
     time_t last_used;
     int usage_count;
+    struct property_key_entry *next;   /* chained on hash collision */
 } property_key_entry;
 
 /* Property key cache - based on proven archive design */

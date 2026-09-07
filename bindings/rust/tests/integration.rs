@@ -4481,3 +4481,72 @@ fn test_write_query_stats() {
 
     assert!(conn.cypher("MATCH (n:Nope) RETURN n").unwrap().is_empty());
 }
+
+/// F10: cypher_rows streams rows with the same shapes as cypher().
+#[test]
+fn test_cypher_rows_each() {
+    let conn = test_connection();
+    conn.cypher("CREATE (a:P {name: 'Ann', age: 30})-[:KNOWS]->(b:P {name: 'Bob', age: 25})")
+        .unwrap();
+
+    let mut names: Vec<(String, i64)> = vec![];
+    conn.cypher_rows_each(
+        "MATCH (n:P) WHERE n.age >= $min RETURN n.name AS name, n.age AS age ORDER BY name",
+        Some(&json!({"min": 0})),
+        |row| {
+            names.push((row.get("name")?, row.get("age")?));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        names,
+        vec![("Ann".to_string(), 30), ("Bob".to_string(), 25)]
+    );
+
+    // Entities decode exactly as through cypher()
+    let via_cypher = conn.cypher("MATCH (n:P {name: 'Ann'}) RETURN n").unwrap();
+    let mut via_rows = vec![];
+    conn.cypher_rows_each("MATCH (n:P {name: 'Ann'}) RETURN n", None, |row| {
+        via_rows.push(row.get_value("n").cloned().unwrap());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(via_rows.len(), 1);
+    assert_eq!(
+        via_rows[0].as_object().unwrap().get("id"),
+        via_cypher[0]
+            .get_value("n")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .get("id")
+    );
+
+    // Write query without RETURN yields one statistics row
+    let mut stats = vec![];
+    conn.cypher_rows_each("CREATE (:P {name: 'Cy'})", None, |row| {
+        stats.push(row.get::<i64>("nodes_created")?);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(stats, vec![1]);
+
+    // Errors surface as Error::Cypher with the extension's message
+    let err = conn
+        .cypher_rows_each("BOGUS", None, |_| Ok(()))
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Cypher(ref m) if m.contains("syntax error")),
+        "{err:?}"
+    );
+
+    // The callback can stop early
+    let mut seen = 0;
+    let stopped = conn.cypher_rows_each("MATCH (n:P) RETURN n.name", None, |_| {
+        seen += 1;
+        Err(Error::Cypher("stop".into()))
+    });
+    assert!(stopped.is_err());
+    assert_eq!(seen, 1);
+}

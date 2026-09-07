@@ -83,6 +83,44 @@ The first byte distinguishes the two shapes: `[` is a result set, `{` is a stati
 
 ---
 
+### `cypher_rows(query [, params_json])` (table-valued)
+
+```sql
+SELECT c0, c1 FROM cypher_rows('MATCH (n:Person) RETURN n.name, n.age') LIMIT 100;
+SELECT row FROM cypher_rows('MATCH (n:Person) WHERE n.age > $min RETURN n', '{"min": 25}');
+```
+
+An eponymous virtual table that exposes the same query as SQL rows. Use it
+for large results and for anything you want to page, filter, or join in SQL:
+SQLite steps the table one row at a time, so peak memory is one row rather
+than the whole JSON string `cypher()` builds, and `LIMIT` stops the scan.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `row` | TEXT (JSON) | The row as a JSON object keyed by `RETURN` column name — the same object `cypher()` puts in its array |
+| `cols` | TEXT (JSON) | Array of the `RETURN` column names |
+| `ncols` | INTEGER | Number of `RETURN` columns |
+| `c0` … `c31` | native | Positional values: integers, reals and booleans (0/1) keep their SQLite types, strings are TEXT, nodes/relationships/paths/lists/maps are JSON text |
+| `query`, `params` | hidden | The function-call arguments |
+
+A write query without `RETURN` yields one row whose `row` is the statistics
+object and whose `c0`…`c4` are `nodes_created`, `relationships_created`,
+`nodes_deleted`, `relationships_deleted`, `properties_set`. Errors raise the
+same structured `{"error": ..., "code": ...}` message `cypher()` raises.
+
+```sql
+-- compose with the rest of SQL
+SELECT p.c0 AS name, sum(value) AS total
+FROM cypher_rows('MATCH (p:Person) RETURN p.name, p.scores') AS p, json_each(p.c1)
+GROUP BY p.c0;
+```
+
+Positional columns beyond the 32nd are not exposed; use `row` for wider
+projections. The table shares the connection's executor and statement cache
+with `cypher()`.
+
+---
+
 ### `cypher_validate(query)`
 
 ```sql

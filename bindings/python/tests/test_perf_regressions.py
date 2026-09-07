@@ -7,11 +7,12 @@ tests/performance/python/.
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from graphqlite import connect
+from graphqlite import Graph, connect
 
 
 def get_extension_path():
@@ -290,3 +291,102 @@ def test_statement_cache_survives_many_distinct_queries(db):
     for i in range(100):
         assert db.cypher(f"MATCH (n:P {{id: 'p{i % 50}'}}) RETURN n.n AS n")[0]["n"] == i % 50
     assert db.cypher("MATCH (n:P {id: 'p7'}) RETURN n.n AS n")[0]["n"] == 7
+
+
+# ---------------------------------------------------------------------------
+# F10: cypher_rows table-valued interface
+# ---------------------------------------------------------------------------
+
+
+class TestCypherRows:
+    @pytest.fixture
+    def conn(self):
+        c = connect(":memory:", extension_path=get_extension_path())
+        yield c
+        c.close()
+
+    @pytest.fixture
+    def graph(self):
+        with Graph(":memory:", extension_path=get_extension_path()) as g:
+            yield g
+
+    def test_iter_rows_matches_cypher(self, conn):
+        conn.cypher("CREATE (a:P {name: 'Ann', age: 30})-[:KNOWS {since: 2020}]->(b:P {name: 'Bob', age: 25})")
+        via_cypher = conn.cypher("MATCH (n:P)-[r]->(m) RETURN n, r, m ORDER BY n.name").to_list()
+        via_rows = list(conn.iter_rows("MATCH (n:P)-[r]->(m) RETURN n, r, m ORDER BY n.name"))
+        assert via_rows == via_cypher
+        assert via_rows[0]["n"]["properties"]["name"] == "Ann"
+        assert via_rows[0]["r"]["properties"]["since"] == 2020
+
+    def test_iter_rows_is_a_generator_with_params(self, conn):
+        conn.cypher("UNWIND range(1, 100) AS i CREATE (:N {i: i})")
+        it = conn.iter_rows("MATCH (n:N) WHERE n.i > $min RETURN n.i AS i ORDER BY i", {"min": 90})
+        assert next(it) == {"i": 91}
+        assert [r["i"] for r in it] == list(range(92, 101))
+
+    def test_iter_rows_write_stats_and_errors(self, conn):
+        assert list(conn.iter_rows("CREATE (:N {i: 1})")) == [
+            {"nodes_created": 1, "relationships_created": 0, "nodes_deleted": 0,
+             "relationships_deleted": 0, "properties_set": 1}
+        ]
+        with pytest.raises(sqlite3.Error, match="syntax error"):
+            list(conn.iter_rows("BOGUS"))
+
+    def test_native_column_types(self, conn):
+        conn.cypher("CREATE (:T {s: 'x', i: 7, f: 2.5, b: true})")
+        row = conn.execute(
+            "SELECT c0, typeof(c0), c1, typeof(c1), c2, typeof(c2), c3, typeof(c3), c4, typeof(c4) "
+            "FROM cypher_rows('MATCH (n:T) RETURN n.s, n.i, n.f, n.b, n.missing')"
+        ).fetchone()
+        assert row == ("x", "text", 7, "integer", 2.5, "real", 1, "integer", None, "null")
+
+    def test_sql_limit_stops_early(self, conn):
+        conn.cypher("UNWIND range(1, 5000) AS i CREATE (:N {i: i})")
+        rows = conn.execute("SELECT c0 FROM cypher_rows('MATCH (n:N) RETURN n.i ORDER BY n.i') LIMIT 3").fetchall()
+        assert rows == [(1,), (2,), (3,)]
+
+    def test_graph_iter_query(self, graph):
+        graph.upsert_node("a", {"name": "A"})
+        assert [r["name"] for r in graph.iter_query("MATCH (n) RETURN n.name AS name")] == ["A"]
+
+
+# ---------------------------------------------------------------------------
+# Smaller review items: CSR cache staleness, growable transform buffers
+# ---------------------------------------------------------------------------
+
+
+def test_cached_graph_refreshes_after_writes():
+    g = connect(":memory:", extension_path=get_extension_path())
+    for i in range(3):
+        g.cypher("CREATE (:C {id: $id})", {"id": f"c{i}"})
+    g.cypher("MATCH (a:C {id: 'c0'}), (b:C {id: 'c1'}) CREATE (a)-[:E]->(b)")
+    assert json.loads(g.execute("SELECT gql_load_graph()").fetchone()[0])["nodes"] == 3
+    assert len(_algo(g.cypher("RETURN louvain()"))) == 3
+    # A write after gql_load_graph() used to leave algorithms on the old graph
+    g.cypher("CREATE (:C {id: 'c3'})-[:E]->(:C {id: 'c4'})")
+    assert len(_algo(g.cypher("RETURN louvain()"))) == 5
+    assert json.loads(g.execute("SELECT gql_load_graph()").fetchone()[0])["nodes"] == 5
+    g.close()
+
+
+def test_large_pattern_comprehension_projection(db):
+    # The collect expression of a pattern comprehension used to be rendered
+    # into a fixed 4 KB stack buffer that append_sql could try to realloc.
+    rows = db.cypher(
+        "MATCH (a:P {id: 'p0'}) RETURN [(a)-[:R]->(b) | {x: b, y: b, z: b, w: b}] AS l"
+    ).to_list()
+    assert len(rows) == 1 and len(rows[0]["l"]) == 1
+    assert set(rows[0]["l"][0].keys()) == {"x", "y", "z", "w"}
+    assert rows[0]["l"][0]["x"]["properties"]["id"] == "p1"
+
+
+def test_property_keys_sharing_a_hash_slot_stay_cached(db):
+    # 2,000 distinct keys over a 1,024-slot cache guarantee collisions; every
+    # key must still resolve (the cache used to evict on collision).
+    props = ", ".join(f"k{i}: {i}" for i in range(400))
+    for batch in range(5):
+        db.cypher(f"CREATE (:K {{ {props.replace('k', f'k{batch}_')} }})")
+    for batch in range(5):
+        for i in (0, 199, 399):
+            key = f"k{batch}_{i}"
+            assert db.cypher(f"MATCH (n:K) WHERE n.{key} = {i} RETURN count(*) AS c")[0]["c"] == 1

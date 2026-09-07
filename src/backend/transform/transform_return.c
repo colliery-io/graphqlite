@@ -1805,7 +1805,11 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* Now we need to go back and fill in the collect expression */
                 /* Create a new buffer for the collect expression */
-                char collect_sql[4096];
+                /* Heap buffer: append_sql may realloc it when the collect
+                 * expression is large (e.g. several entity projections). */
+                size_t collect_cap = 4096;
+                char *collect_sql = malloc(collect_cap);
+                if (!collect_sql) return -1;
 
                 /* Save current buffer state */
                 char *temp_buffer = ctx->sql_buffer;
@@ -1815,17 +1819,19 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 /* Switch to collect buffer */
                 ctx->sql_buffer = collect_sql;
                 ctx->sql_size = 0;
-                ctx->sql_capacity = sizeof(collect_sql);
+                ctx->sql_capacity = collect_cap;
 
                 /* Transform the collect expression */
                 if (transform_expression(ctx, comp->collect_expr) < 0) {
+                    free(ctx->sql_buffer);
                     ctx->sql_buffer = temp_buffer;
                     ctx->sql_size = temp_size;
                     ctx->sql_capacity = temp_capacity;
                     return -1;
                 }
 
-                /* Null terminate */
+                /* Null terminate (the buffer may have been grown) */
+                collect_sql = ctx->sql_buffer;
                 collect_sql[ctx->sql_size] = '\0';
 
                 /* Restore original buffer */
@@ -1857,6 +1863,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         if (!new_buffer) {
                             ctx->has_error = true;
                             ctx->error_message = strdup("Out of memory expanding buffer for pattern comprehension");
+                            free(collect_sql);
                             return -1;
                         }
 
@@ -1877,6 +1884,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     /* Update size */
                     ctx->sql_size = new_size;
                 }
+                free(collect_sql);
 
                 /* Restore variable count (remove pattern-local variables) */
                 transform_var_truncate_to(ctx->var_ctx, saved_var_count);
