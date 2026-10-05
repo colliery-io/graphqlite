@@ -4550,3 +4550,104 @@ fn test_cypher_rows_each() {
     assert!(stopped.is_err());
     assert_eq!(seen, 1);
 }
+
+// ---------------------------------------------------------------------------
+// GitHub #16: structured diagnostics + non-executing validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_validate_valid_query() {
+    let conn = test_connection();
+    let v = conn.validate("MATCH (n:Person) RETURN n.name").unwrap();
+    assert!(v.is_valid());
+    assert!(v.diagnostic.is_none());
+}
+
+#[test]
+fn test_validate_parse_error_has_location() {
+    let conn = test_connection();
+    let v = conn.validate("MATCH (n:Person RETURN n.name").unwrap();
+    assert!(!v.valid);
+    let d = v.diagnostic.expect("diagnostic");
+    assert_eq!(d.code, "PARSE_ERROR");
+    assert_eq!(d.line, Some(1));
+    assert_eq!(d.column, Some(17));
+    assert!(d.message.contains("unexpected RETURN"), "{}", d.message);
+    assert!(d.message.contains("expecting ')'"), "{}", d.message);
+}
+
+#[test]
+fn test_validate_multiline_parse_error_reports_later_line() {
+    let conn = test_connection();
+    let v = conn.validate("MATCH (n)\nWHERE n.x = \nRETURN n").unwrap();
+    let d = v.diagnostic.expect("diagnostic");
+    assert_eq!(d.code, "PARSE_ERROR");
+    assert_eq!((d.line, d.column), (Some(3), Some(1)));
+}
+
+#[test]
+fn test_validate_scanner_error_has_column() {
+    // Scanner-stage failures used to report column 0 and were classified
+    // as execution errors.
+    let conn = test_connection();
+    let v = conn.validate("RETURN 99999999999999999999999").unwrap();
+    let d = v.diagnostic.expect("diagnostic");
+    assert_eq!(d.code, "PARSE_ERROR");
+    assert_eq!((d.line, d.column), (Some(1), Some(8)));
+    assert!(d.message.contains("IntegerOverflow"), "{}", d.message);
+
+    let v = conn.validate("RETURN \"unterminated").unwrap();
+    let d = v.diagnostic.expect("diagnostic");
+    assert_eq!(d.code, "PARSE_ERROR");
+    assert_eq!((d.line, d.column), (Some(1), Some(8)));
+}
+
+#[test]
+fn test_validate_static_semantic_error() {
+    let conn = test_connection();
+    let v = conn.validate("RETURN NOT 1").unwrap();
+    let d = v.diagnostic.expect("diagnostic");
+    assert_eq!(d.code, "VALIDATION_ERROR");
+    assert!(d.message.contains("InvalidArgumentType"), "{}", d.message);
+    assert_eq!((d.line, d.column), (None, None));
+
+    let v = conn.validate("RETURN 1 UNION RETURN 1, 2").unwrap();
+    let d = v.diagnostic.expect("diagnostic");
+    assert_eq!(d.code, "VALIDATION_ERROR");
+    assert!(
+        d.message.contains("DifferentColumnsInUnion"),
+        "{}",
+        d.message
+    );
+}
+
+#[test]
+fn test_validate_does_not_execute() {
+    let conn = test_connection();
+    assert!(
+        conn.validate("CREATE (:Issue16Probe {k: 1})")
+            .unwrap()
+            .valid
+    );
+    let rows = conn.cypher("MATCH (n:Issue16Probe) RETURN n").unwrap();
+    assert_eq!(rows.len(), 0);
+}
+
+#[test]
+fn test_graph_validate_forwards() {
+    let g = test_graph();
+    assert!(g.validate("RETURN 1").unwrap().valid);
+    assert!(!g.validate("RETURN").unwrap().valid);
+}
+
+#[test]
+fn test_cypher_error_message_keeps_quotes() {
+    // The error renderer JSON-escapes the message instead of replacing
+    // double quotes with single quotes.
+    let conn = test_connection();
+    let err = conn.cypher("RETURN \"unterminated").unwrap_err();
+    match err {
+        Error::Cypher(m) => assert!(m.contains("'\"'"), "{m}"),
+        other => panic!("expected Error::Cypher, got {other:?}"),
+    }
+}

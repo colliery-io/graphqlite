@@ -987,6 +987,68 @@ static void test_call_without_braces_error(void)
     printf("CALL without braces error test passed\n");
 }
 
+/* GitHub #16: parse errors carry a 1-based line and column.
+ * Scanner-stage failures (bad character, unterminated string, integer
+ * overflow) used to report column 0 because the token bridge dropped the
+ * scanner's column; they must now point at the offending token like the
+ * grammar's syntax errors do. */
+static void test_parse_error_location_scanner(void)
+{
+    cypher_parse_result *r = parse_cypher_query_ext("RETURN \"unterminated");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r);
+    CU_ASSERT_PTR_NULL(r->ast);
+    CU_ASSERT_PTR_NOT_NULL(r->error_message);
+    CU_ASSERT_EQUAL(r->error_line, 1);
+    CU_ASSERT_EQUAL(r->error_column, 8);
+    cypher_parse_result_free(r);
+
+    r = parse_cypher_query_ext("RETURN 99999999999999999999999");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r);
+    CU_ASSERT_PTR_NULL(r->ast);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r->error_message);
+    CU_ASSERT_PTR_NOT_NULL(strstr(r->error_message, "IntegerOverflow"));
+    CU_ASSERT_EQUAL(r->error_line, 1);
+    CU_ASSERT_EQUAL(r->error_column, 8);
+    cypher_parse_result_free(r);
+
+    /* Second line: the column restarts at 1 after the newline. */
+    r = parse_cypher_query_ext("MATCH (n) RETURN n.name\nORDER BY ~x");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r);
+    CU_ASSERT_PTR_NULL(r->ast);
+    CU_ASSERT_EQUAL(r->error_line, 2);
+    CU_ASSERT_EQUAL(r->error_column, 10);
+    cypher_parse_result_free(r);
+}
+
+/* GitHub #16: grammar-stage syntax errors keep Bison's location and its
+ * "unexpected X, expecting Y" hint. */
+static void test_parse_error_location_grammar(void)
+{
+    cypher_parse_result *r = parse_cypher_query_ext("MATCH (n:Person RETURN n.name");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r);
+    CU_ASSERT_PTR_NULL(r->ast);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r->error_message);
+    CU_ASSERT_PTR_NOT_NULL(strstr(r->error_message, "unexpected RETURN"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(r->error_message, "expecting ')'"));
+    CU_ASSERT_EQUAL(r->error_line, 1);
+    CU_ASSERT_EQUAL(r->error_column, 17);
+    cypher_parse_result_free(r);
+
+    r = parse_cypher_query_ext("MATCH (n)\nWHERE n.x = \nRETURN n");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r);
+    CU_ASSERT_PTR_NULL(r->ast);
+    CU_ASSERT_EQUAL(r->error_line, 3);
+    CU_ASSERT_EQUAL(r->error_column, 1);
+    cypher_parse_result_free(r);
+
+    /* A valid query reports no error and no location. */
+    r = parse_cypher_query_ext("MATCH (n) RETURN n");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(r);
+    CU_ASSERT_PTR_NOT_NULL(r->ast);
+    CU_ASSERT_PTR_NULL(r->error_message);
+    cypher_parse_result_free(r);
+}
+
 /* Test MATCH + CALL parsing */
 static void test_match_call_parsing(void)
 {
@@ -2288,7 +2350,9 @@ int init_parser_suite(void)
         !CU_add_test(suite, "Nested CALL parsing", test_nested_call_parsing) ||
         !CU_add_test(suite, "LOAD CSV parsing", test_load_csv_parsing) ||
         !CU_add_test(suite, "LOAD CSV WITH HEADERS parsing", test_load_csv_with_headers_parsing) ||
-        !CU_add_test(suite, "LOAD CSV FIELDTERMINATOR parsing", test_load_csv_fieldterminator_parsing))
+        !CU_add_test(suite, "LOAD CSV FIELDTERMINATOR parsing", test_load_csv_fieldterminator_parsing) ||
+        !CU_add_test(suite, "Parse error location (scanner stage)", test_parse_error_location_scanner) ||
+        !CU_add_test(suite, "Parse error location (grammar stage)", test_parse_error_location_grammar))
     {
         return CU_get_error();
     }

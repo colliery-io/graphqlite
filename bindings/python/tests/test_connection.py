@@ -1335,3 +1335,88 @@ def test_write_query_stats(db):
     assert detach["relationships_deleted"] == 1
     # A RETURN with zero rows is still an (empty) result set, not stats
     assert db.cypher("MATCH (n:Nope) RETURN n").to_list() == []
+
+
+# =============================================================================
+# GitHub #16: structured diagnostics + non-executing validation
+# =============================================================================
+
+def test_validate_valid_query(db):
+    v = db.validate("MATCH (n:Person) RETURN n.name")
+    assert v.valid
+    assert bool(v) is True
+    assert v.diagnostic is None
+
+
+def test_validate_parse_error_has_location(db):
+    v = db.validate("MATCH (n:Person RETURN n.name")
+    assert not v
+    d = v.diagnostic
+    assert d.code == "PARSE_ERROR"
+    assert (d.line, d.column) == (1, 17)
+    assert "unexpected RETURN" in d.message
+    assert "expecting ')'" in d.message
+    assert str(d).startswith("PARSE_ERROR at 1:17: ")
+
+
+def test_validate_multiline_parse_error_reports_later_line(db):
+    v = db.validate("MATCH (n)\nWHERE n.x = \nRETURN n")
+    assert (v.diagnostic.code, v.diagnostic.line, v.diagnostic.column) == ("PARSE_ERROR", 3, 1)
+
+
+def test_validate_scanner_error_has_column(db):
+    v = db.validate("RETURN 99999999999999999999999")
+    assert v.diagnostic.code == "PARSE_ERROR"
+    assert (v.diagnostic.line, v.diagnostic.column) == (1, 8)
+    assert "IntegerOverflow" in v.diagnostic.message
+
+    v = db.validate('RETURN "unterminated')
+    assert v.diagnostic.code == "PARSE_ERROR"
+    assert (v.diagnostic.line, v.diagnostic.column) == (1, 8)
+
+
+def test_validate_static_semantic_error(db):
+    v = db.validate("RETURN NOT 1")
+    assert v.diagnostic.code == "VALIDATION_ERROR"
+    assert "InvalidArgumentType" in v.diagnostic.message
+    assert (v.diagnostic.line, v.diagnostic.column) == (None, None)
+    assert str(v.diagnostic).startswith("VALIDATION_ERROR: ")
+
+    v = db.validate("RETURN 1 UNION RETURN 1, 2")
+    assert v.diagnostic.code == "VALIDATION_ERROR"
+    assert "DifferentColumnsInUnion" in v.diagnostic.message
+
+
+def test_validate_does_not_execute(db):
+    assert db.validate("CREATE (:Issue16Probe {k: 1})").valid
+    rows = db.cypher("MATCH (n:Issue16Probe) RETURN count(n) AS c")
+    assert rows[0]["c"] == 0
+
+
+def test_cypher_error_is_structured(db):
+    with pytest.raises(graphqlite.CypherError) as ei:
+        db.cypher("MATCH (n:Person RETURN n.name")
+    err = ei.value
+    assert isinstance(err, sqlite3.Error)  # backwards compatible
+    assert err.code == "PARSE_ERROR"
+    assert (err.line, err.column) == (1, 17)
+    assert "syntax error" in str(err)
+
+    with pytest.raises(graphqlite.CypherError) as ei:
+        db.cypher("RETURN NOT 1")
+    assert ei.value.code == "VALIDATION_ERROR"
+    assert (ei.value.line, ei.value.column) == (None, None)
+
+
+def test_iter_rows_error_is_structured(db):
+    with pytest.raises(graphqlite.CypherError) as ei:
+        list(db.iter_rows("MATCH (n RETURN n"))
+    assert ei.value.code == "PARSE_ERROR"
+    assert (ei.value.line, ei.value.column) == (1, 10)
+
+
+def test_cypher_error_message_keeps_quotes(db):
+    with pytest.raises(graphqlite.CypherError) as ei:
+        db.cypher('RETURN "unterminated')
+    assert ei.value.code == "PARSE_ERROR"
+    assert "'\"'" in str(ei.value)

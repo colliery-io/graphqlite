@@ -1,7 +1,7 @@
 //! GraphQLite connection wrapper.
 
 use crate::query_builder::CypherQuery;
-use crate::{CypherResult, Error, Result, Row};
+use crate::{CypherResult, Error, Result, Row, ValidationResult};
 
 use std::path::Path;
 #[cfg(not(feature = "bundled-extension"))]
@@ -130,6 +130,38 @@ impl Connection {
             }
             None => Ok(CypherResult::empty()),
         }
+    }
+
+    /// Validate a Cypher query without executing it.
+    ///
+    /// Runs the scanner, the grammar and the extension's compile-time
+    /// semantic checks (the same pass `cypher()` runs before transform) and
+    /// reports the outcome as data. The graph is never read or written, so a
+    /// `CREATE` validates without creating anything.
+    ///
+    /// Syntax failures carry `PARSE_ERROR` with a 1-based line and column;
+    /// static semantic failures such as `RETURN NOT 1` carry
+    /// `VALIDATION_ERROR`. Errors that only surface during transform or
+    /// execution (an unknown variable, for example) are not detected here.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Connection;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// let v = conn.validate("MATCH (n:Person RETURN n.name")?;
+    /// assert!(!v.valid);
+    /// let d = v.diagnostic.unwrap();
+    /// assert_eq!(d.code, "PARSE_ERROR");
+    /// assert_eq!((d.line, d.column), (Some(1), Some(17)));
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn validate(&self, query: &str) -> Result<ValidationResult> {
+        let json: String = self
+            .conn
+            .query_row("SELECT cypher_validate(?1)", [query], |row| row.get(0))?;
+        Ok(ValidationResult::from_json(&json)?)
     }
 
     /// Execute a Cypher query with named parameters.

@@ -84,7 +84,7 @@ Execute a Cypher query.
 
 Returns: `CypherResult`
 
-Raises: `sqlite3.Error` on parse or execution failure.
+Raises: `CypherError` (a subclass of `sqlite3.Error`) on parse, validation or execution failure; see [`CypherError`](#cyphererror).
 
 **Example**
 
@@ -108,13 +108,43 @@ result, with the same keys and value shapes `Connection.cypher` produces, so
 peak memory is one row and the consumer can stop early. A write query
 without `RETURN` yields one dict of modification counts.
 
-Raises: `sqlite3.Error` on parse or execution failure.
+Raises: `CypherError` (a subclass of `sqlite3.Error`) on parse, validation or execution failure.
 
 **Example**
 
 ```python
 for row in conn.iter_rows("MATCH (n:Person) RETURN n.name AS name, n.age AS age"):
     print(row["name"], row["age"])
+```
+
+---
+
+### `Connection.validate`
+
+```python
+conn.validate(query: str) -> ValidationResult
+```
+
+Validate a Cypher query without executing it. The query goes through the
+scanner, the grammar and the same compile-time semantic pass `cypher()` runs
+before transform; the graph is never read or written, so validating a
+`CREATE` creates nothing. Errors that only surface during transform or
+execution (an unknown variable, for example) are not detected.
+
+Returns: `ValidationResult`, truthy when the query is valid. When it is not,
+`diagnostic` holds a `Diagnostic` with `code` (`PARSE_ERROR` for scanner and
+grammar failures, `VALIDATION_ERROR` for static semantic violations such as
+`RETURN NOT 1`), `message`, and the 1-based `line` and `column` of the
+offending token for parse errors (`None` otherwise).
+
+**Example**
+
+```python
+v = conn.validate("MATCH (n:Person RETURN n.name")
+if not v:
+    d = v.diagnostic
+    print(d.code, d.line, d.column, d.message)
+    # PARSE_ERROR 1 17 Line 1, Col 17: syntax error, unexpected RETURN, expecting ')'
 ```
 
 ---
@@ -166,6 +196,55 @@ conn.sqlite_connection -> sqlite3.Connection
 ```
 
 The underlying `sqlite3.Connection` object.
+
+---
+
+## `CypherError`
+
+```python
+class CypherError(sqlite3.Error)
+```
+
+Raised by `Connection.cypher`, `Connection.iter_rows` and everything built on
+them when the extension rejects a query. It subclasses `sqlite3.Error`, so
+existing `except sqlite3.Error` handlers keep working, and adds the fields of
+the extension's structured error object:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `message` | str | Human-readable reason (also `str(err)`) |
+| `code` | str \| None | `PARSE_ERROR`, `VALIDATION_ERROR`, `EXECUTION_ERROR`, `NOT_IMPLEMENTED`, `MEMORY_ERROR` or `INTERNAL_ERROR` |
+| `line`, `column` | int \| None | 1-based location of the offending token for parse errors |
+
+```python
+try:
+    conn.cypher("MATCH (n:Person RETURN n.name")
+except graphqlite.CypherError as e:
+    print(e.code, e.line, e.column)   # PARSE_ERROR 1 17
+```
+
+---
+
+## `ValidationResult` and `Diagnostic`
+
+Frozen dataclasses returned by `Connection.validate` / `Graph.validate`.
+
+```python
+@dataclass(frozen=True)
+class Diagnostic:
+    code: str
+    message: str
+    line: Optional[int] = None
+    column: Optional[int] = None
+
+@dataclass(frozen=True)
+class ValidationResult:
+    valid: bool
+    diagnostic: Optional[Diagnostic] = None   # None when valid
+```
+
+`bool(result)` is `result.valid`. `str(diagnostic)` renders as
+`PARSE_ERROR at 1:17: ...` or `VALIDATION_ERROR: ...`.
 
 ---
 
@@ -374,6 +453,14 @@ graph.query(cypher: str, params: dict = None) -> list[dict]
 ```
 
 Execute a Cypher query and return all rows as a list of dicts.
+
+#### `Graph.validate`
+
+```python
+graph.validate(cypher: str) -> ValidationResult
+```
+
+Validate a Cypher query without executing it. See [`Connection.validate`](#connectionvalidate).
 
 ---
 

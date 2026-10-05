@@ -427,24 +427,22 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
             sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
         }
     } else {
-        const char *err_code = GQL_ERR_EXECUTION;
-        if (result->error_message && (strstr(result->error_message, "syntax error") || strstr(result->error_message, "Line "))) {
-            err_code = GQL_ERR_PARSE;
-        } else if (result->error_message && strstr(result->error_message, "not yet implemented")) {
-            err_code = GQL_ERR_NOT_IMPL;
+        /* Prefer the code the executor attached (parse / validation stage);
+         * fall back to message sniffing for errors raised deeper in the
+         * transform and execution layers, which are not yet classified. */
+        const char *err_code = result->error_code;
+        if (!err_code) {
+            err_code = GQL_ERR_EXECUTION;
+            if (result->error_message && (strstr(result->error_message, "syntax error") || strstr(result->error_message, "Line "))) {
+                err_code = GQL_ERR_PARSE;
+            } else if (result->error_message && strstr(result->error_message, "not yet implemented")) {
+                err_code = GQL_ERR_NOT_IMPL;
+            }
         }
         const char *err_msg = result->error_message ? result->error_message : "Query execution failed";
-        /* Sanitize double quotes in dynamic error messages to avoid breaking JSON */
-        char sanitized_msg[512];
-        const char *src = err_msg;
-        char *dst = sanitized_msg;
-        char *end = sanitized_msg + sizeof(sanitized_msg) - 1;
-        while (*src && dst < end) {
-            *dst++ = (*src == '"') ? '\'' : *src;
-            src++;
-        }
-        *dst = '\0';
-        graphqlite_result_error(context, sanitized_msg, err_code);
+        /* The renderer JSON-escapes the message, so no quote sanitizing here. */
+        graphqlite_result_error_at(context, err_msg, err_code,
+                                   result->error_line, result->error_column);
     }
     
     /* Cleanup - only free result, executor is cached */

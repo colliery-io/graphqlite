@@ -76,6 +76,10 @@ foreach_binding* get_foreach_binding(foreach_context *ctx, const char *variable)
 /* Result helper functions */
 cypher_result* create_empty_result(void);
 void set_result_error(cypher_result *result, const char *error_msg);
+/* set_result_error plus a GQL_ERR_* code and a 1-based source location
+ * (0 = unknown). The code must point at static storage. */
+void set_result_error_ex(cypher_result *result, const char *error_msg,
+                         const char *error_code, int line, int column);
 
 /* Helper to bind parameters from JSON to a prepared statement */
 int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json);

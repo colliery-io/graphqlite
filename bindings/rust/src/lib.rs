@@ -59,6 +59,7 @@ mod platform;
 mod query_builder;
 mod result;
 mod utils;
+mod validation;
 
 pub use connection::Connection;
 pub use error::Error;
@@ -70,6 +71,7 @@ pub use utils::{
     assert_identifier, escape_string, format_value, is_identifier, sanitize_rel_type,
     PropertyValue, CYPHER_RESERVED,
 };
+pub use validation::{Diagnostic, ValidationResult};
 
 // Algorithm result types
 pub use algorithms::{

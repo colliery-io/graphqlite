@@ -11,7 +11,7 @@ mod queries;
 pub use bulk::BulkInsertResult;
 
 use crate::query_builder::CypherQuery;
-use crate::{Connection, CypherResult, Result};
+use crate::{Connection, CypherResult, Result, ValidationResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -79,6 +79,13 @@ impl Graph {
     /// Execute a raw Cypher query.
     pub fn query(&self, cypher: &str) -> Result<CypherResult> {
         self.conn.cypher(cypher)
+    }
+
+    /// Validate a raw Cypher query without executing it.
+    ///
+    /// See [`Connection::validate`].
+    pub fn validate(&self, cypher: &str) -> Result<ValidationResult> {
+        self.conn.validate(cypher)
     }
 
     /// Execute a raw Cypher query with named parameters.

@@ -4,6 +4,40 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Structured diagnostics and non-executing validation** (GitHub #16,
+  Kairos GQLITE-T-0192). `cypher_validate(query)` now runs the compile-time
+  semantic pass as well as the parser, so a query the grammar accepts but
+  openCypher rejects (`RETURN NOT 1`, UNION branches with different columns)
+  is reported as `VALIDATION_ERROR` instead of `valid`; it never touches the
+  graph. Its JSON gains a stable `code` key (`PARSE_ERROR` or
+  `VALIDATION_ERROR`) and is now fully JSON-escaped.
+- The `cypher()` and `cypher_rows()` error object gains `line` and `column`
+  (1-based, parse errors only) next to the existing `error` and `code` keys,
+  and `code` is now set by the stage that failed instead of being inferred
+  from the message text: scanner errors (unterminated string, out-of-range
+  integer literal) are `PARSE_ERROR` and compile-time semantic errors are
+  `VALIDATION_ERROR`, where both used to be `EXECUTION_ERROR`.
+- Rust: `Connection::validate` / `Graph::validate` returning
+  `ValidationResult { valid, diagnostic: Option<Diagnostic> }`, with
+  `Diagnostic { code, message, line, column }`.
+- Python: `Connection.validate` / `Graph.validate` returning a
+  `ValidationResult` dataclass, and `graphqlite.CypherError`, a subclass of
+  `sqlite3.Error` raised by `cypher()` and `iter_rows()` that carries `code`,
+  `line` and `column`. Existing `except sqlite3.Error` handlers keep working.
+
+### Fixed
+
+- Scanner-stage parse errors reported column 0: the token bridge dropped the
+  scanner's column, and the scanner recorded the position after the token
+  rather than at its start. Both now report the 1-based column of the
+  offending token, matching the grammar's syntax errors.
+- Error messages are JSON-escaped instead of having double quotes replaced
+  by single quotes and being truncated at 512 bytes.
+
 ## [0.8.0] — 2026-09-07
 
 A performance release implementing all ten findings of the performance review

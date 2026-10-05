@@ -67,6 +67,31 @@ conn.cypher_rows_each("MATCH (n:Person) RETURN n.name AS name", None, |row| {
 })?;
 ```
 
+#### `Connection::validate`
+
+```rust
+fn validate(&self, query: &str) -> Result<ValidationResult>
+```
+
+Validate a Cypher query without executing it. The query goes through the
+scanner, the grammar and the same compile-time semantic pass `cypher()` runs
+before transform; the graph is never read or written, so validating a
+`CREATE` creates nothing. Errors that only surface during transform or
+execution (an unknown variable, for example) are not detected.
+
+The outcome is data, not an `Err`: `ValidationResult { valid, diagnostic }`,
+where `diagnostic` is a `Diagnostic { code, message, line, column }` with
+`code` `PARSE_ERROR` (scanner or grammar; `line` and `column` are the 1-based
+location of the offending token) or `VALIDATION_ERROR` (static semantic
+violation such as `RETURN NOT 1`; no location).
+
+```rust
+let v = conn.validate("MATCH (n:Person RETURN n.name")?;
+if let Some(d) = v.diagnostic {
+    println!("{}", d); // PARSE_ERROR at 1:17: Line 1, Col 17: syntax error, unexpected RETURN, expecting ')'
+}
+```
+
 #### `Connection::cypher_builder`
 
 ```rust
@@ -191,6 +216,7 @@ fn get_all_edges(&self) -> Result<Vec<serde_json::Value>>
 
 ```rust
 fn query(&self, cypher: &str, params: Option<&serde_json::Value>) -> Result<Vec<serde_json::Value>>
+fn validate(&self, cypher: &str) -> Result<ValidationResult>   // see Connection::validate
 fn stats(&self) -> Result<serde_json::Value>
 fn node_degree(&self, id: &str) -> Result<i64>
 fn get_neighbors(&self, id: &str) -> Result<Vec<serde_json::Value>>
@@ -266,6 +292,26 @@ fn close(self) -> Result<()>
 ## Result Types
 
 All are plain structs deriving `Debug`, `Clone`, `serde::Serialize`, `serde::Deserialize`.
+
+### `ValidationResult` / `Diagnostic`
+
+```rust
+pub struct ValidationResult {
+    pub valid: bool,
+    pub diagnostic: Option<Diagnostic>,   // None when valid
+}
+
+pub struct Diagnostic {
+    pub code: String,          // "PARSE_ERROR" | "VALIDATION_ERROR"
+    pub message: String,
+    pub line: Option<u32>,     // 1-based, parse errors only
+    pub column: Option<u32>,   // 1-based, parse errors only
+}
+```
+
+Returned by `Connection::validate` and `Graph::validate`. `Diagnostic`
+implements `Display` (`PARSE_ERROR at 1:17: ...`). These two derive `Debug`,
+`Clone`, `PartialEq`, `Eq` rather than serde traits.
 
 ### `PageRankResult`
 

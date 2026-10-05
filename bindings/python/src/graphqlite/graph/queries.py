@@ -2,6 +2,7 @@
 
 from typing import Iterator, Optional
 
+from ..connection import ValidationResult
 from ._base import BaseMixin
 
 
@@ -139,6 +140,14 @@ class QueriesMixin(BaseMixin):
             "node_count": int(node_cnt) if node_cnt else 0,
             "edge_count": int(edge_cnt) if edge_cnt else 0,
         }
+
+    def validate(self, cypher: str) -> ValidationResult:
+        """
+        Validate a Cypher query without executing it.
+
+        See :meth:`graphqlite.Connection.validate`.
+        """
+        return self._conn.validate(cypher)
 
     def query(self, cypher: str, params: Optional[dict] = None) -> list[dict]:
         """

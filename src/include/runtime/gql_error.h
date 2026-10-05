@@ -46,4 +46,23 @@ void graphqlite_result_error(sqlite3_context *context,
                              const char *message,
                              const char *code);
 
+/* Same as graphqlite_result_error, with a 1-based source location. The JSON
+ * gains "line" and "column" keys only when the respective value is > 0, so
+ * {"error","code"} stays a stable subset for existing consumers (issue #16). */
+void graphqlite_result_error_at(sqlite3_context *context,
+                                const char *message,
+                                const char *code,
+                                int line,
+                                int column);
+
+/* Render {"error":"...","code":"..."[,"line":N][,"column":M]} with the message
+ * JSON-escaped. Returns an sqlite3_malloc'd string (free with sqlite3_free) or
+ * NULL on allocation failure. Shared by cypher(), cypher_rows and
+ * cypher_validate() so every surface agrees on the error shape. */
+char *gql_error_json(const char *message, const char *code, int line, int column);
+
+/* JSON-quote a string (surrounding quotes, escapes, control chars as \uXXXX).
+ * Returns a malloc'd string (free with free) or NULL. */
+char *gql_json_quote(const char *s);
+
 #endif /* RUNTIME_GQL_ERROR_H */
