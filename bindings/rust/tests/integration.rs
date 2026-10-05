@@ -4644,18 +4644,36 @@ fn test_graph_validate_forwards() {
 fn test_cypher_error_message_keeps_quotes() {
     // The error renderer JSON-escapes the message instead of replacing
     // double quotes with single quotes.
-    // cypher() surfaces the extension's structured JSON through the SQLite
-    // error (Error::Sqlite), so check the rendered text rather than a variant.
     let conn = test_connection();
     let err = conn.cypher("RETURN \"unterminated").unwrap_err();
-    let text = err.to_string();
-    let json_start = text
-        .find('{')
-        .unwrap_or_else(|| panic!("no JSON in {text}"));
-    let v: serde_json::Value = serde_json::from_str(&text[json_start..])
-        .unwrap_or_else(|e| panic!("error text is not valid JSON ({e}): {text}"));
-    assert!(v["error"].as_str().unwrap().contains("'\"'"), "{text}");
-    assert_eq!(v["code"], "PARSE_ERROR");
-    assert_eq!(v["line"], 1);
-    assert_eq!(v["column"], 8);
+    match err {
+        Error::Cypher(m) => assert!(m.contains("'\"'"), "{m}"),
+        other => panic!("expected Error::Cypher, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cypher_errors_use_the_same_variant_on_every_entry_point() {
+    // cypher(), the query builder and cypher_rows_each() all surface an
+    // extension failure as Error::Cypher carrying the extension's message.
+    let conn = test_connection();
+    let via_cypher = conn.cypher("MATCH (n RETURN n").unwrap_err();
+    let via_builder = conn
+        .cypher_builder("MATCH (n RETURN n")
+        .param("x", 1)
+        .run()
+        .unwrap_err();
+    let via_rows = conn
+        .cypher_rows_each("MATCH (n RETURN n", None, |_| Ok(()))
+        .unwrap_err();
+    for err in [via_cypher, via_builder, via_rows] {
+        match err {
+            Error::Cypher(m) => assert!(m.contains("syntax error"), "{m}"),
+            other => panic!("expected Error::Cypher, got {other:?}"),
+        }
+    }
+
+    // A genuine SQLite failure is still Error::Sqlite.
+    let err = conn.execute("SELECT * FROM no_such_table").unwrap_err();
+    assert!(matches!(err, Error::Sqlite(_)), "{err:?}");
 }

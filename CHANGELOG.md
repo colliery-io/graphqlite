@@ -29,6 +29,14 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   `sqlite3.Error` raised by `cypher()` and `iter_rows()` that carries `code`,
   `line` and `column`. Existing `except sqlite3.Error` handlers keep working.
 
+### Changed
+
+- Rust: `Connection::cypher`, `cypher_with_params`, the query builder and
+  `GraphManager::query` now return `Error::Cypher(message)` when the
+  extension rejects a query, as `cypher_rows_each` already did. They used to
+  return `Error::Sqlite` wrapping the raw JSON error text. Genuine SQLite
+  failures still return `Error::Sqlite`.
+
 ### Fixed
 
 - Scanner-stage parse errors reported column 0: the token bridge dropped the

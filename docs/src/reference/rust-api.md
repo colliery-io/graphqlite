@@ -477,7 +477,7 @@ pub enum Error {
 |---------|-------|
 | `Sqlite` | SQLite or rusqlite error |
 | `Json` | JSON serialization/deserialization failure |
-| `Cypher` | Cypher parse or execution error |
+| `Cypher` | The extension rejected a query (parse, validation or execution). Raised by `cypher()`, the query builder, `cypher_rows_each()` and `GraphManager::query`; the string is the extension's `error` message |
 | `ExtensionNotFound` | Could not locate the extension library |
 | `TypeError` | Type mismatch when reading a column value |
 | `ColumnNotFound` | Column name not present in result |

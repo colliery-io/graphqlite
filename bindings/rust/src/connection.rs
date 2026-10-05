@@ -118,7 +118,8 @@ impl Connection {
     pub fn cypher(&self, query: &str) -> Result<CypherResult> {
         let result: Option<String> = self
             .conn
-            .query_row("SELECT cypher(?1)", [query], |row| row.get(0))?;
+            .query_row("SELECT cypher(?1)", [query], |row| row.get(0))
+            .map_err(map_query_error)?;
 
         match result {
             Some(json_str) => {
@@ -205,11 +206,14 @@ impl Connection {
     ) -> Result<CypherResult> {
         let params_json = serde_json::to_string(params)
             .map_err(|e| Error::Cypher(format!("Failed to serialize params: {}", e)))?;
-        let result: Option<String> = self.conn.query_row(
-            "SELECT cypher(?1, ?2)",
-            rusqlite::params![query, params_json],
-            |row| row.get(0),
-        )?;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT cypher(?1, ?2)",
+                rusqlite::params![query, params_json],
+                |row| row.get(0),
+            )
+            .map_err(map_query_error)?;
 
         match result {
             Some(json_str) => {
@@ -269,10 +273,7 @@ impl Connection {
             let row = match rows.next() {
                 Ok(Some(r)) => r,
                 Ok(None) => break,
-                Err(rusqlite::Error::SqliteFailure(_, Some(msg))) => {
-                    return Err(parse_structured_error(&msg))
-                }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(map_query_error(e)),
             };
             let json_str: String = row.get(0)?;
             let obj = match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -387,6 +388,22 @@ fn load_extension(conn: &rusqlite::Connection, path: &std::path::Path) -> Result
     }
 
     Ok(())
+}
+
+/// Map a rusqlite error raised while running Cypher to the crate's error.
+///
+/// The extension reports query failures through `sqlite3_result_error` with
+/// the structured `{"error":"msg","code":"CODE",...}` object as the message.
+/// Those become [`Error::Cypher`] carrying the `error` text, so `cypher()`,
+/// `cypher_with_params()`, the query builder and `cypher_rows_each()` all
+/// surface the same variant; anything else stays [`Error::Sqlite`].
+pub(crate) fn map_query_error(e: rusqlite::Error) -> Error {
+    if let rusqlite::Error::SqliteFailure(_, Some(msg)) = &e {
+        if msg.starts_with("{\"error\"") || msg.starts_with("Error") {
+            return parse_structured_error(msg);
+        }
+    }
+    Error::Sqlite(e)
 }
 
 /// Parse a structured JSON error from the extension into an Error.
