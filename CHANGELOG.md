@@ -4,7 +4,15 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] — 2026-10-05
+
+A diagnostics release closing GitHub issue #16 (Kairos GQLITE-T-0192, PR
+#120). Query results, the `cypher()` result format and the openCypher TCK
+pass count (3788) are unchanged. Error objects on every SQL surface gain a
+location and a stage-accurate `code`, `cypher_validate()` becomes a real
+pre-flight check that runs the compile-time semantic pass without executing,
+and both bindings gain a `validate()` API. One behaviour change for the Rust
+crate: extension query errors are now `Error::Cypher` on every entry point.
 
 ### Added
 
