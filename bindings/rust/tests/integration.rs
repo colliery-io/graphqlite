@@ -4649,6 +4649,13 @@ fn test_cypher_error_message_keeps_quotes() {
     let conn = test_connection();
     let err = conn.cypher("RETURN \"unterminated").unwrap_err();
     let text = err.to_string();
-    assert!(text.contains("'\"'"), "{text}");
-    assert!(text.contains("PARSE_ERROR"), "{text}");
+    let json_start = text
+        .find('{')
+        .unwrap_or_else(|| panic!("no JSON in {text}"));
+    let v: serde_json::Value = serde_json::from_str(&text[json_start..])
+        .unwrap_or_else(|e| panic!("error text is not valid JSON ({e}): {text}"));
+    assert!(v["error"].as_str().unwrap().contains("'\"'"), "{text}");
+    assert_eq!(v["code"], "PARSE_ERROR");
+    assert_eq!(v["line"], 1);
+    assert_eq!(v["column"], 8);
 }
