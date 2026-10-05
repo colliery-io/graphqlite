@@ -44,3 +44,16 @@ void set_result_error(cypher_result *result, const char *error_msg)
     result->success = false;
     result->error_message = strdup(error_msg);
 }
+
+void set_result_error_ex(cypher_result *result, const char *error_msg,
+                         const char *error_code, int line, int column)
+{
+    if (!result || !error_msg) {
+        return;
+    }
+
+    set_result_error(result, error_msg);
+    result->error_code = error_code;
+    result->error_line = line > 0 ? line : 0;
+    result->error_column = column > 0 ? column : 0;
+}

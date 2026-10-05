@@ -17,6 +17,7 @@
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
 #include "transform/transform_validate.h"
+#include "runtime/gql_error.h"
 
 /* SQLite custom function: REVERSE(string) - reverses a string */
 static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_value **argv)
@@ -391,9 +392,10 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                 {
                     char *validate_err = NULL;
                     if (transform_validate_query(query, &validate_err) < 0) {
-                        set_result_error(result,
-                                         validate_err ? validate_err
-                                                       : "Validation failed");
+                        set_result_error_ex(result,
+                                            validate_err ? validate_err
+                                                         : "Validation failed",
+                                            GQL_ERR_VALIDATION, 0, 0);
                         if (validate_err) free(validate_err);
                         return result;
                     }
@@ -545,7 +547,8 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                 {
                     char *uerr = NULL;
                     if (transform_validate_union((cypher_union *)ast, &uerr) < 0) {
-                        set_result_error(result, uerr ? uerr : "UNION validation failed");
+                        set_result_error_ex(result, uerr ? uerr : "UNION validation failed",
+                                            GQL_ERR_VALIDATION, 0, 0);
                         if (uerr) free(uerr);
                         return result;
                     }
@@ -693,7 +696,7 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
         CYPHER_DEBUG("Parser returned NULL");
         cypher_result *result = create_empty_result();
         if (result) {
-            set_result_error(result, "Internal parser error");
+            set_result_error_ex(result, "Internal parser error", GQL_ERR_INTERNAL, 0, 0);
         }
         return result;
     }
@@ -703,8 +706,13 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
         CYPHER_DEBUG("Parser error: %s", parse_result->error_message ? parse_result->error_message : "Unknown error");
         cypher_result *result = create_empty_result();
         if (result) {
-            /* Use the detailed parser error message */
-            set_result_error(result, parse_result->error_message ? parse_result->error_message : "Failed to parse query");
+            /* Use the detailed parser error message and carry its location
+             * so cypher() / cypher_rows can report line and column. */
+            set_result_error_ex(result,
+                                parse_result->error_message ? parse_result->error_message : "Failed to parse query",
+                                GQL_ERR_PARSE,
+                                parse_result->error_line,
+                                parse_result->error_column);
         }
         cypher_parse_result_free(parse_result);
         return result;

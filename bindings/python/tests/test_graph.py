@@ -1991,3 +1991,16 @@ def test_bulk_rel_type_matches_cypher_path(g, raw):
 def test_bulk_mixin_has_no_private_sanitizer():
     from graphqlite.graph.bulk import BulkMixin
     assert not hasattr(BulkMixin, "_sanitize_rel_type")
+
+
+def test_graph_validate_forwards():
+    """GitHub #16: Graph.validate delegates to Connection.validate."""
+    from graphqlite import graph as _graph
+    g = _graph(":memory:")
+    try:
+        assert g.validate("RETURN 1").valid
+        v = g.validate("RETURN")
+        assert not v.valid
+        assert v.diagnostic.code == "PARSE_ERROR"
+    finally:
+        g.close()

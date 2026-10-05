@@ -18,6 +18,13 @@ struct cypher_return;
 typedef struct cypher_result {
     bool success;
     char *error_message;
+    /* Structured diagnostics (issue #16). error_code is one of the GQL_ERR_*
+     * string constants from runtime/gql_error.h (static storage, never freed)
+     * or NULL when the producer did not classify the error. error_line and
+     * error_column are 1-based and 0 when unknown. */
+    const char *error_code;
+    int error_line;
+    int error_column;
     
     /* Result data for queries that return data */
     int row_count;

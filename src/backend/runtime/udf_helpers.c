@@ -31,6 +31,7 @@
 #include "parser/cypher_debug.h"
 #include "runtime/gql_error.h"
 #include "transform/sql_builder.h"
+#include "transform/transform_validate.h"
 
 /* SQLite's JSON subtype marker (added in 3.45). Matches the 'J' char =
  * 0x4A used by json_array/json_object to flag JSON-typed text results
@@ -41,13 +42,73 @@
 #define GQL_SUBTYPE_JSON 0x4A
 #endif
 
-/* Definition of the structured-error helper declared in gql_error.h. */
+/* Definitions of the structured-error helpers declared in gql_error.h. */
+char *gql_json_quote(const char *s) {
+    if (!s) s = "";
+    /* Worst case every byte becomes \uXXXX (6 bytes), plus quotes and NUL. */
+    size_t cap = strlen(s) * 6 + 3;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    char *d = out;
+    *d++ = '"';
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        switch (*p) {
+            case '"':  *d++ = '\\'; *d++ = '"';  break;
+            case '\\': *d++ = '\\'; *d++ = '\\'; break;
+            case '\n': *d++ = '\\'; *d++ = 'n';  break;
+            case '\r': *d++ = '\\'; *d++ = 'r';  break;
+            case '\t': *d++ = '\\'; *d++ = 't';  break;
+            case '\b': *d++ = '\\'; *d++ = 'b';  break;
+            case '\f': *d++ = '\\'; *d++ = 'f';  break;
+            default:
+                if (*p < 0x20) {
+                    d += sprintf(d, "\\u%04x", (unsigned int)*p);
+                } else {
+                    *d++ = (char)*p;
+                }
+        }
+    }
+    *d++ = '"';
+    *d = '\0';
+    return out;
+}
+
+char *gql_error_json(const char *message, const char *code, int line, int column) {
+    char *msg = gql_json_quote(message ? message : "Unknown error");
+    if (!msg) return NULL;
+    char *out;
+    if (line > 0 && column > 0) {
+        out = sqlite3_mprintf("{\"error\":%s,\"code\":\"%s\",\"line\":%d,\"column\":%d}",
+                              msg, code ? code : GQL_ERR_EXECUTION, line, column);
+    } else if (line > 0) {
+        out = sqlite3_mprintf("{\"error\":%s,\"code\":\"%s\",\"line\":%d}",
+                              msg, code ? code : GQL_ERR_EXECUTION, line);
+    } else {
+        out = sqlite3_mprintf("{\"error\":%s,\"code\":\"%s\"}",
+                              msg, code ? code : GQL_ERR_EXECUTION);
+    }
+    free(msg);
+    return out;
+}
+
+void graphqlite_result_error_at(sqlite3_context *context,
+                                const char *message,
+                                const char *code,
+                                int line,
+                                int column) {
+    char *json = gql_error_json(message, code, line, column);
+    if (!json) {
+        sqlite3_result_error_nomem(context);
+        return;
+    }
+    sqlite3_result_error(context, json, -1);
+    sqlite3_free(json);
+}
+
 void graphqlite_result_error(sqlite3_context *context,
                              const char *message,
                              const char *code) {
-    char buf[1024];
-    snprintf(buf, sizeof(buf), "{\"error\":\"%s\",\"code\":\"%s\"}", message, code);
-    sqlite3_result_error(context, buf, -1);
+    graphqlite_result_error_at(context, message, code, 0, 0);
 }
 
 /* Cypher's three-valued equality for any pair of values.
@@ -3628,10 +3689,47 @@ void regexp_func(
     sqlite3_result_int(context, ret == 0 ? 1 : 0);
 }
 
-/* cypher_validate() - Parse and validate a Cypher query without executing it.
- * Returns a JSON object with validation results:
- *   {"valid": true} or {"valid": false, "error": "...", "line": N, "column": N}
- */
+/* Validate the AST the way the executor does before transform: the static
+ * argument-type pass for single queries and the column-agreement pass for
+ * UNION trees. Returns 0 when valid, -1 with *error_message set otherwise. */
+static int validate_parsed_ast(ast_node *ast, char **error_message) {
+    if (!ast) return 0;
+    if (ast->type == AST_NODE_QUERY || ast->type == AST_NODE_SINGLE_QUERY) {
+        return transform_validate_query((cypher_query *)ast, error_message);
+    }
+    if (ast->type == AST_NODE_UNION) {
+        return transform_validate_union((cypher_union *)ast, error_message);
+    }
+    return 0;
+}
+
+/* Emit {"valid":false,"error":...,"code":...[,"line":N][,"column":M]} by
+ * reusing the cypher() error renderer so both surfaces agree. */
+static void validate_result_error(sqlite3_context *context, const char *message,
+                                  const char *code, int line, int column) {
+    char *err = gql_error_json(message, code, line, column);
+    if (!err) {
+        sqlite3_result_error_nomem(context);
+        return;
+    }
+    /* err starts with '{'; splice the valid flag in front of its keys. */
+    char *out = sqlite3_mprintf("{\"valid\":false,%s", err + 1);
+    sqlite3_free(err);
+    if (!out) {
+        sqlite3_result_error_nomem(context);
+        return;
+    }
+    sqlite3_result_text(context, out, -1, sqlite3_free);
+}
+
+/* cypher_validate() - Parse and statically validate a Cypher query without
+ * executing it (issue #16). Runs the scanner, the grammar and the same
+ * compile-time semantic pass the executor runs before transform; it never
+ * touches the graph. Returns a JSON object:
+ *   {"valid": true}
+ *   {"valid":false,"error":"...","code":"PARSE_ERROR","line":N,"column":M}
+ *   {"valid":false,"error":"...","code":"VALIDATION_ERROR"}
+ * "line" and "column" (1-based) are present only when known. */
 void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
     if (argc < 1) {
         graphqlite_result_error(context, "cypher_validate requires a query argument", GQL_ERR_VALIDATION);
@@ -3640,49 +3738,37 @@ void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_value **ar
 
     const char *query = (const char*)sqlite3_value_text(argv[0]);
     if (!query) {
-        sqlite3_result_text(context, "{\"valid\": false, \"error\": \"Query is NULL\"}", -1, SQLITE_STATIC);
+        validate_result_error(context, "Query is NULL", GQL_ERR_VALIDATION, 0, 0);
         return;
     }
 
-    /* Parse the query */
     cypher_parse_result *parse_result = parse_cypher_query_ext(query);
     if (!parse_result) {
-        sqlite3_result_text(context, "{\"valid\": false, \"error\": \"Parser allocation failed\"}", -1, SQLITE_STATIC);
+        sqlite3_result_error_nomem(context);
         return;
     }
 
-    if (parse_result->ast != NULL && parse_result->error_message == NULL) {
-        /* Valid query */
-        sqlite3_result_text(context, "{\"valid\": true}", -1, SQLITE_STATIC);
-    } else {
-        /* Invalid query - build JSON response with error details */
-        char *response = malloc(1024);
-        if (response) {
-            const char *err = parse_result->error_message ? parse_result->error_message : "Unknown parse error";
-            /* Escape quotes in error message for JSON */
-            char escaped_err[512];
-            char *dst = escaped_err;
-            const char *src = err;
-            while (*src && (dst - escaped_err) < 500) {
-                if (*src == '"') { *dst++ = '\\'; *dst++ = '"'; }
-                else if (*src == '\\') { *dst++ = '\\'; *dst++ = '\\'; }
-                else { *dst++ = *src; }
-                src++;
-            }
-            *dst = '\0';
-
-            snprintf(response, 1024,
-                "{\"valid\": false, \"error\": \"%s\", \"line\": %d, \"column\": %d}",
-                escaped_err,
-                parse_result->error_line > 0 ? parse_result->error_line : 1,
-                parse_result->error_column > 0 ? parse_result->error_column : 0);
-            sqlite3_result_text(context, response, -1, SQLITE_TRANSIENT);
-            free(response);
-        } else {
-            sqlite3_result_text(context, "{\"valid\": false, \"error\": \"Memory allocation failed\"}", -1, SQLITE_STATIC);
-        }
+    if (parse_result->ast == NULL || parse_result->error_message != NULL) {
+        validate_result_error(context,
+                              parse_result->error_message ? parse_result->error_message : "Unknown parse error",
+                              GQL_ERR_PARSE,
+                              parse_result->error_line,
+                              parse_result->error_column);
+        cypher_parse_result_free(parse_result);
+        return;
     }
 
+    char *validation_error = NULL;
+    if (validate_parsed_ast(parse_result->ast, &validation_error) < 0) {
+        validate_result_error(context,
+                              validation_error ? validation_error : "Validation failed",
+                              GQL_ERR_VALIDATION, 0, 0);
+        free(validation_error);
+        cypher_parse_result_free(parse_result);
+        return;
+    }
+
+    sqlite3_result_text(context, "{\"valid\": true}", -1, SQLITE_STATIC);
     cypher_parse_result_free(parse_result);
 }
 

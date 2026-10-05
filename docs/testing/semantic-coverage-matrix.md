@@ -733,3 +733,33 @@ Regression tests live in `tests/functional/39_issue_regression_tests.sql`
   `upsert_edge(..., edge_id=...)` (Python) / `upsert_edge_with_id`
   (Rust) merge on an `id` relationship property so parallel edges on
   the same (source, target, type) triple are individually addressable.
+
+## Coverage update (2026-10-04) — GitHub issue #16: structured diagnostics + non-executing validation
+
+Regression tests live in `tests/functional/43_validate_diagnostics.sql`
+(hard assertions, same CHECK-constrained temp-table pattern as test 39),
+plus CUnit parse-location tests in `tests/test_parser.c` and Rust/Python
+integration tests. Verified alongside unit 953/953, functional clean,
+Python 457, Rust 304, and a full TCK run (3788 pass, identical to the
+0.8.0 baseline). Executor changes are confined to error reporting: the
+parse-failure and compile-time-validation branches of
+`cypher_executor_execute` / `cypher_executor_execute_ast` attach a
+`GQL_ERR_*` code and the parser's line/column to `cypher_result`; no
+query-shape cell changes.
+
+- **Scanner-stage parse errors reported column 0** — `cypher_yylex`
+  dropped the scanner's column and `scanner_error` recorded the position
+  after the token. Both now report the 1-based column of the offending
+  token (test 43 §3: integer overflow, unterminated string, bad character
+  on line 2).
+- **`cypher_validate()` accepted statically invalid queries** —
+  `RETURN NOT 1` and UNION column mismatches validated as `valid` because
+  only the parser ran. It now runs `transform_validate_query` /
+  `transform_validate_union` and reports `VALIDATION_ERROR` (test 43 §4),
+  and never executes (test 43 §5: a validated `CREATE` creates nothing).
+- **Error object shape** — `cypher()`, `cypher_rows` and
+  `cypher_validate()` share one renderer: `{"error","code"[,"line"]
+  [,"column"]}` with a JSON-escaped message (test 43 §3.2 checks
+  `json_valid` on a message containing a double quote). `code` is set by
+  the failing stage instead of sniffed from the message, so scanner and
+  static-semantic errors are no longer `EXECUTION_ERROR`.

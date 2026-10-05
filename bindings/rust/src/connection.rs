@@ -1,7 +1,7 @@
 //! GraphQLite connection wrapper.
 
 use crate::query_builder::CypherQuery;
-use crate::{CypherResult, Error, Result, Row};
+use crate::{CypherResult, Error, Result, Row, ValidationResult};
 
 use std::path::Path;
 #[cfg(not(feature = "bundled-extension"))]
@@ -118,7 +118,8 @@ impl Connection {
     pub fn cypher(&self, query: &str) -> Result<CypherResult> {
         let result: Option<String> = self
             .conn
-            .query_row("SELECT cypher(?1)", [query], |row| row.get(0))?;
+            .query_row("SELECT cypher(?1)", [query], |row| row.get(0))
+            .map_err(map_query_error)?;
 
         match result {
             Some(json_str) => {
@@ -130,6 +131,38 @@ impl Connection {
             }
             None => Ok(CypherResult::empty()),
         }
+    }
+
+    /// Validate a Cypher query without executing it.
+    ///
+    /// Runs the scanner, the grammar and the extension's compile-time
+    /// semantic checks (the same pass `cypher()` runs before transform) and
+    /// reports the outcome as data. The graph is never read or written, so a
+    /// `CREATE` validates without creating anything.
+    ///
+    /// Syntax failures carry `PARSE_ERROR` with a 1-based line and column;
+    /// static semantic failures such as `RETURN NOT 1` carry
+    /// `VALIDATION_ERROR`. Errors that only surface during transform or
+    /// execution (an unknown variable, for example) are not detected here.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use graphqlite::Connection;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// let v = conn.validate("MATCH (n:Person RETURN n.name")?;
+    /// assert!(!v.valid);
+    /// let d = v.diagnostic.unwrap();
+    /// assert_eq!(d.code, "PARSE_ERROR");
+    /// assert_eq!((d.line, d.column), (Some(1), Some(17)));
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn validate(&self, query: &str) -> Result<ValidationResult> {
+        let json: String = self
+            .conn
+            .query_row("SELECT cypher_validate(?1)", [query], |row| row.get(0))?;
+        Ok(ValidationResult::from_json(&json)?)
     }
 
     /// Execute a Cypher query with named parameters.
@@ -173,11 +206,14 @@ impl Connection {
     ) -> Result<CypherResult> {
         let params_json = serde_json::to_string(params)
             .map_err(|e| Error::Cypher(format!("Failed to serialize params: {}", e)))?;
-        let result: Option<String> = self.conn.query_row(
-            "SELECT cypher(?1, ?2)",
-            rusqlite::params![query, params_json],
-            |row| row.get(0),
-        )?;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT cypher(?1, ?2)",
+                rusqlite::params![query, params_json],
+                |row| row.get(0),
+            )
+            .map_err(map_query_error)?;
 
         match result {
             Some(json_str) => {
@@ -237,10 +273,7 @@ impl Connection {
             let row = match rows.next() {
                 Ok(Some(r)) => r,
                 Ok(None) => break,
-                Err(rusqlite::Error::SqliteFailure(_, Some(msg))) => {
-                    return Err(parse_structured_error(&msg))
-                }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(map_query_error(e)),
             };
             let json_str: String = row.get(0)?;
             let obj = match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -355,6 +388,22 @@ fn load_extension(conn: &rusqlite::Connection, path: &std::path::Path) -> Result
     }
 
     Ok(())
+}
+
+/// Map a rusqlite error raised while running Cypher to the crate's error.
+///
+/// The extension reports query failures through `sqlite3_result_error` with
+/// the structured `{"error":"msg","code":"CODE",...}` object as the message.
+/// Those become [`Error::Cypher`] carrying the `error` text, so `cypher()`,
+/// `cypher_with_params()`, the query builder and `cypher_rows_each()` all
+/// surface the same variant; anything else stays [`Error::Sqlite`].
+pub(crate) fn map_query_error(e: rusqlite::Error) -> Error {
+    if let rusqlite::Error::SqliteFailure(_, Some(msg)) = &e {
+        if msg.starts_with("{\"error\"") || msg.starts_with("Error") {
+            return parse_structured_error(msg);
+        }
+    }
+    Error::Sqlite(e)
 }
 
 /// Parse a structured JSON error from the extension into an Error.

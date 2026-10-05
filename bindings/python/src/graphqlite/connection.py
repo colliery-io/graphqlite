@@ -4,8 +4,81 @@ import json
 import os
 import platform
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Iterator, NoReturn, Optional, Union
+
+
+class CypherError(sqlite3.Error):
+    """
+    A Cypher query failed in the extension.
+
+    Subclasses ``sqlite3.Error`` so existing ``except sqlite3.Error`` handlers
+    keep working, and adds the structured fields the extension reports
+    (GitHub #16):
+
+    - ``code``: ``PARSE_ERROR``, ``VALIDATION_ERROR``, ``EXECUTION_ERROR``,
+      ``NOT_IMPLEMENTED``, ``MEMORY_ERROR`` or ``INTERNAL_ERROR``.
+    - ``line`` / ``column``: 1-based location of the offending token for
+      parse errors, else ``None``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = None,
+        line: Optional[int] = None,
+        column: Optional[int] = None,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.line = line
+        self.column = column
+
+
+def _raise_structured(e: sqlite3.Error) -> NoReturn:
+    """Re-raise an extension error as CypherError when it carries the JSON shape."""
+    try:
+        err_data = json.loads(str(e))
+    except (json.JSONDecodeError, TypeError):
+        raise e
+    if isinstance(err_data, dict) and "error" in err_data:
+        raise CypherError(
+            err_data["error"],
+            code=err_data.get("code"),
+            line=err_data.get("line"),
+            column=err_data.get("column"),
+        ) from None
+    raise e
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    """One validation diagnostic: a stable code, a message and an optional location."""
+
+    code: str
+    message: str
+    line: Optional[int] = None
+    column: Optional[int] = None
+
+    def __str__(self) -> str:
+        if self.line is not None and self.column is not None:
+            return f"{self.code} at {self.line}:{self.column}: {self.message}"
+        if self.line is not None:
+            return f"{self.code} at line {self.line}: {self.message}"
+        return f"{self.code}: {self.message}"
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """Outcome of :meth:`Connection.validate`. Truthy when the query is valid."""
+
+    valid: bool
+    diagnostic: Optional[Diagnostic] = None
+
+    def __bool__(self) -> bool:
+        return self.valid
 
 
 class CypherResult:
@@ -149,15 +222,7 @@ class Connection:
             else:
                 cursor = self._conn.execute("SELECT cypher(?)", (query,))
         except sqlite3.Error as e:
-            # Parse structured JSON error from extension
-            err_str = str(e)
-            try:
-                err_data = json.loads(err_str)
-                if isinstance(err_data, dict) and "error" in err_data:
-                    raise sqlite3.Error(err_data["error"]) from None
-            except (json.JSONDecodeError, TypeError):
-                pass
-            raise
+            _raise_structured(e)
 
         row = cursor.fetchone()
 
@@ -213,14 +278,43 @@ class Connection:
             for (row_json,) in cursor:
                 yield json.loads(row_json)
         except sqlite3.Error as e:
-            err_str = str(e)
-            try:
-                err_data = json.loads(err_str)
-                if isinstance(err_data, dict) and "error" in err_data:
-                    raise sqlite3.Error(err_data["error"]) from None
-            except (json.JSONDecodeError, TypeError):
-                pass
-            raise
+            _raise_structured(e)
+
+    def validate(self, query: str) -> ValidationResult:
+        """
+        Validate a Cypher query without executing it.
+
+        Runs the scanner, the grammar and the extension's compile-time
+        semantic checks (the same pass ``cypher()`` runs before transform) and
+        returns the outcome as data. The graph is never read or written, so a
+        ``CREATE`` validates without creating anything.
+
+        Syntax failures carry ``PARSE_ERROR`` with a 1-based ``line`` and
+        ``column``; static semantic failures such as ``RETURN NOT 1`` carry
+        ``VALIDATION_ERROR``. Errors that only surface during transform or
+        execution (an unknown variable, for example) are not detected here.
+
+        Example:
+            >>> v = db.validate("MATCH (n:Person RETURN n.name")
+            >>> v.valid
+            False
+            >>> (v.diagnostic.code, v.diagnostic.line, v.diagnostic.column)
+            ('PARSE_ERROR', 1, 17)
+        """
+        cursor = self._conn.execute("SELECT cypher_validate(?)", (query,))
+        row = cursor.fetchone()
+        data = json.loads(row[0])
+        if data.get("valid"):
+            return ValidationResult(valid=True)
+        return ValidationResult(
+            valid=False,
+            diagnostic=Diagnostic(
+                code=data.get("code", "VALIDATION_ERROR"),
+                message=data.get("error", "Unknown validation error"),
+                line=data.get("line"),
+                column=data.get("column"),
+            ),
+        )
 
     def execute(self, sql: str, parameters: tuple = ()) -> sqlite3.Cursor:
         """Execute a raw SQL query."""

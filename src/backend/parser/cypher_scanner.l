@@ -21,7 +21,7 @@ static void prepare_token(CypherScannerState *state, CypherTokenType type, const
 static void prepare_string_token(CypherScannerState *state, CypherTokenType type, const char *text, const char *value);
 static void prepare_integer_token(CypherScannerState *state, const char *text);
 static void prepare_decimal_token(CypherScannerState *state, const char *text);
-static void scanner_error(CypherScannerState *state, const char *message);
+static void scanner_error(CypherScannerState *state, const char *message, int token_len);
 static char* unescape_string(const char *escaped_str, int length);
 extern bool g_invalid_unicode_in_string;
 
@@ -165,12 +165,13 @@ operator    [+*/%^=!&|~]+
                     int len = yyleng - 2; /* Remove quotes */
                     char *unescaped = unescape_string(yytext + 1, len);
                     if (!unescaped) {
-                        scanner_error(yyextra, "Out of memory processing string literal");
+                        scanner_error(yyextra, "Out of memory processing string literal", yyleng);
                         return CYPHER_TOKEN_EOF;
                     }
                     if (g_invalid_unicode_in_string) {
                         scanner_error(yyextra,
-                            "SyntaxError: InvalidUnicodeLiteral: invalid \\u escape in string literal");
+                            "SyntaxError: InvalidUnicodeLiteral: invalid \\u escape in string literal",
+                            yyleng);
                     }
                     
                     prepare_string_token(yyextra, CYPHER_TOKEN_STRING, yytext, unescaped);
@@ -183,12 +184,13 @@ operator    [+*/%^=!&|~]+
                     int len = yyleng - 2;
                     char *unescaped = unescape_string(yytext + 1, len);
                     if (!unescaped) {
-                        scanner_error(yyextra, "Out of memory processing string literal");
+                        scanner_error(yyextra, "Out of memory processing string literal", yyleng);
                         return CYPHER_TOKEN_EOF;
                     }
                     if (g_invalid_unicode_in_string) {
                         scanner_error(yyextra,
-                            "SyntaxError: InvalidUnicodeLiteral: invalid \\u escape in string literal");
+                            "SyntaxError: InvalidUnicodeLiteral: invalid \\u escape in string literal",
+                            yyleng);
                     }
                     
                     prepare_string_token(yyextra, CYPHER_TOKEN_STRING, yytext, unescaped);
@@ -227,7 +229,7 @@ operator    [+*/%^=!&|~]+
                     int len = yyleng - 2;
                     char *value = malloc(len + 1);
                     if (!value) {
-                        scanner_error(yyextra, "Out of memory");
+                        scanner_error(yyextra, "Out of memory", yyleng);
                         return CYPHER_TOKEN_EOF;
                     }
                     
@@ -265,7 +267,7 @@ operator    [+*/%^=!&|~]+
                     char msg[100];
                     snprintf(msg, sizeof(msg), "Unexpected character: '%c' (0x%02x)", 
                             yytext[0], (unsigned char)yytext[0]);
-                    scanner_error(yyextra, msg);
+                    scanner_error(yyextra, msg, yyleng);
                     prepare_token(yyextra, CYPHER_TOKEN_EOF, "");
                     return CYPHER_TOKEN_EOF;
                 }
@@ -322,7 +324,7 @@ static void prepare_integer_token(CypherScannerState *state, const char *text)
         snprintf(buf, sizeof(buf),
                  "SyntaxError: IntegerOverflow: integer literal '%s' is out of range",
                  text);
-        scanner_error(state, buf);
+        scanner_error(state, buf, (int)strlen(text));
     }
     state->current_token.value.integer = parsed;
 }
@@ -333,12 +335,16 @@ static void prepare_decimal_token(CypherScannerState *state, const char *text)
     state->current_token.value.decimal = strtod(text, NULL);
 }
 
-static void scanner_error(CypherScannerState *state, const char *message)
+/* Record a scanner error at the start of the offending token. YY_USER_ACTION
+ * has already advanced current_column past the token, so subtract its length
+ * to report the same 1-based column Bison's syntax errors report (issue #16). */
+static void scanner_error(CypherScannerState *state, const char *message, int token_len)
 {
     if (state) {
+        int column = state->current_column - token_len;
         state->has_error = true;
         state->last_error.line = state->current_line;
-        state->last_error.column = state->current_column;
+        state->last_error.column = column > 0 ? column : 1;
         
         /* Free previous error message if any */
         if (state->last_error.message) {

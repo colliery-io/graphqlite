@@ -292,8 +292,9 @@ impl GraphManager {
         }
 
         // Execute query
-        let result: Option<String> =
-            coord.query_row("SELECT cypher(?1)", [cypher], |row| row.get(0))?;
+        let result: Option<String> = coord
+            .query_row("SELECT cypher(?1)", [cypher], |row| row.get(0))
+            .map_err(crate::connection::map_query_error)?;
 
         match result {
             Some(json_str) => {

@@ -208,17 +208,16 @@ oom:
 
 /* Same {"error":..., "code":...} shape cypher() raises, so the bindings'
  * error parsing applies to both entry points. */
-static int set_error(sqlite3_vtab *vt, const char *msg, const char *code) {
-    gbuf b = {0};
-    if (gb_puts(&b, "{\"error\":") < 0 || gb_put_json_string(&b, msg) < 0 ||
-        gb_puts(&b, ",\"code\":\"") < 0 || gb_puts(&b, code) < 0 || gb_puts(&b, "\"}") < 0) {
-        free(b.p);
-        return SQLITE_NOMEM;
-    }
+static int set_error_at(sqlite3_vtab *vt, const char *msg, const char *code, int line, int column) {
+    char *json = gql_error_json(msg, code, line, column);
+    if (!json) return SQLITE_NOMEM;
     sqlite3_free(vt->zErrMsg);
-    vt->zErrMsg = sqlite3_mprintf("%s", b.p);
-    free(b.p);
+    vt->zErrMsg = json;
     return SQLITE_ERROR;
+}
+
+static int set_error(sqlite3_vtab *vt, const char *msg, const char *code) {
+    return set_error_at(vt, msg, code, 0, 0);
 }
 
 static const char *classify_error(const char *msg) {
@@ -332,7 +331,8 @@ static int rows_filter(sqlite3_vtab_cursor *cur, int idxNum, const char *idxStr,
     if (!r) return set_error(&vt->base, "Failed to execute cypher query", GQL_ERR_EXECUTION);
     if (!r->success) {
         const char *msg = r->error_message ? r->error_message : "Query execution failed";
-        int rc = set_error(&vt->base, msg, classify_error(msg));
+        const char *code = r->error_code ? r->error_code : classify_error(msg);
+        int rc = set_error_at(&vt->base, msg, code, r->error_line, r->error_column);
         cypher_result_free(r);
         return rc;
     }

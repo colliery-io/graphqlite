@@ -79,7 +79,19 @@ For a single-column result the key is the expression text or alias from `RETURN`
 
 The first byte distinguishes the two shapes: `[` is a result set, `{` is a statistics object (or an error object, which additionally carries an `error` key). The empty array `[]` is only returned when a `RETURN` clause produced zero matching rows.
 
-**Error handling**: Sets SQLite error text and returns an error result on parse failure or execution failure.
+**Error handling**: on failure the function raises an SQLite error whose text is a JSON object:
+
+```json
+{"error": "Line 1, Col 17: syntax error, unexpected RETURN, expecting ')'", "code": "PARSE_ERROR", "line": 1, "column": 17}
+```
+
+| Key | Present | Meaning |
+|-----|---------|---------|
+| `error` | always | Human-readable reason. Grammar errors name the unexpected token and, where known, the expected one |
+| `code` | always | `PARSE_ERROR` (scanner or grammar), `VALIDATION_ERROR` (compile-time semantic check such as `RETURN NOT 1` or a UNION column mismatch), `EXECUTION_ERROR` (transform or runtime), `NOT_IMPLEMENTED`, `MEMORY_ERROR`, `INTERNAL_ERROR` |
+| `line`, `column` | parse errors | 1-based location of the offending token |
+
+`{"error", "code"}` is the stable subset; `line` and `column` are only added when known. The message is JSON-escaped, so quotes and control characters in it are safe to decode. Use `cypher_validate()` to get the same diagnostics without executing.
 
 ---
 
@@ -127,7 +139,11 @@ with `cypher()`.
 SELECT cypher_validate('MATCH (n:Person) RETURN n.name');
 ```
 
-Validates a Cypher query without executing it.
+Validates a Cypher query without executing it. The query goes through the
+scanner, the grammar and the same compile-time semantic pass `cypher()` runs
+before transform; the graph is never read or written, so validating a
+`CREATE` creates nothing. Errors that only surface during transform or
+execution (an unknown variable, for example) are not detected.
 
 **Returns**: TEXT — a JSON object:
 
@@ -135,11 +151,22 @@ Validates a Cypher query without executing it.
 {"valid": true}
 ```
 
-or
+or, for a syntax error, the same keys the `cypher()` error object carries:
 
 ```json
-{"valid": false, "error": "...", "line": 1, "column": 15}
+{"valid": false, "error": "Line 1, Col 17: syntax error, unexpected RETURN, expecting ')'", "code": "PARSE_ERROR", "line": 1, "column": 17}
 ```
+
+or, for a static semantic violation:
+
+```json
+{"valid": false, "error": "SyntaxError: InvalidArgumentType: Type mismatch: expected Boolean but was Integer", "code": "VALIDATION_ERROR"}
+```
+
+`line` and `column` are 1-based and present only when the parser can locate
+the problem (scanner and grammar errors). Scanner-stage errors such as an
+unterminated string or an out-of-range integer literal point at the start of
+the offending token.
 
 ---
 

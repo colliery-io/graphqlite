@@ -239,6 +239,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
             context->has_error = true;
             context->error_message = strdup(error->message);
             context->error_location = error->line;
+            context->error_column = error->column;
         }
         cypher_token_free(&token);
         return 0;

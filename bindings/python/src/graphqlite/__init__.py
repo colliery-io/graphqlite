@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from .connection import Connection, connect, wrap
+from .connection import Connection, CypherError, Diagnostic, ValidationResult, connect, wrap
 from .graph import BulkInsertResult, Graph, graph
 from .manager import GraphManager, graphs
 from .utils import assert_identifier, escape_string, sanitize_rel_type, CYPHER_RESERVED
@@ -12,6 +12,7 @@ __version__ = "0.8.0"
 __all__ = [
     "BulkInsertResult",
     "Connection", "connect", "wrap", "load", "loadable_path",
+    "CypherError", "Diagnostic", "ValidationResult",
     "Graph", "graph", "GraphManager", "graphs",
     "assert_identifier", "escape_string", "sanitize_rel_type", "CYPHER_RESERVED"
 ]
