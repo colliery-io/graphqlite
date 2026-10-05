@@ -4644,10 +4644,11 @@ fn test_graph_validate_forwards() {
 fn test_cypher_error_message_keeps_quotes() {
     // The error renderer JSON-escapes the message instead of replacing
     // double quotes with single quotes.
+    // cypher() surfaces the extension's structured JSON through the SQLite
+    // error (Error::Sqlite), so check the rendered text rather than a variant.
     let conn = test_connection();
     let err = conn.cypher("RETURN \"unterminated").unwrap_err();
-    match err {
-        Error::Cypher(m) => assert!(m.contains("'\"'"), "{m}"),
-        other => panic!("expected Error::Cypher, got {other:?}"),
-    }
+    let text = err.to_string();
+    assert!(text.contains("'\"'"), "{text}");
+    assert!(text.contains("PARSE_ERROR"), "{text}");
 }
