@@ -21,6 +21,7 @@ unclean exit (SIGSEGV, etc.), marking the in-flight scenario as `error`.
 from __future__ import annotations
 
 import json
+import re
 import os
 import resource
 import signal
@@ -250,7 +251,17 @@ def _write(proto, msg: dict) -> None:
     proto.flush()
 
 
+_ERROR_CLASS_PREFIX = re.compile(r"^(\w+(?:Error|Failed|Failure|NotFound)):")
+
+
 def _classify(msg: str) -> str:
+    # The engine prefixes classified errors with the openCypher class name
+    # ("TypeError: ...", "EntityNotFound: DeletedEntityAccess: ...",
+    # "ConstraintVerificationFailed: DeleteConnectedNode: ..."); trust that
+    # before falling back to keyword sniffing.
+    m = _ERROR_CLASS_PREFIX.match((msg or "").lstrip())
+    if m:
+        return m.group(1)
     lower = (msg or "").lower()
     if "parse" in lower or "syntax" in lower:
         return "SyntaxError"

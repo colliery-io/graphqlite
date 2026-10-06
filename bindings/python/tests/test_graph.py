@@ -1700,6 +1700,39 @@ def test_issue_50_startnode_endnode_same_return(g):
     assert len(row) == 2  # Two distinct keys, not one
 
 
+def test_t0181_startnode_endnode_return_node_objects(g):
+    """GQLITE-T-0181: bare startNode(r)/endNode(r) return node objects (id, labels,
+    properties) in the same shape as RETURN n, not raw integer ids."""
+    import json
+    g.connection.cypher('CREATE (a:Sn181Py {name: "Alice"})-[:K181Py]->(b:Sn181Py {name: "Bob"})')
+    result = g.query('MATCH ()-[r:K181Py]->() RETURN startNode(r) AS sn, endNode(r) AS en')
+    assert len(result) == 1
+    sn, en = result[0]["sn"], result[0]["en"]
+    if isinstance(sn, str):
+        sn = json.loads(sn)
+    if isinstance(en, str):
+        en = json.loads(en)
+    assert isinstance(sn, dict) and isinstance(en, dict)
+    assert set(sn) == {"id", "labels", "properties"}
+    assert sn["labels"] == ["Sn181Py"]
+    assert sn["properties"]["name"] == "Alice"
+    assert en["properties"]["name"] == "Bob"
+
+    # Same object as RETURN a for the start node.
+    via_var = g.query('MATCH (a:Sn181Py {name: "Alice"}) RETURN a AS n')[0]["n"]
+    via_func = g.query('MATCH ()-[r:K181Py]->() RETURN startNode(r) AS n')[0]["n"]
+    assert via_var == via_func
+
+    # Nested use keeps resolving to the endpoint.
+    nested = g.query(
+        'MATCH (a)-[r:K181Py]->(b) '
+        'RETURN id(startNode(r)) = id(a) AS s, startNode(r).name AS sname, labels(endNode(r)) AS l'
+    )[0]
+    assert nested["s"] is True
+    assert nested["sname"] == "Alice"
+    assert nested["l"] == ["Sn181Py"]
+
+
 def test_issue_51_call_merge_scoping(g):
     """Issue #51: CALL { WITH c MATCH (d) MERGE (c)-[:REL]->(d) } should link c to d, not self-loop."""
     g.connection.cypher('CREATE (c:Co51Py {id: "acme"})')

@@ -1309,6 +1309,46 @@ def test_unwind_with_index(db):
 # Write statistics object (GitHub #116)
 # =============================================================================
 
+def test_t0254_delete_connected_node_raises_and_leaves_graph_unchanged(db):
+    """GQLITE-T-0254: DELETE without DETACH on a node with relationships raises
+    ConstraintVerificationFailed: DeleteConnectedNode; nothing in the statement
+    is applied (the free node matched by the same statement survives)."""
+    db.cypher("CREATE (:Free254 {k: 1}), (x:Conn254)-[:R254]->(:Other254), (x)-[:R254]->(:Other254)")
+    with pytest.raises(graphqlite.CypherError) as ei:
+        db.cypher("MATCH (n) WHERE n:Free254 OR n:Conn254 DELETE n")
+    assert "ConstraintVerificationFailed: DeleteConnectedNode" in str(ei.value)
+    assert db.cypher("MATCH (n:Free254) RETURN count(n) AS c")[0]["c"] == 1
+    assert db.cypher("MATCH (n:Conn254) RETURN count(n) AS c")[0]["c"] == 1
+    assert db.cypher("MATCH ()-[r:R254]->() RETURN count(r) AS c")[0]["c"] == 2
+    # Deleting the relationships in the same clause (node listed first) is fine.
+    stats = db.cypher("MATCH (x:Conn254)-[r:R254]->() DELETE x, r")[0]
+    assert stats["nodes_deleted"] == 1 and stats["relationships_deleted"] == 2
+    # DETACH DELETE keeps cascading.
+    db.cypher("CREATE (y:Conn254b)-[:R254b]->(:Other254)")
+    detach = db.cypher("MATCH (y:Conn254b) DETACH DELETE y")[0]
+    assert detach["nodes_deleted"] == 1 and detach["relationships_deleted"] == 1
+
+
+def test_t0253_access_of_deleted_entity_raises(db):
+    """GQLITE-T-0253: reading a property or the labels of an entity deleted in
+    the same statement raises EntityNotFound: DeletedEntityAccess and deletes
+    nothing; RETURN n / count(*) after DELETE stay legal."""
+    db.cypher("CREATE (:Del253 {num: 0})-[:T253 {num: 7}]->(:Del253 {num: 1})")
+    for q in ("MATCH (n:Del253) DETACH DELETE n RETURN n.num",
+              "MATCH (n:Del253) DETACH DELETE n RETURN labels(n)",
+              "MATCH ()-[r:T253]->() DELETE r RETURN r.num"):
+        with pytest.raises(graphqlite.CypherError) as ei:
+            db.cypher(q)
+        assert "EntityNotFound: DeletedEntityAccess" in str(ei.value), q
+    assert db.cypher("MATCH (n:Del253) RETURN count(n) AS c")[0]["c"] == 2
+    assert db.cypher("MATCH ()-[r:T253]->() RETURN count(r) AS c")[0]["c"] == 1
+    # A null binding is not a deleted entity.
+    assert db.cypher("OPTIONAL MATCH (a:Del253Nope) DELETE a RETURN a.num")[0]["a.num"] is None
+    assert db.cypher("MATCH ()-[r:T253]->() DELETE r RETURN r")[0]["r"]["type"] == "T253"
+    assert db.cypher("MATCH (n:Del253) DELETE n RETURN count(*) AS c")[0]["c"] == 2
+    assert db.cypher("MATCH (n:Del253) RETURN count(n) AS c")[0]["c"] == 0
+
+
 STAT_KEYS = {"nodes_created", "relationships_created", "nodes_deleted",
              "relationships_deleted", "properties_set"}
 

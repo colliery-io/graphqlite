@@ -1833,26 +1833,99 @@ static void test_startnode_endnode_same_return(void)
 }
 
 /**
- * Issue #50 Test b: Bare startNode(r) currently returns raw integer ID.
- * This is a known limitation — returning full node objects requires
- * a join back to the nodes table, which is a feature enhancement.
- * This test documents the current behavior.
+ * Issue #50 Test b / GQLITE-T-0181: bare startNode(r) / endNode(r) project the
+ * endpoint node in the same shape as `RETURN n` — a JSON object with id,
+ * labels and properties — instead of the raw source_id/target_id integer.
  */
-static void test_startnode_bare_returns_id(void)
+static void test_startnode_bare_returns_node(void)
 {
     /* Uses data created by test_startnode_endnode_same_return */
     cypher_result *result = cypher_executor_execute(executor,
-        "MATCH ()-[r:KNOWS50]->() RETURN startNode(r) AS sn");
+        "MATCH ()-[r:KNOWS50]->() RETURN startNode(r) AS sn, endNode(r) AS en");
     CU_ASSERT_PTR_NOT_NULL(result);
 
     if (result) {
+        if (!result->success) {
+            printf("\nT-0181 bare startNode/endNode: %s\n", result->error_message);
+        }
         CU_ASSERT_TRUE(result->success);
-        /* Currently returns source_id integer — verify it's at least a valid ID */
-        if (result->success && result->row_count > 0 && result->data[0][0]) {
-            int val = atoi(result->data[0][0]);
-            CU_ASSERT_TRUE(val > 0);
+        if (result->success) {
+            CU_ASSERT_EQUAL(result->row_count, 1);
+            CU_ASSERT_EQUAL(result->column_count, 2);
+            if (result->row_count == 1 && result->column_count == 2 &&
+                result->data[0][0] && result->data[0][1]) {
+                /* Node object, not an integer id */
+                CU_ASSERT_EQUAL(result->data[0][0][0], '{');
+                CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"labels\":[\"Sn50\"]"));
+                CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"properties\":{\"name\":\"Alice\"}"));
+                CU_ASSERT_EQUAL(result->data[0][1][0], '{');
+                CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][1], "\"labels\":[\"Sn50\"]"));
+                CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][1], "\"properties\":{\"name\":\"Bob\"}"));
+            }
         }
         cypher_result_free(result);
+    }
+
+    /* Same shape as RETURN n for the same node */
+    cypher_result *via_func = cypher_executor_execute(executor,
+        "MATCH ()-[r:KNOWS50]->() RETURN startNode(r) AS n");
+    cypher_result *via_var = cypher_executor_execute(executor,
+        "MATCH (n:Sn50 {name: \"Alice\"}) RETURN n");
+    CU_ASSERT_PTR_NOT_NULL(via_func);
+    CU_ASSERT_PTR_NOT_NULL(via_var);
+    if (via_func && via_var) {
+        CU_ASSERT_TRUE(via_func->success);
+        CU_ASSERT_TRUE(via_var->success);
+        if (via_func->success && via_var->success &&
+            via_func->row_count == 1 && via_var->row_count == 1 &&
+            via_func->data[0][0] && via_var->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(via_func->data[0][0], via_var->data[0][0]);
+        }
+    }
+    if (via_func) cypher_result_free(via_func);
+    if (via_var) cypher_result_free(via_var);
+}
+
+/**
+ * GQLITE-T-0181: startNode()/endNode() nested in other expressions keep
+ * resolving to the endpoint: id(), labels(), equality with the bound node,
+ * and WITH projection followed by property access.
+ */
+static void test_startnode_nested_expressions(void)
+{
+    /* Uses data created by test_startnode_endnode_same_return */
+    cypher_result *result = cypher_executor_execute(executor,
+        "MATCH (a)-[r:KNOWS50]->(b) "
+        "RETURN id(startNode(r)) = id(a) AS s, id(endNode(r)) = id(b) AS e, "
+        "labels(startNode(r)) AS l, startNode(r) = a AS same");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        if (!result->success) {
+            printf("\nT-0181 nested startNode: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count == 1 && result->column_count == 4) {
+            CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+            CU_ASSERT_PTR_NOT_NULL(result->data[0][1]);
+            CU_ASSERT_PTR_NOT_NULL(result->data[0][2]);
+            CU_ASSERT_PTR_NOT_NULL(result->data[0][3]);
+            if (result->data[0][0]) CU_ASSERT_STRING_EQUAL(result->data[0][0], "true");
+            if (result->data[0][1]) CU_ASSERT_STRING_EQUAL(result->data[0][1], "true");
+            if (result->data[0][2]) CU_ASSERT_STRING_EQUAL(result->data[0][2], "[\"Sn50\"]");
+            if (result->data[0][3]) CU_ASSERT_STRING_EQUAL(result->data[0][3], "true");
+        }
+        cypher_result_free(result);
+    }
+
+    cypher_result *with_result = cypher_executor_execute(executor,
+        "MATCH ()-[r:KNOWS50]->() WITH startNode(r) AS s RETURN s.name AS n");
+    CU_ASSERT_PTR_NOT_NULL(with_result);
+    if (with_result) {
+        CU_ASSERT_TRUE(with_result->success);
+        if (with_result->success && with_result->row_count == 1 && with_result->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(with_result->data[0][0], "Alice");
+        }
+        cypher_result_free(with_result);
     }
 }
 
@@ -2013,7 +2086,8 @@ int init_executor_functions_suite(void)
 
         /* Issue #50: startNode/endNode regression */
         !CU_add_test(suite, "Issue #50: startNode+endNode same RETURN", test_startnode_endnode_same_return) ||
-        !CU_add_test(suite, "Issue #50: bare startNode returns ID", test_startnode_bare_returns_id))
+        !CU_add_test(suite, "T-0181: bare startNode/endNode return node objects", test_startnode_bare_returns_node) ||
+        !CU_add_test(suite, "T-0181: startNode/endNode nested in expressions", test_startnode_nested_expressions))
     {
         return CU_get_error();
     }

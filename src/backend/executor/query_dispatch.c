@@ -13,6 +13,7 @@
 #include "executor/executor_internal.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
+#include "runtime/gql_error.h"
 
 /*
  * Clause extraction helpers - find specific clause types in a query
@@ -829,6 +830,145 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/* GQLITE-T-0253: EntityNotFound: DeletedEntityAccess.
+ *
+ * openCypher: reading a property, the labels or the property map of an
+ * entity that the same statement deleted is a runtime error (Return2
+ * [15]-[17]). `RETURN n`, `id(n)`, `type(r)` and `count(*)` stay legal.
+ * These helpers walk a RETURN expression and report whether it reads such
+ * data from a variable named by the DELETE clause. */
+static bool delete_names_variable(cypher_delete *del, const char *name)
+{
+    if (!del || !del->items || !name) return false;
+    for (int i = 0; i < del->items->count; i++) {
+        cypher_delete_item *it = (cypher_delete_item *)del->items->items[i];
+        if (it && it->variable && strcmp(it->variable, name) == 0) return true;
+    }
+    return false;
+}
+
+static bool is_deleted_identifier(ast_node *expr, cypher_delete *del)
+{
+    return expr && expr->type == AST_NODE_IDENTIFIER &&
+           delete_names_variable(del, ((cypher_identifier *)expr)->name);
+}
+
+static bool expr_reads_deleted_entity(ast_node *expr, cypher_delete *del);
+
+static bool list_reads_deleted_entity(ast_list *list, cypher_delete *del)
+{
+    if (!list) return false;
+    for (int i = 0; i < list->count; i++) {
+        if (expr_reads_deleted_entity(list->items[i], del)) return true;
+    }
+    return false;
+}
+
+static bool expr_reads_deleted_entity(ast_node *expr, cypher_delete *del)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_PROPERTY: {
+            cypher_property *p = (cypher_property *)expr;
+            if (is_deleted_identifier(p->expr, del)) return true;
+            return expr_reads_deleted_entity(p->expr, del);
+        }
+        case AST_NODE_MAP_PROJECTION: {
+            cypher_map_projection *mp = (cypher_map_projection *)expr;
+            if (is_deleted_identifier(mp->base_expr, del)) return true;
+            if (mp->items) {
+                for (int i = 0; i < mp->items->count; i++) {
+                    cypher_map_projection_item *it = (cypher_map_projection_item *)mp->items->items[i];
+                    if (it && expr_reads_deleted_entity(it->expr, del)) return true;
+                }
+            }
+            return false;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call *)expr;
+            if (fc->function_name && fc->args && fc->args->count == 1 &&
+                (strcasecmp(fc->function_name, "labels") == 0 ||
+                 strcasecmp(fc->function_name, "properties") == 0 ||
+                 strcasecmp(fc->function_name, "keys") == 0) &&
+                is_deleted_identifier(fc->args->items[0], del)) {
+                return true;
+            }
+            return list_reads_deleted_entity(fc->args, del);
+        }
+        case AST_NODE_LABEL_EXPR:
+            return expr_reads_deleted_entity(((cypher_label_expr *)expr)->expr, del);
+        case AST_NODE_NOT_EXPR:
+            return expr_reads_deleted_entity(((cypher_not_expr *)expr)->expr, del);
+        case AST_NODE_NULL_CHECK:
+            return expr_reads_deleted_entity(((cypher_null_check *)expr)->expr, del);
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *b = (cypher_binary_op *)expr;
+            return expr_reads_deleted_entity(b->left, del) ||
+                   expr_reads_deleted_entity(b->right, del);
+        }
+        case AST_NODE_LIST:
+            return list_reads_deleted_entity(((cypher_list *)expr)->items, del);
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map *)expr;
+            if (!m->pairs) return false;
+            for (int i = 0; i < m->pairs->count; i++) {
+                cypher_map_pair *pair = (cypher_map_pair *)m->pairs->items[i];
+                if (pair && expr_reads_deleted_entity(pair->value, del)) return true;
+            }
+            return false;
+        }
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr *)expr;
+            if (expr_reads_deleted_entity(c->operand, del)) return true;
+            if (expr_reads_deleted_entity(c->else_expr, del)) return true;
+            if (c->when_clauses) {
+                for (int i = 0; i < c->when_clauses->count; i++) {
+                    cypher_when_clause *w = (cypher_when_clause *)c->when_clauses->items[i];
+                    if (w && (expr_reads_deleted_entity(w->condition, del) ||
+                              expr_reads_deleted_entity(w->result, del))) return true;
+                }
+            }
+            return false;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *sub = (cypher_subscript *)expr;
+            return expr_reads_deleted_entity(sub->expr, del) ||
+                   expr_reads_deleted_entity(sub->index, del) ||
+                   expr_reads_deleted_entity(sub->slice_start, del) ||
+                   expr_reads_deleted_entity(sub->slice_end, del);
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension *)expr;
+            return expr_reads_deleted_entity(lc->list_expr, del) ||
+                   expr_reads_deleted_entity(lc->where_expr, del) ||
+                   expr_reads_deleted_entity(lc->transform_expr, del);
+        }
+        case AST_NODE_LIST_PREDICATE: {
+            cypher_list_predicate *lp = (cypher_list_predicate *)expr;
+            return expr_reads_deleted_entity(lp->list_expr, del) ||
+                   expr_reads_deleted_entity(lp->predicate, del);
+        }
+        case AST_NODE_REDUCE_EXPR: {
+            cypher_reduce_expr *r = (cypher_reduce_expr *)expr;
+            return expr_reads_deleted_entity(r->initial_value, del) ||
+                   expr_reads_deleted_entity(r->list_expr, del) ||
+                   expr_reads_deleted_entity(r->expression, del);
+        }
+        default:
+            return false;
+    }
+}
+
+static bool return_reads_deleted_entity(cypher_return *ret, cypher_delete *del)
+{
+    if (!ret || !ret->items || !del) return false;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+        if (it && expr_reads_deleted_entity(it->expr, del)) return true;
+    }
+    return false;
+}
+
 static int handle_match_delete(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags)
 {
@@ -886,6 +1026,26 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
             if (t == AST_NODE_LITERAL) continue;
             needs_pre_capture = true;
             break;
+        }
+    }
+
+    /* GQLITE-T-0253: RETURN reads property/label data of a variable this
+     * statement deletes. If the MATCH binds such an entity, the statement
+     * fails as a whole (nothing is deleted, nothing is projected). A null
+     * binding (OPTIONAL MATCH miss) is not a deleted entity and falls
+     * through to the normal null-propagating projection. */
+    if (ret_clause && return_reads_deleted_entity(ret_clause, del)) {
+        int bound = delete_targets_bound(executor, match, del);
+        if (bound < 0) {
+            set_result_error(result, "Failed to execute MATCH for DELETE");
+            return -1;
+        }
+        if (bound > 0) {
+            set_result_error_ex(result,
+                "EntityNotFound: DeletedEntityAccess: cannot access a property or "
+                "label of an entity deleted in the same statement",
+                GQL_ERR_EXECUTION, 0, 0);
+            return -1;
         }
     }
 
