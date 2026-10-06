@@ -698,6 +698,43 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value_free(&pv);
                                     continue;
                                 }
+                            } else if (pair->value->type == AST_NODE_FUNCTION_CALL) {
+                                /* GQLITE-T-0301: function call in an edge
+                                 * property map, e.g.
+                                 * `CREATE ()-[:R {name: toUpper("x")}]->()`.
+                                 * Mirrors the node-property path above; this
+                                 * branch was missing, so the property was
+                                 * silently dropped. */
+                                cypher_function_call *func = (cypher_function_call*)pair->value;
+                                property_value func_pv;
+                                property_value_init(&func_pv);
+                                static int64_t rel_func_int_buf;
+                                static double rel_func_real_buf;
+                                static int rel_func_bool_buf;
+                                int rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
+                                if (rc == -2) {
+                                    property_value_free(&func_pv);
+                                    continue; /* NULL result: no property */
+                                } else if (rc == 0) {
+                                    if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
+                                        if (cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, func_pv.as_str) == 0) {
+                                            result->properties_set++;
+                                            CYPHER_DEBUG("Set edge property: %s", pair->key);
+                                        }
+                                        property_value_free(&func_pv);
+                                        continue;
+                                    } else if (prop_type == PROP_TYPE_INTEGER) {
+                                        rel_func_int_buf = func_pv.as_int;
+                                        prop_value = &rel_func_int_buf;
+                                    } else if (prop_type == PROP_TYPE_REAL) {
+                                        rel_func_real_buf = func_pv.as_real;
+                                        prop_value = &rel_func_real_buf;
+                                    } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                        rel_func_bool_buf = func_pv.as_bool;
+                                        prop_value = &rel_func_bool_buf;
+                                    }
+                                }
+                                property_value_free(&func_pv);
                             } else if (pair->value->type == AST_NODE_IDENTIFIER && g_foreach_ctx) {
                                 /* foreach/UNWIND binding reference, e.g.
                                  * `UNWIND [1,2,3] AS x CREATE ()-[r {num: x}]->()`.
@@ -726,6 +763,37 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                             continue;
                                     }
                                 }
+                            } else if (pair->value->type != AST_NODE_IDENTIFIER) {
+                                /* GQLITE-T-0301: general expression in an edge
+                                 * property map (e.g. `a.id + "!"` with `a`
+                                 * MATCH-bound). Same fallback as the node
+                                 * path (GQLITE-T-0339 part 2). */
+                                property_value gen_pv;
+                                property_value_init(&gen_pv);
+                                static int64_t rel_gen_int_buf;
+                                static double rel_gen_real_buf;
+                                static int rel_gen_bool_buf;
+                                int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv);
+                                if (erc == 0) {
+                                    if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
+                                        if (cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, gen_pv.as_str) == 0) {
+                                            result->properties_set++;
+                                            CYPHER_DEBUG("Set edge property: %s", pair->key);
+                                        }
+                                        property_value_free(&gen_pv);
+                                        continue;
+                                    } else if (prop_type == PROP_TYPE_INTEGER) {
+                                        rel_gen_int_buf = gen_pv.as_int;
+                                        prop_value = &rel_gen_int_buf;
+                                    } else if (prop_type == PROP_TYPE_REAL) {
+                                        rel_gen_real_buf = gen_pv.as_real;
+                                        prop_value = &rel_gen_real_buf;
+                                    } else if (prop_type == PROP_TYPE_BOOLEAN) {
+                                        rel_gen_bool_buf = gen_pv.as_bool;
+                                        prop_value = &rel_gen_bool_buf;
+                                    }
+                                }
+                                property_value_free(&gen_pv);
                             }
 
                             if (prop_value) {

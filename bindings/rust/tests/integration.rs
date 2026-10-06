@@ -4122,7 +4122,6 @@ fn test_unwind_merge_on_create_set() {
 // =============================================================================
 
 #[test]
-#[ignore = "engine regression: COUNT(rel) over OPTIONAL-MATCH NULL counts the null instead of skipping it (T-0301)"]
 fn test_count_skips_nulls_from_optional_match() {
     let conn = test_connection();
     conn.cypher("CREATE (a:CntNullRs {id: 'x'})").unwrap();
@@ -4137,7 +4136,6 @@ fn test_count_skips_nulls_from_optional_match() {
 }
 
 #[test]
-#[ignore = "engine regression: edge variable through WITH then property access errors with 'no such column: _with_0.r.id' (T-0301)"]
 fn test_edge_variable_through_with() {
     let conn = test_connection();
     conn.cypher("CREATE (:EWARs {id: 'a'})-[:ERELRs {weight: 7}]->(:EWBRs {id: 'b'})")
@@ -4153,7 +4151,6 @@ fn test_edge_variable_through_with() {
 }
 
 #[test]
-#[ignore = "engine regression: toUpper()/toLower() inside CREATE property map stores empty string (T-0301)"]
 fn test_function_call_in_create_property_map() {
     let conn = test_connection();
     conn.cypher("CREATE (n:FnCreateRs {upper: toUpper('hello'), lower: toLower('WORLD')})")
@@ -4167,7 +4164,6 @@ fn test_function_call_in_create_property_map() {
 }
 
 #[test]
-#[ignore = "engine regression: CALL { WITH a RETURN a.id AS inner_id } loses the inner_id alias (T-0301)"]
 fn test_call_subquery_exports_inner_return() {
     let conn = test_connection();
     conn.cypher("CREATE (:CallExpRs {id: 'ce1'})").unwrap();
@@ -4178,7 +4174,6 @@ fn test_call_subquery_exports_inner_return() {
 }
 
 #[test]
-#[ignore = "engine regression: CALL { WITH c MATCH (d) MERGE (c)-[:R]->(d) } only iterates one row (T-0301)"]
 fn test_call_subquery_processes_all_inner_match_rows() {
     let conn = test_connection();
     conn.cypher("CREATE (:CallCoRs {id: 'co'})").unwrap();
