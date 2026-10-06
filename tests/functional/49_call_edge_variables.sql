@@ -39,5 +39,10 @@ INSERT INTO _assert SELECT 'T-0373 2.2 WITH a, l inside CALL',
 INSERT INTO _assert SELECT 'T-0373 2.3 inner MATCH edge variable',
     CAST(json_extract(cypher('MATCH (a:A49) CALL { WITH a MATCH (a)-[l2:L49]->(f2) RETURN l2.w AS w2, f2.id AS f2id } RETURN w2, f2id'), '$[0].w2') AS INTEGER) = 3;
 
+-- Exported node-property aliases keep their JSON type (integer, not text).
+INSERT INTO _assert SELECT 'T-0373 3.1 exported numeric alias keeps integer type',
+    json_type(cypher('MATCH (a:A49) CALL { WITH a RETURN size(a.id) AS n } RETURN n, n + 1 AS n1'), '$[0].n') = 'integer'
+    AND json_type(cypher('MATCH (a:A49) CALL { WITH a RETURN size(a.id) AS n } RETURN n, n + 1 AS n1'), '$[0].n1') = 'integer';
+
 SELECT name, ok FROM _assert;
 SELECT '=== Test 49 Complete ===' as test_section;

@@ -267,6 +267,10 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
     int accum_capacity = 16;
     int accum_count = 0;
     char ***accum_rows = accumulating ? calloc(accum_capacity, sizeof(char**)) : NULL;
+    /* GQLITE-T-0373: per-cell SQLite types alongside accum_rows, so exported
+     * numeric/boolean aliases keep their JSON type instead of rendering as
+     * text. */
+    int **accum_types = accumulating ? calloc(accum_capacity, sizeof(int*)) : NULL;
     int accum_col_count = 0;
     char **accum_col_names = NULL;
 
@@ -642,6 +646,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                     int inner_col_count = 0;
                     char **inner_col_names_local = NULL;
                     char **inner_col_values = NULL;
+                    int *inner_col_types = NULL;
 
                     if (inner_ok) {
                         CYPHER_DEBUG("CALL inner RETURN SQL: %s", inner_sql);
@@ -654,8 +659,10 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                 inner_col_count = sqlite3_column_count(inner_stmt);
                                 inner_col_values = calloc(inner_col_count, sizeof(char*));
                                 inner_col_names_local = calloc(inner_col_count, sizeof(char*));
+                                inner_col_types = calloc(inner_col_count, sizeof(int));
                                 for (int ic = 0; ic < inner_col_count; ic++) {
                                     const char *cn = sqlite3_column_name(inner_stmt, ic);
+                                    if (inner_col_types) inner_col_types[ic] = sqlite3_column_type(inner_stmt, ic);
                                     const char *cv = (const char*)sqlite3_column_text(inner_stmt, ic);
                                     inner_col_names_local[ic] = cn ? strdup(cn) : strdup("");
                                     inner_col_values[ic] = cv ? strdup(cv) : NULL;
@@ -692,6 +699,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         }
 
                         char **row = calloc(total_cols, sizeof(char*));
+                        int *row_types = calloc(total_cols, sizeof(int));
                         for (int pi = 0; pi < total_cols; pi++) {
                             cypher_return_item *item = (cypher_return_item*)post_ret->items->items[pi];
                             bool resolved = false;
@@ -702,6 +710,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                 for (int ic = 0; ic < inner_col_count; ic++) {
                                     if (inner_col_names_local[ic] && strcmp(inner_col_names_local[ic], ref) == 0) {
                                         row[pi] = inner_col_values[ic] ? strdup(inner_col_values[ic]) : NULL;
+                                        if (row_types && inner_col_types) row_types[pi] = inner_col_types[ic];
                                         resolved = true;
                                         break;
                                     }
@@ -808,6 +817,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                             if (sqlite3_step(ev) == SQLITE_ROW) {
                                                 const char *val = (const char*)sqlite3_column_text(ev, 0);
                                                 row[pi] = val ? strdup(val) : NULL;
+                                                if (row_types) row_types[pi] = sqlite3_column_type(ev, 0);
                                             }
                                             sqlite3_finalize(ev);
                                         }
@@ -827,8 +837,11 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         if (accum_count >= accum_capacity) {
                             accum_capacity *= 2;
                             accum_rows = realloc(accum_rows, accum_capacity * sizeof(char**));
+                            accum_types = realloc(accum_types, accum_capacity * sizeof(int*));
                         }
-                        accum_rows[accum_count++] = row;
+                        accum_rows[accum_count] = row;
+                        if (accum_types) accum_types[accum_count] = row_types; else free(row_types);
+                        accum_count++;
 
                         for (int ic = 0; ic < inner_col_count; ic++) {
                             free(inner_col_names_local[ic]);
@@ -836,6 +849,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         }
                         free(inner_col_names_local);
                         free(inner_col_values);
+                        free(inner_col_types);
                     }
                 }
             }
@@ -875,6 +889,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
         result->column_names = accum_col_names;
         result->row_count = accum_count;
         result->data = accum_rows;
+        result->data_types = accum_types;
         result->success = true;
         return 0;
     }
@@ -888,6 +903,10 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
             }
         }
         free(accum_rows);
+    }
+    if (accum_types) {
+        for (int i = 0; i < accum_count; i++) free(accum_types[i]);
+        free(accum_types);
     }
     if (accum_col_names) {
         for (int i = 0; i < accum_col_count; i++) free(accum_col_names[i]);
