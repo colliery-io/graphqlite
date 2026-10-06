@@ -14,6 +14,27 @@
 #include "executor/executor_internal.h"
 #include "parser/cypher_debug.h"
 
+/* GQLITE-T-0373: outer/inner MATCH rows export entity ids as
+ * `<var>_id` (node) or `<var>_eid` (edge). Bind by TRAILING suffix so a
+ * variable called `my_id` still works, and so edges land in the map as
+ * edges (they used to be bound as nodes, so `l.w` / `type(l)` after a
+ * CALL resolved against the wrong table and came back NULL). */
+static void bind_exported_column(variable_map *map, const char *col_name, int value)
+{
+    if (!map || !col_name) return;
+    size_t n = strlen(col_name);
+    char var_name[128];
+    if (n > 4 && strcmp(col_name + n - 4, "_eid") == 0 && n - 4 < sizeof(var_name)) {
+        memcpy(var_name, col_name, n - 4); var_name[n - 4] = '\0';
+        set_variable_edge_id(map, var_name, value);
+        CYPHER_DEBUG("CALL: bound variable '%s' = edge %d", var_name, value);
+    } else if (n > 3 && strcmp(col_name + n - 3, "_id") == 0 && n - 3 < sizeof(var_name)) {
+        memcpy(var_name, col_name, n - 3); var_name[n - 3] = '\0';
+        set_variable_node_id(map, var_name, value);
+        CYPHER_DEBUG("CALL: bound variable '%s' = node %d", var_name, value);
+    }
+}
+
 /* T-0301: does an inner-RETURN column value (always carried as text) look
  * like a SQL numeric literal? Such values are spliced into the post-CALL
  * evaluation SQL unquoted so `inner_n + 1` stays arithmetic. */
@@ -183,7 +204,8 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
             transform_var *var = transform_var_at(ctx->var_ctx, vi);
             if (var && (var->kind == VAR_KIND_NODE || var->kind == VAR_KIND_EDGE)) {
                 if (!first) append_sql(ctx, ", ");
-                append_sql(ctx, "%s.id AS \"%s_id\"", var->table_alias, var->name);
+                append_sql(ctx, "%s.id AS \"%s%s\"", var->table_alias, var->name,
+                           var->kind == VAR_KIND_EDGE ? "_eid" : "_id");
                 first = false;
             }
         }
@@ -276,10 +298,11 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                     bool first = true;
                     for (int vi = 0; vi < vcount; vi++) {
                         transform_var *tv = transform_var_at(mctx->var_ctx, vi);
-                        if (tv && tv->kind == VAR_KIND_NODE) {
+                        if (tv && (tv->kind == VAR_KIND_NODE || tv->kind == VAR_KIND_EDGE)) {
                             if (!first) p += snprintf(buf + p, sizeof(buf) - p, ", ");
                             p += snprintf(buf + p, sizeof(buf) - p,
-                                          "%s.id AS \"%s_id\"", tv->table_alias, tv->name);
+                                          "%s.id AS \"%s%s\"", tv->table_alias, tv->name,
+                                          tv->kind == VAR_KIND_EDGE ? "_eid" : "_id");
                             first = false;
                         }
                     }
@@ -315,16 +338,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
         for (int c = 0; c < col_count; c++) {
             const char *col_name = sqlite3_column_name(outer_stmt, c);
             if (col_name && sqlite3_column_type(outer_stmt, c) == SQLITE_INTEGER) {
-                char var_name[128];
-                strncpy(var_name, col_name, sizeof(var_name) - 1);
-                var_name[sizeof(var_name) - 1] = '\0';
-                char *suffix = strstr(var_name, "_id");
-                if (suffix) {
-                    *suffix = '\0';
-                    int node_id = sqlite3_column_int(outer_stmt, c);
-                    set_variable_node_id(var_map, var_name, node_id);
-                    CYPHER_DEBUG("CALL: bound outer variable '%s' = node %d", var_name, node_id);
-                }
+                bind_exported_column(var_map, col_name, sqlite3_column_int(outer_stmt, c));
             }
         }
 
@@ -349,12 +363,21 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                     /* Simple identifier import: WITH a */
                     if (item->expr && item->expr->type == AST_NODE_IDENTIFIER) {
                         const char *name = ((cypher_identifier*)item->expr)->name;
-                        int node_id = get_variable_node_id(var_map, name);
-                        if (node_id >= 0) {
-                            const char *alias = item->alias ? item->alias : name;
-                            set_variable_node_id(scoped_map, alias, node_id);
-                            CYPHER_DEBUG("CALL WITH: imported '%s' as '%s' = node %d",
-                                         name, alias, node_id);
+                        const char *alias = item->alias ? item->alias : name;
+                        if (is_variable_edge(var_map, name)) {
+                            /* GQLITE-T-0373: edges were dropped here, so
+                             * `CALL { WITH l RETURN l.w ... }` lost `l`. */
+                            int edge_id = get_variable_edge_id(var_map, name);
+                            set_variable_edge_id(scoped_map, alias, edge_id);
+                            CYPHER_DEBUG("CALL WITH: imported '%s' as '%s' = edge %d",
+                                         name, alias, edge_id);
+                        } else {
+                            int node_id = get_variable_node_id(var_map, name);
+                            if (node_id >= 0) {
+                                set_variable_node_id(scoped_map, alias, node_id);
+                                CYPHER_DEBUG("CALL WITH: imported '%s' as '%s' = node %d",
+                                             name, alias, node_id);
+                            }
                         }
                     }
                     /* WITH expressions (e.g., WITH a.name AS n) are not node IDs —
@@ -429,17 +452,7 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                     for (int mc = 0; mc < mcols; mc++) {
                                         const char *cname = sqlite3_column_name(match_stmt, mc);
                                         if (cname && sqlite3_column_type(match_stmt, mc) == SQLITE_INTEGER) {
-                                            int node_id = sqlite3_column_int(match_stmt, mc);
-                                            char var_name[128];
-                                            strncpy(var_name, cname, sizeof(var_name) - 1);
-                                            var_name[sizeof(var_name) - 1] = '\0';
-                                            char *suffix = strstr(var_name, "_id");
-                                            if (suffix) {
-                                                *suffix = '\0';
-                                                set_variable_node_id(scoped_map, var_name, node_id);
-                                                CYPHER_DEBUG("CALL MATCH: resolved '%s' = node %d",
-                                                             var_name, node_id);
-                                            }
+                                            bind_exported_column(scoped_map, cname, sqlite3_column_int(match_stmt, mc));
                                         }
                                     }
                                     /* Execute all post-MATCH clauses for this row */
@@ -593,23 +606,32 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         free(expr_sql);
                     }
 
-                    /* Build FROM/WHERE to pin variables to exact entity IDs */
+                    /* Build FROM/WHERE to pin variables to exact entity IDs.
+                     * GQLITE-T-0373: one FROM ... CROSS JOIN chain and a
+                     * trailing WHERE — the old form emitted WHERE before the
+                     * second JOIN, a syntax error whenever two or more
+                     * variables were imported (`WITH a, l`). */
                     if (inner_ok && scoped_map->count > 0) {
+                        sqlite3_str *from_s = sqlite3_str_new(executor->db);
+                        sqlite3_str *where_s = sqlite3_str_new(executor->db);
                         for (int si = 0; si < scoped_map->count; si++) {
                             variable_mapping *m = &scoped_map->mappings[si];
                             char var_alias[64];
                             snprintf(var_alias, sizeof(var_alias), "_cv_%d", si);
                             const char *table = m->type == VAR_MAP_TYPE_NODE ? "nodes" : "edges";
-                            if (si == 0) {
-                                sqlite3_str_appendf(inner_str,
-                                                 " FROM %s AS %s WHERE %s.id = %d",
-                                                 table, var_alias, var_alias, m->entity_id);
-                            } else {
-                                sqlite3_str_appendf(inner_str,
-                                                 " JOIN %s AS %s ON %s.id = %d",
-                                                 table, var_alias, var_alias, m->entity_id);
-                            }
+                            sqlite3_str_appendf(from_s, "%s%s AS %s",
+                                                sqlite3_str_length(from_s) ? " CROSS JOIN " : " FROM ",
+                                                table, var_alias);
+                            sqlite3_str_appendf(where_s, "%s%s.id = %d",
+                                                sqlite3_str_length(where_s) ? " AND " : " WHERE ",
+                                                var_alias, m->entity_id);
                         }
+                        char *from_sql = sqlite3_str_finish(from_s);
+                        char *where_sql = sqlite3_str_finish(where_s);
+                        if (from_sql) sqlite3_str_appendall(inner_str, from_sql);
+                        if (where_sql) sqlite3_str_appendall(inner_str, where_sql);
+                        sqlite3_free(from_sql);
+                        sqlite3_free(where_sql);
                     }
 
                     cypher_transform_free_context(ret_ctx);
