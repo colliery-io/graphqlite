@@ -71,6 +71,28 @@ class Diagnostic:
 
 
 @dataclass(frozen=True)
+class Capabilities:
+    """What this build of the extension supports (:meth:`Connection.capabilities`).
+
+    ``schema_version`` changes only when a key of the document is added,
+    renamed or removed; new feature flags do not change it. A flag that is
+    missing from ``features`` must be read as ``False`` (see :meth:`supports`).
+    """
+
+    schema_version: int
+    graphqlite_version: str
+    cypher_dialect: str
+    sqlite_version: str
+    json1: bool
+    neo4j_compat: bool
+    features: dict
+
+    def supports(self, flag: str) -> bool:
+        """``True`` when ``flag`` is present and enabled."""
+        return bool(self.features.get(flag, False))
+
+
+@dataclass(frozen=True)
 class ValidationResult:
     """Outcome of :meth:`Connection.validate`. Truthy when the query is valid."""
 
@@ -279,6 +301,33 @@ class Connection:
                 yield json.loads(row_json)
         except sqlite3.Error as e:
             _raise_structured(e)
+
+    def capabilities(self) -> Capabilities:
+        """
+        Report what this build of the extension supports.
+
+        Wraps the SQL function ``cypher_capabilities()``; use it to detect
+        features at run time instead of comparing version strings.
+
+        Example:
+            >>> caps = db.capabilities()
+            >>> caps.graphqlite_version
+            '0.9.1'
+            >>> caps.supports("existential_subquery_full")
+            True
+        """
+        cursor = self._conn.execute("SELECT cypher_capabilities()")
+        data = json.loads(cursor.fetchone()[0])
+        sqlite_info = data.get("sqlite") or {}
+        return Capabilities(
+            schema_version=int(data.get("schema_version", 0)),
+            graphqlite_version=str(data.get("graphqlite_version", "")),
+            cypher_dialect=str(data.get("cypher_dialect", "")),
+            sqlite_version=str(sqlite_info.get("version", "")),
+            json1=bool(sqlite_info.get("json1", False)),
+            neo4j_compat=bool(data.get("neo4j_compat", False)),
+            features=dict(data.get("features") or {}),
+        )
 
     def validate(self, query: str) -> ValidationResult:
         """

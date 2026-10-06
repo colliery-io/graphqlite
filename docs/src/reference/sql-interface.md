@@ -319,3 +319,42 @@ WHERE np.node_id = 1;
 ```
 
 Direct writes to schema tables bypass Cypher validation and the property key cache. Prefer `cypher()` for mutations.
+
+---
+
+### `cypher_capabilities()`
+
+```sql
+SELECT cypher_capabilities();
+SELECT json_extract(cypher_capabilities(), '$.features.existential_subquery_full');
+```
+
+Returns what this build of the extension supports, so a client can detect
+features at run time instead of comparing version strings (GitHub #17).
+The function takes no arguments and never touches the graph.
+
+**Returns**: TEXT — a JSON object:
+
+```json
+{"schema_version": 1,
+ "graphqlite_version": "0.9.1",
+ "cypher_dialect": "openCypher 9",
+ "sqlite": {"version": "3.47.2", "json1": true},
+ "neo4j_compat": false,
+ "features": {"bracket_property_access": true, "list_literals": true,
+              "existential_subquery_full": true, "load_csv": false, "...": true}}
+```
+
+| Key | Meaning |
+|---|---|
+| `schema_version` | Changes only when a key of this object is added, renamed or removed. New entries inside `features` do not change it. |
+| `graphqlite_version` | The extension version (`GRAPHQLITE_VERSION`). |
+| `cypher_dialect` | The Cypher dialect the grammar follows. |
+| `sqlite.version`, `sqlite.json1` | The SQLite library the extension is running in and whether its JSON functions are available. |
+| `neo4j_compat` | Reserved for a Neo4j compatibility mode; always `false` today. |
+| `features` | One boolean per feature flag. A flag that is missing must be read as `false`. |
+
+The bindings expose the same document as `Connection::capabilities()` (Rust,
+a `Capabilities` struct) and `Connection.capabilities()` (Python, a
+`Capabilities` dataclass).
+

@@ -1460,3 +1460,18 @@ def test_cypher_error_message_keeps_quotes(db):
         db.cypher('RETURN "unterminated')
     assert ei.value.code == "PARSE_ERROR"
     assert "'\"'" in str(ei.value)
+
+
+# GQLITE-T-0100: capability metadata
+def test_capabilities_reports_version_and_flags(db):
+    caps = db.capabilities()
+    assert caps.schema_version == 1
+    assert caps.graphqlite_version
+    assert caps.cypher_dialect == "openCypher 9"
+    assert caps.json1 is True
+    assert caps.supports("validate")
+    assert caps.supports("existential_subquery_full")
+    assert caps.supports("load_csv") is False
+    assert caps.supports("definitely_unknown_flag") is False
+    assert caps.neo4j_compat is False
+

@@ -71,6 +71,9 @@ void gql_temporal_diff_ns_func(sqlite3_context *ctx, int argc, sqlite3_value **a
 /* Regex + Cypher reflection */
 void regexp_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_value **argv);
+/* GQLITE-T-0100: cypher_capabilities() -> JSON document describing the
+ * extension version, Cypher dialect, feature flags and SQLite/JSON support. */
+void cypher_capabilities_func(sqlite3_context *context, int argc, sqlite3_value **argv);
 
 /* Percentile aggregates (M15) — register as aggregates with these
  * step+final pairs. percentileCont = linear interp; percentileDisc =

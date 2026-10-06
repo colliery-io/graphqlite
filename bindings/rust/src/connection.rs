@@ -158,6 +158,24 @@ impl Connection {
     /// assert_eq!((d.line, d.column), (Some(1), Some(17)));
     /// # Ok::<(), graphqlite::Error>(())
     /// ```
+    /// Report what this build of the extension supports.
+    ///
+    /// Wraps the SQL function `cypher_capabilities()`; use it to detect
+    /// features at run time instead of comparing version strings.
+    ///
+    /// ```no_run
+    /// # let conn = graphqlite::Connection::open_in_memory()?;
+    /// let caps = conn.capabilities()?;
+    /// if caps.supports("existential_subquery_full") { /* use EXISTS { MATCH ... } */ }
+    /// # Ok::<(), graphqlite::Error>(())
+    /// ```
+    pub fn capabilities(&self) -> Result<crate::Capabilities> {
+        let json: String = self
+            .conn
+            .query_row("SELECT cypher_capabilities()", [], |row| row.get(0))?;
+        Ok(crate::Capabilities::from_json(&json)?)
+    }
+
     pub fn validate(&self, query: &str) -> Result<ValidationResult> {
         let json: String = self
             .conn

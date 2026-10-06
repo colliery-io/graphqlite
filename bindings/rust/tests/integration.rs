@@ -4763,3 +4763,20 @@ fn test_cypher_errors_use_the_same_variant_on_every_entry_point() {
     let err = conn.execute("SELECT * FROM no_such_table").unwrap_err();
     assert!(matches!(err, Error::Sqlite(_)), "{err:?}");
 }
+
+// GQLITE-T-0100: capability metadata
+#[test]
+fn test_capabilities_reports_version_and_flags() {
+    let conn = test_connection();
+    let caps = conn.capabilities().unwrap();
+    assert_eq!(caps.schema_version, 1);
+    assert!(!caps.graphqlite_version.is_empty());
+    assert_eq!(caps.cypher_dialect, "openCypher 9");
+    assert!(caps.json1);
+    assert!(caps.supports("validate"));
+    assert!(caps.supports("existential_subquery_full"));
+    assert!(!caps.supports("load_csv"));
+    assert!(!caps.supports("definitely_unknown_flag"));
+    assert!(!caps.neo4j_compat);
+}
+

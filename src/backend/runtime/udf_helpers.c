@@ -13,6 +13,7 @@
  *    forward decls.
  */
 
+#include "graphqlite_version.h"
 #include "graphqlite_sqlite.h"
 #include <string.h>
 #include <stdlib.h>
@@ -4076,4 +4077,98 @@ void gql_map_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     sqlite3_result_text(ctx, dbuf_get(&out), (int)dbuf_len(&out), SQLITE_TRANSIENT);
     sqlite3_result_subtype(ctx, GQL_SUBTYPE_JSON);
     dbuf_free(&out);
+}
+
+
+/* ------------------------------------------------------------------------
+ * GQLITE-T-0100: cypher_capabilities()
+ *
+ * Returns a JSON object clients use to detect features at run time instead
+ * of guessing from the version string:
+ *
+ *   {"schema_version": 1,
+ *    "graphqlite_version": "0.9.1",
+ *    "cypher_dialect": "openCypher 9",
+ *    "sqlite": {"version": "3.47.2", "json1": true},
+ *    "neo4j_compat": false,
+ *    "features": {"<flag>": true|false, ...}}
+ *
+ * `schema_version` changes only when a key is added, renamed or removed;
+ * new feature flags may appear at any release and unknown flags must be
+ * read as false. The flag list is static per build: it documents what this
+ * version of the engine implements, not what the current graph contains.
+ * ---------------------------------------------------------------------- */
+typedef struct { const char *name; int on; } gql_capability_flag;
+
+static const gql_capability_flag gql_capability_flags[] = {
+    /* Syntax asked about in GitHub #17 */
+    {"bracket_property_access",       1},  /* n['prop'], list[0], map['k'] */
+    {"list_literals",                 1},
+    {"map_literals",                  1},
+    {"list_properties",               1},  /* list-valued node/edge properties (JSON) */
+    {"map_properties",                1},  /* map-valued node/edge properties (JSON) */
+    {"backtick_identifiers",          1},
+    {"json_path_access",              1},  /* json_extract-style nested access */
+    {"parameters",                    1},  /* $param with a JSON params argument */
+    /* Clauses and constructs */
+    {"optional_match",                1},
+    {"with_where",                    1},
+    {"unwind",                        1},
+    {"foreach",                       1},
+    {"merge_on_create_on_match",      1},
+    {"union",                         1},
+    {"call_subquery",                 1},  /* CALL { ... } */
+    {"call_procedures",               1},  /* CALL proc.name(...) YIELD */
+    {"existential_subquery_pattern",  1},  /* EXISTS((p)), EXISTS { (p) WHERE ... } */
+    {"existential_subquery_full",     1},  /* EXISTS { MATCH ... RETURN ... } */
+    {"pattern_comprehension",         1},
+    {"list_comprehension",            1},
+    {"quantifiers",                   1},  /* all/any/none/single */
+    {"reduce",                        1},
+    {"case_expressions",              1},
+    {"shortest_path",                 1},
+    {"variable_length_paths",         1},
+    {"named_paths",                   1},
+    {"temporal_types",                1},  /* date/time/datetime/duration */
+    {"named_timezones",               1},  /* fixed offsets; coarse DST rules */
+    {"timezone_historical_dst",       0},  /* needs IANA tzdata (T-0342..0344) */
+    {"graph_algorithms",              1},  /* pagerank, louvain, ... */
+    {"multi_graph",                   1},  /* gql_load_graph / graph-scoped tables */
+    {"cypher_rows_vtab",              1},  /* cypher_rows() table-valued function */
+    {"validate",                      1},  /* cypher_validate() */
+    {"write_stats",                   1},  /* JSON stats object on writes */
+    /* Not implemented */
+    {"load_csv",                      0},
+    {"profile",                       0},
+    {"explain",                       1},
+    {"create_index",                  0},
+    {"create_constraint",             0},
+    {"label_disjunction",             0},  /* (n:A|B) */
+    {"map_projection_all_properties", 0},  /* n{.*} */
+};
+
+void cypher_capabilities_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    (void)argc; (void)argv;
+    sqlite3 *db = sqlite3_context_db_handle(context);
+    sqlite3_str *s = sqlite3_str_new(db);
+    int json1 = sqlite3_libversion_number() >= 3038000 ||
+                sqlite3_compileoption_used("ENABLE_JSON1");
+    sqlite3_str_appendf(s, "{\"schema_version\":%d,", GRAPHQLITE_CAPABILITIES_SCHEMA);
+    sqlite3_str_appendf(s, "\"graphqlite_version\":\"%s\",", GRAPHQLITE_VERSION);
+    sqlite3_str_appendf(s, "\"cypher_dialect\":\"%s\",", GRAPHQLITE_CYPHER_DIALECT);
+    sqlite3_str_appendf(s, "\"sqlite\":{\"version\":\"%s\",\"json1\":%s},",
+                        sqlite3_libversion(), json1 ? "true" : "false");
+    sqlite3_str_appendall(s, "\"neo4j_compat\":false,");
+    sqlite3_str_appendall(s, "\"features\":{");
+    size_t n = sizeof(gql_capability_flags) / sizeof(gql_capability_flags[0]);
+    for (size_t i = 0; i < n; i++) {
+        sqlite3_str_appendf(s, "%s\"%s\":%s", i ? "," : "",
+                            gql_capability_flags[i].name,
+                            gql_capability_flags[i].on ? "true" : "false");
+    }
+    sqlite3_str_appendall(s, "}}");
+    char *out = sqlite3_str_finish(s);
+    if (!out) { sqlite3_result_error_nomem(context); return; }
+    sqlite3_result_text(context, out, -1, sqlite3_free);
 }

@@ -233,6 +233,12 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          cypher_validate_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* GQLITE-T-0100: capability metadata for clients (GitHub #17). */
+  rc = sqlite3_create_function(db, "cypher_capabilities", 0,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         cypher_capabilities_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   /* Percentile aggregates (M15). Registered under both the Cypher
    * names (percentileCont/percentileDisc) and an internal SQL alias
    * (_gql_percentile_cont/_disc) so the transform layer can choose. */
