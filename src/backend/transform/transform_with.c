@@ -363,6 +363,50 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         }
     }
 
+    /* GQLITE-T-0324: a WITH's WHERE sees BOTH the pre-WITH variables AND the
+     * projected aliases (Cypher scope carve-out for the WITH filter only).
+     * When the plain pre-WITH translation failed because the predicate also
+     * names a projected alias (`WITH a.name AS name WHERE name = 'B' OR
+     * a.name2 = 'C'`), retry in the pre-WITH scope with each non-aggregate
+     * projection alias temporarily registered as a projected variable whose
+     * source expression is the item's own translated SQL. The temporary
+     * registrations are truncated away afterwards so downstream clauses keep
+     * the strict post-WITH scope (WithWhere7 [3]). Aggregate items are not
+     * registered: a filter on them belongs after grouping (the post path). */
+    if (with->where && !with_where_pre && with->items && !with->pass_all) {
+        int saved_var_count = transform_var_count(ctx->var_ctx);
+        bool registered_any = false;
+        for (int i = 0; i < with->items->count; i++) {
+            cypher_return_item *item = (cypher_return_item*)with->items->items[i];
+            if (!item || !item->alias || !item->expr) continue;
+            if (item->expr->type == AST_NODE_IDENTIFIER &&
+                strcmp(((cypher_identifier*)item->expr)->name, item->alias) == 0) continue;
+            if (find_aggregating_call(item->expr) != NULL) continue;
+            if (transform_var_lookup(ctx->var_ctx, item->alias) != NULL) continue;
+            char *src = transform_expression_to_string(ctx, item->expr);
+            if (!src || ctx->has_error) {
+                ctx->has_error = false;
+                if (ctx->error_message) { free(ctx->error_message); ctx->error_message = NULL; }
+                free(src);
+                continue;
+            }
+            if (transform_var_register_projected(ctx->var_ctx, item->alias, src) == 0) {
+                registered_any = true;
+            }
+            free(src);
+        }
+        if (registered_any) {
+            ctx->where_conjunct = true;
+            with_where_pre = transform_expression_to_string(ctx, with->where);
+            ctx->where_conjunct = false;
+            if (!with_where_pre && ctx->has_error) {
+                ctx->has_error = false;
+                if (ctx->error_message) { free(ctx->error_message); ctx->error_message = NULL; }
+            }
+        }
+        transform_var_truncate_to(ctx->var_ctx, saved_var_count);
+    }
+
     /* Generate a unique CTE name */
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_with_%d", ctx->with_cte_counter++);
