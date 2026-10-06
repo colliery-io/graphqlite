@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "transform/cypher_transform.h"
 #include "transform/sql_builder.h"
@@ -23,6 +24,85 @@ static int generate_label_add(cypher_transform_context *ctx,
                              const char *variable, const char *label_name);
 
 /* Transform a SET clause into SQL */
+/* Replace every occurrence of `from` in `*field` with `to` (in place). */
+static void replace_all_in(char **field, const char *from, const char *to)
+{
+    if (!field || !*field || !strstr(*field, from)) return;
+    size_t flen = strlen(from), tlen = strlen(to);
+    dynamic_buffer out;
+    dbuf_init(&out);
+    const char *p = *field;
+    for (;;) {
+        const char *hit = strstr(p, from);
+        if (!hit) { dbuf_append(&out, p); break; }
+        dbuf_appendf(&out, "%.*s", (int)(hit - p), p);
+        dbuf_append(&out, to);
+        p = hit + flen;
+        (void)tlen;
+    }
+    free(*field);
+    *field = dbuf_finish(&out);
+}
+
+/* T-0370: snapshot the pipeline before a write.
+ *
+ * A SET that follows WITH/UNWIND is executed as pre-exec DML, and the
+ * trailing RETURN is a separate statement that re-evaluates the pipeline's
+ * CTEs AFTER the write. Any value computed before the SET — `WITH a,
+ * a.name AS old SET a.name = 'x' RETURN old`, or the `collect(a)` entity
+ * snapshots in List12 [1]/[2] — therefore saw the post-write state.
+ *
+ * When the pipeline at the SET is exactly one CTE (`FROM _with_N` /
+ * `FROM _unwind_N`, no joins, no pending ORDER/LIMIT/GROUP), materialize
+ * it into a temp table as the first pre-exec statement, point the builder
+ * and every variable at that table, and let the DML and the RETURN both
+ * read the frozen rows. cypher_transform_query defers the final prepare
+ * so the table exists when the SELECT is compiled. */
+static int set_snapshot_pipeline(cypher_transform_context *ctx)
+{
+    sql_builder *b = ctx->unified_builder;
+    if (!b || !sql_builder_has_from(b)) return 0;
+    if (b->select_count > 0 || b->order_count > 0 || b->group_count > 0 ||
+        b->limit >= 0 || b->offset >= 0 || b->limit_expr || b->offset_expr || b->distinct)
+        return 0;
+    const char *joins = sql_builder_get_joins(b);
+    if (joins && joins[0]) return 0;
+
+    const char *from = sql_builder_get_from(b);
+    if (strncmp(from, "_with_", 6) != 0 && strncmp(from, "_unwind_", 8) != 0) return 0;
+    for (const char *p = from; *p; p++) {
+        if (!isalnum((unsigned char)*p) && *p != '_') return 0;  /* alias or join text */
+    }
+
+    char snap[32];
+    snprintf(snap, sizeof(snap), "_gql_pipe_%d", ctx->pipe_snapshot_count++);
+    const char *where = sql_builder_get_where(b);
+
+    if (!dbuf_is_empty(&b->raw_output)) sql_raw(b, "; ");
+    sql_raw(b, "DROP TABLE IF EXISTS temp.%s; CREATE TEMP TABLE %s AS SELECT * FROM %s", snap, snap, from);
+    if (where && where[0]) sql_raw(b, " WHERE %s", where);
+
+    /* Rebind every variable from `<cte>.` to `<snap>.` — aliases are either
+     * a plain column ref (`_with_0.n`) or an expression over one
+     * (`json_extract(_unwind_0.value, '$.id')`). */
+    char from_dot[48], snap_dot[48];
+    snprintf(from_dot, sizeof(from_dot), "%s.", from);
+    snprintf(snap_dot, sizeof(snap_dot), "%s.", snap);
+    int n = transform_var_count(ctx->var_ctx);
+    for (int i = 0; i < n; i++) {
+        transform_var *v = transform_var_at(ctx->var_ctx, i);
+        if (!v) continue;
+        replace_all_in(&v->table_alias, from_dot, snap_dot);
+        replace_all_in(&v->source_expr, from_dot, snap_dot);
+    }
+
+    dbuf_clear(&b->where);
+    b->where_count = 0;
+    sql_from(b, snap, NULL);
+    CYPHER_DEBUG("SET: snapshotted pipeline %s into %s", from, snap);
+    return 0;
+}
+
 int transform_set_clause(cypher_transform_context *ctx, cypher_set *set)
 {
     CYPHER_DEBUG("Transforming SET clause");
@@ -37,6 +117,19 @@ int transform_set_clause(cypher_transform_context *ctx, cypher_set *set)
     } else if (ctx->query_type == QUERY_TYPE_READ) {
         ctx->query_type = QUERY_TYPE_MIXED;
     }
+
+    /* T-0370: only a property SET is split into pre-exec DML (it emits
+     * INSERT OR REPLACE); a label-only SET stays in the legacy compound,
+     * where a snapshot table would never be created. */
+    bool has_property_item = false;
+    for (int i = 0; set->items && i < set->items->count; i++) {
+        cypher_set_item *item = (cypher_set_item*)set->items->items[i];
+        if (item && item->property && item->property->type != AST_NODE_LABEL_EXPR) {
+            has_property_item = true;
+            break;
+        }
+    }
+    if (has_property_item && set_snapshot_pipeline(ctx) < 0) return -1;
     
     /* Process each SET item */
     for (int i = 0; i < set->items->count; i++) {
@@ -119,6 +212,19 @@ static int transform_set_item(cypher_transform_context *ctx, cypher_set_item *it
     return generate_property_update(ctx, var_id->name, prop->property_name, item->expr);
 }
 
+/* T-0370: the id expression for a SET target. A variable bound by MATCH has
+ * a table alias (`n` -> `n.id`); a post-WITH / post-UNWIND entity has
+ * alias_is_id set and its "alias" already IS the id expression (e.g.
+ * `_with_0.n` or `json_extract(_unwind_0.value, '$.id')`), so appending
+ * `.id` produced `no such column` / syntax errors (List12 [1]/[2]). */
+static const char *set_entity_id_expr(cypher_transform_context *ctx, const char *variable,
+                                      const char *table_alias, char *buf, size_t buflen)
+{
+    if (transform_var_alias_is_id(ctx->var_ctx, variable)) return table_alias;
+    snprintf(buf, buflen, "%s.id", table_alias);
+    return buf;
+}
+
 /* Generate SQL to update a property */
 static int generate_property_update(cypher_transform_context *ctx, 
                                    const char *variable, const char *property_name, 
@@ -140,6 +246,8 @@ static int generate_property_update(cypher_transform_context *ctx,
         ctx->error_message = strdup("Unknown variable in SET clause");
         return -1;
     }
+    char id_buf[320];
+    const char *id_expr = set_entity_id_expr(ctx, variable, table_alias, id_buf, sizeof(id_buf));
 
     /* Start a new statement if needed (I-0039 migration). */
     if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
@@ -226,10 +334,15 @@ static int generate_property_update(cypher_transform_context *ctx,
      * after the DELETE.) Then DELETE the same (entity_id, key_id)
      * row from every OTHER typed prop table so the next read returns
      * the just-written value (Set6 [7]/[21] aggregating-after-SET). */
+    /* T-0370: a key first seen in this SET has no property_keys row yet;
+     * the specialized MATCH+SET executor registers keys itself, the
+     * generic transform path (SET after WITH/UNWIND) did not. */
     sql_raw(ctx->unified_builder,
-        "INSERT OR REPLACE INTO %s (%s, key_id, value) SELECT %s.id, "
+        "INSERT OR IGNORE INTO property_keys (key) VALUES ('%s'); ", escaped_prop);
+    sql_raw(ctx->unified_builder,
+        "INSERT OR REPLACE INTO %s (%s, key_id, value) SELECT %s, "
         "(SELECT id FROM property_keys WHERE key = '%s'), %s",
-        prop_table, entity_col, table_alias, escaped_prop, value_sql);
+        prop_table, entity_col, id_expr, escaped_prop, value_sql);
     free(value_sql);
 
     /* Build the post-INSERT DELETE list for the other typed tables. */
@@ -265,8 +378,8 @@ static int generate_property_update(cypher_transform_context *ctx,
             all_tables[ti], escaped_prop);
         if (have_from) {
             dbuf_appendf(&post_dml,
-                " AND %s IN (SELECT %s.id FROM %s",
-                entity_col, table_alias, from_str);
+                " AND %s IN (SELECT %s FROM %s",
+                entity_col, id_expr, from_str);
             if (joins_str && joins_str[0]) {
                 dbuf_appendf(&post_dml, " %s", joins_str);
             }
@@ -319,6 +432,8 @@ static int generate_bulk_property_update(cypher_transform_context *ctx,
         ctx->error_message = strdup("Unknown variable in bulk SET clause");
         return -1;
     }
+    char id_buf[320];
+    const char *id_expr = set_entity_id_expr(ctx, variable, table_alias, id_buf, sizeof(id_buf));
 
     bool is_edge = transform_var_is_edge(ctx->var_ctx, variable);
 
@@ -337,7 +452,7 @@ static int generate_bulk_property_update(cypher_transform_context *ctx,
 
             /* Get entity ID — use subquery from unified builder */
             if (ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from)) {
-                sql_raw(ctx->unified_builder, "(SELECT %s.id FROM %s", table_alias, dbuf_get(&ctx->unified_builder->from));
+                sql_raw(ctx->unified_builder, "(SELECT %s FROM %s", id_expr, dbuf_get(&ctx->unified_builder->from));
                 if (!dbuf_is_empty(&ctx->unified_builder->joins)) {
                     sql_raw(ctx->unified_builder, " %s", dbuf_get(&ctx->unified_builder->joins));
                 }
@@ -346,7 +461,7 @@ static int generate_bulk_property_update(cypher_transform_context *ctx,
                 }
                 sql_raw(ctx->unified_builder, ")");
             } else {
-                sql_raw(ctx->unified_builder, "%s.id", table_alias);
+                sql_raw(ctx->unified_builder, "%s", id_expr);
             }
         }
     }
@@ -381,6 +496,7 @@ static int generate_label_add(cypher_transform_context *ctx,
         ctx->error_message = strdup("Unknown variable in SET label - variable must be defined in MATCH clause");
         return -1;
     }
+    char id_buf[320];
     
     /* Start a new statement if needed (I-0039 migration). */
     if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
@@ -391,8 +507,8 @@ static int generate_label_add(cypher_transform_context *ctx,
         char *escaped_lbl = escape_sql_string(label_name);
         if (!escaped_lbl) escaped_lbl = strdup(label_name ? label_name : "");
         sql_raw(ctx->unified_builder,
-            "INSERT OR IGNORE INTO node_labels (node_id, label) SELECT %s.id, '%s'",
-            table_alias, escaped_lbl);
+            "INSERT OR IGNORE INTO node_labels (node_id, label) SELECT %s, '%s'",
+            set_entity_id_expr(ctx, variable, table_alias, id_buf, sizeof(id_buf)), escaped_lbl);
         free(escaped_lbl);
     }
 

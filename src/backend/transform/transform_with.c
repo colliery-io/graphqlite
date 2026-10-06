@@ -880,6 +880,12 @@ with_star_columns_done:
                     transform_var *var = transform_var_lookup(ctx->var_ctx, id->name);
                     if (var) {
                         source_kinds[i] = var->kind;
+                        /* T-0370: `WITH nodes, ...` re-projects a collected
+                         * entity list — keep its inner kind so a later
+                         * UNWIND still rebinds elements as nodes/edges
+                         * (List12 [1]/[2]). */
+                        if (inner_kinds && var->kind == VAR_KIND_PROJECTED)
+                            inner_kinds[i] = var->list_inner_kind;
                         if (var->kind == VAR_KIND_PATH && saved_path_elems) {
                             saved_path_elems[i] = var->path_elements;
                             saved_path_types[i] = var->path_type;

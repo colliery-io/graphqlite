@@ -672,6 +672,21 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
         if (err_msg) sqlite3_free(err_msg);
     }
 
+    /* T-0370: a read deferred past the DML (it selects from the
+     * `_gql_pipe_N` snapshot that DML just created). */
+    if (!transform_result->stmt && transform_result->deferred_sql) {
+        int prc = sqlite3_prepare_v2(executor->db, transform_result->deferred_sql, -1,
+                                     &transform_result->stmt, NULL);
+        if (prc != SQLITE_OK) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "SQL prepare failed: %s", sqlite3_errmsg(executor->db));
+            set_result_error(result, buf);
+            cypher_free_result(transform_result);
+            cypher_transform_free_context(ctx);
+            return -1;
+        }
+    }
+
     /* Build results from statement */
     if (transform_result->stmt) {
         /* Bind parameters if provided */
