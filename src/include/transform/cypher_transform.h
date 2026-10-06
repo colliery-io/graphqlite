@@ -83,6 +83,14 @@ struct cypher_transform_context {
     /* Multi-graph support: current graph for MATCH clause processing */
     const char *current_graph;      /* Active graph name (borrowed pointer, not owned) */
 
+    /* GQLITE-T-0139: inside an EXISTS { ... } body, the table tokens of the
+     * OUTER query's aliases that were seeded into this context as bound
+     * entities (e.g. "_gql_default_alias_0", "_with_0"). generate_node_match
+     * must not add them to FROM — they are correlated references to the
+     * enclosing query. Borrowed pointers; owned by the EXISTS emitter. */
+    const char **correlated_outer_aliases;
+    int correlated_outer_count;
+
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;
 
@@ -188,6 +196,13 @@ void cypher_transform_clear_defer_pairs(cypher_transform_context *ctx);
 
 /* Main transform entry point */
 cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cypher_query *query);
+
+/* GQLITE-T-0139: transform a READ-ONLY query (MATCH / OPTIONAL MATCH / WITH /
+ * UNWIND / RETURN) into SQL in ctx->sql_buffer WITHOUT preparing it, so the
+ * text can be embedded as a correlated subquery. Updating clauses are
+ * rejected with SyntaxError: InvalidClauseComposition. Returns 0 or -1 with
+ * ctx->error_message set. */
+int cypher_transform_read_query_sql(cypher_transform_context *ctx, cypher_query *query);
 
 /* Generate SQL only (for EXPLAIN) - returns 0 on success, -1 on error */
 int cypher_transform_generate_sql(cypher_transform_context *ctx, cypher_query *query);

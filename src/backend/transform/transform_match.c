@@ -1443,7 +1443,18 @@ skip_combined_exists:
                                            strstr(dbuf_get(&ctx->unified_builder->from), cte_name) != NULL;
                         bool cte_in_joins = !dbuf_is_empty(&ctx->unified_builder->joins) &&
                                             strstr(dbuf_get(&ctx->unified_builder->joins), cte_name) != NULL;
-                        if (!cte_in_from && !cte_in_joins) {
+                        /* GQLITE-T-0139: an outer alias seeded into an
+                         * EXISTS { } body is a correlated reference, not a
+                         * source to scan. */
+                        bool is_outer_ref = false;
+                        for (int oi = 0; oi < ctx->correlated_outer_count; oi++) {
+                            if (ctx->correlated_outer_aliases[oi] &&
+                                strcmp(ctx->correlated_outer_aliases[oi], cte_name) == 0) {
+                                is_outer_ref = true;
+                                break;
+                            }
+                        }
+                        if (!cte_in_from && !cte_in_joins && !is_outer_ref) {
                             /* Add as CROSS JOIN if FROM already exists, otherwise as FROM */
                             if (!dbuf_is_empty(&ctx->unified_builder->from)) {
                                 sql_join(ctx->unified_builder, SQL_JOIN_CROSS, cte_name, NULL, NULL);

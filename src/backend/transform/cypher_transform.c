@@ -669,6 +669,54 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
 }
 
 /* Generate next unique alias */
+int cypher_transform_read_query_sql(cypher_transform_context *ctx, cypher_query *query)
+{
+    if (!ctx || !query || !query->clauses) return -1;
+    ctx->sql_size = 0;
+    if (ctx->sql_buffer) ctx->sql_buffer[0] = '\0';
+    ctx->has_error = false;
+    free(ctx->error_message);
+    ctx->error_message = NULL;
+
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *clause = query->clauses->items[i];
+        if (!clause) continue;
+        if (i > 0) transform_var_mark_inherited(ctx->var_ctx);
+        int rc = 0;
+        switch (clause->type) {
+            case AST_NODE_MATCH:  rc = transform_match_clause(ctx, (cypher_match*)clause); break;
+            case AST_NODE_WITH:   rc = transform_with_clause(ctx, (cypher_with*)clause); break;
+            case AST_NODE_UNWIND: rc = transform_unwind_clause(ctx, (cypher_unwind*)clause); break;
+            case AST_NODE_RETURN: rc = transform_return_clause(ctx, (cypher_return*)clause); break;
+            default:
+                ctx->has_error = true;
+                free(ctx->error_message);
+                ctx->error_message = strdup("SyntaxError: InvalidClauseComposition: "
+                    "an existential subquery may only contain MATCH, WITH, UNWIND and RETURN");
+                return -1;
+        }
+        if (rc < 0) {
+            if (!ctx->has_error) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("Failed to transform existential subquery");
+            }
+            return -1;
+        }
+    }
+    if (ctx->unified_builder &&
+        (ctx->unified_builder->select_count > 0 ||
+         !dbuf_is_empty(&ctx->unified_builder->from))) {
+        if (finalize_sql_generation(ctx) < 0) {
+            ctx->has_error = true;
+            free(ctx->error_message);
+            ctx->error_message = strdup("Failed to finalize existential subquery SQL");
+            return -1;
+        }
+    }
+    prepend_cte_to_sql(ctx);
+    return 0;
+}
+
 char* get_next_default_alias(cypher_transform_context *ctx)
 {
     char *alias = malloc(64);

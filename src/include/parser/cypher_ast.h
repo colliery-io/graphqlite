@@ -97,7 +97,8 @@ typedef enum {
 /* EXISTS expression types */
 typedef enum {
     EXISTS_TYPE_PATTERN,   /* EXISTS((pattern)) */
-    EXISTS_TYPE_PROPERTY   /* EXISTS(property) */
+    EXISTS_TYPE_PROPERTY,  /* EXISTS(property) */
+    EXISTS_TYPE_QUERY      /* EXISTS { MATCH ... RETURN ... } full subquery (GQLITE-T-0139) */
 } exists_expr_type;
 
 /* List predicate types: all(), any(), none(), single() */
@@ -394,6 +395,7 @@ typedef struct cypher_exists_expr {
     union {
         ast_list *pattern;       /* For EXISTS((pattern)) - list of path elements */
         ast_node *property;      /* For EXISTS(property) - property access expression */
+        ast_node *query;         /* For EXISTS { <single query> } - a cypher_query */
     } expr;
     ast_node *where_clause;      /* Optional inner WHERE for brace form
                                   * EXISTS { (n)-->(m) WHERE <expr> } (NULL otherwise) */
@@ -554,6 +556,7 @@ cypher_binary_op* make_binary_op(binary_op_type op_type, ast_node *left, ast_nod
 cypher_function_call* make_function_call(char *function_name, ast_list *args, bool distinct, int location);
 cypher_exists_expr* make_exists_pattern_expr(ast_list *pattern, int location);
 cypher_exists_expr* make_exists_property_expr(ast_node *property, int location);
+cypher_exists_expr* make_exists_query_expr(ast_node *query, int location);
 cypher_list_predicate* make_list_predicate(list_predicate_type pred_type, const char *variable, ast_node *list_expr, ast_node *predicate, int location);
 cypher_reduce_expr* make_reduce_expr(const char *accumulator, ast_node *initial_value, const char *variable, ast_node *list_expr, ast_node *expression, int location);
 cypher_subscript* make_subscript(ast_node *expr, ast_node *index, int location);

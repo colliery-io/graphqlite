@@ -1510,6 +1510,13 @@ function_call:
             if (ee) ee->is_subquery = true;
             $$ = (ast_node*)ee;
         }
+    | EXISTS '{' single_query '}'
+        {
+            /* GQLITE-T-0139: full existential subquery
+             * EXISTS { MATCH (n)-->(m) [WITH ... WHERE ...] RETURN true }
+             * (CIP2015-05-13-EXISTS level 3; ExistentialSubquery2/3). */
+            $$ = (ast_node*)make_exists_query_expr($3, @1.first_line);
+        }
     | EXISTS '{' pattern_list WHERE expr '}'
         {
             /* Existential subquery with inner WHERE:

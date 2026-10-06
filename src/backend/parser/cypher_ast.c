@@ -416,6 +416,8 @@ void ast_node_free(ast_node *node)
                     ast_list_free(exists_expr->expr.pattern);
                 } else if (exists_expr->expr_type == EXISTS_TYPE_PROPERTY) {
                     ast_node_free(exists_expr->expr.property);
+                } else if (exists_expr->expr_type == EXISTS_TYPE_QUERY) {
+                    ast_node_free(exists_expr->expr.query);
                 }
                 if (exists_expr->where_clause) {
                     ast_node_free(exists_expr->where_clause);
@@ -1147,6 +1149,19 @@ cypher_function_call* make_function_call(char *function_name, ast_list *args, bo
     func->args = args;
     func->distinct = distinct;
     return func;
+}
+
+/* GQLITE-T-0139: EXISTS { MATCH ... [WITH ...] RETURN ... } */
+cypher_exists_expr* make_exists_query_expr(ast_node *query, int location)
+{
+    cypher_exists_expr *exists_expr = (cypher_exists_expr*)ast_node_create(AST_NODE_EXISTS_EXPR, location, sizeof(cypher_exists_expr));
+    if (!exists_expr) {
+        return NULL;
+    }
+    exists_expr->expr_type = EXISTS_TYPE_QUERY;
+    exists_expr->expr.query = query;
+    exists_expr->is_subquery = true;
+    return exists_expr;
 }
 
 cypher_exists_expr* make_exists_pattern_expr(ast_list *pattern, int location)
