@@ -29,6 +29,89 @@ static bool entity_ref_from_json(const char *txt, int64_t *id_out, bool *is_edge
     return false;
 }
 
+/* Build a synthetic `RETURN v1, v2, ...` over the variables named by the
+ * DELETE items, so the MATCH can be executed once and the bound entities read
+ * from the result (entity JSON pass-through, perf review F5). Caller frees
+ * with free_delete_synthetic_return(). */
+static cypher_return *build_delete_synthetic_return(cypher_delete *delete_clause)
+{
+    cypher_return *synthetic_return = calloc(1, sizeof(cypher_return));
+    if (!synthetic_return) return NULL;
+
+    synthetic_return->base.type = AST_NODE_RETURN;
+    synthetic_return->items = ast_list_create();
+    synthetic_return->distinct = false;
+    synthetic_return->order_by = NULL;
+    synthetic_return->limit = NULL;
+    synthetic_return->skip = NULL;
+
+    for (int i = 0; i < delete_clause->items->count; i++) {
+        cypher_delete_item *del_item = (cypher_delete_item*)delete_clause->items->items[i];
+        if (del_item && del_item->variable) {
+            cypher_identifier *id = calloc(1, sizeof(cypher_identifier));
+            id->base.type = AST_NODE_IDENTIFIER;
+            id->name = strdup(del_item->variable);
+
+            cypher_return_item *ret_item = calloc(1, sizeof(cypher_return_item));
+            ret_item->base.type = AST_NODE_RETURN_ITEM;
+            ret_item->expr = (ast_node*)id;
+            ret_item->alias = NULL;
+
+            ast_list_append(synthetic_return->items, (ast_node*)ret_item);
+        }
+    }
+    return synthetic_return;
+}
+
+static void free_delete_synthetic_return(cypher_return *synthetic_return)
+{
+    if (!synthetic_return) return;
+    /* ast_list_free handles freeing items */
+    if (synthetic_return->items) {
+        ast_list_free(synthetic_return->items);
+    }
+    free(synthetic_return);
+}
+
+/* GQLITE-T-0253: does the MATCH bind at least one non-null entity for any
+ * of the DELETE targets? Used before a RETURN that reads data of a deleted
+ * variable: openCypher raises EntityNotFound: DeletedEntityAccess only when
+ * an entity was actually deleted (a null from an OPTIONAL MATCH miss is just
+ * null). Returns 1 if bound, 0 if nothing is bound, -1 on error. */
+int delete_targets_bound(cypher_executor *executor, cypher_match *match,
+                         cypher_delete *delete_clause)
+{
+    if (!executor || !match || !delete_clause || !delete_clause->items) return -1;
+
+    cypher_return *synthetic_return = build_delete_synthetic_return(delete_clause);
+    if (!synthetic_return) return -1;
+
+    cypher_result *match_result = create_empty_result();
+    int rc = execute_match_return_query(executor, match, synthetic_return, match_result);
+    int bound = 0;
+    if (rc < 0) {
+        bound = -1;
+    } else {
+        for (int row = 0; row < match_result->row_count && !bound; row++) {
+            for (int col = 0; col < match_result->column_count; col++) {
+                bool non_null = false;
+                if (match_result->agtype_data && match_result->agtype_data[row][col]) {
+                    agtype_value *v = match_result->agtype_data[row][col];
+                    non_null = (v->type == AGTV_VERTEX || v->type == AGTV_EDGE);
+                } else if (match_result->data && match_result->data[row] &&
+                           match_result->data[row][col]) {
+                    int64_t id; bool is_edge;
+                    non_null = entity_ref_from_json(match_result->data[row][col], &id, &is_edge);
+                }
+                if (non_null) { bound = 1; break; }
+            }
+        }
+    }
+    cypher_result_free(match_result);
+    free_delete_synthetic_return(synthetic_return);
+    return bound;
+}
+
 /* Execute MATCH+DELETE query combination */
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result)
 {
@@ -44,36 +127,10 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
      * Transforming twice would mutate the AST (GQLITE-T-0092). */
 
     /* Create a synthetic RETURN clause for the variables to delete */
-    cypher_return *synthetic_return = calloc(1, sizeof(cypher_return));
+    cypher_return *synthetic_return = build_delete_synthetic_return(delete_clause);
     if (!synthetic_return) {
         set_result_error(result, "Failed to allocate memory for DELETE processing");
         return -1;
-    }
-
-    synthetic_return->base.type = AST_NODE_RETURN;
-    synthetic_return->items = ast_list_create();
-    synthetic_return->distinct = false;
-    synthetic_return->order_by = NULL;
-    synthetic_return->limit = NULL;
-    synthetic_return->skip = NULL;
-
-    /* Add RETURN items for each variable to delete */
-    for (int i = 0; i < delete_clause->items->count; i++) {
-        cypher_delete_item *del_item = (cypher_delete_item*)delete_clause->items->items[i];
-        if (del_item && del_item->variable) {
-            /* Create identifier for the variable */
-            cypher_identifier *id = calloc(1, sizeof(cypher_identifier));
-            id->base.type = AST_NODE_IDENTIFIER;
-            id->name = strdup(del_item->variable);
-
-            /* Create return item */
-            cypher_return_item *ret_item = calloc(1, sizeof(cypher_return_item));
-            ret_item->base.type = AST_NODE_RETURN_ITEM;
-            ret_item->expr = (ast_node*)id;
-            ret_item->alias = NULL;
-
-            ast_list_append(synthetic_return->items, (ast_node*)ret_item);
-        }
     }
 
     /* Execute the MATCH query to get entities */
@@ -81,11 +138,7 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
     if (execute_match_return_query(executor, match, synthetic_return, match_result) < 0) {
         set_result_error(result, "Failed to execute MATCH for DELETE");
         cypher_result_free(match_result);
-        /* Clean up synthetic return - ast_list_free handles freeing items */
-        if (synthetic_return->items) {
-            ast_list_free(synthetic_return->items);
-        }
-        free(synthetic_return);
+        free_delete_synthetic_return(synthetic_return);
         return -1;
     }
 
@@ -144,11 +197,7 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
                                 set_result_error(result, "Cannot delete node - it still has relationships");
                                 cypher_result_free(match_result);
 
-                                /* Clean up synthetic return - ast_list_free handles freeing items */
-                                if (synthetic_return->items) {
-                                    ast_list_free(synthetic_return->items);
-                                }
-                                free(synthetic_return);
+                                free_delete_synthetic_return(synthetic_return);
 
                                 return -1;
                             }
@@ -168,11 +217,7 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
 
     cypher_result_free(match_result);
 
-    /* Clean up synthetic return - ast_list_free handles freeing items */
-    if (synthetic_return->items) {
-        ast_list_free(synthetic_return->items);
-    }
-    free(synthetic_return);
+    free_delete_synthetic_return(synthetic_return);
 
     /* Set result with deletion counts */
     result->success = true;

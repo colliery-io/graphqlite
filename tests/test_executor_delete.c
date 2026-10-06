@@ -448,6 +448,95 @@ static void test_delete_anonymous_entities(void)
     }
 }
 
+/* GQLITE-T-0253: reading a property or the labels of an entity deleted in
+ * the same statement raises EntityNotFound: DeletedEntityAccess and leaves
+ * the graph unchanged. RETURN n / id(n) / type(r) / count(*) stay legal, and
+ * a null binding (OPTIONAL MATCH miss) is not a deleted entity. */
+static void run_and_expect_deleted_access_error(cypher_executor *executor, const char *query)
+{
+    cypher_result *res = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(res);
+    if (!res) return;
+    CU_ASSERT_FALSE(res->success);
+    CU_ASSERT_PTR_NOT_NULL(res->error_message);
+    if (res->error_message) {
+        if (!strstr(res->error_message, "EntityNotFound: DeletedEntityAccess")) {
+            printf("\nT-0253 unexpected error for %s: %s\n", query, res->error_message);
+        }
+        CU_ASSERT_PTR_NOT_NULL(strstr(res->error_message, "EntityNotFound: DeletedEntityAccess"));
+    }
+    cypher_result_free(res);
+}
+
+static void test_delete_then_access_deleted_entity(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (!executor) return;
+
+    cypher_result *setup = cypher_executor_execute(executor,
+        "CREATE (:Del253 {num: 0})-[:T253 {num: 7}]->(:Del253 {num: 1})");
+    CU_ASSERT_PTR_NOT_NULL(setup);
+    if (setup) { CU_ASSERT_TRUE(setup->success); cypher_result_free(setup); }
+
+    /* Property of a deleted node, labels of a deleted node, property inside a
+     * larger expression, property of a deleted relationship. */
+    run_and_expect_deleted_access_error(executor,
+        "MATCH ()-[r:T253]->() DELETE r RETURN r.num");
+    run_and_expect_deleted_access_error(executor,
+        "MATCH (n:Del253) DETACH DELETE n RETURN n.num");
+    run_and_expect_deleted_access_error(executor,
+        "MATCH (n:Del253) DETACH DELETE n RETURN labels(n)");
+    run_and_expect_deleted_access_error(executor,
+        "MATCH (n:Del253) DETACH DELETE n RETURN n.num + 1 AS x");
+    run_and_expect_deleted_access_error(executor,
+        "MATCH (n:Del253) DETACH DELETE n RETURN properties(n) AS p");
+
+    /* The failed statements must not have deleted anything. */
+    CU_ASSERT_EQUAL(count_nodes_with_label(executor, "Del253"), 2);
+    CU_ASSERT_EQUAL(count_relationships_with_type(executor, "T253"), 1);
+
+    /* A null binding is not a deleted entity: null propagates, no error. */
+    cypher_result *opt = cypher_executor_execute(executor,
+        "OPTIONAL MATCH (a:Del253DoesNotExist) DELETE a RETURN a.num");
+    CU_ASSERT_PTR_NOT_NULL(opt);
+    if (opt) {
+        CU_ASSERT_TRUE(opt->success);
+        if (opt->success) {
+            CU_ASSERT_EQUAL(opt->row_count, 1);
+            if (opt->row_count == 1) CU_ASSERT_PTR_NULL(opt->data[0][0]);
+        }
+        cypher_result_free(opt);
+    }
+
+    /* Identity-only projections of a deleted entity stay legal. */
+    cypher_result *type_res = cypher_executor_execute(executor,
+        "MATCH ()-[r:T253]->() DELETE r RETURN type(r)");
+    CU_ASSERT_PTR_NOT_NULL(type_res);
+    if (type_res) {
+        CU_ASSERT_TRUE(type_res->success);
+        if (type_res->success && type_res->row_count == 1 && type_res->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(type_res->data[0][0], "T253");
+        }
+        cypher_result_free(type_res);
+    }
+    CU_ASSERT_EQUAL(count_relationships_with_type(executor, "T253"), 0);
+
+    cypher_result *cnt = cypher_executor_execute(executor,
+        "MATCH (n:Del253) DELETE n RETURN count(*) AS c");
+    CU_ASSERT_PTR_NOT_NULL(cnt);
+    if (cnt) {
+        CU_ASSERT_TRUE(cnt->success);
+        if (cnt->success && cnt->row_count == 1 && cnt->data[0][0]) {
+            CU_ASSERT_STRING_EQUAL(cnt->data[0][0], "2");
+        }
+        cypher_result_free(cnt);
+    }
+    CU_ASSERT_EQUAL(count_nodes_with_label(executor, "Del253"), 0);
+
+    cypher_executor_free(executor);
+}
+
 /* Initialize the DELETE executor test suite */
 int init_executor_delete_suite(void)
 {
@@ -465,7 +554,8 @@ int init_executor_delete_suite(void)
         !CU_add_test(suite, "DELETE with WHERE", test_delete_with_where) ||
         !CU_add_test(suite, "DETACH DELETE", test_detach_delete) ||
         !CU_add_test(suite, "DELETE error conditions", test_delete_error_conditions) ||
-        !CU_add_test(suite, "DELETE anonymous entities", test_delete_anonymous_entities)) {
+        !CU_add_test(suite, "DELETE anonymous entities", test_delete_anonymous_entities) ||
+        !CU_add_test(suite, "T-0253: access of deleted entity raises EntityNotFound", test_delete_then_access_deleted_entity)) {
         return CU_get_error();
     }
     

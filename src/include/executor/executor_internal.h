@@ -153,6 +153,9 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
 int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result);
 int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result);
+/* GQLITE-T-0253: 1 if the MATCH binds a non-null entity for any DELETE
+ * target, 0 if none, -1 on error. */
+int delete_targets_bound(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause);
 int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cypher_merge *merge, cypher_result *result);
 int execute_match_remove_query(cypher_executor *executor, cypher_match *match, cypher_remove *remove, cypher_result *result);
 
