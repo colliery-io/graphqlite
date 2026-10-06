@@ -2119,6 +2119,102 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
  * Executes the CREATE clause, then queries the created nodes to build
  * the RETURN result.
  */
+/* GQLITE-T-0371: RETURN after write-only clauses (CREATE / MERGE, no
+ * MATCH) used to be projected by hand from the variable map, which cannot
+ * evaluate aggregates, path variables (`MERGE p = (..) RETURN p`), nested
+ * function calls (`startNode(r).id`) or arithmetic. For those shapes we
+ * re-run the normal MATCH+RETURN pipeline over the written patterns,
+ * constrained to exactly the bound entity ids (`id(a) = 5 AND id(r) = 7`),
+ * so the result is the written row and nothing else. */
+static bool return_item_is_hand_projectable(cypher_return_item *item, variable_map *vm)
+{
+    ast_node *expr = item ? item->expr : NULL;
+    if (!expr) return true;
+    switch (expr->type) {
+        case AST_NODE_LITERAL:
+            return true;
+        case AST_NODE_IDENTIFIER: {
+            const char *n = ((cypher_identifier*)expr)->name;
+            return get_variable_node_id(vm, n) >= 0 || get_variable_edge_id(vm, n) >= 0;
+        }
+        case AST_NODE_PROPERTY: {
+            cypher_property *prop = (cypher_property*)expr;
+            if (!prop->expr || prop->expr->type != AST_NODE_IDENTIFIER) return false;
+            const char *n = ((cypher_identifier*)prop->expr)->name;
+            return get_variable_node_id(vm, n) >= 0 || get_variable_edge_id(vm, n) >= 0;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *fc = (cypher_function_call*)expr;
+            if (aggregating_call_name(expr)) return false;
+            if (!fc->args || fc->args->count != 1) return false;
+            ast_node *arg = fc->args->items[0];
+            if (!arg || arg->type != AST_NODE_IDENTIFIER) return false;
+            const char *n = ((cypher_identifier*)arg)->name;
+            return get_variable_node_id(vm, n) >= 0 || get_variable_edge_id(vm, n) >= 0;
+        }
+        default:
+            return false;
+    }
+}
+
+static bool return_needs_bound_rematch(cypher_return *ret, variable_map *vm)
+{
+    if (!ret || !ret->items || !vm) return false;
+    for (int i = 0; i < ret->items->count; i++) {
+        if (!return_item_is_hand_projectable((cypher_return_item*)ret->items->items[i], vm))
+            return true;
+    }
+    return false;
+}
+
+static void append_pattern_items(ast_list *dst, ast_list *src)
+{
+    if (!src) return;
+    for (int i = 0; i < src->count; i++) ast_list_append(dst, src->items[i]);
+}
+
+static int execute_return_via_bound_rematch(cypher_executor *executor, cypher_query *query,
+                                            variable_map *vm, cypher_return *ret,
+                                            cypher_result *result)
+{
+    ast_list *combined = ast_list_create();
+    if (!combined) { set_result_error(result, "OOM"); return -1; }
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_CREATE) append_pattern_items(combined, ((cypher_create*)c)->pattern);
+        else if (c->type == AST_NODE_MERGE) append_pattern_items(combined, ((cypher_merge*)c)->pattern);
+        else if (c->type == AST_NODE_MATCH) append_pattern_items(combined, ((cypher_match*)c)->pattern);
+    }
+
+    /* id(var) = <bound id> for every binding, ANDed together. */
+    ast_node *where = NULL;
+    for (int i = 0; i < vm->count; i++) {
+        variable_mapping *m = &vm->mappings[i];
+        if (!m->variable || m->entity_id < 0) continue;
+        ast_list *args = ast_list_create();
+        if (!args) continue;
+        ast_list_append(args, (ast_node*)make_identifier(m->variable, 0));
+        ast_node *fn = (ast_node*)make_function_call("id", args, false, 0);
+        ast_node *eq = (ast_node*)make_binary_op(BINARY_OP_EQ, fn,
+                                                 (ast_node*)make_integer_literal(m->entity_id, 0), 0);
+        where = where ? (ast_node*)make_binary_op(BINARY_OP_AND, where, eq, 0) : eq;
+    }
+
+    cypher_match *synth = make_cypher_match(combined, where, false, NULL);
+    int rc = -1;
+    if (synth) {
+        rc = execute_match_return_query(executor, synth, ret, result);
+        free(synth);
+    } else {
+        set_result_error(result, "OOM");
+    }
+    if (where) ast_node_free(where);
+    free(combined->items);
+    free(combined);
+    return rc;
+}
+
 static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
@@ -2133,13 +2229,35 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
     int rc = 0;
     for (int i = 0; query->clauses && i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
-        if (clause->type != AST_NODE_CREATE) continue;
-        rc = execute_create_clause_with_varmap(executor,
-                                                (cypher_create *)clause,
-                                                result, &var_map);
-        if (rc < 0) {
-            if (var_map) free_variable_map(var_map);
-            return -1;
+        if (clause->type == AST_NODE_CREATE) {
+            rc = execute_create_clause_with_varmap(executor,
+                                                    (cypher_create *)clause,
+                                                    result, &var_map);
+            if (rc < 0) {
+                if (var_map) free_variable_map(var_map);
+                return -1;
+            }
+        } else if (clause->type == AST_NODE_MERGE) {
+            /* GQLITE-T-0371: a MERGE between CREATE and RETURN used to be
+             * skipped entirely (Merge5 [4], Merge9 [3]). Run it against the
+             * bindings so far and fold its bindings back in. */
+            variable_map *merged = NULL;
+            rc = execute_merge_clause(executor, (cypher_merge *)clause, result,
+                                      var_map, &merged);
+            if (rc < 0) {
+                if (var_map) free_variable_map(var_map);
+                if (merged) free_variable_map(merged);
+                return -1;
+            }
+            if (merged) {
+                if (!var_map) var_map = create_variable_map();
+                for (int mi = 0; var_map && mi < merged->count; mi++) {
+                    variable_mapping *m = &merged->mappings[mi];
+                    if (m->type == VAR_MAP_TYPE_NODE) set_variable_node_id(var_map, m->variable, m->entity_id);
+                    else set_variable_edge_id(var_map, m->variable, m->entity_id);
+                }
+                free_variable_map(merged);
+            }
         }
     }
 
@@ -2159,6 +2277,14 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
         result->success = true;
         if (var_map) free_variable_map(var_map);
         return 0;
+    }
+
+    /* GQLITE-T-0371: aggregates, path variables, nested calls → re-match. */
+    if (return_needs_bound_rematch(ret, var_map)) {
+        rc = execute_return_via_bound_rematch(executor, query, var_map, ret, result);
+        free_variable_map(var_map);
+        if (rc >= 0) result->success = true;
+        return rc;
     }
 
     /* Honor LIMIT 0 / SKIP for CREATE+RETURN: side effects are already
@@ -2879,10 +3005,39 @@ static int handle_merge_return(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Executing MERGE+RETURN via pattern dispatch");
 
+    /* GQLITE-T-0371: run EVERY MERGE clause in document order, chaining the
+     * bindings (`MERGE (a) MERGE (b) MERGE p = (a)-[:R]->(b) RETURN p`); only
+     * the first MERGE used to run. */
     variable_map *vm = NULL;
-    if (execute_merge_clause(executor, merge, result, NULL, &vm) < 0) {
-        if (vm) free_variable_map(vm);
-        return -1;
+    for (int ci = 0; query->clauses && ci < query->clauses->count; ci++) {
+        ast_node *c = query->clauses->items[ci];
+        if (!c || c->type != AST_NODE_MERGE) continue;
+        variable_map *step = NULL;
+        if (execute_merge_clause(executor, (cypher_merge*)c, result, vm, &step) < 0) {
+            if (vm) free_variable_map(vm);
+            if (step) free_variable_map(step);
+            return -1;
+        }
+        if (step) {
+            if (!vm) { vm = step; }
+            else {
+                for (int mi = 0; mi < step->count; mi++) {
+                    variable_mapping *m = &step->mappings[mi];
+                    if (m->type == VAR_MAP_TYPE_NODE) set_variable_node_id(vm, m->variable, m->entity_id);
+                    else set_variable_edge_id(vm, m->variable, m->entity_id);
+                }
+                free_variable_map(step);
+            }
+        }
+    }
+
+    /* GQLITE-T-0371: `MERGE p = (..) RETURN p`, nested calls etc. go through
+     * the id-constrained re-match; aggregates keep the per-cell projection. */
+    if (vm && !return_has_aggregation(ret) && return_needs_bound_rematch(ret, vm)) {
+        int rc = execute_return_via_bound_rematch(executor, query, vm, ret, result);
+        free_variable_map(vm);
+        if (rc >= 0) result->success = true;
+        return rc;
     }
 
     set_return_column_names(ret, result);

@@ -1005,6 +1005,103 @@ static void test_merge_undirected_rematch_keeps_inline_props(void)
     }
 }
 
+
+/* GQLITE-T-0371: MATCH+MERGE runs once per matched row (Merge8 [1]). */
+static void test_match_merge_per_row(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (a:PRA {id: 1}), (b:PRB {id: 2}) CREATE (a)-[:PRT]->(b) CREATE (:PRA {id: 3}), (:PRB {id: 4})",
+            true, "Seed 2x2 nodes with one edge");
+        cypher_result *result = cypher_executor_execute(executor,
+            "MATCH (a:PRA), (b:PRB) MERGE (a)-[r:PRT]->(b) ON CREATE SET r.name = 'new' ON MATCH SET r.name = 'old' RETURN count(r)");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->relationships_created, 3);
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                if (result->row_count > 0 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "4");
+                }
+            } else {
+                printf("MATCH+MERGE per row error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+        cypher_result *names = cypher_executor_execute(executor,
+            "MATCH ()-[r:PRT {name: 'old'}]->() RETURN count(r)");
+        if (names) {
+            CU_ASSERT_TRUE(names->success);
+            if (names->success && names->row_count > 0 && names->data[0][0]) {
+                CU_ASSERT_STRING_EQUAL(names->data[0][0], "1");
+            }
+            cypher_result_free(names);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
+/* GQLITE-T-0371: CREATE ... MERGE ... RETURN runs the MERGE and evaluates
+ * aggregates in RETURN (Merge5 [4], Merge9 [3]). */
+static void test_create_merge_return_aggregate(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        cypher_result *result = cypher_executor_execute(executor,
+            "CREATE (a:CMA), (b:CMB) MERGE (a)-[:CMX]->(b) RETURN count(a)");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->nodes_created, 2);
+                CU_ASSERT_EQUAL(result->relationships_created, 1);
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                if (result->row_count > 0 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "1");
+                }
+            } else {
+                printf("CREATE+MERGE+RETURN error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
+/* GQLITE-T-0371: MERGE binds a path and chained MERGEs all run
+ * (Merge1 [13], Merge5 [10]). */
+static void test_merge_path_return(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        cypher_result *result = cypher_executor_execute(executor,
+            "MERGE (a:MP {num: 1}) MERGE (b:MP {num: 2}) MERGE p = (a)-[:MPR]->(b) RETURN p");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                printf("MERGE path RETURN: nodes_created=%d rels_created=%d rows=%d cell=%s\n",
+                       result->nodes_created, result->relationships_created, result->row_count,
+                       (result->row_count > 0 && result->data[0][0]) ? result->data[0][0] : "(null)");
+                CU_ASSERT_EQUAL(result->nodes_created, 2);
+                CU_ASSERT_EQUAL(result->relationships_created, 1);
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                /* The path cell is a hydrated path (not SQL NULL). */
+                CU_ASSERT_TRUE(result->row_count > 0 && result->data[0][0] != NULL);
+            } else {
+                printf("MERGE path RETURN error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
 int init_executor_merge_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor MERGE", setup_executor_merge_suite, teardown_executor_merge_suite);
@@ -1033,7 +1130,10 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE+WITH+multi-SET", test_merge_with_multiple_set) ||
         !CU_add_test(suite, "MERGE+WITH+edge variable", test_merge_with_edge_variable_return) ||
         !CU_add_test(suite, "MERGE with parameter properties", test_merge_param_properties) ||
-        !CU_add_test(suite, "MERGE undirected re-match keeps inline props", test_merge_undirected_rematch_keeps_inline_props)) {
+        !CU_add_test(suite, "MERGE undirected re-match keeps inline props", test_merge_undirected_rematch_keeps_inline_props) ||
+        !CU_add_test(suite, "MATCH+MERGE per matched row", test_match_merge_per_row) ||
+        !CU_add_test(suite, "CREATE+MERGE+RETURN aggregate", test_create_merge_return_aggregate) ||
+        !CU_add_test(suite, "MERGE path RETURN", test_merge_path_return)) {
         return CU_get_error();
     }
 
