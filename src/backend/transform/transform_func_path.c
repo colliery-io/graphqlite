@@ -51,6 +51,45 @@ int transform_path_length_function(cypher_transform_context *ctx, cypher_functio
     return 0;
 }
 
+/* T-0370: nodes()/relationships() of a path that is a JSON value rather than
+ * a registered path variable — a comprehension/quantifier element over
+ * collect(p) (`[x IN collect(p) | nodes(x)]`, List12 [4]/[5]), an unwound
+ * path, or a projected column. Two encodings exist: the hydrated object
+ * {nodes:[...], rels:[...]} (pattern comprehensions, paths under UNWIND)
+ * and the interleaved elem-id array [n0, e0, n1, ...] text that the regular
+ * path projection and collect(p) store. Both yield fully hydrated entity
+ * JSON so the result renders as nodes/relationships. */
+static int emit_json_path_members(cypher_transform_context *ctx, ast_node *arg, bool want_nodes)
+{
+    char *v = cypher_transform_capture_expression(ctx, arg);
+    if (!v) return -1;
+    char *ej = want_nodes ? gql_sql_node_json_expr("", "je.value")
+                          : gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
+    if (!ej) { free(v); return -1; }
+    append_sql(ctx,
+        "(CASE WHEN %s IS NULL THEN NULL"
+        " WHEN json_valid(%s) AND json_type(%s) = 'object' THEN json_extract(%s, '$.%s')"
+        " ELSE (SELECT json_group_array(json(%s) ORDER BY je.key) FROM json_each(%s) je%s"
+        " WHERE (je.key %% 2) = %d) END)",
+        v, v, v, v, want_nodes ? "nodes" : "rels",
+        ej, v, want_nodes ? "" : " JOIN edges e ON e.id = je.value",
+        want_nodes ? 0 : 1);
+    free(ej);
+    free(v);
+    return 0;
+}
+
+/* True when `arg` must be treated as a JSON path value: any expression that
+ * is not an identifier, or an identifier that is a projected (list element /
+ * WITH column) variable rather than a path, node or relationship. */
+static bool arg_is_json_path_value(cypher_transform_context *ctx, ast_node *arg)
+{
+    if (arg->type != AST_NODE_IDENTIFIER) return true;
+    cypher_identifier *id = (cypher_identifier*)arg;
+    if (transform_var_is_path(ctx->var_ctx, id->name)) return false;
+    return transform_var_is_projected(ctx->var_ctx, id->name);
+}
+
 /* Transform nodes() function - returns list of nodes in a path */
 int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
@@ -75,6 +114,10 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
         ctx->has_error = true;
         ctx->error_message = strdup("nodes() function argument must be a path variable");
         return -1;
+    }
+
+    if (arg_is_json_path_value(ctx, arg)) {
+        return emit_json_path_members(ctx, arg, true);
     }
 
     if (arg->type != AST_NODE_IDENTIFIER) {
@@ -155,6 +198,10 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
         ctx->has_error = true;
         ctx->error_message = strdup("relationships() function argument must be a path variable");
         return -1;
+    }
+
+    if (arg_is_json_path_value(ctx, arg)) {
+        return emit_json_path_members(ctx, arg, false);
     }
 
     if (arg->type != AST_NODE_IDENTIFIER) {

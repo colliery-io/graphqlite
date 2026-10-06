@@ -94,6 +94,11 @@ static const char *find_aggregating_call(ast_node *expr)
         const char *r = find_aggregating_call(s->expr);
         if (r) return r;
         return find_aggregating_call(s->index);
+    } else if (expr->type == AST_NODE_LIST_COMPREHENSION) {
+        /* T-0370: `[x IN collect(p) | ...]` aggregates over its source
+         * list (List12 [5]); the element/WHERE expressions run per
+         * element and are not grouping keys. */
+        return find_aggregating_call(((cypher_list_comprehension*)expr)->list_expr);
     }
     return NULL;
 }

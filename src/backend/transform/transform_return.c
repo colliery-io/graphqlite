@@ -268,6 +268,10 @@ static bool ast_contains_aggregate_func(ast_node *expr)
         }
         case AST_NODE_NULL_CHECK:
             return ast_contains_aggregate_func(((cypher_null_check *)expr)->expr);
+        case AST_NODE_LIST_COMPREHENSION:
+            /* T-0370: the comprehension's source list may aggregate
+             * (`[x IN collect(p) | ...]`). */
+            return ast_contains_aggregate_func(((cypher_list_comprehension *)expr)->list_expr);
         default:
             return false;
     }
@@ -1655,6 +1659,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 /* Track node aliases and whether they're external */
                 char node_aliases[10][32];
                 char node_vars[10][32];  /* Variable names from the pattern */
+                /* T-0370: SQL expression yielding each node's id. A node
+                 * from the comprehension's own FROM is `_pc_nN.id`; an
+                 * outer MATCH node is `<alias>.id`; a post-WITH node is
+                 * its alias (alias_is_id); a projected outer variable (a
+                 * list-comprehension element — Pattern2 [7]) is either a
+                 * raw id or an entity object, resolved at run time. */
+                char node_ids[10][400];
+                bool node_is_outer[10];
                 int node_count = 0;
 
                 /* First pass: collect nodes and generate FROM clause */
@@ -1688,7 +1700,19 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             strncpy(node_aliases[node_count], outer_alias,
                                    sizeof(node_aliases[node_count]) - 1);
                             node_aliases[node_count][sizeof(node_aliases[node_count]) - 1] = '\0';
+                            node_is_outer[node_count] = true;
+                            if (transform_var_alias_is_id(ctx->var_ctx, node->variable)) {
+                                snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s", outer_alias);
+                            } else if (transform_var_is_projected(ctx->var_ctx, node->variable)) {
+                                snprintf(node_ids[node_count], sizeof(node_ids[node_count]),
+                                         "(CASE WHEN json_valid(%s) AND json_type(%s) = 'object' "
+                                         "THEN json_extract(%s, '$.id') ELSE %s END)",
+                                         outer_alias, outer_alias, outer_alias, outer_alias);
+                            } else {
+                                snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", outer_alias);
+                            }
                         } else {
+                            node_is_outer[node_count] = false;
                             /* Generate new alias and add to FROM */
                             if (!first_table) {
                                 append_sql(ctx, ", ");
@@ -1696,6 +1720,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             snprintf(node_aliases[node_count], sizeof(node_aliases[node_count]),
                                     "_pc_n%d", node_count);
                             append_sql(ctx, "nodes AS %s", node_aliases[node_count]);
+                            snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", node_aliases[node_count]);
                             first_table = false;
                         }
 
@@ -1719,9 +1744,12 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     }
                 }
 
-                /* Register pattern variables for use in expressions */
+                /* Register pattern variables for use in expressions.
+                 * T-0370: an outer-bound variable keeps its own
+                 * registration (re-registering a projected element as a
+                 * node would break `x.prop` inside the comprehension). */
                 for (int i = 0; i < node_count; i++) {
-                    if (node_vars[i][0] != '\0') {
+                    if (node_vars[i][0] != '\0' && !node_is_outer[i]) {
                         transform_var_register_node(ctx->var_ctx, node_vars[i], node_aliases[i], NULL);
                     }
                 }
@@ -1799,16 +1827,25 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         int target_node = source_node + 1;
 
                         /* Handle direction */
-                        if (rel->left_arrow) {
+                        if (rel->left_arrow && !rel->right_arrow) {
                             /* <-[r]- means target->source */
-                            append_sql(ctx, "_pc_e%d.target_id = %s.id AND _pc_e%d.source_id = %s.id",
-                                      rel_index, node_aliases[source_node],
-                                      rel_index, node_aliases[target_node]);
+                            append_sql(ctx, "_pc_e%d.target_id = %s AND _pc_e%d.source_id = %s",
+                                      rel_index, node_ids[source_node],
+                                      rel_index, node_ids[target_node]);
+                        } else if (!rel->left_arrow && !rel->right_arrow) {
+                            /* T-0370: -[r]- is undirected — either
+                             * orientation (Pattern2 [11]). */
+                            append_sql(ctx, "((_pc_e%d.source_id = %s AND _pc_e%d.target_id = %s)"
+                                            " OR (_pc_e%d.source_id = %s AND _pc_e%d.target_id = %s))",
+                                      rel_index, node_ids[source_node],
+                                      rel_index, node_ids[target_node],
+                                      rel_index, node_ids[target_node],
+                                      rel_index, node_ids[source_node]);
                         } else {
-                            /* -[r]-> or -[r]- means source->target */
-                            append_sql(ctx, "_pc_e%d.source_id = %s.id AND _pc_e%d.target_id = %s.id",
-                                      rel_index, node_aliases[source_node],
-                                      rel_index, node_aliases[target_node]);
+                            /* -[r]-> means source->target */
+                            append_sql(ctx, "_pc_e%d.source_id = %s AND _pc_e%d.target_id = %s",
+                                      rel_index, node_ids[source_node],
+                                      rel_index, node_ids[target_node]);
                         }
 
                         /* Add relationship type constraint if specified */
@@ -1833,8 +1870,8 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                     }
 
                                     int current_node = (i == 0) ? 0 : i / 2;
-                                    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ",
-                                              node_aliases[current_node]);
+                                    append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s AND label = ",
+                                              node_ids[current_node]);
                                     append_string_literal(ctx, label);
                                     append_sql(ctx, ")");
                                     first_condition = false;
