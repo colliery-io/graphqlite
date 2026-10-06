@@ -4,6 +4,79 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] — 2026-10-06
+
+A correctness release: the openCypher TCK pass count moves from **3788** to
+**3816** of 3880 (98.4%, zero regressions, nothing skipped any more), a
+process crash is fixed, the last seven engine bugs behind `#[ignore]`d Rust
+binding tests are closed, and two small surfaces are added
+(`cypher_capabilities()` and the full `EXISTS { … }` subquery). Query
+results and the `cypher()` output format are otherwise unchanged. Kairos
+items are referenced as GQLITE-T-NNNN.
+
+### Added
+
+- **Full existential subquery** `EXISTS { MATCH … [WITH …] RETURN … }`
+  (CIP2015-05-13-EXISTS level 3, T-0139, +5 TCK). The body is a read-only
+  query correlated to the outer scope; nested `EXISTS { }` and pattern
+  predicates inside the body work. Updating clauses in the body raise
+  `SyntaxError: InvalidClauseComposition`.
+- **`cypher_capabilities()`** (T-0100, GitHub #17): a versioned JSON
+  document with the extension version, Cypher dialect, SQLite/JSON1
+  availability and one boolean per feature flag, exposed as
+  `Connection::capabilities()` (Rust, `Capabilities` struct) and
+  `Connection.capabilities()` (Python, `Capabilities` dataclass). New
+  single version source `src/include/graphqlite_version.h`.
+- **Runtime errors required by openCypher**: reading a property of an
+  entity deleted earlier in the statement raises
+  `EntityNotFound: DeletedEntityAccess` (T-0253); `DELETE` without `DETACH`
+  on a connected node raises `ConstraintVerificationFailed:
+  DeleteConnectedNode` and the whole statement is verified before anything
+  is written (T-0254). Four formerly skipped TCK scenarios now run.
+
+### Fixed
+
+- **MERGE** (T-0338, T-0371, +8 TCK): `MATCH … MERGE` runs the MERGE
+  pattern once per matched row (`ON CREATE` / `ON MATCH` per row);
+  `RETURN` after `CREATE`/`MERGE` evaluates aggregates, path variables
+  (`MERGE p = … RETURN p`) and nested calls through an id-constrained
+  re-match; a `MERGE` between `CREATE` and `RETURN` is no longer skipped;
+  every `MERGE` clause of a `MERGE … RETURN` runs; the undirected
+  `MATCH+MERGE … RETURN` re-match keeps inline node properties.
+- **OPTIONAL MATCH** (T-0336, +2 TCK): a multi-relationship optional
+  pattern with several unbound nodes is matched as one all-or-none chain
+  ("ON clause references tables to its right" is gone); a bound
+  relationship re-matched with two fresh endpoints keeps the anchor row.
+- **WITH … WHERE** sees both the pre-WITH variables and the projected
+  aliases (T-0324, +1 TCK).
+- **List and pattern comprehensions over collected entities** (T-0370,
+  +6 TCK): `[x IN collect(n) | x.prop]`, `nodes()`/`relationships()` on
+  collected paths, pattern comprehensions inside list comprehensions, and
+  `SET` after `WITH`/`UNWIND` over collected entities reads pre-write state.
+- **Temporal**: durations with very large components no longer overflow
+  `int64` (T-0369, +2 TCK); `datetime` rendering has no libc dependency
+  (T-0301); `timestamp()` is built from integer epoch seconds plus
+  milliseconds instead of a Julian-day float (T-0205, Windows CI runner).
+- **`startNode(r)` / `endNode(r)`** return the node object (T-0181).
+- **CALL subqueries**: inner `RETURN` aliases are exported to the outer
+  scope, inner `MATCH` rows are all processed, several imported variables
+  build valid SQL, edge variables survive the subquery (`l.w`, `type(l)`,
+  `WITH l`), exported aliases keep their JSON type (T-0301, T-0373), and
+  `size(<prop>)` in the inner `RETURN` no longer aborts the process
+  (T-0374).
+- `CREATE` edge property maps evaluate function calls and expressions
+  (T-0301); `id()` of a variable carried through `WITH`/`UNWIND` works
+  (T-0375).
+- Rust bindings: all seven `#[ignore]`d integration tests are enabled again
+  (T-0301).
+
+### Changed
+
+- Internal: aggregate property JOINs go through a typed `sql_builder`
+  section and the `pending_prop_joins` context buffer is gone (T-0268,
+  T-0269; generated SQL unchanged).
+- `tests/tck/baseline.json` regenerated (3816 / 3880; it was stale at 3346).
+
 ## [0.9.0] — 2026-10-05
 
 A diagnostics release closing GitHub issue #16 (Kairos GQLITE-T-0192, PR

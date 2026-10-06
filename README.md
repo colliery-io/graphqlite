@@ -51,9 +51,9 @@ suite for the Cypher query language. Current coverage:
 
 | Area | Scenarios | Passing |
 |------|-----------|---------|
-| **Overall** | **3,876** | **97.7%** |
-| Expressions (temporal, lists, maps, comparison, literals, …) | 2,599 | 98.0% |
-| Clauses (MATCH, WITH, MERGE, CREATE, SET, DELETE, UNWIND, …) | 1,247 | 97.2% |
+| **Overall** | **3,880** | **98.4%** |
+| Expressions (temporal, lists, maps, comparison, literals, …) | 2,599 | 98.5% |
+| Clauses (MATCH, WITH, MERGE, CREATE, SET, DELETE, UNWIND, …) | 1,251 | 98.1% |
 | Use cases (triadic selection, subgraph counting) | 30 | 100% |
 
 Run it yourself with `angreal test tck`. The remaining gaps are tracked in
