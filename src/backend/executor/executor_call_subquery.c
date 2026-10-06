@@ -577,25 +577,20 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         cypher_return_item *ret_item = (cypher_return_item*)inner_return_clause->items->items[ri];
                         if (ri > 0) sqlite3_str_appendf(inner_str, ", ");
 
-                        char *saved_buf = ret_ctx->sql_buffer;
-                        int saved_size = ret_ctx->sql_size;
-                        int saved_cap = ret_ctx->sql_capacity;
-                        char temp_buf[2048] = {0};
-                        ret_ctx->sql_buffer = temp_buf;
-                        ret_ctx->sql_size = 0;
-                        ret_ctx->sql_capacity = sizeof(temp_buf);
-
-                        if (transform_expression(ret_ctx, ret_item->expr) == 0 && ret_ctx->sql_size > 0) {
-                            const char *col_name = ret_item->alias ? ret_item->alias : temp_buf;
-                            sqlite3_str_appendf(inner_str, "%s AS \"%s\"",
-                                             temp_buf, col_name);
+                        /* GQLITE-T-0374: capture into a heap buffer. This used
+                         * to point ctx->sql_buffer at a 2 KiB stack array; an
+                         * expression whose SQL is longer (size() emits a long
+                         * CASE) made append_sql realloc/overrun a stack
+                         * pointer and the process aborted. */
+                        char *expr_sql = cypher_transform_capture_expression(ret_ctx, ret_item->expr);
+                        if (expr_sql && expr_sql[0]) {
+                            const char *col_name = ret_item->alias ? ret_item->alias : expr_sql;
+                            sqlite3_str_appendf(inner_str, "%s AS \"%w\"",
+                                             expr_sql, col_name);
                         } else {
                             inner_ok = false;
                         }
-
-                        ret_ctx->sql_buffer = saved_buf;
-                        ret_ctx->sql_size = saved_size;
-                        ret_ctx->sql_capacity = saved_cap;
+                        free(expr_sql);
                     }
 
                     /* Build FROM/WHERE to pin variables to exact entity IDs */
