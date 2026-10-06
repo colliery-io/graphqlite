@@ -3534,23 +3534,22 @@ void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value *
                 y = atoi(ds);
             } else goto bad;
         }
+        /* Week and ordinal dates go through the same proleptic-Gregorian
+         * integer arithmetic as gql_normalize_date_func (days_from_civil /
+         * civil_from_days / weekday_of) rather than timegm()/gmtime(), so
+         * the rendering does not depend on the platform's libc time range or
+         * behaviour (GQLITE-T-0301: byte-identical output on macOS and Linux). */
+        int oy, omm, odd;
         if (from_week) {
-            struct tm jan4; memset(&jan4, 0, sizeof(jan4));
-            jan4.tm_year = y - 1900; jan4.tm_mon = 0; jan4.tm_mday = 4;
-            time_t ts = timegm(&jan4);
-            struct tm *tt = gmtime(&ts);
-            int monday_off = (tt->tm_wday + 6) % 7;
-            time_t target = ts - (time_t)monday_off * 86400 + (time_t)((week - 1) * 7 + (dow - 1)) * 86400;
-            struct tm *tg = gmtime(&target);
-            snprintf(normalized_date, sizeof(normalized_date), "%04d-%02d-%02d",
-                     tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+            int monday_off = (weekday_of(y, 1, 4) + 6) % 7;
+            long jan4_days = days_from_civil(y, 1, 4);
+            long target = jan4_days - monday_off + (long)(week - 1) * 7 + (dow - 1);
+            civil_from_days(target, &oy, &omm, &odd);
+            format_iso_date(normalized_date, sizeof(normalized_date), oy, omm, odd);
         } else if (from_ord) {
-            struct tm jan1; memset(&jan1, 0, sizeof(jan1));
-            jan1.tm_year = y - 1900; jan1.tm_mon = 0; jan1.tm_mday = 1;
-            time_t target = timegm(&jan1) + (time_t)(ord - 1) * 86400;
-            struct tm *tg = gmtime(&target);
-            snprintf(normalized_date, sizeof(normalized_date), "%04d-%02d-%02d",
-                     tg->tm_year + 1900, tg->tm_mon + 1, tg->tm_mday);
+            long target = days_from_civil(y, 1, 1) + (ord - 1);
+            civil_from_days(target, &oy, &omm, &odd);
+            format_iso_date(normalized_date, sizeof(normalized_date), oy, omm, odd);
         } else {
             format_iso_date(normalized_date, sizeof(normalized_date), y, mo, d);
         }

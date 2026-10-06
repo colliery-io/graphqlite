@@ -3616,7 +3616,6 @@ fn test_time_map_construction() {
 }
 
 #[test]
-#[ignore = "engine regression: datetime map construction format differs by platform: macOS 'T10:30:00' vs Linux 'T10:30Z' (T-0301)"]
 fn test_datetime_map_construction() {
     let conn = test_connection();
     let r = conn
@@ -3637,7 +3636,6 @@ fn test_duration_map() {
 }
 
 #[test]
-#[ignore = "engine regression: datetime serialization differs by platform: macOS '1970-01-01 00:00:00' vs Linux '1970-01-01T00:00:00Z' (T-0301)"]
 fn test_datetime_from_epoch() {
     let conn = test_connection();
     let r = conn.cypher("RETURN datetimeFromEpoch(0) AS r").unwrap();
