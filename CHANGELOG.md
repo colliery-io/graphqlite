@@ -4,7 +4,12 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.2] — 2026-10-06
+
+A MERGE correctness release. The openCypher TCK pass count moves from
+**3816** to **3822** of 3880 (98.5%, zero regressions) and every Merge
+feature file is now green. Query results and the `cypher()` output format
+are otherwise unchanged.
 
 ### Fixed
 

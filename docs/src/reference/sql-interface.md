@@ -337,7 +337,7 @@ The function takes no arguments and never touches the graph.
 
 ```json
 {"schema_version": 1,
- "graphqlite_version": "0.9.1",
+ "graphqlite_version": "0.9.2",
  "cypher_dialect": "openCypher 9",
  "sqlite": {"version": "3.47.2", "json1": true},
  "neo4j_compat": false,

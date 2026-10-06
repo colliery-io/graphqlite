@@ -312,7 +312,7 @@ class Connection:
         Example:
             >>> caps = db.capabilities()
             >>> caps.graphqlite_version
-            '0.9.1'
+            '0.9.2'
             >>> caps.supports("existential_subquery_full")
             True
         """

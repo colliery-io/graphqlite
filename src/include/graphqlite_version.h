@@ -9,7 +9,7 @@
 #ifndef GRAPHQLITE_VERSION_H
 #define GRAPHQLITE_VERSION_H
 
-#define GRAPHQLITE_VERSION "0.9.1"
+#define GRAPHQLITE_VERSION "0.9.2"
 
 /* Bumped whenever a key is added to, renamed in or removed from the JSON
  * document returned by cypher_capabilities(). Adding a feature flag does
