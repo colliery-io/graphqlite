@@ -385,6 +385,122 @@ static void test_list_comprehension_with_transform(void)
 }
 
 /* ============================================================
+ * Comprehensions over collected entities (T-0370)
+ * ============================================================ */
+
+/* [x IN collect(n) WHERE x.prop | x.prop] reads the entity JSON that
+ * collect() stores (List12 [1]/[2]). */
+static void test_list_comprehension_over_collected_nodes(void)
+{
+    const char *query =
+        "MATCH (p:Person) WITH collect(p) AS ps "
+        "RETURN [x IN ps WHERE x.age > 28 | x.name] AS names";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nComprehension over collected nodes failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "Alice"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "Charlie"));
+            CU_ASSERT_PTR_NULL(strstr(result->data[0][0], "Bob"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* nodes()/relationships() on a path that is a comprehension element over
+ * collect(path) — not a registered path variable (List12 [4]/[5]). */
+static void test_list_comprehension_nodes_of_collected_paths(void)
+{
+    cypher_result *setup = cypher_executor_execute(executor,
+        "CREATE (:LC370 {k: 1})-[:LCR370]->(:LC370 {k: 2})");
+    CU_ASSERT_PTR_NOT_NULL(setup);
+    if (setup) {
+        CU_ASSERT_TRUE(setup->success);
+        cypher_result_free(setup);
+    }
+
+    const char *query =
+        "MATCH path = (a:LC370 {k: 1})-->() "
+        "RETURN [p IN collect(path) | nodes(p)] AS ns, "
+        "       [p IN collect(path) | size(relationships(p))] AS rc";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nnodes() over collected paths failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0 && result->column_count >= 2) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"k\":1"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"k\":2"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "LC370"));
+            CU_ASSERT_STRING_EQUAL(result->data[0][1], "[1]");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* A pattern comprehension whose bound node is a list-comprehension
+ * element (Pattern2 [7]). Depends on the LC370 graph created above. */
+static void test_pattern_comprehension_inside_list_comprehension(void)
+{
+    const char *query =
+        "MATCH path = (a:LC370 {k: 1})-->() "
+        "RETURN [x IN nodes(path) | size([(x)-->(:LC370) | 1])] AS c";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nPattern comprehension in list comprehension failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count > 0) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "[1,0]");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* SET after UNWIND over collect(n): the write applies, and a value
+ * projected before the SET keeps its pre-write state (List12 [1]). Runs
+ * last in this group — it rewrites LC370.k. */
+static void test_set_after_unwind_collected_reads_pre_write(void)
+{
+    const char *query =
+        "MATCH (n:LC370) WITH collect(n) AS ns "
+        "WITH ns, [x IN ns | x.k] AS old "
+        "UNWIND ns AS m SET m.k = m.k + 10 "
+        "RETURN old, m.k AS cur ORDER BY cur";
+
+    cypher_result *result = cypher_executor_execute(executor, query);
+    CU_ASSERT_PTR_NOT_NULL(result);
+
+    if (result) {
+        if (!result->success) {
+            printf("\nSET after UNWIND over collect failed: %s\n", result->error_message);
+        }
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_EQUAL(result->row_count, 2);
+        if (result->success && result->row_count == 2 && result->column_count >= 2) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "[1,2]");
+            CU_ASSERT_STRING_EQUAL(result->data[0][1], "11");
+            CU_ASSERT_STRING_EQUAL(result->data[1][1], "12");
+        }
+        cypher_result_free(result);
+    }
+}
+
+/* ============================================================
  * Map Literal Tests
  * ============================================================ */
 
@@ -980,6 +1096,10 @@ int init_executor_expressions_suite(void)
         !CU_add_test(suite, "List comprehension basic", test_list_comprehension_basic) ||
         !CU_add_test(suite, "List comprehension with WHERE", test_list_comprehension_with_where) ||
         !CU_add_test(suite, "List comprehension with transform", test_list_comprehension_with_transform) ||
+        !CU_add_test(suite, "List comprehension over collected nodes", test_list_comprehension_over_collected_nodes) ||
+        !CU_add_test(suite, "nodes()/relationships() of collected paths", test_list_comprehension_nodes_of_collected_paths) ||
+        !CU_add_test(suite, "Pattern comprehension inside list comprehension", test_pattern_comprehension_inside_list_comprehension) ||
+        !CU_add_test(suite, "SET after UNWIND over collect reads pre-write", test_set_after_unwind_collected_reads_pre_write) ||
 
         /* Map literal tests */
         !CU_add_test(suite, "Map literal", test_map_literal) ||

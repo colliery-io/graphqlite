@@ -763,3 +763,38 @@ query-shape cell changes.
   `json_valid` on a message containing a double quote). `code` is set by
   the failing stage instead of sniffed from the message, so scanner and
   static-semantic errors are no longer `EXECUTION_ERROR`.
+
+## Coverage update (2026-10-05) — list/pattern comprehension over collected entities (+6)
+
+GQLITE-T-0370. `transform_set.c`, `transform_with.c`, `cypher_transform.c`,
+`query_dispatch.c`, `transform_func_path.c`, `transform_return.c`. Verified via
+the TCK harness (3788 -> 3794, full pass-set diff: zero regressions; unit
+957/957; functional test 44):
+
+- **SET after WITH/UNWIND over `collect(n)` (List12 [1]/[2]).** Four stacked
+  defects: `WITH nodes, …` dropped the collected list's `list_inner_kind`, so
+  the later UNWIND bound the element as a scalar; SET always appended `.id` to
+  the alias (a post-WITH/UNWIND entity's alias already *is* the id); the CTE
+  prefix was attached to the first statement of the compound pre-exec DML
+  only; and the pre-exec DML ran before the SELECT re-evaluated the WITH CTEs,
+  so values projected before the SET (`collect(a)` snapshots, `WITH a,
+  a.name AS old SET …`) saw the post-write state. A property SET over a
+  single-CTE pipeline now materializes it into `temp._gql_pipe_N` first,
+  rebinds variables to it, and the read's prepare is deferred until the DML
+  has run (`cypher_query_result.deferred_sql`).
+- **`nodes()` / `relationships()` on a path carried as a JSON value**
+  (List12 [4]/[5]): a comprehension element over `collect(p)`, an unwound
+  path, or a projected column. Both encodings (hydrated `{nodes, rels}` and
+  the interleaved elem-id array) yield hydrated entity JSON.
+- **Pattern comprehension bound to a list element** (Pattern2 [7]): each
+  pattern node has an explicit id expression (MATCH alias `.id`, post-WITH
+  alias, or a run-time id-or-object check for a projected element); outer
+  variables are no longer re-registered as pattern nodes. **Undirected
+  `--` inside a pattern comprehension** matches either orientation
+  (Pattern2 [11]).
+- **Aggregate inside a list comprehension's source list** (`WITH [x IN
+  collect(p) | …] AS p, count(n)`, List12 [5]) marks the WITH item as
+  aggregating instead of a GROUP BY key.
+- Known gap (unchanged): `nodes(q)` / `relationships(q)` on a pattern
+  comprehension's own path variable (`[q = (a)-->() | nodes(q)]`) still
+  return raw ids.
