@@ -32,9 +32,15 @@ int transform_timestamp_function(cypher_transform_context *ctx, cypher_function_
     CYPHER_DEBUG("Transforming timestamp() function");
     UNUSED_PARAMETER(func_call);
 
-    /* Return Unix timestamp in milliseconds (Cypher standard) */
-    /* SQLite: (strftime('%s', 'now') * 1000) + (strftime('%f', 'now') * 1000) % 1000 */
-    append_sql(ctx, "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)");
+    /* Return Unix timestamp in milliseconds (Cypher standard).
+     * GQLITE-T-0205: the former `CAST((julianday('now') - 2440587.5) *
+     * 86400000 AS INTEGER)` evaluated to 0 on the GitHub Actions Windows
+     * (MSYS2/MinGW64) runner after a toolchain/SQLite image update. Build the
+     * value from integer seconds plus the millisecond part of '%f' instead:
+     * no floating-point Julian-day arithmetic, and both 'now' references
+     * share one statement-level clock reading in SQLite. */
+    append_sql(ctx, "(CAST(strftime('%%s', 'now') AS INTEGER) * 1000 + "
+                    "CAST(substr(strftime('%%f', 'now'), 4, 3) AS INTEGER))");
 
     return 0;
 }
