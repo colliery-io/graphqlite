@@ -1027,6 +1027,80 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/* GQLITE-T-0338: generate_node_match (transform_match.c) consumes a node's
+ * first inline property by nulling the map pair's key once it has been
+ * folded into the FROM/JOIN anchor. handle_match_merge transforms the same
+ * pattern AST twice — once to execute the MERGE, once for the RETURN
+ * re-match over the combined MATCH+MERGE pattern — so the second pass used
+ * to lose the `{id: ..}` filters and an undirected MERGE re-match doubled
+ * its rows (Merge5 [12]/[13]). Snapshot every inline property key before
+ * the first pass and put the nulled ones back before the second. The keys
+ * are never freed by the consumer, so restoring the pointer is safe. */
+typedef struct {
+    cypher_map_pair **pairs;
+    char **keys;
+    int count;
+    int cap;
+} prop_key_snapshot;
+
+static void snapshot_add(prop_key_snapshot *snap, cypher_map_pair *pair)
+{
+    if (snap->count == snap->cap) {
+        int cap = snap->cap ? snap->cap * 2 : 8;
+        cypher_map_pair **pp = realloc(snap->pairs, (size_t)cap * sizeof(*pp));
+        char **kk = realloc(snap->keys, (size_t)cap * sizeof(*kk));
+        if (!pp || !kk) { free(pp); free(kk); return; }
+        snap->pairs = pp; snap->keys = kk; snap->cap = cap;
+    }
+    snap->pairs[snap->count] = pair;
+    snap->keys[snap->count] = pair->key;
+    snap->count++;
+}
+
+static void snapshot_props(prop_key_snapshot *snap, ast_node *props)
+{
+    if (!props || props->type != AST_NODE_MAP) return;
+    cypher_map *m = (cypher_map*)props;
+    if (!m->pairs) return;
+    for (int i = 0; i < m->pairs->count; i++) {
+        cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[i];
+        if (pair && pair->key) snapshot_add(snap, pair);
+    }
+}
+
+static void snapshot_pattern_prop_keys(ast_list *pattern, prop_key_snapshot *snap)
+{
+    if (!pattern) return;
+    for (int i = 0; i < pattern->count; i++) {
+        ast_node *item = pattern->items[i];
+        if (!item) continue;
+        if (item->type == AST_NODE_NODE_PATTERN) {
+            snapshot_props(snap, ((cypher_node_pattern*)item)->properties);
+        } else if (item->type == AST_NODE_PATH) {
+            cypher_path *path = (cypher_path*)item;
+            if (!path->elements) continue;
+            for (int j = 0; j < path->elements->count; j++) {
+                ast_node *el = path->elements->items[j];
+                if (!el) continue;
+                if (el->type == AST_NODE_NODE_PATTERN)
+                    snapshot_props(snap, ((cypher_node_pattern*)el)->properties);
+                else if (el->type == AST_NODE_REL_PATTERN)
+                    snapshot_props(snap, ((cypher_rel_pattern*)el)->properties);
+            }
+        }
+    }
+}
+
+static void restore_pattern_prop_keys(prop_key_snapshot *snap)
+{
+    for (int i = 0; i < snap->count; i++) {
+        if (snap->pairs[i]->key == NULL) snap->pairs[i]->key = snap->keys[i];
+    }
+    free(snap->pairs);
+    free(snap->keys);
+    snap->pairs = NULL; snap->keys = NULL; snap->count = snap->cap = 0;
+}
+
 static int handle_match_merge(cypher_executor *executor, cypher_query *query,
                               cypher_result *result, clause_flags flags)
 {
@@ -1036,6 +1110,11 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Executing MATCH+MERGE via pattern dispatch");
 
+    /* GQLITE-T-0338: see prop_key_snapshot above. */
+    prop_key_snapshot snap = {0};
+    snapshot_pattern_prop_keys(match ? match->pattern : NULL, &snap);
+    snapshot_pattern_prop_keys(merge ? merge->pattern : NULL, &snap);
+
     /* T-0317: MATCH+WITH+MERGE — bind each pre-WITH MATCH into a
      * var_map, process WITH item renames (`a AS x` etc.), then run
      * MERGE against the renamed map. This covers Merge5 [16]-[19]
@@ -1044,7 +1123,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
     bool has_with = (flags & CLAUSE_WITH) != 0;
     if (has_with) {
         variable_map *vm = create_variable_map();
-        if (!vm) { set_result_error(result, "OOM"); return -1; }
+        if (!vm) { restore_pattern_prop_keys(&snap); set_result_error(result, "OOM"); return -1; }
 
         /* Bind every pre-WITH MATCH clause into vm. */
         for (int i = 0; i < query->clauses->count; i++) {
@@ -1054,6 +1133,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
             if (c->type != AST_NODE_MATCH) continue;
             if (bind_match_clause_into_varmap(executor, (cypher_match*)c, vm, result) < 0) {
                 free_variable_map(vm);
+                restore_pattern_prop_keys(&snap);
                 return -1;
             }
         }
@@ -1061,7 +1141,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
         /* Apply WITH renames: for each `X AS Y` (or bare X), copy vm
          * entries to a fresh scoped map under the target alias. */
         variable_map *scoped = create_variable_map();
-        if (!scoped) { free_variable_map(vm); set_result_error(result, "OOM"); return -1; }
+        if (!scoped) { free_variable_map(vm); restore_pattern_prop_keys(&snap); set_result_error(result, "OOM"); return -1; }
         for (int i = 0; i < query->clauses->count; i++) {
             ast_node *c = query->clauses->items[i];
             if (!c || c->type != AST_NODE_WITH) continue;
@@ -1098,6 +1178,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
             if (bind_match_clause_into_varmap(executor, (cypher_match*)c,
                                               scoped, result) < 0) {
                 free_variable_map(scoped);
+                restore_pattern_prop_keys(&snap);
                 return -1;
             }
         }
@@ -1105,6 +1186,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
         /* Run MERGE against the scoped (WITH-renamed + post-WITH MATCH) var_map. */
         int rc = execute_merge_clause(executor, merge, result, scoped, NULL);
         free_variable_map(scoped);
+        restore_pattern_prop_keys(&snap);   /* T-0338: re-match sees the inline props */
         if (rc < 0) return rc;
 
         result->success = true;
@@ -1140,6 +1222,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
     /* Capture the MATCH+MERGE var_map when a trailing SET needs it. */
     variable_map *mm_vars = NULL;
     int rc = execute_match_merge_query_with_varmap(executor, match, merge, result, set ? &mm_vars : NULL);
+    restore_pattern_prop_keys(&snap);   /* T-0338: re-match sees the inline props */
     if (rc < 0) {
         if (mm_vars) free_variable_map(mm_vars);
         return rc;

@@ -958,6 +958,53 @@ static void test_merge_param_properties(void)
 }
 
 /* Initialize the MERGE executor test suite */
+
+/* GQLITE-T-0338: MATCH+MERGE+RETURN re-matches the combined pattern. The
+ * first transform consumes each node's first inline property into the FROM
+ * anchor by nulling its AST key, so the re-match used to lose the {id:..}
+ * filters and an undirected MERGE returned every (a,b) assignment of the
+ * single edge — 2 rows instead of 1 (Merge5 [12]/[13]). */
+static void test_merge_undirected_rematch_keeps_inline_props(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+
+    if (executor) {
+        execute_and_verify(executor,
+            "CREATE (a:ReMatch {id: 1}), (b:ReMatch {id: 2}) CREATE (a)-[:KNOWS]->(b)",
+            true, "Create one directed edge");
+
+        cypher_result *result = cypher_executor_execute(executor,
+            "MATCH (a:ReMatch {id: 2}), (b:ReMatch {id: 1}) MERGE (a)-[r:KNOWS]-(b) RETURN r");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (!result->success) {
+                printf("MERGE undirected re-match error: %s\n", result->error_message);
+            } else {
+                /* The existing edge matches undirected: no new edge, one row. */
+                CU_ASSERT_EQUAL(result->relationships_created, 0);
+                CU_ASSERT_EQUAL(result->row_count, 1);
+            }
+            cypher_result_free(result);
+        }
+
+        /* Still exactly one edge in the graph. */
+        cypher_result *count = cypher_executor_execute(executor,
+            "MATCH (:ReMatch)-[r:KNOWS]-(:ReMatch) RETURN count(r)");
+        CU_ASSERT_PTR_NOT_NULL(count);
+        if (count) {
+            CU_ASSERT_TRUE(count->success);
+            if (count->success && count->row_count > 0 && count->data[0][0]) {
+                /* undirected MATCH sees the edge from both ends */
+                CU_ASSERT_STRING_EQUAL(count->data[0][0], "2");
+            }
+            cypher_result_free(count);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
 int init_executor_merge_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor MERGE", setup_executor_merge_suite, teardown_executor_merge_suite);
@@ -985,7 +1032,8 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE+WITH+RETURN no SET", test_merge_with_return_no_set) ||
         !CU_add_test(suite, "MERGE+WITH+multi-SET", test_merge_with_multiple_set) ||
         !CU_add_test(suite, "MERGE+WITH+edge variable", test_merge_with_edge_variable_return) ||
-        !CU_add_test(suite, "MERGE with parameter properties", test_merge_param_properties)) {
+        !CU_add_test(suite, "MERGE with parameter properties", test_merge_param_properties) ||
+        !CU_add_test(suite, "MERGE undirected re-match keeps inline props", test_merge_undirected_rematch_keeps_inline_props)) {
         return CU_get_error();
     }
 
