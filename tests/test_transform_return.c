@@ -69,9 +69,9 @@ static cypher_query_result* parse_and_transform(const char *query_str)
 }
 
 /* T-0268: aggregates on properties route their property LEFT JOINs
- * through the builder's deferred-join section; the legacy context
- * buffer `pending_prop_joins` is never written any more, and nothing is
- * left deferred once the owning clause has consumed it. */
+ * through the builder's deferred-join section (the legacy context buffer
+ * `pending_prop_joins` was deleted in T-0269), and nothing is left
+ * deferred once the owning clause has consumed it. */
 static void check_aggregate_prop_joins(const char *query_str, const char *expect_join)
 {
     ast_node *ast = parse_cypher_query(query_str);
@@ -100,11 +100,8 @@ static void check_aggregate_prop_joins(const char *query_str, const char *expect
             printf("\n  %s -> missing %s in: %s\n", query_str, expect_join, ctx->sql_buffer);
         }
     }
-    /* ... the context-level buffer was never written ... */
-    CU_ASSERT_PTR_NULL(ctx->pending_prop_joins);
-    CU_ASSERT_EQUAL(ctx->pending_prop_joins_len, 0);
-    CU_ASSERT_STRING_EQUAL(get_pending_prop_joins(ctx), "");
-    /* ... and the builder's deferred section was fully consumed. */
+    /* ... the context-level buffer no longer exists (T-0269) and the
+     * builder's deferred section was fully consumed. */
     CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(ctx->unified_builder));
 
     cypher_transform_free_context(ctx);

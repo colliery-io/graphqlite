@@ -59,10 +59,6 @@ struct cypher_transform_context {
     int anon_node_counter;          /* Cumulative counter for anonymous nodes */
     int anon_node_base;             /* Base offset for the current pattern's anon nodes */
 
-    /* Pending property JOINs buffer (accumulated during RETURN transform) */
-    char *pending_prop_joins;
-    size_t pending_prop_joins_len;
-    size_t pending_prop_joins_cap;
 
     /* I-0047 P3: bound-rel endpoint constraint for an OPTIONAL MATCH, stashed
      * by the rel handler and flushed onto the last LEFT JOIN's ON after the
@@ -286,11 +282,6 @@ int transform_expression_into(cypher_transform_context *ctx,
 char *transform_expression_str(cypher_transform_context *ctx,
                                ast_node *expr);
 
-/* Pending property joins for aggregation optimization */
-void add_pending_prop_join(cypher_transform_context *ctx, const char *join_sql);
-const char* get_pending_prop_joins(cypher_transform_context *ctx);
-size_t get_pending_prop_joins_len(cypher_transform_context *ctx);
-void reset_pending_prop_joins(cypher_transform_context *ctx);
 
 /* Graph-aware table name helper - uses variable's associated graph */
 void append_var_table(cypher_transform_context *ctx, const char *var_name, const char *table);

@@ -33,21 +33,6 @@
  *
  * Uses a dynamically growing buffer to handle arbitrary query complexity.
  */
-#define PENDING_JOINS_INITIAL_CAP 1024
-
-void reset_pending_prop_joins(cypher_transform_context *ctx)
-{
-    if (ctx->pending_prop_joins) {
-        ctx->pending_prop_joins[0] = '\0';
-    }
-    ctx->pending_prop_joins_len = 0;
-}
-
-const char* get_pending_prop_joins(cypher_transform_context *ctx)
-{
-    return ctx->pending_prop_joins ? ctx->pending_prop_joins : "";
-}
-
 /* Whether an AST node is a boolean-producing expression. Mirrors the
  * predicate at the top-of-RETURN-item wrap site below. Used when
  * emitting list/map values so booleans inside literals get tagged
@@ -102,11 +87,6 @@ static int transform_list_item_value(cypher_transform_context *ctx, ast_node *ex
         return 0;
     }
     return transform_expression(ctx, expr);
-}
-
-size_t get_pending_prop_joins_len(cypher_transform_context *ctx)
-{
-    return ctx->pending_prop_joins_len;
 }
 
 /*
@@ -164,37 +144,6 @@ static char *transform_order_by_term(cypher_transform_context *ctx,
         }
     }
     return transform_expression_to_string(ctx, order_expr);
-}
-
-void add_pending_prop_join(cypher_transform_context *ctx, const char *join_sql)
-{
-    if (!join_sql) return;
-
-    size_t len = strlen(join_sql);
-    size_t needed = ctx->pending_prop_joins_len + len + 1;
-
-    /* Initialize buffer on first use */
-    if (!ctx->pending_prop_joins) {
-        size_t cap = PENDING_JOINS_INITIAL_CAP;
-        while (cap < needed) cap *= 2;
-        ctx->pending_prop_joins = malloc(cap);
-        if (!ctx->pending_prop_joins) return;
-        ctx->pending_prop_joins[0] = '\0';
-        ctx->pending_prop_joins_cap = cap;
-    }
-
-    /* Grow buffer if needed */
-    if (needed > ctx->pending_prop_joins_cap) {
-        size_t new_cap = ctx->pending_prop_joins_cap * 2;
-        while (new_cap < needed) new_cap *= 2;
-        char *new_buf = realloc(ctx->pending_prop_joins, new_cap);
-        if (!new_buf) return;
-        ctx->pending_prop_joins = new_buf;
-        ctx->pending_prop_joins_cap = new_cap;
-    }
-
-    memcpy(ctx->pending_prop_joins + ctx->pending_prop_joins_len, join_sql, len + 1);
-    ctx->pending_prop_joins_len += len;
 }
 
 /*
