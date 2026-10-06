@@ -673,6 +673,110 @@ static void test_sql_builder_pre_cte_to_string_excludes(void)
     sql_builder_free(b);
 }
 
+/* T-0268: deferred JOIN section. */
+static void test_sql_builder_deferred_joins_flush(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(b));
+
+    sql_from(b, "nodes", "n");
+    /* Deferred text arrives while a projection item is being transformed,
+     * i.e. possibly BEFORE later joins are added to the JOIN section. */
+    sql_join_deferred(b, " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = n.id");
+    sql_join_deferred(b, " LEFT JOIN node_props_real AS _prop_1_real ON _prop_1_real.node_id = n.id");
+    sql_join(b, SQL_JOIN_LEFT, "edges", "e", "e.source_id = n.id");
+
+    /* The JOIN section is untouched until flushed. */
+    const char *joins = sql_builder_get_joins(b);
+    CU_ASSERT_PTR_NOT_NULL(joins);
+    if (joins) {
+        CU_ASSERT_STRING_EQUAL(joins, " LEFT JOIN edges AS e ON e.source_id = n.id");
+    }
+    const char *deferred = sql_builder_get_deferred_joins(b);
+    CU_ASSERT_PTR_NOT_NULL(deferred);
+    if (deferred) {
+        /* Call order preserved, fragments concatenated verbatim. */
+        CU_ASSERT_STRING_EQUAL(deferred,
+            " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = n.id"
+            " LEFT JOIN node_props_real AS _prop_1_real ON _prop_1_real.node_id = n.id");
+    }
+
+    /* Flush appends after every existing JOIN and empties the section. */
+    sql_builder_flush_deferred_joins(b);
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(b));
+    joins = sql_builder_get_joins(b);
+    CU_ASSERT_PTR_NOT_NULL(joins);
+    if (joins) {
+        CU_ASSERT_STRING_EQUAL(joins,
+            " LEFT JOIN edges AS e ON e.source_id = n.id"
+            " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = n.id"
+            " LEFT JOIN node_props_real AS _prop_1_real ON _prop_1_real.node_id = n.id");
+    }
+
+    /* Flushing an empty section is a no-op. */
+    sql_builder_flush_deferred_joins(b);
+    CU_ASSERT_STRING_EQUAL(sql_builder_get_joins(b),
+            " LEFT JOIN edges AS e ON e.source_id = n.id"
+            " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = n.id"
+            " LEFT JOIN node_props_real AS _prop_1_real ON _prop_1_real.node_id = n.id");
+
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_deferred_joins_not_in_to_string(void)
+{
+    /* Unflushed deferred JOINs are owned by the clause, not emitted by
+     * sql_builder_to_string; clear drops them. */
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_select(b, "n.id", NULL);
+    sql_from(b, "nodes", "n");
+    sql_join_deferred(b, " LEFT JOIN node_props_int AS _prop_1_int ON 1");
+
+    char *sql = sql_builder_to_string(b);
+    CU_ASSERT_PTR_NOT_NULL(sql);
+    if (sql) {
+        CU_ASSERT_STRING_EQUAL(sql, "SELECT n.id FROM nodes AS n");
+        free(sql);
+    }
+    CU_ASSERT_PTR_NOT_NULL(sql_builder_get_deferred_joins(b));
+
+    sql_builder_clear_deferred_joins(b);
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(b));
+    CU_ASSERT_PTR_NULL(sql_builder_get_joins(b));
+
+    sql_builder_free(b);
+}
+
+static void test_sql_builder_deferred_joins_reset(void)
+{
+    sql_builder *b = sql_builder_create();
+    CU_ASSERT_PTR_NOT_NULL(b);
+    if (!b) return;
+
+    sql_join_deferred(b, " LEFT JOIN x ON 1");
+    CU_ASSERT_PTR_NOT_NULL(sql_builder_get_deferred_joins(b));
+
+    sql_builder_reset(b);
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(b));
+    CU_ASSERT(dbuf_is_empty(&b->deferred_joins));
+
+    /* NULL-safe. */
+    sql_join_deferred(NULL, " x");
+    sql_join_deferred(b, NULL);
+    sql_builder_clear_deferred_joins(NULL);
+    sql_builder_flush_deferred_joins(NULL);
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(NULL));
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(b));
+
+    sql_builder_free(b);
+}
+
 /* I-0042 E1: idempotent sql_builder_to_string. */
 static void test_sql_builder_to_string_idempotent(void)
 {
@@ -1229,6 +1333,9 @@ int init_sql_builder_suite(void)
     if (!CU_add_test(suite, "sql: pre_cte recursive flag", test_sql_builder_pre_cte_recursive)) return -1;
     if (!CU_add_test(suite, "sql: pre_cte reset", test_sql_builder_pre_cte_reset)) return -1;
     if (!CU_add_test(suite, "sql: pre_cte not in to_string", test_sql_builder_pre_cte_to_string_excludes)) return -1;
+    if (!CU_add_test(suite, "sql: deferred joins flush", test_sql_builder_deferred_joins_flush)) return -1;
+    if (!CU_add_test(suite, "sql: deferred joins not in to_string", test_sql_builder_deferred_joins_not_in_to_string)) return -1;
+    if (!CU_add_test(suite, "sql: deferred joins reset", test_sql_builder_deferred_joins_reset)) return -1;
     if (!CU_add_test(suite, "sql: to_string idempotent", test_sql_builder_to_string_idempotent)) return -1;
     if (!CU_add_test(suite, "sql: reset clears finalized", test_sql_builder_reset_clears_finalized)) return -1;
     if (!CU_add_test(suite, "sql: Reset", test_sql_builder_reset)) return -1;

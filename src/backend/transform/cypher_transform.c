@@ -83,10 +83,6 @@ cypher_transform_context* cypher_transform_create_context_ex(sqlite3 *db, bool r
     ctx->anon_node_counter = 0;
     ctx->anon_node_base = 0;
 
-    /* Initialize pending property JOINs buffer */
-    ctx->pending_prop_joins = NULL;
-    ctx->pending_prop_joins_len = 0;
-    ctx->pending_prop_joins_cap = 0;
 
     /* Initialize unified SQL builder */
     ctx->unified_builder = sql_builder_create();
@@ -191,7 +187,6 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
     /* Free buffers */
     free(ctx->sql_buffer);
     free(ctx->error_message);
-    free(ctx->pending_prop_joins);
     free(ctx->pending_optional_on);
 
     /* T-0320: free defer-pair tracking. */

@@ -647,7 +647,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
      * the SQLite type classes (numeric / text-not-JSON / boolean)
      * and returns null on mismatch. Each operand is transformed
      * exactly once, so we don't trip over transform_expression's
-     * side effects (pending_prop_joins / alias counter / etc.). */
+     * side effects (deferred joins / alias counter / etc.). */
     if (is_order_cmp) {
         const char *op_sql = NULL;
         switch (binary_op->op_type) {

@@ -341,8 +341,9 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         return -1;
     }
 
-    /* Reset pending property JOINs for this WITH clause */
-    reset_pending_prop_joins(ctx);
+    /* Discard any deferred property JOINs left over from an earlier
+     * clause; this WITH starts with an empty deferred section. */
+    sql_builder_clear_deferred_joins(ctx->unified_builder);
 
     /* GQLITE-T-0220: translate `with->where` in the PRE-WITH variable scope so
      * it can reference variables bound by prior MATCH/OPTIONAL MATCH that are
@@ -742,13 +743,15 @@ with_star_columns_done:
         dbuf_append(&cte_body, joins_clause);
     }
 
-    /* Add pending property JOINs from aggregate functions */
-    size_t pending_len = get_pending_prop_joins_len(ctx);
-    if (pending_len > 0) {
-        const char *pending_joins = get_pending_prop_joins(ctx);
-        dbuf_append(&cte_body, pending_joins);
-        CYPHER_DEBUG("WITH: Added property JOINs: %s", pending_joins);
-        reset_pending_prop_joins(ctx);
+    /* Append the property JOINs deferred by aggregate functions (T-0268).
+     * joins_clause was borrowed before the items were transformed, so the
+     * deferred text goes after it here, exactly where sql_builder would
+     * put it. */
+    const char *deferred_joins = sql_builder_get_deferred_joins(ctx->unified_builder);
+    if (deferred_joins) {
+        dbuf_append(&cte_body, deferred_joins);
+        CYPHER_DEBUG("WITH: Added property JOINs: %s", deferred_joins);
+        sql_builder_clear_deferred_joins(ctx->unified_builder);
     }
 
     if (where_clause || with_where_pre) {

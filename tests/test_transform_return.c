@@ -68,6 +68,65 @@ static cypher_query_result* parse_and_transform(const char *query_str)
     return result;
 }
 
+/* T-0268: aggregates on properties route their property LEFT JOINs
+ * through the builder's deferred-join section (the legacy context buffer
+ * `pending_prop_joins` was deleted in T-0269), and nothing is left
+ * deferred once the owning clause has consumed it. */
+static void check_aggregate_prop_joins(const char *query_str, const char *expect_join)
+{
+    ast_node *ast = parse_cypher_query(query_str);
+    CU_ASSERT_PTR_NOT_NULL(ast);
+    if (!ast) return;
+
+    cypher_transform_context *ctx = cypher_transform_create_context(test_db);
+    CU_ASSERT_PTR_NOT_NULL(ctx);
+    if (!ctx) { cypher_parser_free_result(ast); return; }
+
+    cypher_query_result *result = cypher_transform_query(ctx, (cypher_query*)ast);
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_FALSE(result->has_error);
+        if (result->has_error && result->error_message) {
+            printf("\n  %s -> %s\n", query_str, result->error_message);
+        }
+        cypher_free_result(result);
+    }
+
+    /* The property JOINs reached the generated SQL ... */
+    CU_ASSERT_PTR_NOT_NULL(ctx->sql_buffer);
+    if (ctx->sql_buffer) {
+        CU_ASSERT(strstr(ctx->sql_buffer, expect_join) != NULL);
+        if (strstr(ctx->sql_buffer, expect_join) == NULL) {
+            printf("\n  %s -> missing %s in: %s\n", query_str, expect_join, ctx->sql_buffer);
+        }
+    }
+    /* ... the context-level buffer no longer exists (T-0269) and the
+     * builder's deferred section was fully consumed. */
+    CU_ASSERT_PTR_NULL(sql_builder_get_deferred_joins(ctx->unified_builder));
+
+    cypher_transform_free_context(ctx);
+    cypher_parser_free_result(ast);
+}
+
+static void test_return_aggregate_prop_joins_deferred(void)
+{
+    /* RETURN: flushed onto the JOIN section after the MATCH joins. */
+    check_aggregate_prop_joins(
+        "MATCH (n:Person) RETURN avg(n.age), max(n.age)",
+        " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = ");
+    check_aggregate_prop_joins(
+        "MATCH (n:Person) RETURN avg(n.age), max(n.age)",
+        " LEFT JOIN node_props_text AS _prop_2_text ON _prop_2_text.node_id = ");
+    /* WITH: appended to the CTE body after the borrowed joins_clause. */
+    check_aggregate_prop_joins(
+        "MATCH (n:Person) WITH n.name AS name, sum(n.age) AS total RETURN name, total",
+        " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = ");
+    /* Edge aggregate (T-0314 tables) through the same path. */
+    check_aggregate_prop_joins(
+        "MATCH (a)-[r:KNOWS]->(b) RETURN min(r.since)",
+        " LEFT JOIN edge_props_int AS _prop_1_int ON _prop_1_int.edge_id = ");
+}
+
 /* Test simple RETURN */
 static void test_return_simple(void)
 {
@@ -876,6 +935,7 @@ int register_return_tests(void)
     if (!CU_add_test(suite, "RETURN node object", test_return_node_object)) return -1;
     if (!CU_add_test(suite, "RETURN edge object", test_return_edge_object)) return -1;
     if (!CU_add_test(suite, "RETURN GROUP BY", test_return_group_by)) return -1;
+    if (!CU_add_test(suite, "RETURN aggregate property JOINs deferred (T-0268)", test_return_aggregate_prop_joins_deferred)) return -1;
 
     return 0;
 }
