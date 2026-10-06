@@ -53,6 +53,11 @@ struct cypher_transform_context {
     int global_alias_counter;       /* Global counter for all unnamed entities (like AGE) */
     int with_cte_counter;           /* Counter for WITH CTE names (_with_N) */
     int unwind_cte_counter;         /* Counter for UNWIND CTE names (_unwind_N) */
+    /* T-0370: number of pipeline snapshots (`_gql_pipe_N` temp tables)
+     * taken by a SET that follows a WITH/UNWIND CTE, so the read half of
+     * the query sees pre-write values. Non-zero defers the final prepare
+     * to the executor (the temp table only exists after pre_exec_dml). */
+    int pipe_snapshot_count;
     int reduce_counter;             /* Counter for REDUCE CTE names (_reduce_N) */
     int prop_join_counter;          /* Counter for property JOIN aliases */
     int quantifier_counter;         /* Counter for list-predicate json_each aliases (_je_N) */
@@ -150,6 +155,11 @@ struct cypher_query_result {
      * the query has a trailing read. Executor runs sqlite3_exec on
      * this then steps stmt. cypher_free_result frees this. */
     char *pre_exec_dml;
+
+    /* T-0370: final SQL text whose prepare is deferred until pre_exec_dml
+     * has run (it reads a `_gql_pipe_N` temp table created by that DML).
+     * Owned string; NULL when `stmt` was prepared at transform time. */
+    char *deferred_sql;
 
     /* Column information */
     char **column_names;

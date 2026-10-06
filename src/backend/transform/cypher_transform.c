@@ -934,16 +934,47 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
     if (mixed_dml && raw_dml) {
         size_t prefix_len = ctx->cte_prefix_len;
         if (prefix_len > 0 && prefix_len <= ctx->sql_size) {
-            size_t dml_len = strlen(raw_dml);
-            char *prefixed = malloc(prefix_len + dml_len + 1);
-            if (prefixed) {
-                memcpy(prefixed, ctx->sql_buffer, prefix_len);
-                memcpy(prefixed + prefix_len, raw_dml, dml_len + 1);
-                free(raw_dml);
-                result->pre_exec_dml = prefixed;
-            } else {
-                result->pre_exec_dml = raw_dml;
+            /* T-0370: the DML is a compound of several statements
+             * (`INSERT OR REPLACE ...; DELETE ...; DELETE ...`). A WITH
+             * prefix only scopes the statement it is attached to, so a
+             * SET target bound through a WITH/UNWIND CTE (`_with_0`,
+             * `_unwind_0`) failed in the follow-up DELETEs with "no such
+             * table". Prefix every top-level statement; split on ';'
+             * outside single-quoted literals. */
+            dynamic_buffer out;
+            dbuf_init(&out);
+            const char *stmt = raw_dml;
+            bool in_quote = false;
+            bool first = true;
+            for (const char *p = raw_dml; ; p++) {
+                if (*p == '\'') { in_quote = !in_quote; continue; }
+                if (*p != '\0' && (*p != ';' || in_quote)) continue;
+                const char *s = stmt;
+                while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+                if (s < p) {
+                    if (!first) dbuf_append(&out, "; ");
+                    first = false;
+                    /* T-0370 pipeline snapshot statements: a DROP takes
+                     * no CTEs; CREATE TEMP TABLE x AS <select> takes
+                     * them after the AS (a WITH may not precede DDL). */
+                    const char *as_kw = NULL;
+                    if (strncmp(s, "CREATE TEMP TABLE ", 18) == 0) as_kw = strstr(s, " AS ");
+                    if (strncmp(s, "DROP ", 5) == 0) {
+                        dbuf_appendf(&out, "%.*s", (int)(p - s), s);
+                    } else if (as_kw && as_kw < p) {
+                        dbuf_appendf(&out, "%.*s", (int)(as_kw + 4 - s), s);
+                        dbuf_appendf(&out, "%.*s", (int)prefix_len, ctx->sql_buffer);
+                        dbuf_appendf(&out, "%.*s", (int)(p - (as_kw + 4)), as_kw + 4);
+                    } else {
+                        dbuf_appendf(&out, "%.*s", (int)prefix_len, ctx->sql_buffer);
+                        dbuf_appendf(&out, "%.*s", (int)(p - s), s);
+                    }
+                }
+                if (*p == '\0') break;
+                stmt = p + 1;
             }
+            free(raw_dml);
+            result->pre_exec_dml = dbuf_finish(&out);
         } else {
             result->pre_exec_dml = raw_dml;
         }
@@ -951,6 +982,14 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
 
     /* Prepare the SQL statement */
     CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
+
+    /* T-0370: the read half references a `_gql_pipe_N` temp table that
+     * only exists once pre_exec_dml has run — hand the text to the
+     * executor to prepare after the DML. */
+    if (result->pre_exec_dml && ctx->pipe_snapshot_count > 0) {
+        result->deferred_sql = strdup(ctx->sql_buffer);
+        return result;
+    }
 
     int rc = sqlite3_prepare_v2(ctx->db, ctx->sql_buffer, -1, &result->stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -1484,6 +1523,7 @@ void cypher_free_result(cypher_query_result *result)
     }
 
     free(result->pre_exec_dml);
+    free(result->deferred_sql);
 
     for (int i = 0; i < result->column_count; i++) {
         free(result->column_names[i]);
