@@ -4,6 +4,22 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **MERGE in row-wise write pipelines** (GQLITE-T-0371, +6 TCK — the Merge
+  feature files are now fully green): `MATCH … DELETE … MERGE … RETURN` runs
+  the deletes for every row before any MERGE (so MERGE cannot match deleted
+  entities) and returns one row per input row; scalar `WITH` projections
+  (`WITH foo.x AS x`, `split(str, ',') AS roles`) feed MERGE property maps,
+  including expressions and list values; `WITH a AS x` rename chains across
+  several MERGEs resolve; `CREATE … WITH … UNWIND … WITH … MERGE … RETURN
+  count(*)` works. `UNWIND … UNWIND … CREATE` now creates the cartesian
+  product (it created one row per first-list item with the second variable
+  null).
+- `tests/tck/baseline.json` regenerated (3822 / 3880).
+
 ## [0.9.1] — 2026-10-06
 
 A correctness release: the openCypher TCK pass count moves from **3788** to
