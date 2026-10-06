@@ -277,14 +277,20 @@ static void test_delete_multiple_items(void)
         CU_ASSERT_PTR_NOT_NULL(delete_result);
         
         if (delete_result) {
+            /* GQLITE-T-0254: the statement is verified as a whole, so the
+             * relationship r being deleted in the same clause makes `a` and
+             * `b` deletable regardless of item order. */
             if (!delete_result->success) {
                 printf("DELETE multiple items error: %s\n", delete_result->error_message);
-                /* DELETE may not be fully implemented yet */
-            } else {
-                printf("DELETE multiple items executed successfully\n");
+            }
+            CU_ASSERT_TRUE(delete_result->success);
+            if (delete_result->success) {
+                CU_ASSERT_EQUAL(delete_result->nodes_deleted, 2);
+                CU_ASSERT_EQUAL(delete_result->relationships_deleted, 1);
             }
             cypher_result_free(delete_result);
         }
+        CU_ASSERT_EQUAL(count_nodes_with_label(executor, "DeleteMultiTest"), 0);
         
         cypher_executor_free(executor);
     }
@@ -435,14 +441,19 @@ static void test_delete_anonymous_entities(void)
         CU_ASSERT_PTR_NOT_NULL(delete_result);
         
         if (delete_result) {
-            if (!delete_result->success) {
-                printf("DELETE with anonymous entities error: %s\n", delete_result->error_message);
-                /* This may not be fully implemented yet */
-            } else {
-                printf("DELETE with anonymous entities executed successfully\n");
+            /* GQLITE-T-0254: `a` still has the REL relationship and the
+             * statement has no DETACH, so it must fail with
+             * ConstraintVerificationFailed: DeleteConnectedNode (this test
+             * used to accept either outcome). */
+            CU_ASSERT_FALSE(delete_result->success);
+            CU_ASSERT_PTR_NOT_NULL(delete_result->error_message);
+            if (delete_result->error_message) {
+                CU_ASSERT_PTR_NOT_NULL(strstr(delete_result->error_message,
+                    "ConstraintVerificationFailed: DeleteConnectedNode"));
             }
             cypher_result_free(delete_result);
         }
+        CU_ASSERT_EQUAL(count_nodes_with_label(executor, "DeleteAnonTest"), 2);
         
         cypher_executor_free(executor);
     }
@@ -537,6 +548,84 @@ static void test_delete_then_access_deleted_entity(void)
     cypher_executor_free(executor);
 }
 
+/* GQLITE-T-0254: DELETE without DETACH on a node with incident
+ * relationships raises ConstraintVerificationFailed: DeleteConnectedNode and
+ * leaves the graph unchanged (no partial application across rows); DETACH
+ * DELETE and deleting the relationship in the same clause keep working. */
+static void test_delete_connected_node_constraint(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (!executor) return;
+
+    /* Two free nodes and one connected node, all matched by one DELETE. The
+     * free ones must NOT be deleted when the connected one fails. */
+    cypher_result *setup = cypher_executor_execute(executor,
+        "CREATE (:Free254 {k: 1}), (:Free254 {k: 2}), (x:Conn254)-[:R254]->(:Other254), (x)-[:R254]->(:Other254)");
+    CU_ASSERT_PTR_NOT_NULL(setup);
+    if (setup) { CU_ASSERT_TRUE(setup->success); cypher_result_free(setup); }
+
+    cypher_result *res = cypher_executor_execute(executor,
+        "MATCH (n) WHERE n:Free254 OR n:Conn254 DELETE n");
+    CU_ASSERT_PTR_NOT_NULL(res);
+    if (res) {
+        CU_ASSERT_FALSE(res->success);
+        CU_ASSERT_PTR_NOT_NULL(res->error_message);
+        if (res->error_message) {
+            if (!strstr(res->error_message, "ConstraintVerificationFailed: DeleteConnectedNode")) {
+                printf("\nT-0254 unexpected error: %s\n", res->error_message);
+            }
+            CU_ASSERT_PTR_NOT_NULL(strstr(res->error_message,
+                "ConstraintVerificationFailed: DeleteConnectedNode"));
+        }
+        cypher_result_free(res);
+    }
+    /* Graph unchanged: both free nodes, the connected node and its edges remain. */
+    CU_ASSERT_EQUAL(count_nodes_with_label(executor, "Free254"), 2);
+    CU_ASSERT_EQUAL(count_nodes_with_label(executor, "Conn254"), 1);
+    CU_ASSERT_EQUAL(count_relationships_with_type(executor, "R254"), 2);
+
+    /* Deleting the node together with its relationships in one clause is
+     * fine, whatever the item order. */
+    cypher_result *with_rels = cypher_executor_execute(executor,
+        "MATCH (x:Conn254)-[r:R254]->() DELETE x, r");
+    CU_ASSERT_PTR_NOT_NULL(with_rels);
+    if (with_rels) {
+        if (!with_rels->success) {
+            printf("\nT-0254 DELETE x, r error: %s\n", with_rels->error_message);
+        }
+        CU_ASSERT_TRUE(with_rels->success);
+        if (with_rels->success) {
+            CU_ASSERT_EQUAL(with_rels->nodes_deleted, 1);
+            CU_ASSERT_EQUAL(with_rels->relationships_deleted, 2);
+        }
+        cypher_result_free(with_rels);
+    }
+    CU_ASSERT_EQUAL(count_nodes_with_label(executor, "Conn254"), 0);
+    CU_ASSERT_EQUAL(count_relationships_with_type(executor, "R254"), 0);
+
+    /* DETACH DELETE still cascades. */
+    cypher_result *setup2 = cypher_executor_execute(executor,
+        "CREATE (y:Conn254b)-[:R254b]->(:Other254), (y)-[:R254b]->(:Other254)");
+    CU_ASSERT_PTR_NOT_NULL(setup2);
+    if (setup2) { CU_ASSERT_TRUE(setup2->success); cypher_result_free(setup2); }
+    cypher_result *detach = cypher_executor_execute(executor,
+        "MATCH (y:Conn254b) DETACH DELETE y");
+    CU_ASSERT_PTR_NOT_NULL(detach);
+    if (detach) {
+        CU_ASSERT_TRUE(detach->success);
+        if (detach->success) {
+            CU_ASSERT_EQUAL(detach->nodes_deleted, 1);
+            CU_ASSERT_EQUAL(detach->relationships_deleted, 2);
+        }
+        cypher_result_free(detach);
+    }
+    CU_ASSERT_EQUAL(count_nodes_with_label(executor, "Conn254b"), 0);
+    CU_ASSERT_EQUAL(count_relationships_with_type(executor, "R254b"), 0);
+
+    cypher_executor_free(executor);
+}
+
 /* Initialize the DELETE executor test suite */
 int init_executor_delete_suite(void)
 {
@@ -555,7 +644,8 @@ int init_executor_delete_suite(void)
         !CU_add_test(suite, "DETACH DELETE", test_detach_delete) ||
         !CU_add_test(suite, "DELETE error conditions", test_delete_error_conditions) ||
         !CU_add_test(suite, "DELETE anonymous entities", test_delete_anonymous_entities) ||
-        !CU_add_test(suite, "T-0253: access of deleted entity raises EntityNotFound", test_delete_then_access_deleted_entity)) {
+        !CU_add_test(suite, "T-0253: access of deleted entity raises EntityNotFound", test_delete_then_access_deleted_entity) ||
+        !CU_add_test(suite, "T-0254: DELETE of a connected node raises ConstraintVerificationFailed", test_delete_connected_node_constraint)) {
         return CU_get_error();
     }
     

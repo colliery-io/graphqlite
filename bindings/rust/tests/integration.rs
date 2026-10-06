@@ -4073,6 +4073,54 @@ fn test_t0181_startnode_endnode_return_node_objects() {
 }
 
 #[test]
+fn test_t0254_delete_connected_node_raises_and_leaves_graph_unchanged() {
+    // GQLITE-T-0254: DELETE without DETACH on a node with relationships fails
+    // with ConstraintVerificationFailed: DeleteConnectedNode and applies nothing.
+    let conn = test_connection();
+    conn.cypher("CREATE (:Free254Rs {k: 1}), (x:Conn254Rs)-[:R254Rs]->(:Other254Rs), (x)-[:R254Rs]->(:Other254Rs)")
+        .unwrap();
+    let err = conn
+        .cypher("MATCH (n) WHERE n:Free254Rs OR n:Conn254Rs DELETE n")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("ConstraintVerificationFailed: DeleteConnectedNode"),
+        "unexpected error: {err}"
+    );
+    let free = conn.cypher("MATCH (n:Free254Rs) RETURN count(n) AS c").unwrap();
+    assert_eq!(free[0].get::<i64>("c").unwrap(), 1);
+    let rels = conn.cypher("MATCH ()-[r:R254Rs]->() RETURN count(r) AS c").unwrap();
+    assert_eq!(rels[0].get::<i64>("c").unwrap(), 2);
+    // Node listed before its relationships in the same clause is fine.
+    let r = conn.cypher("MATCH (x:Conn254Rs)-[r:R254Rs]->() DELETE x, r").unwrap();
+    assert_eq!(r[0].get::<i64>("nodes_deleted").unwrap(), 1);
+    assert_eq!(r[0].get::<i64>("relationships_deleted").unwrap(), 2);
+}
+
+#[test]
+fn test_t0253_access_of_deleted_entity_raises() {
+    // GQLITE-T-0253: reading data of an entity deleted in the same statement
+    // fails with EntityNotFound: DeletedEntityAccess and deletes nothing.
+    let conn = test_connection();
+    conn.cypher("CREATE (:Del253Rs {num: 0})-[:T253Rs {num: 7}]->(:Del253Rs {num: 1})")
+        .unwrap();
+    for q in [
+        "MATCH (n:Del253Rs) DETACH DELETE n RETURN n.num",
+        "MATCH (n:Del253Rs) DETACH DELETE n RETURN labels(n)",
+        "MATCH ()-[r:T253Rs]->() DELETE r RETURN r.num",
+    ] {
+        let err = conn.cypher(q).unwrap_err();
+        assert!(
+            err.to_string().contains("EntityNotFound: DeletedEntityAccess"),
+            "{q}: unexpected error: {err}"
+        );
+    }
+    let nodes = conn.cypher("MATCH (n:Del253Rs) RETURN count(n) AS c").unwrap();
+    assert_eq!(nodes[0].get::<i64>("c").unwrap(), 2);
+    let cnt = conn.cypher("MATCH (n:Del253Rs) DETACH DELETE n RETURN count(*) AS c").unwrap();
+    assert_eq!(cnt[0].get::<i64>("c").unwrap(), 2);
+}
+
+#[test]
 fn test_issue_51_call_merge_scoping() {
     let conn = test_connection();
     conn.cypher("CREATE (c:Co51Rs {id: 'acme'})").unwrap();

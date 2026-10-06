@@ -10,6 +10,7 @@
 #include "executor/executor_internal.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
+#include "runtime/gql_error.h"
 
 /* Perf review F5: entity JSON is passed through as text, so DELETE reads the
  * id and kind straight from the object. json_object() emits the id first and
@@ -112,6 +113,113 @@ int delete_targets_bound(cypher_executor *executor, cypher_match *match,
     return bound;
 }
 
+/* GQLITE-T-0254: a DELETE statement is applied as a whole. The targets of
+ * every item/row are collected (deduplicated) first; without DETACH every
+ * node target is checked for incident relationships that the same statement
+ * does not also delete; only then are relationships deleted, then nodes. A
+ * ConstraintVerificationFailed therefore leaves the graph unchanged, and
+ * `DELETE a, r` works regardless of the item order. */
+typedef struct delete_target_set {
+    int64_t *node_ids; int node_count; int node_cap;
+    int64_t *edge_ids; int edge_count; int edge_cap;
+} delete_target_set;
+
+static bool id_in_list(const int64_t *ids, int count, int64_t id)
+{
+    for (int i = 0; i < count; i++) if (ids[i] == id) return true;
+    return false;
+}
+
+static int target_set_add(delete_target_set *set, int64_t id, bool is_edge)
+{
+    int64_t **ids = is_edge ? &set->edge_ids : &set->node_ids;
+    int *count = is_edge ? &set->edge_count : &set->node_count;
+    int *cap = is_edge ? &set->edge_cap : &set->node_cap;
+    if (id_in_list(*ids, *count, id)) return 0;
+    if (*count == *cap) {
+        int ncap = *cap ? *cap * 2 : 16;
+        int64_t *n = realloc(*ids, (size_t)ncap * sizeof(int64_t));
+        if (!n) return -1;
+        *ids = n; *cap = ncap;
+    }
+    (*ids)[(*count)++] = id;
+    return 0;
+}
+
+static void target_set_free(delete_target_set *set)
+{
+    free(set->node_ids); free(set->edge_ids);
+    memset(set, 0, sizeof(*set));
+}
+
+/* First relationship incident to node_id that is not itself a delete target,
+ * or -1 when there is none (or on a SQL error, which the delete step will
+ * surface). */
+static int64_t find_connected_edge_not_deleted(cypher_executor *executor, int64_t node_id,
+                                               const delete_target_set *set)
+{
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT id FROM edges WHERE source_id = %lld OR target_id = %lld",
+             (long long)node_id, (long long)node_id);
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+    int64_t found = -1;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t eid = sqlite3_column_int64(stmt, 0);
+        if (!id_in_list(set->edge_ids, set->edge_count, eid)) { found = eid; break; }
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+static void set_delete_connected_node_error(cypher_result *result, int64_t node_id)
+{
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "ConstraintVerificationFailed: DeleteConnectedNode: Cannot delete node %lld "
+             "because it still has relationships. To delete this node, you must first "
+             "delete its relationships (or use DETACH DELETE).", (long long)node_id);
+    set_result_error_ex(result, msg, GQL_ERR_EXECUTION, 0, 0);
+}
+
+/* Verify (no DETACH) and apply the collected targets: relationships first,
+ * then nodes. Returns 0 on success; -1 with result error set otherwise. */
+static int apply_delete_targets(cypher_executor *executor, const delete_target_set *set,
+                                bool detach, cypher_result *result,
+                                int *deleted_nodes, int *deleted_edges)
+{
+    if (!detach) {
+        for (int i = 0; i < set->node_count; i++) {
+            int64_t blocking = find_connected_edge_not_deleted(executor, set->node_ids[i], set);
+            if (blocking >= 0) {
+                CYPHER_DEBUG("Cannot delete node %lld: relationship %lld is not deleted",
+                             (long long)set->node_ids[i], (long long)blocking);
+                set_delete_connected_node_error(result, set->node_ids[i]);
+                return -1;
+            }
+        }
+    }
+
+    for (int i = 0; i < set->edge_count; i++) {
+        CYPHER_DEBUG("Deleting edge with ID %lld", (long long)set->edge_ids[i]);
+        if (delete_edge_by_id(executor, set->edge_ids[i]) == 0) (*deleted_edges)++;
+    }
+    for (int i = 0; i < set->node_count; i++) {
+        CYPHER_DEBUG("Deleting node with ID %lld", (long long)set->node_ids[i]);
+        int detached = 0;
+        if (delete_node_by_id(executor, set->node_ids[i], detach, &detached) == 0) {
+            (*deleted_nodes)++;
+            *deleted_edges += detached;
+        } else {
+            /* Safety net: the pre-check above should have caught this. */
+            set_delete_connected_node_error(result, set->node_ids[i]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Execute MATCH+DELETE query combination */
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result)
 {
@@ -142,82 +250,60 @@ int execute_match_delete_query(cypher_executor *executor, cypher_match *match, c
         return -1;
     }
 
-    /* Process each entity found by the MATCH and delete it */
-    int deleted_nodes = 0, deleted_edges = 0;
-
-    /* Following AGE's process_delete_list pattern */
+    /* Collect every target first (deduplicated across items and rows), then
+     * verify and apply (GQLITE-T-0254). */
+    delete_target_set set = {0};
     for (int i = 0; i < delete_clause->items->count; i++) {
         cypher_delete_item *item = (cypher_delete_item*)delete_clause->items->items[i];
         if (!item || !item->variable) continue;
 
-        /* Check if this variable is an edge or node */
-        /* bool is_edge = is_edge_variable(ctx, item->variable); -- not needed, we check entity type */
-
-        /* For each variable to delete, we need to find its value in the MATCH results */
-        /* AGE uses entity_position but we'll find by variable name */
         for (int row = 0; row < match_result->row_count; row++) {
             for (int col = 0; col < match_result->column_count; col++) {
-                if (match_result->column_names[col] &&
-                    strcmp(match_result->column_names[col], item->variable) == 0) {
+                if (!match_result->column_names[col] ||
+                    strcmp(match_result->column_names[col], item->variable) != 0) continue;
 
-                    /* Found the variable's column - get the entity. The
-                     * agtype cell is set only for legacy id-only values;
-                     * entity JSON is passed through as text (perf review F5),
-                     * so derive the id/kind from the JSON in that case. */
-                    int64_t entity_id = -1;
-                    bool entity_is_edge = false;
-                    bool entity_known = false;
-                    if (match_result->agtype_data && match_result->agtype_data[row][col]) {
-                        agtype_value *entity = match_result->agtype_data[row][col];
-                        if (entity->type == AGTV_VERTEX) {
-                            entity_id = entity->val.entity.id;
-                            entity_known = true;
-                        } else if (entity->type == AGTV_EDGE) {
-                            entity_id = entity->val.edge.id;
-                            entity_is_edge = true;
-                            entity_known = true;
-                        }
-                    } else if (match_result->data && match_result->data[row] &&
-                               match_result->data[row][col]) {
-                        entity_known = entity_ref_from_json(match_result->data[row][col],
-                                                            &entity_id, &entity_is_edge);
+                /* Found the variable's column - get the entity. The agtype cell
+                 * is set only for legacy id-only values; entity JSON is passed
+                 * through as text (perf review F5), so derive the id/kind from
+                 * the JSON in that case. A NULL cell (OPTIONAL MATCH miss) is
+                 * skipped. */
+                int64_t entity_id = -1;
+                bool entity_is_edge = false;
+                bool entity_known = false;
+                if (match_result->agtype_data && match_result->agtype_data[row][col]) {
+                    agtype_value *entity = match_result->agtype_data[row][col];
+                    if (entity->type == AGTV_VERTEX) {
+                        entity_id = entity->val.entity.id;
+                        entity_known = true;
+                    } else if (entity->type == AGTV_EDGE) {
+                        entity_id = entity->val.edge.id;
+                        entity_is_edge = true;
+                        entity_known = true;
                     }
-                    if (entity_known) {
-                        if (!entity_is_edge) {
-
-                            CYPHER_DEBUG("Deleting node '%s' with ID %lld", item->variable, entity_id);
-
-                            int detached = 0;
-                            int delete_result = delete_node_by_id(executor, entity_id, delete_clause->detach, &detached);
-                            if (delete_result == 0) {
-                                deleted_nodes++;
-                                deleted_edges += detached;
-                            } else {
-                                /* Failed to delete node - likely due to constraint violation */
-                                set_result_error(result, "Cannot delete node - it still has relationships");
-                                cypher_result_free(match_result);
-
-                                free_delete_synthetic_return(synthetic_return);
-
-                                return -1;
-                            }
-                        } else {
-
-                            CYPHER_DEBUG("Deleting edge '%s' with ID %lld", item->variable, entity_id);
-
-                            if (delete_edge_by_id(executor, entity_id) == 0) {
-                                deleted_edges++;
-                            }
-                        }
-                    }
+                } else if (match_result->data && match_result->data[row] &&
+                           match_result->data[row][col]) {
+                    entity_known = entity_ref_from_json(match_result->data[row][col],
+                                                        &entity_id, &entity_is_edge);
+                }
+                if (entity_known && target_set_add(&set, entity_id, entity_is_edge) < 0) {
+                    set_result_error(result, "Failed to allocate memory for DELETE processing");
+                    target_set_free(&set);
+                    cypher_result_free(match_result);
+                    free_delete_synthetic_return(synthetic_return);
+                    return -1;
                 }
             }
         }
     }
 
     cypher_result_free(match_result);
-
     free_delete_synthetic_return(synthetic_return);
+
+    int deleted_nodes = 0, deleted_edges = 0;
+    int rc = apply_delete_targets(executor, &set, delete_clause->detach, result,
+                                  &deleted_nodes, &deleted_edges);
+    target_set_free(&set);
+    if (rc < 0) return -1;
 
     /* Set result with deletion counts */
     result->success = true;
@@ -242,34 +328,34 @@ int execute_delete_operations(cypher_executor *executor,
     if (!executor || !del || !var_map || !result) return -1;
     if (!del->items) return 0;
 
-    int deleted_nodes = 0, deleted_edges = 0;
+    /* Same verify-then-apply discipline as execute_match_delete_query
+     * (GQLITE-T-0254): collect this row's targets, then relationships first,
+     * then nodes. */
+    delete_target_set set = {0};
     for (int i = 0; i < del->items->count; i++) {
         cypher_delete_item *item = (cypher_delete_item *)del->items->items[i];
         if (!item || !item->variable) continue;
 
-        /* Try edge first — edges are deleted unconditionally; nodes
-         * honor the DETACH flag and may fail on connected nodes. */
+        int rc = 0;
         if (is_variable_edge(var_map, item->variable)) {
             int edge_id = get_variable_edge_id(var_map, item->variable);
-            if (edge_id < 0) continue;
-            if (delete_edge_by_id(executor, (int64_t)edge_id) == 0) {
-                deleted_edges++;
-            }
+            if (edge_id >= 0) rc = target_set_add(&set, (int64_t)edge_id, true);
         } else {
             int node_id = get_variable_node_id(var_map, item->variable);
-            if (node_id < 0) continue;
-            int detached = 0;
-            int rc = delete_node_by_id(executor, (int64_t)node_id, del->detach, &detached);
-            if (rc == 0) {
-                deleted_nodes++;
-                deleted_edges += detached;
-            } else {
-                set_result_error(result,
-                    "Cannot delete node - it still has relationships");
-                return -1;
-            }
+            if (node_id >= 0) rc = target_set_add(&set, (int64_t)node_id, false);
+        }
+        if (rc < 0) {
+            set_result_error(result, "Failed to allocate memory for DELETE processing");
+            target_set_free(&set);
+            return -1;
         }
     }
+
+    int deleted_nodes = 0, deleted_edges = 0;
+    int rc = apply_delete_targets(executor, &set, del->detach, result,
+                                  &deleted_nodes, &deleted_edges);
+    target_set_free(&set);
+    if (rc < 0) return -1;
 
     result->nodes_deleted += deleted_nodes;
     result->relationships_deleted += deleted_edges;
