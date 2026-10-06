@@ -75,9 +75,12 @@ int transform_id_function(cypher_transform_context *ctx, cypher_function_call *f
         return -1;
     }
 
-    /* Check if it's a projected variable (from WITH) */
-    if (transform_var_is_projected(ctx->var_ctx, id->name)) {
-        /* Projected variable already contains the ID value */
+    /* Check if it's a projected variable (from WITH), or a node/edge carried
+     * through WITH / UNWIND whose alias IS the id column (alias_is_id):
+     * GQLITE-T-0375 — `WITH n ... RETURN id(n)` used to emit `_with_0.n.id`. */
+    if (transform_var_is_projected(ctx->var_ctx, id->name) ||
+        transform_var_alias_is_id(ctx->var_ctx, id->name)) {
+        /* The alias already is the ID value */
         append_sql(ctx, "%s", alias);
     } else {
         /* Node or edge variable - access .id field */
