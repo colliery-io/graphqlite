@@ -907,6 +907,33 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             path_combined_exists = true;
         }
     }
+    /* GQLITE-T-0336 (P3, MatchWhere6 [5]): a single BOUND relationship
+     * (`WITH r ... OPTIONAL MATCH (a2)<-[r]-(b2) WHERE ...`) whose two
+     * endpoints are both fresh. Neither endpoint can anchor the other, so
+     * the per-rel emission either cross-multiplies or filters the anchor
+     * row away. Route it through the derived-table chain below, which
+     * pins the edge by id and yields both endpoint ids. */
+    if (!path_combined_exists && optional && path->elements &&
+        path->elements->count == 3 &&
+        path->elements->items[0]->type == AST_NODE_NODE_PATTERN &&
+        path->elements->items[1]->type == AST_NODE_REL_PATTERN &&
+        path->elements->items[2]->type == AST_NODE_NODE_PATTERN) {
+        cypher_rel_pattern *r = (cypher_rel_pattern *)path->elements->items[1];
+        cypher_node_pattern *s0 = (cypher_node_pattern *)path->elements->items[0];
+        cypher_node_pattern *s2 = (cypher_node_pattern *)path->elements->items[2];
+        bool rel_bound = r->variable && !r->varlen &&
+                         transform_var_alias_is_id(ctx->var_ctx, r->variable);
+        bool s0_fresh = s0->variable && !transform_var_lookup(ctx->var_ctx, s0->variable);
+        bool s2_fresh = s2->variable && !transform_var_lookup(ctx->var_ctx, s2->variable);
+        bool has_path_var = false;
+        for (int vi = 0; vi < ctx->var_ctx->count; vi++) {
+            if (ctx->var_ctx->vars[vi].kind == VAR_KIND_PATH) { has_path_var = true; break; }
+        }
+        if (rel_bound && s0_fresh && s2_fresh && !has_path_var &&
+            !s0->properties && !s2->properties) {
+            path_combined_exists = true;
+        }
+    }
 
     bool *defer_to_rel = NULL;
     if (optional && path->elements && path->elements->count > 0) {
@@ -1005,6 +1032,202 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 static GQL_THREAD_LOCAL char anon_buf[64][32];
                 snprintf(anon_buf[j], sizeof(anon_buf[j]), "n_%d", ctx->anon_node_base + j);
                 node_alias[j] = anon_buf[j];
+            }
+        }
+
+        /* GQLITE-T-0336 (P3): when TWO OR MORE nodes of the chain are
+         * unbound, one `LEFT JOIN nodes AS X ON EXISTS(...)` per node cannot
+         * work — the EXISTS for the first node references the alias of a
+         * node joined later ("ON clause references tables to its right",
+         * MatchWhere6 [7]). Materialise the whole chain once as a derived
+         * table that yields the node id of every position, LEFT JOIN it on
+         * the bound positions, then LEFT JOIN each unbound node on its id
+         * column. A WHERE on the OPTIONAL MATCH is pushed into the derived
+         * table's ON through the T-0320 defer-pair rewrite
+         * (`<alias>.id` -> `<derived>.p<j>`), so the chain is all-or-none. */
+        {
+            int unbound_count = 0;
+            bool derived_ok = true;
+            bool is_bound_pos[64] = {0};
+            for (int j = 0; j < n_count; j++) {
+                ast_node *el = path->elements->items[j];
+                if (el->type != AST_NODE_NODE_PATTERN) continue;
+                cypher_node_pattern *np = (cypher_node_pattern *)el;
+                bool bound = false;
+                if (np->variable) {
+                    transform_var *v = transform_var_lookup(ctx->var_ctx, np->variable);
+                    if (v && transform_var_is_bound(ctx->var_ctx, np->variable)) bound = true;
+                }
+                const char *al = node_alias[j];
+                if (al && !bound) {
+                    const char *fs = dbuf_get(&ctx->unified_builder->from);
+                    const char *js = dbuf_get(&ctx->unified_builder->joins);
+                    char needle[80];
+                    snprintf(needle, sizeof(needle), " AS %s", al);
+                    if ((fs && strstr(fs, needle)) || (js && strstr(js, needle))) bound = true;
+                }
+                is_bound_pos[j] = bound;
+                if (!bound) {
+                    unbound_count++;
+                    /* Inline properties on an unbound chain node are not
+                     * folded into the derived table; keep the legacy path. */
+                    if (np->properties) derived_ok = false;
+                }
+            }
+            if (derived_ok && unbound_count >= 2) {
+                char *dt_alias = get_next_default_alias(ctx);
+                if (!dt_alias) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Out of memory in OPTIONAL derived table");
+                    free(combined_node_skip);
+                    free(defer_to_rel);
+                    return -1;
+                }
+                dynamic_buffer dt; dbuf_init(&dt);
+                dynamic_buffer bound_rel_on; dbuf_init(&bound_rel_on);
+                dynamic_buffer dt_extra_sel; dbuf_init(&dt_extra_sel);
+                dbuf_append(&dt, "(SELECT ");
+                bool first_sel = true;
+                for (int j = 0; j < n_count; j++) {
+                    if (path->elements->items[j]->type != AST_NODE_NODE_PATTERN) continue;
+                    if (!first_sel) dbuf_append(&dt, ", ");
+                    first_sel = false;
+                    dbuf_appendf(&dt, "_n%d.id AS p%d", j, j);
+                }
+                size_t dt_sel_end = 0; (void)dt_sel_end;
+                dbuf_append(&dt, "__EXTRA_SEL__");
+                dbuf_append(&dt, " FROM ");
+                int ri = 0;
+                for (int j = 0; j < path->elements->count; j++) {
+                    if (path->elements->items[j]->type != AST_NODE_REL_PATTERN) continue;
+                    if (ri > 0) dbuf_append(&dt, ", ");
+                    dbuf_appendf(&dt, "%s _ce%d", get_graph_table(ctx, "edges"), ri);
+                    ri++;
+                }
+                int dt_rels = ri;
+                for (int j = 0; j < n_count; j++) {
+                    if (path->elements->items[j]->type != AST_NODE_NODE_PATTERN) continue;
+                    dbuf_appendf(&dt, ", %s _n%d", get_graph_table(ctx, "nodes"), j);
+                }
+                dbuf_append(&dt, " WHERE ");
+                ri = 0;
+                bool first_c = true;
+                for (int j = 0; j < path->elements->count; j++) {
+                    ast_node *el = path->elements->items[j];
+                    if (el->type != AST_NODE_REL_PATTERN) continue;
+                    cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+                    if (!first_c) dbuf_append(&dt, " AND ");
+                    first_c = false;
+                    if (r->left_arrow && !r->right_arrow) {
+                        dbuf_appendf(&dt, "(_ce%d.source_id = _n%d.id AND _ce%d.target_id = _n%d.id)",
+                                     ri, j + 1, ri, j - 1);
+                    } else if (!r->left_arrow && !r->right_arrow) {
+                        dbuf_appendf(&dt, "((_ce%d.source_id = _n%d.id AND _ce%d.target_id = _n%d.id) "
+                                          "OR (_ce%d.source_id = _n%d.id AND _ce%d.target_id = _n%d.id))",
+                                     ri, j - 1, ri, j + 1, ri, j + 1, ri, j - 1);
+                    } else {
+                        dbuf_appendf(&dt, "(_ce%d.source_id = _n%d.id AND _ce%d.target_id = _n%d.id)",
+                                     ri, j - 1, ri, j + 1);
+                    }
+                    if (r->type) {
+                        char *esc = escape_sql_string(r->type);
+                        dbuf_appendf(&dt, " AND _ce%d.type = '%s'", ri, esc ? esc : r->type);
+                        free(esc);
+                    }
+                    if (r->variable && transform_var_alias_is_id(ctx->var_ctx, r->variable)) {
+                        /* Bound relationship: pin the edge to the bound id.
+                         * The id is an outer column, so it goes in the ON. */
+                        const char *rid = transform_var_get_alias(ctx->var_ctx, r->variable);
+                        if (rid) dbuf_appendf(&bound_rel_on, "%s_ce%d_id = %s",
+                                              dbuf_is_empty(&bound_rel_on) ? "" : " AND ", ri, rid);
+                        dbuf_appendf(&dt_extra_sel, ", _ce%d.id AS _ce%d_id", ri, ri);
+                    }
+                    ri++;
+                }
+                for (int a = 0; a < dt_rels; a++)
+                    for (int b = a + 1; b < dt_rels; b++)
+                        dbuf_appendf(&dt, " AND _ce%d.id <> _ce%d.id", a, b);
+                /* Labels of the unbound chain nodes live inside the chain. */
+                for (int j = 0; j < n_count; j++) {
+                    ast_node *el = path->elements->items[j];
+                    if (el->type != AST_NODE_NODE_PATTERN || is_bound_pos[j]) continue;
+                    cypher_node_pattern *np = (cypher_node_pattern *)el;
+                    if (!has_labels(np)) continue;
+                    for (int li = 0; li < np->labels->count; li++) {
+                        char *esc = escape_sql_string(get_label_string(np->labels->items[li]));
+                        dbuf_appendf(&dt, " AND EXISTS (SELECT 1 FROM %s WHERE node_id = _n%d.id AND label = '%s')",
+                                     get_graph_table(ctx, "node_labels"), j,
+                                     esc ? esc : get_label_string(np->labels->items[li]));
+                        free(esc);
+                    }
+                }
+                dbuf_append(&dt, ")");
+                /* Splice the bound-rel id columns into the SELECT list. */
+                {
+                    const char *raw = dbuf_get(&dt);
+                    const char *mark = strstr(raw, "__EXTRA_SEL__");
+                    dynamic_buffer spliced; dbuf_init(&spliced);
+                    if (mark) {
+                        dbuf_appendf(&spliced, "%.*s", (int)(mark - raw), raw);
+                        dbuf_append(&spliced, dbuf_get(&dt_extra_sel) ? dbuf_get(&dt_extra_sel) : "");
+                        dbuf_append(&spliced, mark + strlen("__EXTRA_SEL__"));
+                    } else {
+                        dbuf_append(&spliced, raw);
+                    }
+                    dbuf_free(&dt);
+                    dt = spliced;
+                }
+
+                /* ON: tie the derived table to every bound position. */
+                dynamic_buffer on; dbuf_init(&on);
+                bool first_on = true;
+                if (!dbuf_is_empty(&bound_rel_on)) {
+                    /* `<dt>._ceN_id = <bound id>` for each pinned edge. */
+                    const char *b = dbuf_get(&bound_rel_on);
+                    dynamic_buffer pref; dbuf_init(&pref);
+                    for (const char *q = b; *q; ) {
+                        if (strncmp(q, "_ce", 3) == 0) { dbuf_appendf(&pref, "%s.", dt_alias); }
+                        dbuf_appendf(&pref, "%c", *q);
+                        q++;
+                    }
+                    dbuf_append(&on, dbuf_get(&pref));
+                    dbuf_free(&pref);
+                    first_on = false;
+                }
+                for (int j = 0; j < n_count; j++) {
+                    ast_node *el = path->elements->items[j];
+                    if (el->type != AST_NODE_NODE_PATTERN || !is_bound_pos[j]) continue;
+                    cypher_node_pattern *np = (cypher_node_pattern *)el;
+                    char ref[256];
+                    snprintf(ref, sizeof(ref), "%s", get_node_id_ref(ctx, node_alias[j], np->variable));
+                    if (!first_on) dbuf_append(&on, " AND ");
+                    first_on = false;
+                    dbuf_appendf(&on, "%s.p%d = %s", dt_alias, j, ref);
+                }
+                if (first_on) dbuf_append(&on, "1=1");
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, dbuf_get(&dt), dt_alias, dbuf_get(&on));
+                dbuf_free(&on);
+                dbuf_free(&dt);
+                dbuf_free(&bound_rel_on);
+                dbuf_free(&dt_extra_sel);
+
+                /* Each unbound node hangs off its id column; record the
+                 * defer pair so the OPTIONAL WHERE is rewritten into the
+                 * derived table's ON (all-or-none). */
+                for (int j = 0; j < n_count; j++) {
+                    ast_node *el = path->elements->items[j];
+                    if (el->type != AST_NODE_NODE_PATTERN) continue;
+                    if (is_bound_pos[j]) { combined_node_skip[j] = true; continue; }
+                    char on_cond[256], col[16];
+                    snprintf(on_cond, sizeof(on_cond), "%s.id = %s.p%d", node_alias[j], dt_alias, j);
+                    snprintf(col, sizeof(col), "p%d", j);
+                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"),
+                             node_alias[j], on_cond);
+                    cypher_transform_record_defer_pair(ctx, dt_alias, node_alias[j], col);
+                    combined_node_skip[j] = true;
+                }
+                free(dt_alias);
+                goto skip_combined_exists;
             }
         }
 
