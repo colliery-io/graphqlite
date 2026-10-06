@@ -14,6 +14,17 @@
 #include "executor/executor_internal.h"
 #include "parser/cypher_debug.h"
 
+/* T-0301: does an inner-RETURN column value (always carried as text) look
+ * like a SQL numeric literal? Such values are spliced into the post-CALL
+ * evaluation SQL unquoted so `inner_n + 1` stays arithmetic. */
+static bool call_value_is_numeric(const char *v)
+{
+    if (!v || !*v) return false;
+    char *end = NULL;
+    strtod(v, &end);
+    return end && *end == '\0';
+}
+
 int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                          cypher_result *result, clause_flags flags)
 {
@@ -694,6 +705,18 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                             transform_var_register_edge(eval_ctx->var_ctx, m->variable, va, NULL);
                                         transform_var_set_bound(eval_ctx->var_ctx, m->variable, true);
                                     }
+                                    /* T-0301: the inner RETURN's exported
+                                     * aliases are visible to post-CALL
+                                     * expressions as columns of the one-row
+                                     * derived table `_ci` built below. */
+                                    for (int ic = 0; ic < inner_col_count; ic++) {
+                                        const char *cn = inner_col_names_local[ic];
+                                        if (!cn || transform_var_lookup(eval_ctx->var_ctx, cn)) continue;
+                                        char src[320];
+                                        snprintf(src, sizeof(src), "_ci.\"%s\"", cn);
+                                        transform_var_register_projected(eval_ctx->var_ctx, cn, src);
+                                        transform_var_set_bound(eval_ctx->var_ctx, cn, true);
+                                    }
 
                                     sqlite3_str *eval_str = sqlite3_str_new(executor->db);
                                     sqlite3_str_appendall(eval_str, "SELECT ");
@@ -714,18 +737,50 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                         eval_ctx->sql_size = ss;
                                         eval_ctx->sql_capacity = sc;
 
+                                        /* T-0301: every source goes in one
+                                         * FROM ... CROSS JOIN chain and every id
+                                         * constraint in a trailing WHERE. The
+                                         * previous form emitted WHERE before
+                                         * JOIN, a syntax error whenever the
+                                         * outer scope held more than one
+                                         * variable (every expression came back
+                                         * NULL). The exported inner RETURN
+                                         * columns ride along as `_ci`. */
+                                        sqlite3_str *from_str = sqlite3_str_new(executor->db);
+                                        sqlite3_str *where_str = sqlite3_str_new(executor->db);
                                         for (int si = 0; si < var_map->count; si++) {
                                             variable_mapping *m = &var_map->mappings[si];
                                             char va[64];
                                             snprintf(va, sizeof(va), "_ov_%d", si);
                                             const char *tbl = m->type == VAR_MAP_TYPE_NODE ? "nodes" : "edges";
-                                            if (si == 0)
-                                                sqlite3_str_appendf(eval_str,
-                                                                 " FROM %s AS %s WHERE %s.id = %d", tbl, va, va, m->entity_id);
-                                            else
-                                                sqlite3_str_appendf(eval_str,
-                                                                 " JOIN %s AS %s ON %s.id = %d", tbl, va, va, m->entity_id);
+                                            sqlite3_str_appendf(from_str, "%s%s AS %s",
+                                                                sqlite3_str_length(from_str) ? " CROSS JOIN " : " FROM ",
+                                                                tbl, va);
+                                            sqlite3_str_appendf(where_str, "%s%s.id = %d",
+                                                                sqlite3_str_length(where_str) ? " AND " : " WHERE ",
+                                                                va, m->entity_id);
                                         }
+                                        if (inner_col_count > 0) {
+                                            sqlite3_str_appendall(from_str,
+                                                sqlite3_str_length(from_str) ? " CROSS JOIN (SELECT " : " FROM (SELECT ");
+                                            for (int ic = 0; ic < inner_col_count; ic++) {
+                                                const char *cv = inner_col_values[ic];
+                                                const char *cn = inner_col_names_local[ic];
+                                                if (ic > 0) sqlite3_str_appendall(from_str, ", ");
+                                                if (!cv) sqlite3_str_appendall(from_str, "NULL");
+                                                else if (call_value_is_numeric(cv)) sqlite3_str_appendall(from_str, cv);
+                                                else sqlite3_str_appendf(from_str, "%Q", cv);
+                                                if (cn) sqlite3_str_appendf(from_str, " AS \"%w\"", cn);
+                                                else sqlite3_str_appendf(from_str, " AS \"_ci_%d\"", ic);
+                                            }
+                                            sqlite3_str_appendall(from_str, ") AS _ci");
+                                        }
+                                        char *from_sql = sqlite3_str_finish(from_str);
+                                        char *where_sql = sqlite3_str_finish(where_str);
+                                        if (from_sql) sqlite3_str_appendall(eval_str, from_sql);
+                                        if (where_sql) sqlite3_str_appendall(eval_str, where_sql);
+                                        sqlite3_free(from_sql);
+                                        sqlite3_free(where_sql);
 
                                         char *eval_sql = sqlite3_str_finish(eval_str);
                                         sqlite3_stmt *ev;
