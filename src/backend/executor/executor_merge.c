@@ -1176,6 +1176,16 @@ int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cy
     return execute_match_merge_query_with_varmap(executor, match, merge, result, NULL);
 }
 
+/* GQLITE-T-0371: free the per-row binding maps of a MATCH+MERGE. */
+static void free_row_maps(variable_map **maps, int count)
+{
+    if (!maps) return;
+    for (int i = 0; i < count; i++) {
+        if (maps[i]) free_variable_map(maps[i]);
+    }
+    free(maps);
+}
+
 int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_match *match, cypher_merge *merge,
                                           cypher_result *result, variable_map **out_var_map)
 {
@@ -1257,46 +1267,72 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
         }
     }
 
-    /* Create variable map to store matched node IDs */
-    variable_map *var_map = create_variable_map();
-    if (!var_map) {
-        set_result_error(result, "Failed to create variable map");
-        sqlite3_finalize(stmt);
-        cypher_transform_free_context(ctx);
-        return -1;
-    }
-
-    /* Read matched node IDs */
+    /* GQLITE-T-0371: read EVERY matched row into its own variable map. Each
+     * row drives one pass over the MERGE pattern below (openCypher: MERGE
+     * runs once per incoming row), so `MATCH (a:A), (b:B) MERGE (a)-[:T]->(b)`
+     * creates the missing edge for each (a,b) pair and ON CREATE / ON MATCH
+     * fire per row. Used to `break` after the first row. */
+    variable_map **row_maps = NULL;
+    int row_count = 0, row_cap = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
+        variable_map *rm = create_variable_map();
+        if (!rm) break;
         int col = 0;
         int var_count2 = transform_var_count(ctx->var_ctx);
         for (int i = 0; i < var_count2; i++) {
             transform_var *var = transform_var_at(ctx->var_ctx, i);
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, var->name, (int)node_id);
-                CYPHER_DEBUG("MERGE bound variable '%s' to node %lld", var->name, (long long)node_id);
+                set_variable_node_id(rm, var->name, (int)node_id);
+                CYPHER_DEBUG("MERGE row %d bound variable '%s' to node %lld", row_count, var->name, (long long)node_id);
                 col++;
             }
         }
-        break; /* For now, just take the first match */
+        if (row_count == row_cap) {
+            int cap = row_cap ? row_cap * 2 : 8;
+            variable_map **grown = realloc(row_maps, (size_t)cap * sizeof(*grown));
+            if (!grown) { free_variable_map(rm); break; }
+            row_maps = grown;
+            row_cap = cap;
+        }
+        row_maps[row_count++] = rm;
     }
 
     sqlite3_finalize(stmt);
     cypher_transform_free_context(ctx);
 
+    /* Legacy behaviour kept: a MATCH that binds nothing still runs the
+     * MERGE pattern once with an empty map (callers and tests rely on it). */
+    if (row_count == 0) {
+        row_maps = malloc(sizeof(*row_maps));
+        if (!row_maps) {
+            set_result_error(result, "Failed to create variable map");
+            return -1;
+        }
+        row_maps[0] = create_variable_map();
+        if (!row_maps[0]) {
+            free(row_maps);
+            set_result_error(result, "Failed to create variable map");
+            return -1;
+        }
+        row_count = 1;
+    }
+
     /* Now execute the MERGE clause with the bound variables */
     if (!merge->pattern) {
         set_result_error(result, "No pattern in MERGE clause");
-        free_variable_map(var_map);
+        free_row_maps(row_maps, row_count);
         return -1;
     }
 
-    CYPHER_DEBUG("Executing MERGE clause with %d patterns", merge->pattern->count);
+    CYPHER_DEBUG("Executing MERGE clause with %d patterns over %d matched rows", merge->pattern->count, row_count);
 
     /* Track which nodes were created vs matched */
     int nodes_matched = 0;
     int nodes_created_in_merge = 0;
+
+    for (int row = 0; row < row_count; row++) {
+    variable_map *var_map = row_maps[row];
 
     /* Process each path pattern in the MERGE clause */
     for (int p = 0; p < merge->pattern->count; p++) {
@@ -1343,7 +1379,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                     node_id = cypher_schema_create_node(executor->schema_mgr);
                     if (node_id < 0) {
                         set_result_error(result, "Failed to create node in MERGE");
-                        free_variable_map(var_map);
+                        free_row_maps(row_maps, row_count);
                         return -1;
                     }
 
@@ -1429,7 +1465,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                 if (was_created && merge->on_create && merge->on_create->count > 0) {
                     CYPHER_DEBUG("Applying ON CREATE SET for node %d", node_id);
                     if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
-                        free_variable_map(var_map);
+                        free_row_maps(row_maps, row_count);
                         return -1;
                     }
                 }
@@ -1438,7 +1474,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                 if (!was_created && merge->on_match && merge->on_match->count > 0) {
                     CYPHER_DEBUG("Applying ON MATCH SET for node %d", node_id);
                     if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
-                        free_variable_map(var_map);
+                        free_row_maps(row_maps, row_count);
                         return -1;
                     }
                 }
@@ -1447,7 +1483,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                 /* Handle relationship in MERGE path */
                 if (previous_node_id < 0 || i + 1 >= path->elements->count) {
                     set_result_error(result, "Invalid relationship pattern in MERGE");
-                    free_variable_map(var_map);
+                    free_row_maps(row_maps, row_count);
                     return -1;
                 }
 
@@ -1455,7 +1491,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                 ast_node *next_element = path->elements->items[i + 1];
                 if (next_element->type != AST_NODE_NODE_PATTERN) {
                     set_result_error(result, "Expected node after relationship in MERGE");
-                    free_variable_map(var_map);
+                    free_row_maps(row_maps, row_count);
                     return -1;
                 }
 
@@ -1482,7 +1518,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                         target_node_id = cypher_schema_create_node(executor->schema_mgr);
                         if (target_node_id < 0) {
                             set_result_error(result, "Failed to create target node in MERGE");
-                            free_variable_map(var_map);
+                            free_row_maps(row_maps, row_count);
                             return -1;
                         }
 
@@ -1577,7 +1613,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                     edge_id = cypher_schema_create_edge(executor->schema_mgr, source_id, dest_id, rel_type);
                     if (edge_id < 0) {
                         set_result_error(result, "Failed to create relationship in MERGE");
-                        free_variable_map(var_map);
+                        free_row_maps(row_maps, row_count);
                         return -1;
                     }
 
@@ -1668,13 +1704,13 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                 /* Apply ON CREATE / ON MATCH for the edge half of the MERGE */
                 if (edge_was_created && merge->on_create && merge->on_create->count > 0) {
                     if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
-                        free_variable_map(var_map);
+                        free_row_maps(row_maps, row_count);
                         return -1;
                     }
                 }
                 if (!edge_was_created && merge->on_match && merge->on_match->count > 0) {
                     if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
-                        free_variable_map(var_map);
+                        free_row_maps(row_maps, row_count);
                         return -1;
                     }
                 }
@@ -1686,13 +1722,17 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
         }
     }
 
+    } /* for each matched row */
+
     CYPHER_DEBUG("MERGE complete: %d nodes matched, %d nodes created", nodes_matched, nodes_created_in_merge);
 
     if (out_var_map) {
-        *out_var_map = var_map;
-    } else {
-        free_variable_map(var_map);
+        /* Hand the last row's bindings to a trailing SET (single-row
+         * semantics preserved for that path). */
+        *out_var_map = row_maps[row_count - 1];
+        row_maps[row_count - 1] = NULL;
     }
+    free_row_maps(row_maps, row_count);
     return 0;
 }
 
