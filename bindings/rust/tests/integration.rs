@@ -4028,6 +4028,51 @@ fn test_issue_50_startnode_endnode_same_return() {
 }
 
 #[test]
+fn test_t0181_startnode_endnode_return_node_objects() {
+    // GQLITE-T-0181: bare startNode(r)/endNode(r) project the endpoint node in
+    // the same shape as `RETURN n`, not the raw source_id/target_id integer.
+    let conn = test_connection();
+    conn.cypher("CREATE (a:Sn181Rs {name: 'Alice'})-[:K181Rs]->(b:Sn181Rs {name: 'Bob'})")
+        .unwrap();
+    let results = conn
+        .cypher("MATCH ()-[r:K181Rs]->() RETURN startNode(r) AS sn, endNode(r) AS en")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let row = &results[0];
+    let sn = row.get_value("sn").expect("sn column");
+    let en = row.get_value("en").expect("en column");
+    assert!(matches!(sn, graphqlite::Value::Object(_)), "startNode(r) must be a node object, got {:?}", sn);
+    assert!(matches!(en, graphqlite::Value::Object(_)), "endNode(r) must be a node object, got {:?}", en);
+    assert_eq!(sn["properties"]["name"].as_str(), Some("Alice"));
+    assert_eq!(en["properties"]["name"].as_str(), Some("Bob"));
+    match &sn["labels"] {
+        graphqlite::Value::Array(labels) => assert_eq!(labels[0].as_str(), Some("Sn181Rs")),
+        other => panic!("labels must be an array, got {:?}", other),
+    }
+    assert!(sn.get("id").is_some());
+
+    // Same object as RETURN a for the start node.
+    let via_var = conn
+        .cypher("MATCH (a:Sn181Rs {name: 'Alice'}) RETURN a AS n")
+        .unwrap();
+    let via_func = conn
+        .cypher("MATCH ()-[r:K181Rs]->() RETURN startNode(r) AS n")
+        .unwrap();
+    assert_eq!(via_var[0].get_value("n"), via_func[0].get_value("n"));
+
+    // Nested use keeps resolving to the endpoint.
+    let nested = conn
+        .cypher("MATCH (a)-[r:K181Rs]->(b) RETURN id(startNode(r)) = id(a) AS s, startNode(r).name AS sname, labels(endNode(r)) AS l")
+        .unwrap();
+    assert_eq!(nested[0].get::<bool>("s").unwrap(), true);
+    assert_eq!(nested[0].get::<String>("sname").unwrap(), "Alice");
+    match nested[0].get_value("l").unwrap() {
+        graphqlite::Value::Array(labels) => assert_eq!(labels[0].as_str(), Some("Sn181Rs")),
+        other => panic!("labels(endNode(r)) must be an array, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_issue_51_call_merge_scoping() {
     let conn = test_connection();
     conn.cypher("CREATE (c:Co51Rs {id: 'acme'})").unwrap();

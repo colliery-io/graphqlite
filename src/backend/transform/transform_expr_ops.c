@@ -20,6 +20,7 @@
 #include "transform/transform_expr_predicate.h"
 #include "transform/transform_func_dispatch.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_func_path.h"
 
 /* --- NaN constant handling (Comparison1 [8], Comparison2 [5]) -------------
  * SQLite collapses float division-by-zero to NULL at the operator level, so
@@ -904,9 +905,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
             (strcasecmp(func->function_name, "startNode") == 0 ||
              strcasecmp(func->function_name, "endNode") == 0)) {
             /* Generate property lookup using the node ID from startNode/endNode.
-             * The function generates (SELECT source_id/target_id FROM edges WHERE id = alias.id)
-             * so we use that as the node_id in the property lookup. Perf review
-             * F6: filter on the resolved key_id when the key is known. */
+             * GQLITE-T-0181: the bare function now yields the node object, so
+             * ask for just the endpoint id here (transform_endpoint_node_id emits
+             * (SELECT source_id/target_id FROM edges WHERE id = alias.id)) and use
+             * that as the node_id in the property lookup. Perf review F6: filter
+             * on the resolved key_id when the key is known. */
             int fkey_id = cypher_transform_property_key_id(ctx, "", prop->property_name);
             static const char *ftbls[5] = {"node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json"};
             static const char *fabs[5]  = {"npt", "npi", "npr", "npb", "npj"};
@@ -916,12 +919,12 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
                 if (fi > 0) append_sql(ctx, ", ");
                 if (fkey_id >= 0) {
                     append_sql(ctx, "(SELECT %s FROM %s %s WHERE %s.node_id = ", fvals[fi], ftbls[fi], fabs[fi], fabs[fi]);
-                    if (transform_expression(ctx, prop->expr) < 0) return -1;
+                    if (transform_endpoint_node_id(ctx, func) < 0) return -1;
                     append_sql(ctx, " AND %s.key_id = %d)", fabs[fi], fkey_id);
                 } else {
                     append_sql(ctx, "(SELECT %s FROM %s %s JOIN property_keys pk ON %s.key_id = pk.id WHERE %s.node_id = ",
                                fvals[fi], ftbls[fi], fabs[fi], fabs[fi], fabs[fi]);
-                    if (transform_expression(ctx, prop->expr) < 0) return -1;
+                    if (transform_endpoint_node_id(ctx, func) < 0) return -1;
                     append_sql(ctx, " AND pk.key = ");
                     append_string_literal(ctx, prop->property_name);
                     append_sql(ctx, ")");

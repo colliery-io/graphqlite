@@ -238,21 +238,26 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
     return 0;
 }
 
-/* Transform startNode() function - returns start node of a relationship */
-int transform_startnode_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+/* GQLITE-T-0181: shared validation for startNode()/endNode(). Emits the SQL
+ * expression that yields the endpoint node id (source_id or target_id of the
+ * relationship bound to the argument), or NULL for a null argument / an
+ * OPTIONAL MATCH miss. Returns 1 when an id expression was emitted, 0 when a
+ * literal NULL was emitted, -1 on error. */
+static int emit_endpoint_id(cypher_transform_context *ctx, cypher_function_call *func_call,
+                            const char *fname, const char *column)
 {
-    CYPHER_DEBUG("Transforming startNode() function");
+    char err[256];
 
-    /* startNode() requires exactly one argument */
     if (!func_call->args || func_call->args->count != 1 || func_call->args->items[0] == NULL) {
         ctx->has_error = true;
-        ctx->error_message = strdup("startNode() function requires exactly one argument");
+        snprintf(err, sizeof(err), "%s() function requires exactly one argument", fname);
+        ctx->error_message = strdup(err);
         return -1;
     }
 
     ast_node *arg = func_call->args->items[0];
 
-    /* startNode(null) → null. */
+    /* startNode(null) / endNode(null) → null. */
     if (arg->type == AST_NODE_LITERAL) {
         cypher_literal *lit = (cypher_literal *)arg;
         if (lit->literal_type == LITERAL_NULL) {
@@ -260,90 +265,97 @@ int transform_startnode_function(cypher_transform_context *ctx, cypher_function_
             return 0;
         }
         ctx->has_error = true;
-        ctx->error_message = strdup("startNode() function argument must be a relationship variable");
+        snprintf(err, sizeof(err), "%s() function argument must be a relationship variable", fname);
+        ctx->error_message = strdup(err);
         return -1;
     }
 
     if (arg->type != AST_NODE_IDENTIFIER) {
         ctx->has_error = true;
-        ctx->error_message = strdup("startNode() function argument must be a relationship variable");
+        snprintf(err, sizeof(err), "%s() function argument must be a relationship variable", fname);
+        ctx->error_message = strdup(err);
         return -1;
     }
 
-    cypher_identifier *id = (cypher_identifier*)arg;
+    cypher_identifier *id = (cypher_identifier *)arg;
     const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
-        char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in startNode() function: %s", id->name);
-        ctx->error_message = strdup(error);
+        snprintf(err, sizeof(err), "Unknown variable in %s() function: %s", fname, id->name);
+        ctx->error_message = strdup(err);
         return -1;
     }
 
-    /* startNode() only works on relationships */
+    /* Only relationships have endpoints. */
     if (!transform_var_is_edge(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
-        ctx->error_message = strdup("startNode() function argument must be a relationship variable");
+        snprintf(err, sizeof(err), "%s() function argument must be a relationship variable", fname);
+        ctx->error_message = strdup(err);
         return -1;
     }
 
-    /* Return the source_id from the edges table */
-    append_sql(ctx, "(SELECT source_id FROM edges WHERE id = %s.id)", alias);
+    /* A post-WITH / projected edge alias IS the id value; a MATCH-bound edge
+     * alias is the edges row (same rule as type()). */
+    bool skip_id = transform_var_is_projected(ctx->var_ctx, id->name) ||
+                   transform_var_alias_is_id(ctx->var_ctx, id->name);
+    append_sql(ctx, "(SELECT %s FROM edges WHERE id = %s%s)", column, alias, skip_id ? "" : ".id");
+    return 1;
+}
 
+/* Emit the full node JSON ({"id","labels","properties"}) for the endpoint,
+ * the same shape `RETURN n` produces (perf review F5 pass-through), guarded
+ * so a NULL endpoint id (null argument, OPTIONAL MATCH miss) stays NULL. */
+static int emit_endpoint_node(cypher_transform_context *ctx, cypher_function_call *func_call,
+                              const char *fname, const char *column)
+{
+    /* Render the id expression into a scratch buffer so it can be spliced
+     * into the node JSON template several times. */
+    size_t saved_size = ctx->sql_size;
+    int rc = emit_endpoint_id(ctx, func_call, fname, column);
+    if (rc < 0) return -1;
+    if (rc == 0) return 0; /* literal NULL already emitted */
+
+    char *id_expr = strdup(ctx->sql_buffer + saved_size);
+    if (!id_expr) return -1;
+    ctx->sql_size = saved_size;
+    ctx->sql_buffer[saved_size] = '\0';
+
+    char *nj = gql_sql_node_json_expr("", id_expr);
+    if (!nj) { free(id_expr); return -1; }
+    append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE %s END)", id_expr, nj);
+    free(nj);
+    free(id_expr);
     return 0;
 }
 
-/* Transform endNode() function - returns end node of a relationship */
+/* Transform startNode() function - returns the start node of a relationship
+ * as a node object (GQLITE-T-0181; was the bare source_id integer). */
+int transform_startnode_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    CYPHER_DEBUG("Transforming startNode() function");
+    return emit_endpoint_node(ctx, func_call, "startNode", "source_id");
+}
+
+/* Transform endNode() function - returns the end node of a relationship
+ * as a node object (GQLITE-T-0181; was the bare target_id integer). */
 int transform_endnode_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming endNode() function");
+    return emit_endpoint_node(ctx, func_call, "endNode", "target_id");
+}
 
-    /* endNode() requires exactly one argument */
-    if (!func_call->args || func_call->args->count != 1 || func_call->args->items[0] == NULL) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("endNode() function requires exactly one argument");
-        return -1;
-    }
-
-    ast_node *arg = func_call->args->items[0];
-
-    /* endNode(null) → null. */
-    if (arg->type == AST_NODE_LITERAL) {
-        cypher_literal *lit = (cypher_literal *)arg;
-        if (lit->literal_type == LITERAL_NULL) {
-            append_sql(ctx, "NULL");
-            return 0;
-        }
-        ctx->has_error = true;
-        ctx->error_message = strdup("endNode() function argument must be a relationship variable");
-        return -1;
-    }
-
-    if (arg->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("endNode() function argument must be a relationship variable");
-        return -1;
-    }
-
-    cypher_identifier *id = (cypher_identifier*)arg;
-    const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
-    if (!alias) {
-        ctx->has_error = true;
-        char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in endNode() function: %s", id->name);
-        ctx->error_message = strdup(error);
-        return -1;
-    }
-
-    /* endNode() only works on relationships */
-    if (!transform_var_is_edge(ctx->var_ctx, id->name)) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("endNode() function argument must be a relationship variable");
-        return -1;
-    }
-
-    /* Return the target_id from the edges table */
-    append_sql(ctx, "(SELECT target_id FROM edges WHERE id = %s.id)", alias);
-
-    return 0;
+/* Emit only the endpoint node id for startNode(r)/endNode(r). Used where the
+ * caller needs the id rather than the node object: property access
+ * (`startNode(r).name`) and `id(startNode(r))`. Returns -1 if func_call is
+ * not a startNode/endNode call or on a validation error. */
+int transform_endpoint_node_id(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    if (!func_call || !func_call->function_name) return -1;
+    if (strcasecmp(func_call->function_name, "startNode") == 0)
+        return emit_endpoint_id(ctx, func_call, "startNode", "source_id") < 0 ? -1 : 0;
+    if (strcasecmp(func_call->function_name, "endNode") == 0)
+        return emit_endpoint_id(ctx, func_call, "endNode", "target_id") < 0 ? -1 : 0;
+    ctx->has_error = true;
+    ctx->error_message = strdup("Expected startNode() or endNode()");
+    return -1;
 }

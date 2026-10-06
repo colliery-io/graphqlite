@@ -15,5 +15,8 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
 int transform_path_relationships_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_startnode_function(cypher_transform_context *ctx, cypher_function_call *func);
 int transform_endnode_function(cypher_transform_context *ctx, cypher_function_call *func);
+/* GQLITE-T-0181: emit only the endpoint node id of startNode(r)/endNode(r)
+ * (for property access and id()); the functions above emit the node object. */
+int transform_endpoint_node_id(cypher_transform_context *ctx, cypher_function_call *func);
 
 #endif /* TRANSFORM_FUNC_PATH_H */

@@ -18,6 +18,7 @@
 #include "transform/transform_func_entity.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
+#include "transform/transform_func_path.h"
 
 /* Transform id() function - returns internal ID of node or relationship */
 int transform_id_function(cypher_transform_context *ctx, cypher_function_call *func_call)
@@ -31,12 +32,37 @@ int transform_id_function(cypher_transform_context *ctx, cypher_function_call *f
         return -1;
     }
 
-    /* The argument must be an identifier (variable) */
     ast_node *arg = func_call->args->items[0];
+
+    /* GQLITE-T-0181: id(startNode(r)) / id(endNode(r)) — take the endpoint id
+     * directly instead of building and re-parsing the node object. */
+    if (arg->type == AST_NODE_FUNCTION_CALL) {
+        cypher_function_call *inner = (cypher_function_call *)arg;
+        if (inner->function_name &&
+            (strcasecmp(inner->function_name, "startNode") == 0 ||
+             strcasecmp(inner->function_name, "endNode") == 0)) {
+            return transform_endpoint_node_id(ctx, inner);
+        }
+    }
+
+    /* Any other non-identifier argument is resolved at runtime: an entity
+     * JSON object yields its "id" member, anything else (including null)
+     * yields null. */
     if (arg->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("id() function argument must be a node or relationship variable");
-        return -1;
+        char *inner_sql = cypher_transform_capture_expression(ctx, arg);
+        if (!inner_sql) {
+            if (!ctx->has_error) {
+                ctx->has_error = true;
+                ctx->error_message = strdup("id() function argument must be a node or relationship");
+            }
+            return -1;
+        }
+        append_sql(ctx,
+            "(CASE WHEN json_valid(%s) AND json_type(%s) = 'object' "
+            "THEN json_extract(%s, '$.id') ELSE NULL END)",
+            inner_sql, inner_sql, inner_sql);
+        free(inner_sql);
+        return 0;
     }
 
     cypher_identifier *id = (cypher_identifier*)arg;
