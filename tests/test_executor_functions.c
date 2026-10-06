@@ -1563,6 +1563,85 @@ static void test_func_duration_between(void)
     }
 }
 
+/* GQLITE-T-0369: billion-year spans (Temporal10 [9]/[10]). Months must not
+ * overflow int32 and the seconds total must not pass through an int64 of
+ * nanoseconds; extended-year inputs ([+-]YYYYYYYYY-MM-DD) must parse. */
+static void test_func_large_duration_between(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN duration.between(date('-999999999-01-01'), date('+999999999-12-31')) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"_iso8601\":\"P1999999998Y11M30D\""));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"months\":23999999987"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"days\":30"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_large_duration_in_seconds(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN duration.inSeconds(localdatetime('-999999999-01-01'), "
+        "localdatetime('+999999999-12-31T23:59:59')) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"_iso8601\":\"PT17531639991215H59M59S\""));
+            /* 17531639991215 h * 3600 + 59 * 60 + 59 */
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"seconds\":63113903968377599"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"nanosecondsOfSecond\":0"));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_large_duration_components_kept_apart(void)
+{
+    /* duration({map}) and duration + duration keep seconds and nanos as
+     * separate fields: 1e17 s * 1e9 would overflow an int64 total-ns. */
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN duration({seconds: 100000000000000000, nanoseconds: 999999999}) "
+        "+ duration({nanoseconds: 1}) AS result");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        CU_ASSERT_PTR_NOT_NULL(result->data[0][0]);
+        if (result->data[0][0]) {
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"seconds\":100000000000000001"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"nanosecondsOfSecond\":0"));
+            CU_ASSERT_PTR_NOT_NULL(strstr(result->data[0][0], "\"_iso8601\":\"PT27777777777777H46M41S\""));
+        }
+        cypher_result_free(result);
+    }
+}
+
+static void test_func_extended_year_dates(void)
+{
+    cypher_result *result = cypher_executor_execute(executor,
+        "RETURN date('-999999999-01-01') AS a, date('+10000-01-01') AS b, "
+        "date('-0001-02-03') AS c, date('2024-01-01') AS d, date('12024-01-01') AS e");
+    CU_ASSERT_PTR_NOT_NULL(result);
+    if (result) {
+        CU_ASSERT_TRUE(result->success);
+        if (result->success && result->row_count >= 1) {
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "-999999999-01-01");
+            CU_ASSERT_STRING_EQUAL(result->data[0][1], "+10000-01-01");
+            CU_ASSERT_STRING_EQUAL(result->data[0][2], "-0001-02-03");
+            CU_ASSERT_STRING_EQUAL(result->data[0][3], "2024-01-01");
+            /* A five-digit year without a sign is not a valid ISO date. */
+            CU_ASSERT_PTR_NULL(result->data[0][4]);
+        }
+        cypher_result_free(result);
+    }
+}
+
 static void test_func_date_truncate(void)
 {
     cypher_result *result = cypher_executor_execute(executor,
@@ -1913,6 +1992,10 @@ int init_executor_functions_suite(void)
         !CU_add_test(suite, "localtime()", test_func_localtime) ||
         !CU_add_test(suite, "datetimeFromEpochMillis()", test_func_datetime_from_epoch_millis) ||
         !CU_add_test(suite, "durationInMonths()", test_func_duration_in_months) ||
+        !CU_add_test(suite, "T-0369: duration.between billion-year span", test_func_large_duration_between) ||
+        !CU_add_test(suite, "T-0369: duration.inSeconds billion-year span", test_func_large_duration_in_seconds) ||
+        !CU_add_test(suite, "T-0369: large seconds + nanos kept apart", test_func_large_duration_components_kept_apart) ||
+        !CU_add_test(suite, "T-0369: extended-year date literals", test_func_extended_year_dates) ||
         !CU_add_test(suite, "durationBetween()", test_func_duration_between) ||
         !CU_add_test(suite, "dateTruncate()", test_func_date_truncate) ||
         !CU_add_test(suite, "dateAdd() mixed", test_func_date_add_mixed) ||
