@@ -140,6 +140,8 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
 static int handle_match_merge(cypher_executor *executor, cypher_query *query,
                               cypher_result *result, clause_flags flags);
+static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
+                                cypher_result *result, clause_flags flags);
 static int handle_match_create(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
 static int handle_match_create_return(cypher_executor *executor, cypher_query *query,
@@ -237,6 +239,35 @@ static const query_pattern patterns[] = {
     /*
      * Priority 90: MATCH + write operation patterns
      */
+    /*
+     * GQLITE-T-0371: row-wise write pipeline. A read prefix (MATCH / WITH /
+     * UNWIND, or a leading CREATE) followed by DELETE / MERGE / WITH / SET
+     * clauses and a RETURN. The prefix is evaluated once through the normal
+     * read pipeline, then every row drives the write clauses in order
+     * (DELETEs eagerly first, as Cypher requires), with scalar WITH
+     * projections available to MERGE property maps.
+     */
+    {
+        .name = "ROWWISE_WRITE (MERGE+DELETE)",
+        .required = CLAUSE_MERGE | CLAUSE_DELETE,
+        .forbidden = CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
+        .handler = handle_rowwise_write,
+        .priority = 96
+    },
+    {
+        .name = "ROWWISE_WRITE (MERGE+UNWIND)",
+        .required = CLAUSE_MERGE | CLAUSE_UNWIND,
+        .forbidden = CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
+        .handler = handle_rowwise_write,
+        .priority = 96
+    },
+    {
+        .name = "ROWWISE_WRITE (MATCH+WITH+MERGE)",
+        .required = CLAUSE_MATCH | CLAUSE_WITH | CLAUSE_MERGE,
+        .forbidden = CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
+        .handler = handle_rowwise_write,
+        .priority = 95
+    },
     {
         .name = "MATCH+SET",
         .required = CLAUSE_MATCH | CLAUSE_SET,
@@ -1823,9 +1854,25 @@ static int handle_match_only(cypher_executor *executor, cypher_query *query,
  * UNWIND+CREATE handler - iterates over list and creates nodes
  * Extracted from cypher_executor.c inline code
  */
+/* GQLITE-T-0371: UNWIND ... UNWIND ... CREATE needs the cartesian product of
+ * the UNWINDs; the dedicated UNWIND+CREATE handlers iterate one list only, so
+ * two or more UNWINDs before the CREATE go to the row-wise pipeline. */
+static bool unwind_create_needs_pipeline(cypher_query *query)
+{
+    int n_unwind = 0;
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_CREATE) break;
+        if (c->type == AST_NODE_UNWIND) n_unwind++;
+    }
+    return n_unwind >= 2;
+}
+
 static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
+    if (unwind_create_needs_pipeline(query)) return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_unwind *unwind = find_unwind_clause(query);
     cypher_create *create = find_create_clause(query);
@@ -2714,6 +2761,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
 static int handle_unwind_create_return(cypher_executor *executor, cypher_query *query,
                                        cypher_result *result, clause_flags flags)
 {
+    if (unwind_create_needs_pipeline(query)) return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_unwind *unwind = find_unwind_clause(query);
     cypher_create *create = find_create_clause(query);
@@ -3264,5 +3312,607 @@ static int handle_merge_return(cypher_executor *executor, cypher_query *query,
     free_variable_map(vm);
     result->success = true;
     return 0;
+}
+
+/* ======================================================================
+ * GQLITE-T-0371: row-wise write pipeline
+ * ====================================================================== */
+
+typedef struct {
+    char *name;
+    char *text;     /* SQL text of the value (NULL for SQL NULL) */
+    int type;       /* SQLITE_INTEGER / FLOAT / TEXT / NULL */
+} rw_scalar;
+
+typedef struct {
+    variable_map *vm;
+    rw_scalar *scalars;
+    int n_scalars;
+} rw_row;
+
+static void rw_row_free(rw_row *r)
+{
+    if (!r) return;
+    if (r->vm) free_variable_map(r->vm);
+    for (int i = 0; i < r->n_scalars; i++) { free(r->scalars[i].name); free(r->scalars[i].text); }
+    free(r->scalars);
+    r->vm = NULL; r->scalars = NULL; r->n_scalars = 0;
+}
+
+static void rw_row_add_scalar(rw_row *r, const char *name, const char *text, int type)
+{
+    rw_scalar *grown = realloc(r->scalars, (size_t)(r->n_scalars + 1) * sizeof(rw_scalar));
+    if (!grown) return;
+    r->scalars = grown;
+    r->scalars[r->n_scalars].name = strdup(name);
+    r->scalars[r->n_scalars].text = text ? strdup(text) : NULL;
+    r->scalars[r->n_scalars].type = type;
+    r->n_scalars++;
+}
+
+static const rw_scalar *rw_row_scalar(const rw_row *r, const char *name)
+{
+    for (int i = 0; i < r->n_scalars; i++)
+        if (strcmp(r->scalars[i].name, name) == 0) return &r->scalars[i];
+    return NULL;
+}
+
+static bool rw_is_write_clause(ast_node_type t)
+{
+    return t == AST_NODE_CREATE || t == AST_NODE_MERGE || t == AST_NODE_DELETE ||
+           t == AST_NODE_SET || t == AST_NODE_REMOVE;
+}
+
+/* Variable names bound at the end of a read prefix. */
+static void rw_collect_pattern_vars(ast_list *pattern, char ***names, int *n)
+{
+    if (!pattern) return;
+    for (int i = 0; i < pattern->count; i++) {
+        ast_node *item = pattern->items[i];
+        if (!item) continue;
+        ast_list *els = NULL;
+        if (item->type == AST_NODE_PATH) {
+            cypher_path *path = (cypher_path*)item;
+            if (path->var_name) { *names = realloc(*names, (size_t)(*n + 1) * sizeof(char*)); (*names)[(*n)++] = strdup(path->var_name); }
+            els = path->elements;
+        } else if (item->type == AST_NODE_NODE_PATTERN) {
+            cypher_node_pattern *np = (cypher_node_pattern*)item;
+            if (np->variable) { *names = realloc(*names, (size_t)(*n + 1) * sizeof(char*)); (*names)[(*n)++] = strdup(np->variable); }
+            continue;
+        }
+        if (!els) continue;
+        for (int j = 0; j < els->count; j++) {
+            ast_node *el = els->items[j];
+            const char *v = NULL;
+            if (el->type == AST_NODE_NODE_PATTERN) v = ((cypher_node_pattern*)el)->variable;
+            else if (el->type == AST_NODE_REL_PATTERN) v = ((cypher_rel_pattern*)el)->variable;
+            if (v && strncmp(v, "_gql_", 5) != 0) {
+                bool dup = false;
+                for (int k = 0; k < *n; k++) if (strcmp((*names)[k], v) == 0) { dup = true; break; }
+                if (!dup) { *names = realloc(*names, (size_t)(*n + 1) * sizeof(char*)); (*names)[(*n)++] = strdup(v); }
+            }
+        }
+    }
+}
+
+static void rw_free_names(char **names, int n) { for (int i = 0; i < n; i++) free(names[i]); free(names); }
+
+static int rw_scope_after_prefix(ast_list *clauses, int prefix_len, char ***out_names)
+{
+    char **names = NULL; int n = 0;
+    for (int i = 0; i < prefix_len; i++) {
+        ast_node *c = clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_MATCH) {
+            rw_collect_pattern_vars(((cypher_match*)c)->pattern, &names, &n);
+        } else if (c->type == AST_NODE_UNWIND) {
+            cypher_unwind *u = (cypher_unwind*)c;
+            if (u->alias) { names = realloc(names, (size_t)(n + 1) * sizeof(char*)); names[n++] = strdup(u->alias); }
+        } else if (c->type == AST_NODE_WITH) {
+            cypher_with *w = (cypher_with*)c;
+            if (w->pass_all) continue;
+            char **nn = NULL; int m = 0;
+            if (w->items) {
+                for (int wi = 0; wi < w->items->count; wi++) {
+                    cypher_return_item *it = (cypher_return_item*)w->items->items[wi];
+                    const char *nm = it->alias ? it->alias :
+                        (it->expr && it->expr->type == AST_NODE_IDENTIFIER ? ((cypher_identifier*)it->expr)->name : NULL);
+                    if (nm) { nn = realloc(nn, (size_t)(m + 1) * sizeof(char*)); nn[m++] = strdup(nm); }
+                }
+            }
+            rw_free_names(names, n);
+            names = nn; n = m;
+        }
+    }
+    *out_names = names;
+    return n;
+}
+
+/* SQL literal text for a scalar, for splicing into an expression. Owned. */
+static char *rw_scalar_sql(const rw_scalar *sc)
+{
+    if (!sc || !sc->text) return strdup("NULL");
+    if (sc->type == SQLITE_INTEGER || sc->type == SQLITE_FLOAT) return strdup(sc->text);
+    const char *t = sc->text;
+    if ((t[0] == '[' || t[0] == '{')) return sqlite3_mprintf("json(%Q)", t);
+    return sqlite3_mprintf("%Q", t);
+}
+
+/* Does `expr` reference only scalar bindings of `row` (and literals)? */
+static bool rw_expr_scalar_only(ast_node *expr, const rw_row *row)
+{
+    if (!expr) return true;
+    switch (expr->type) {
+        case AST_NODE_LITERAL: return true;
+        case AST_NODE_PARAMETER: return true;
+        case AST_NODE_IDENTIFIER: return rw_row_scalar(row, ((cypher_identifier*)expr)->name) != NULL;
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *b = (cypher_binary_op*)expr;
+            return rw_expr_scalar_only(b->left, row) && rw_expr_scalar_only(b->right, row);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *f = (cypher_function_call*)expr;
+            if (aggregating_call_name(expr)) return false;
+            if (!f->args) return true;
+            for (int i = 0; i < f->args->count; i++) if (!rw_expr_scalar_only(f->args->items[i], row)) return false;
+            return true;
+        }
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list*)expr;
+            if (!l->items) return true;
+            for (int i = 0; i < l->items->count; i++) if (!rw_expr_scalar_only(l->items->items[i], row)) return false;
+            return true;
+        }
+        default: return false;
+    }
+}
+
+/* Evaluate a scalar-only expression for a row. Returns the SQLite type;
+ * *out_text is owned (NULL for SQL NULL). Returns -1 on failure. */
+static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_row *row, char **out_text)
+{
+    *out_text = NULL;
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
+    if (!ctx) return -1;
+    for (int i = 0; i < row->n_scalars; i++) {
+        char *lit = rw_scalar_sql(&row->scalars[i]);
+        transform_var_register_projected(ctx->var_ctx, row->scalars[i].name, lit ? lit : "NULL");
+        transform_var_set_bound(ctx->var_ctx, row->scalars[i].name, true);
+        transform_var_set_scalar_value(ctx->var_ctx, row->scalars[i].name, true);
+        sqlite3_free(lit);
+    }
+    char *sql_expr = cypher_transform_capture_expression(ctx, expr);
+    cypher_transform_free_context(ctx);
+    if (!sql_expr) return -1;
+    char *sql = sqlite3_mprintf("SELECT %s", sql_expr);
+    free(sql_expr);
+    sqlite3_stmt *st = NULL;
+    int type = -1;
+    if (sql && sqlite3_prepare_v2(executor->db, sql, -1, &st, NULL) == SQLITE_OK) {
+        if (executor->params_json) bind_params_from_json(st, executor->params_json);
+        if (sqlite3_step(st) == SQLITE_ROW) {
+            type = sqlite3_column_type(st, 0);
+            const char *v = (const char*)sqlite3_column_text(st, 0);
+            *out_text = v ? strdup(v) : NULL;
+        }
+        sqlite3_finalize(st);
+    }
+    sqlite3_free(sql);
+    return type;
+}
+
+/* Literal AST for a scalar value (JSON arrays become list literals). */
+static ast_node *rw_make_literal(cypher_executor *executor, const char *text, int type)
+{
+    if (!text || type == SQLITE_NULL) return (ast_node*)make_null_literal(0);
+    if (type == SQLITE_INTEGER) return (ast_node*)make_integer_literal(strtoll(text, NULL, 10), 0);
+    if (type == SQLITE_FLOAT) return (ast_node*)make_decimal_literal(strtod(text, NULL), 0);
+    if (text[0] == '[') {
+        ast_list *items = ast_list_create();
+        sqlite3_stmt *st = NULL;
+        if (items && sqlite3_prepare_v2(executor->db,
+                "SELECT type, value FROM json_each(?)", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, text, -1, SQLITE_TRANSIENT);
+            bool ok = true;
+            while (sqlite3_step(st) == SQLITE_ROW) {
+                const char *jt = (const char*)sqlite3_column_text(st, 0);
+                const char *jv = (const char*)sqlite3_column_text(st, 1);
+                ast_node *lit = NULL;
+                if (!jt) { ok = false; break; }
+                if (strcmp(jt, "integer") == 0) lit = (ast_node*)make_integer_literal(strtoll(jv ? jv : "0", NULL, 10), 0);
+                else if (strcmp(jt, "real") == 0) lit = (ast_node*)make_decimal_literal(strtod(jv ? jv : "0", NULL), 0);
+                else if (strcmp(jt, "true") == 0) lit = (ast_node*)make_boolean_literal(true, 0);
+                else if (strcmp(jt, "false") == 0) lit = (ast_node*)make_boolean_literal(false, 0);
+                else if (strcmp(jt, "null") == 0) lit = (ast_node*)make_null_literal(0);
+                else if (strcmp(jt, "text") == 0) lit = (ast_node*)make_string_literal((char*)(jv ? jv : ""), 0);
+                else { ok = false; break; }   /* nested arrays/objects: fall back to text */
+                ast_list_append(items, lit);
+            }
+            sqlite3_finalize(st);
+            if (ok) return (ast_node*)make_list(items, 0);
+            ast_list_free(items);
+        } else if (items) {
+            ast_list_free(items);
+        }
+    }
+    return (ast_node*)make_string_literal((char*)text, 0);
+}
+
+typedef struct { cypher_map_pair *pair; ast_node *original; ast_node *substitute; } rw_subst;
+
+static void rw_literalize_props(cypher_executor *executor, ast_node *props, const rw_row *row,
+                                rw_subst **subs, int *n_subs)
+{
+    if (!props || props->type != AST_NODE_MAP) return;
+    cypher_map *m = (cypher_map*)props;
+    if (!m->pairs) return;
+    for (int i = 0; i < m->pairs->count; i++) {
+        cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[i];
+        if (!pair || !pair->value) continue;
+        if (pair->value->type == AST_NODE_LITERAL || pair->value->type == AST_NODE_PARAMETER) continue;
+        if (!rw_expr_scalar_only(pair->value, row)) continue;
+        char *text = NULL;
+        int type = rw_eval_scalar(executor, pair->value, row, &text);
+        if (type < 0) { free(text); continue; }
+        ast_node *lit = rw_make_literal(executor, text, type);
+        free(text);
+        if (!lit) continue;
+        rw_subst *grown = realloc(*subs, (size_t)(*n_subs + 1) * sizeof(rw_subst));
+        if (!grown) { ast_node_free(lit); continue; }
+        *subs = grown;
+        (*subs)[*n_subs].pair = pair;
+        (*subs)[*n_subs].original = pair->value;
+        (*subs)[*n_subs].substitute = lit;
+        (*n_subs)++;
+        pair->value = lit;
+    }
+}
+
+static void rw_literalize_pattern(cypher_executor *executor, ast_list *pattern, const rw_row *row,
+                                  rw_subst **subs, int *n_subs)
+{
+    if (!pattern) return;
+    for (int i = 0; i < pattern->count; i++) {
+        ast_node *item = pattern->items[i];
+        if (!item) continue;
+        if (item->type == AST_NODE_NODE_PATTERN) {
+            rw_literalize_props(executor, ((cypher_node_pattern*)item)->properties, row, subs, n_subs);
+        } else if (item->type == AST_NODE_PATH) {
+            cypher_path *path = (cypher_path*)item;
+            if (!path->elements) continue;
+            for (int j = 0; j < path->elements->count; j++) {
+                ast_node *el = path->elements->items[j];
+                if (el->type == AST_NODE_NODE_PATTERN) rw_literalize_props(executor, ((cypher_node_pattern*)el)->properties, row, subs, n_subs);
+                else if (el->type == AST_NODE_REL_PATTERN) rw_literalize_props(executor, ((cypher_rel_pattern*)el)->properties, row, subs, n_subs);
+            }
+        }
+    }
+}
+
+static void rw_restore_subs(rw_subst *subs, int n_subs)
+{
+    for (int i = 0; i < n_subs; i++) {
+        subs[i].pair->value = subs[i].original;
+        ast_node_free(subs[i].substitute);
+    }
+    free(subs);
+}
+
+static void rw_fold_map(variable_map *into, variable_map *from)
+{
+    if (!into || !from) return;
+    for (int i = 0; i < from->count; i++) {
+        variable_mapping *m = &from->mappings[i];
+        if (m->type == VAR_MAP_TYPE_NODE) set_variable_node_id(into, m->variable, m->entity_id);
+        else set_variable_edge_id(into, m->variable, m->entity_id);
+    }
+}
+
+/* Apply a tail WITH to a row: rename / drop entities and scalars, evaluate
+ * scalar-only expressions. */
+static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
+{
+    if (w->pass_all || !w->items) return 0;
+    rw_row next = {0};
+    next.vm = create_variable_map();
+    if (!next.vm) return -1;
+    for (int wi = 0; wi < w->items->count; wi++) {
+        cypher_return_item *it = (cypher_return_item*)w->items->items[wi];
+        if (!it || !it->expr) continue;
+        if (it->expr->type == AST_NODE_IDENTIFIER) {
+            const char *src = ((cypher_identifier*)it->expr)->name;
+            const char *dst = it->alias ? it->alias : src;
+            if (is_variable_edge(row->vm, src)) set_variable_edge_id(next.vm, dst, get_variable_edge_id(row->vm, src));
+            else if (get_variable_node_id(row->vm, src) >= 0) set_variable_node_id(next.vm, dst, get_variable_node_id(row->vm, src));
+            else {
+                const rw_scalar *sc = rw_row_scalar(row, src);
+                if (sc) rw_row_add_scalar(&next, dst, sc->text, sc->type);
+            }
+        } else if (it->alias && rw_expr_scalar_only(it->expr, row)) {
+            char *text = NULL;
+            int type = rw_eval_scalar(executor, it->expr, row, &text);
+            if (type >= 0) rw_row_add_scalar(&next, it->alias, text, type);
+            free(text);
+        }
+    }
+    bool keep = true;
+    if (w->where && rw_expr_scalar_only(w->where, &next)) {
+        char *text = NULL;
+        int type = rw_eval_scalar(executor, w->where, &next, &text);
+        keep = (type >= 0 && text && strcmp(text, "1") == 0);
+        free(text);
+    }
+    rw_row_free(row);
+    *row = next;
+    return keep ? 0 : 1;   /* 1 = row filtered out */
+}
+
+static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
+                                cypher_result *result, clause_flags flags)
+{
+    ast_list *clauses = query->clauses;
+    if (!clauses || clauses->count == 0) return -1;
+
+    /* Shape check: the first clause must be MATCH, UNWIND or CREATE. Anything
+     * else goes to the handlers that owned these flag sets before. */
+    ast_node *first = clauses->items[0];
+    if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
+                    first->type == AST_NODE_CREATE)) {
+        if (flags & CLAUSE_WITH) return handle_merge_with_pipeline(executor, query, result, flags);
+        return handle_merge_return(executor, query, result, flags);
+    }
+
+    CYPHER_DEBUG("Executing row-wise write pipeline");
+
+    /* --- 1. Split prefix / tail ------------------------------------------ */
+    int start = 0;
+    variable_map *created = NULL;
+    cypher_match *synth_create_match = NULL;
+    ast_node *synth_where = NULL;
+    if (first->type == AST_NODE_CREATE) {
+        /* Leading CREATE: run it once, then read its bindings back through a
+         * synthetic id-constrained MATCH so the rest of the prefix (WITH /
+         * UNWIND) sees the created entities. */
+        if (execute_create_clause_with_varmap(executor, (cypher_create*)first, result, &created) < 0) {
+            if (created) free_variable_map(created);
+            return -1;
+        }
+        if (created) {
+            for (int i = 0; i < created->count; i++) {
+                variable_mapping *m = &created->mappings[i];
+                ast_list *args = ast_list_create();
+                ast_list_append(args, (ast_node*)make_identifier(m->variable, 0));
+                ast_node *fn = (ast_node*)make_function_call("id", args, false, 0);
+                ast_node *eq = (ast_node*)make_binary_op(BINARY_OP_EQ, fn, (ast_node*)make_integer_literal(m->entity_id, 0), 0);
+                synth_where = synth_where ? (ast_node*)make_binary_op(BINARY_OP_AND, synth_where, eq, 0) : eq;
+            }
+        }
+        synth_create_match = make_cypher_match(((cypher_create*)first)->pattern, synth_where, false, NULL);
+        start = 1;
+    }
+    int prefix_end = start;
+    while (prefix_end < clauses->count) {
+        ast_node *c = clauses->items[prefix_end];
+        if (!c || rw_is_write_clause(c->type) || c->type == AST_NODE_RETURN) break;
+        prefix_end++;
+    }
+
+    /* --- 2. Evaluate the prefix once: SELECT every in-scope variable ------ */
+    char **scope = NULL;
+    int n_scope;
+    {
+        ast_list *tmp = ast_list_create();
+        if (synth_create_match) ast_list_append(tmp, (ast_node*)synth_create_match);
+        for (int i = start; i < prefix_end; i++) ast_list_append(tmp, clauses->items[i]);
+        n_scope = rw_scope_after_prefix(tmp, tmp->count, &scope);
+        free(tmp->items); free(tmp);
+    }
+    rw_row *rows = NULL; int n_rows = 0;
+    bool *scope_is_entity = NULL;
+    if (n_scope > 0 || prefix_end > start || synth_create_match) {
+        ast_list *items = ast_list_create();
+        for (int i = 0; i < n_scope; i++)
+            ast_list_append(items, (ast_node*)make_return_item((ast_node*)make_identifier(scope[i], 0), strdup(scope[i])));
+        if (n_scope == 0)
+            ast_list_append(items, (ast_node*)make_return_item((ast_node*)make_integer_literal(1, 0), strdup("_one")));
+        cypher_return *ret = make_cypher_return(false, items, NULL, NULL, NULL);
+        ast_list *pre = ast_list_create();
+        if (synth_create_match) ast_list_append(pre, (ast_node*)synth_create_match);
+        for (int i = start; i < prefix_end; i++) ast_list_append(pre, clauses->items[i]);
+        ast_list_append(pre, (ast_node*)ret);
+        cypher_query *pq = make_cypher_query(pre, false);
+
+        /* Run the prefix through this executor (its schema and params are
+         * live); the read dispatch creates its own transform contexts. */
+        cypher_result *pr = cypher_executor_execute_ast(executor, (ast_node*)pq);
+        int rc_prefix = 0;
+        if (!pr || !pr->success) {
+            char msg[512];
+            snprintf(msg, sizeof(msg), "Failed to evaluate the read prefix of a write pipeline: %s",
+                     pr && pr->error_message ? pr->error_message : "no result");
+            set_result_error(result, msg);
+            rc_prefix = -1;
+        } else {
+            scope_is_entity = calloc((size_t)(n_scope > 0 ? n_scope : 1), sizeof(bool));
+            rows = calloc((size_t)(pr->row_count > 0 ? pr->row_count : 1), sizeof(rw_row));
+            for (int r = 0; r < pr->row_count && rows; r++) {
+                rw_row *row = &rows[n_rows];
+                row->vm = create_variable_map();
+                for (int c = 0; c < n_scope && c < pr->column_count; c++) {
+                    const char *cell = pr->data[r][c];
+                    int ty = pr->data_types ? pr->data_types[r][c] : SQLITE_TEXT;
+                    if (cell && cell[0] == '{' && strstr(cell, "\"id\"")) {
+                        /* entity object: {"id":N,...}; edges carry "startNode" */
+                        const char *idp = strstr(cell, "\"id\":");
+                        long long id = idp ? strtoll(idp + 5, NULL, 10) : -1;
+                        if (id >= 0) {
+                            if (strstr(cell, "\"startNode\"")) set_variable_edge_id(row->vm, scope[c], (int)id);
+                            else set_variable_node_id(row->vm, scope[c], (int)id);
+                            scope_is_entity[c] = true;
+                            continue;
+                        }
+                    }
+                    rw_row_add_scalar(row, scope[c], cell, cell ? ty : SQLITE_NULL);
+                }
+                n_rows++;
+            }
+        }
+        if (pr) cypher_result_free(pr);
+        /* The clauses are shared with `query`; free only what we made. */
+        ast_node_free((ast_node*)ret);
+        free(pre->items); free(pre); free(pq);
+        if (rc_prefix < 0) {
+            rw_free_names(scope, n_scope);
+            if (synth_create_match) { ast_node_free(synth_where); free(synth_create_match); }
+            if (created) free_variable_map(created);
+            free(rows); free(scope_is_entity);
+            return -1;
+        }
+    }
+    if (synth_create_match) { ast_node_free(synth_where); free(synth_create_match); }
+    if (created) free_variable_map(created);
+    rw_free_names(scope, n_scope);
+    free(scope_is_entity);
+
+    cypher_return *ret_clause = find_return_clause(query);
+    int rc = 0;
+
+    /* --- 3. Eager DELETE pass: every DELETE that precedes the first MERGE
+     *        runs for all rows before any MERGE runs for any row. --------- */
+    int first_merge = clauses->count;
+    for (int i = prefix_end; i < clauses->count; i++)
+        if (clauses->items[i] && clauses->items[i]->type == AST_NODE_MERGE) { first_merge = i; break; }
+    bool *eager_done = calloc((size_t)clauses->count, sizeof(bool));
+    for (int i = prefix_end; i < first_merge; i++) {
+        ast_node *c = clauses->items[i];
+        if (!c || c->type != AST_NODE_DELETE) continue;
+        for (int r = 0; r < n_rows && rc >= 0; r++) {
+            rc = execute_delete_operations(executor, (cypher_delete*)c, rows[r].vm, result);
+        }
+        if (eager_done) eager_done[i] = true;
+        if (rc < 0) break;
+    }
+
+    /* --- 4. Per-row tail --------------------------------------------------- */
+    bool *row_alive = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(bool));
+    for (int r = 0; r < n_rows && rc >= 0; r++) {
+        row_alive[r] = true;
+        for (int i = prefix_end; i < clauses->count && rc >= 0 && row_alive[r]; i++) {
+            ast_node *c = clauses->items[i];
+            if (!c) continue;
+            switch (c->type) {
+                case AST_NODE_DELETE:
+                    if (eager_done && eager_done[i]) break;
+                    rc = execute_delete_operations(executor, (cypher_delete*)c, rows[r].vm, result);
+                    break;
+                case AST_NODE_MERGE: {
+                    cypher_merge *mg = (cypher_merge*)c;
+                    rw_subst *subs = NULL; int n_subs = 0;
+                    rw_literalize_pattern(executor, mg->pattern, &rows[r], &subs, &n_subs);
+                    variable_map *out = NULL;
+                    rc = execute_merge_clause(executor, mg, result, rows[r].vm, &out);
+                    rw_restore_subs(subs, n_subs);
+                    if (out) { rw_fold_map(rows[r].vm, out); free_variable_map(out); }
+                    break;
+                }
+                case AST_NODE_SET:
+                    rc = execute_set_operations(executor, (cypher_set*)c, rows[r].vm, result);
+                    break;
+                case AST_NODE_REMOVE:
+                    rc = execute_remove_operations(executor, (cypher_remove*)c, rows[r].vm, result);
+                    break;
+                case AST_NODE_CREATE: {
+                    cypher_create *cr = (cypher_create*)c;
+                    rw_subst *subs = NULL; int n_subs = 0;
+                    rw_literalize_pattern(executor, cr->pattern, &rows[r], &subs, &n_subs);
+                    /* Entities bound by the row (e.g. CREATE (a)-[:R]->(b) after
+                     * MATCH) must be visible to CREATE: start from a copy. */
+                    variable_map *cm = create_variable_map();
+                    if (cm) rw_fold_map(cm, rows[r].vm);
+                    rc = execute_create_clause_with_varmap(executor, cr, result, &cm);
+                    rw_restore_subs(subs, n_subs);
+                    if (cm) { rw_fold_map(rows[r].vm, cm); free_variable_map(cm); }
+                    break;
+                }
+                case AST_NODE_WITH: {
+                    int w = rw_apply_with(executor, (cypher_with*)c, &rows[r]);
+                    if (w < 0) rc = -1;
+                    else if (w == 1) row_alive[r] = false;
+                    break;
+                }
+                case AST_NODE_RETURN:
+                    break;
+                default:
+                    set_result_error(result, "Unsupported clause in a row-wise write pipeline");
+                    rc = -1;
+            }
+        }
+    }
+    free(eager_done);
+
+    /* --- 5. RETURN --------------------------------------------------------- */
+    if (rc >= 0) {
+        result->success = true;
+        if (ret_clause && ret_clause->items) {
+            int live = 0;
+            for (int r = 0; r < n_rows; r++) if (row_alive[r]) live++;
+            set_return_column_names(ret_clause, result);
+            int cols = ret_clause->items->count;
+            bool agg = return_has_aggregation(ret_clause);
+            int out_rows = agg ? 1 : live;
+            result->row_count = out_rows;
+            result->data = calloc((size_t)(out_rows > 0 ? out_rows : 1), sizeof(char**));
+            result->data_types = calloc((size_t)(out_rows > 0 ? out_rows : 1), sizeof(int*));
+            for (int o = 0; o < out_rows; o++) {
+                result->data[o] = calloc((size_t)cols, sizeof(char*));
+                result->data_types[o] = calloc((size_t)cols, sizeof(int));
+            }
+            if (agg) {
+                variable_map **maps = calloc((size_t)(live > 0 ? live : 1), sizeof(variable_map*));
+                int k = 0;
+                for (int r = 0; r < n_rows; r++) if (row_alive[r]) maps[k++] = rows[r].vm;
+                /* non-aggregate cells come from the first live row */
+                int first_live = -1;
+                for (int r = 0; r < n_rows; r++) if (row_alive[r]) { first_live = r; break; }
+                if (first_live >= 0) project_return_row_from_var_map(executor, ret_clause, rows[first_live].vm, result, 0);
+                for (int i = 0; i < cols; i++) {
+                    cypher_return_item *it = (cypher_return_item*)ret_clause->items->items[i];
+                    if (aggregating_call_name(it->expr)) {
+                        free(result->data[0][i]); result->data[0][i] = NULL;
+                        project_aggregate_cell(executor, it, maps, live, result, i);
+                    } else if (first_live >= 0 && rw_expr_scalar_only(it->expr, &rows[first_live])) {
+                        char *text = NULL;
+                        int type = rw_eval_scalar(executor, it->expr, &rows[first_live], &text);
+                        free(result->data[0][i]);
+                        result->data[0][i] = text;
+                        result->data_types[0][i] = type >= 0 ? type : SQLITE_NULL;
+                    }
+                }
+                free(maps);
+            } else {
+                int o = 0;
+                for (int r = 0; r < n_rows; r++) {
+                    if (!row_alive[r]) continue;
+                    project_return_row_from_var_map(executor, ret_clause, rows[r].vm, result, o);
+                    for (int i = 0; i < cols; i++) {
+                        cypher_return_item *it = (cypher_return_item*)ret_clause->items->items[i];
+                        if (it->expr && it->expr->type != AST_NODE_LITERAL && rw_expr_scalar_only(it->expr, &rows[r])) {
+                            char *text = NULL;
+                            int type = rw_eval_scalar(executor, it->expr, &rows[r], &text);
+                            free(result->data[o][i]);
+                            result->data[o][i] = text;
+                            result->data_types[o][i] = type >= 0 ? type : SQLITE_NULL;
+                        }
+                    }
+                    o++;
+                }
+            }
+        }
+    }
+
+    for (int r = 0; r < n_rows; r++) rw_row_free(&rows[r]);
+    free(rows);
+    free(row_alive);
+    return rc;
 }
 

@@ -1102,6 +1102,88 @@ static void test_merge_path_return(void)
     }
 }
 
+
+/* GQLITE-T-0371: row-wise write pipeline — DELETE then MERGE runs the
+ * deletes for every row first, then the MERGE per row (Merge1 [14]). */
+static void test_match_delete_merge_return_per_row(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        execute_and_verify(executor, "CREATE (:RWA {num: 1}), (:RWA {num: 2})", true, "Seed two nodes");
+        cypher_result *result = cypher_executor_execute(executor,
+            "MATCH (a:RWA) DELETE a MERGE (a2:RWA) RETURN a2.num");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->row_count, 2);
+                CU_ASSERT_EQUAL(result->nodes_deleted, 2);
+                CU_ASSERT_EQUAL(result->nodes_created, 1);
+            } else {
+                printf("MATCH+DELETE+MERGE error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
+/* GQLITE-T-0371: scalar WITH projections feed MERGE property maps, with
+ * expressions, one MERGE pass per row (Merge1 [9]). */
+static void test_with_scalars_into_merge_properties(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        execute_and_verify(executor, "UNWIND [0, 1] AS x UNWIND [0, 1] AS y CREATE (:RWS {x: x, y: y})",
+                           true, "Seed 2x2 nodes via double UNWIND");
+        cypher_result *result = cypher_executor_execute(executor,
+            "MATCH (foo:RWS) WITH foo.x AS x, foo.y AS y MERGE (:RWN {x: x, y: y + 1}) MERGE (:RWN {x: x, y: y}) RETURN x, y");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->row_count, 4);
+                /* distinct (x, y) pairs: y in {0,1,2} for x in {0,1} = 6 */
+                CU_ASSERT_EQUAL(result->nodes_created, 6);
+            } else {
+                printf("WITH scalars into MERGE error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
+/* GQLITE-T-0371: a WITH rename chain across several MERGEs (Merge5 [18]). */
+static void test_with_rename_chain_merges(void)
+{
+    cypher_executor *executor = cypher_executor_create(test_db);
+    CU_ASSERT_PTR_NOT_NULL(executor);
+    if (executor) {
+        execute_and_verify(executor, "CREATE (:RWC {id: 0})", true, "Seed one node");
+        cypher_result *result = cypher_executor_execute(executor,
+            "MATCH (n:RWC) MATCH (m:RWC) WITH n AS a, m AS b MERGE (a)-[:RWT]->(b) WITH a AS x, b AS y MERGE (a:RWC) MERGE (b:RWC) MERGE (a)-[:RWT]->(b) RETURN x.id AS x, y.id AS y");
+        CU_ASSERT_PTR_NOT_NULL(result);
+        if (result) {
+            CU_ASSERT_TRUE(result->success);
+            if (result->success) {
+                CU_ASSERT_EQUAL(result->row_count, 1);
+                CU_ASSERT_EQUAL(result->relationships_created, 1);
+                CU_ASSERT_EQUAL(result->nodes_created, 0);
+                if (result->row_count > 0 && result->data[0][0]) {
+                    CU_ASSERT_STRING_EQUAL(result->data[0][0], "0");
+                }
+            } else {
+                printf("WITH rename chain error: %s\n", result->error_message);
+            }
+            cypher_result_free(result);
+        }
+        cypher_executor_free(executor);
+    }
+}
+
 int init_executor_merge_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor MERGE", setup_executor_merge_suite, teardown_executor_merge_suite);
@@ -1133,7 +1215,10 @@ int init_executor_merge_suite(void)
         !CU_add_test(suite, "MERGE undirected re-match keeps inline props", test_merge_undirected_rematch_keeps_inline_props) ||
         !CU_add_test(suite, "MATCH+MERGE per matched row", test_match_merge_per_row) ||
         !CU_add_test(suite, "CREATE+MERGE+RETURN aggregate", test_create_merge_return_aggregate) ||
-        !CU_add_test(suite, "MERGE path RETURN", test_merge_path_return)) {
+        !CU_add_test(suite, "MERGE path RETURN", test_merge_path_return) ||
+        !CU_add_test(suite, "MATCH+DELETE+MERGE+RETURN per row", test_match_delete_merge_return_per_row) ||
+        !CU_add_test(suite, "WITH scalars into MERGE properties", test_with_scalars_into_merge_properties) ||
+        !CU_add_test(suite, "WITH rename chain across MERGEs", test_with_rename_chain_merges)) {
         return CU_get_error();
     }
 
