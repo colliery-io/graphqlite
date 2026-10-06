@@ -316,12 +316,13 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
 {
     CYPHER_DEBUG("Transforming RETURN clause");
 
-    /* Reset pending property JOINs for this RETURN clause */
-    reset_pending_prop_joins(ctx);
-
     if (!ctx || !ret) {
         return -1;
     }
+
+    /* Discard any deferred property JOINs left over from an earlier
+     * clause; this RETURN starts with an empty deferred section. */
+    sql_builder_clear_deferred_joins(ctx->unified_builder);
 
     /* For write queries, RETURN means we need to select the created data */
     if (ctx->query_type == QUERY_TYPE_WRITE) {
@@ -625,11 +626,9 @@ return_star_done:
             }
         }
 
-        /* Add pending property JOINs from aggregate functions */
-        if (ctx->pending_prop_joins_len > 0) {
-            sql_join_raw(ctx->unified_builder, ctx->pending_prop_joins);
-            reset_pending_prop_joins(ctx);
-        }
+        /* Append the property JOINs deferred by aggregate functions
+         * (T-0268) after every other JOIN of this query. */
+        sql_builder_flush_deferred_joins(ctx->unified_builder);
 
         /* T-0311 (E2): finalize moved to end of transform_single_query_sql.
          * External callers (executor_match.c, executor_merge_pipeline.c)

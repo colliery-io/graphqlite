@@ -259,6 +259,7 @@ sql_builder *sql_builder_create(void)
     dbuf_init(&b->select);
     dbuf_init(&b->from);
     dbuf_init(&b->joins);
+    dbuf_init(&b->deferred_joins);
     dbuf_init(&b->where);
     dbuf_init(&b->group_by);
     dbuf_init(&b->order_by);
@@ -290,6 +291,7 @@ void sql_builder_free(sql_builder *b)
     dbuf_free(&b->select);
     dbuf_free(&b->from);
     dbuf_free(&b->joins);
+    dbuf_free(&b->deferred_joins);
     dbuf_free(&b->where);
     dbuf_free(&b->group_by);
     dbuf_free(&b->order_by);
@@ -312,6 +314,7 @@ void sql_builder_reset(sql_builder *b)
     dbuf_clear(&b->select);
     dbuf_clear(&b->from);
     dbuf_clear(&b->joins);
+    dbuf_clear(&b->deferred_joins);
     dbuf_clear(&b->where);
     dbuf_clear(&b->group_by);
     dbuf_clear(&b->order_by);
@@ -387,12 +390,42 @@ void sql_from(sql_builder *b, const char *table, const char *alias)
 }
 
 /*
- * Add raw JOIN SQL (for pending property JOINs from aggregate functions).
+ * Add raw JOIN SQL (appended verbatim to the JOIN section).
  */
 void sql_join_raw(sql_builder *b, const char *raw_join_sql)
 {
     if (!b || !raw_join_sql) return;
     dbuf_append(&b->joins, raw_join_sql);
+}
+
+/*
+ * Deferred JOIN section (T-0268) — see sql_builder.h.
+ */
+void sql_join_deferred(sql_builder *b, const char *raw_join_sql)
+{
+    if (!b || !raw_join_sql) return;
+    dbuf_append(&b->deferred_joins, raw_join_sql);
+}
+
+const char *sql_builder_get_deferred_joins(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->deferred_joins)) {
+        return NULL;
+    }
+    return dbuf_get(&b->deferred_joins);
+}
+
+void sql_builder_clear_deferred_joins(sql_builder *b)
+{
+    if (!b) return;
+    dbuf_clear(&b->deferred_joins);
+}
+
+void sql_builder_flush_deferred_joins(sql_builder *b)
+{
+    if (!b || dbuf_is_empty(&b->deferred_joins)) return;
+    dbuf_append(&b->joins, dbuf_get(&b->deferred_joins));
+    dbuf_clear(&b->deferred_joins);
 }
 
 void sql_join_append_on(sql_builder *b, const char *condition)

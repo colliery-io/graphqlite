@@ -134,18 +134,26 @@ typedef enum {
  */
 typedef struct {
     /* Pre-CTE prepend buffer (T-0267). Holds CTE definitions that
-     * must appear BEFORE any user-written CTEs, e.g. property-join
-     * subqueries currently spliced via the external prepend_cte_to_sql
-     * helper. Format: raw CTE fragments ("name AS (query), ...") with
-     * no leading WITH keyword. sql_builder_to_string emits a single
+     * must appear BEFORE any user-written CTEs. Format: raw CTE
+     * fragments ("name AS (query), ...") with no leading WITH keyword.
+     * The CTE prefix emitted in front of the final SQL is a single
      * WITH clause that concatenates pre_cte and cte when either is
-     * non-empty, with pre_cte appearing first. Targeted by T-0268
-     * to absorb pending_prop_joins / prepend_cte_to_sql machinery. */
+     * non-empty, with pre_cte appearing first. */
     dynamic_buffer pre_cte;
     dynamic_buffer cte;       /* WITH RECURSIVE ... */
     dynamic_buffer select;    /* SELECT columns */
     dynamic_buffer from;      /* FROM table */
     dynamic_buffer joins;     /* JOIN clauses */
+    /* Deferred JOIN fragments (T-0268). Raw " LEFT JOIN ..." text that
+     * aggregate-on-property transforms produce while a RETURN / WITH
+     * item is being transformed. They are parked here instead of in
+     * `joins` because transform_with_clause borrows
+     * sql_builder_get_joins() before the items run and must see the
+     * original join list unchanged. The owning clause appends them
+     * after `joins` (sql_builder_flush_deferred_joins or
+     * sql_builder_get_deferred_joins + clear). Not emitted by
+     * sql_builder_to_string. */
+    dynamic_buffer deferred_joins;
     dynamic_buffer where;     /* WHERE conditions */
     dynamic_buffer group_by;  /* GROUP BY */
     dynamic_buffer order_by;  /* ORDER BY */
@@ -225,9 +233,29 @@ void sql_join(sql_builder *b, sql_join_type type, const char *table,
               const char *alias, const char *on_condition);
 
 /*
- * Add raw JOIN SQL (for pending property JOINs from aggregate functions).
+ * Add raw JOIN SQL (appended verbatim to the JOIN section).
  */
 void sql_join_raw(sql_builder *b, const char *raw_join_sql);
+
+/*
+ * Deferred JOIN section (T-0268).
+ *
+ * sql_join_deferred appends raw JOIN SQL (e.g. the three LEFT JOINs an
+ * aggregate on a property needs) to a side buffer that is NOT part of
+ * sql_builder_to_string output. The clause that owns the current
+ * projection consumes it:
+ *   - sql_builder_flush_deferred_joins moves the text onto the end of
+ *     the JOIN section and clears it (RETURN).
+ *   - sql_builder_get_deferred_joins returns the raw text (NULL when
+ *     empty; valid until the builder is modified) for callers that
+ *     assemble a CTE body themselves (WITH); pair with
+ *     sql_builder_clear_deferred_joins.
+ * Fragments are kept in call order and are not deduplicated.
+ */
+void sql_join_deferred(sql_builder *b, const char *raw_join_sql);
+const char *sql_builder_get_deferred_joins(sql_builder *b);
+void sql_builder_clear_deferred_joins(sql_builder *b);
+void sql_builder_flush_deferred_joins(sql_builder *b);
 
 /*
  * Append an AND condition to the last LEFT JOIN's ON clause.

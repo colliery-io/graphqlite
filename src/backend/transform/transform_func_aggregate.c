@@ -215,11 +215,12 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
              "(SELECT id FROM property_keys WHERE key = '%s')", prop->property_name);
 
     /*
-     * When using unified_builder, accumulate property JOINs in the pending buffer.
-     * These will be injected into the FROM clause by transform_return_clause.
+     * When using unified_builder, park the property JOINs in the builder's
+     * deferred-join section (T-0268). The owning RETURN / WITH clause
+     * appends them after its other JOINs once the projection is built.
      */
     if (ctx->unified_builder) {
-        /* Build the JOIN clauses and add to pending buffer */
+        /* Build the JOIN clauses and defer them */
         char *join_sql = sqlite3_mprintf(
                  " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s"
                  " LEFT JOIN %s AS %s ON %s.%s = %s AND %s.key_id = %s"
@@ -228,9 +229,9 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
                  agg_real_table, join_alias_real, join_alias_real, agg_id_col, node_id_ref, join_alias_real, pk_subquery,
                  agg_text_table, join_alias_text, join_alias_text, agg_id_col, node_id_ref, join_alias_text, pk_subquery);
 
-        if (join_sql) add_pending_prop_join(ctx, join_sql);
+        if (join_sql) sql_join_deferred(ctx->unified_builder, join_sql);
         sqlite3_free(join_sql);
-        CYPHER_DEBUG("Added pending property JOINs for %s aggregation", upper_func);
+        CYPHER_DEBUG("Deferred property JOINs for %s aggregation", upper_func);
 
         /* Generate the aggregation expression using joined columns */
         if (func_call->distinct) {

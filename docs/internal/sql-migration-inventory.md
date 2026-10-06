@@ -45,6 +45,33 @@ Notes:
 
 ## S2 — `pending_prop_joins` writes & invariants
 
+> **Superseded 2026-10-05 (S14, GQLITE-T-0268).** The description below was
+> the 2026-05-19 snapshot and it misread the buffer: `pending_prop_joins`
+> never held CTEs and `prepend_cte_to_sql` never touched it. The buffer held
+> raw ` LEFT JOIN node_props_{int,real,text} AS _prop_N_* ON ...` fragments
+> produced by `transform_func_aggregate.c` for aggregates on properties, and
+> they were spliced into the **JOIN section**: at the end of
+> `transform_return_clause` via `sql_join_raw`, and in
+> `transform_with_clause` right after the borrowed `joins_clause` of the CTE
+> body. Deferral is needed because `transform_with_clause` takes
+> `sql_builder_get_joins()` (a pointer into the `joins` dbuf, NULL when
+> empty) *before* the projection items run.
+>
+> S14 moved the buffer into `sql_builder` as the typed `deferred_joins`
+> section — `sql_join_deferred()` (writer, `transform_func_aggregate.c`),
+> `sql_builder_flush_deferred_joins()` (RETURN), `sql_builder_get_deferred_joins()`
+> + `sql_builder_clear_deferred_joins()` (WITH; and the start-of-clause
+> discards that replaced `reset_pending_prop_joins`). `sql_builder_reset`
+> clears it; `sql_builder_to_string` does not emit it. Generated SQL is
+> byte-identical (TCK 3799/3799, 0 regressions, 0 gains). After S14 the
+> `cypher_transform_context` fields and the `*_pending_prop_join*` helpers
+> are dead; S15 (GQLITE-T-0269) deletes them.
+>
+> `sql_pre_cte` (S13) is unaffected: it remains the CTE-prefix section fused
+> with the user CTE buffer in front of the final SQL.
+
+Original snapshot (2026-05-19), kept for history:
+
 Three writers, three readers, one CTE-prepend invariant.
 
 **Writers / readers** (file:line):
@@ -57,21 +84,16 @@ Three writers, three readers, one CTE-prepend invariant.
 - `transform_func_aggregate.c:200` — `add_pending_prop_join(ctx, …)`
 - `transform_with.c:{215,486,488,491}` — read + reset across WITH boundary
 
-**Prepend invariant**: `prepend_cte_to_sql(ctx)` runs at end of
-transformation and splices the accumulated pending joins as CTEs onto
-the front of the SQL buffer. Defined in `cypher_transform.c:280`.
-Called from:
+**Prepend invariant** (as written in 2026-05; see the note above):
+`prepend_cte_to_sql(ctx)` runs at end of transformation and splices the
+builder's CTE buffers onto the front of the SQL buffer. Defined in
+`cypher_transform.c`. Called from:
 
-- `cypher_transform.c:{401,539,732,744}` (main transform entry points)
-- `executor_match.c:121`
-- `executor_call_subquery.c:187`
-- `executor_merge_pipeline.c:83`
-
-**Invariant**: pending joins emitted by `add_pending_prop_join` must
-appear as CTE statements at the front of the final SQL; the rest of
-the query (SELECT/FROM/WHERE) references them by alias. The order of
-adds is preserved; duplicates are not deduplicated (callers are
-expected not to add duplicates).
+- `cypher_transform.c` (main transform entry points: query, EXPLAIN,
+  UNION variants of both)
+- `executor_match.c`
+- `executor_call_subquery.c`
+- `executor_merge_pipeline.c`
 
 ## S3 — Capability gap analysis
 
@@ -93,13 +115,13 @@ expected not to add duplicates).
 | `append_string_literal(ctx, value)`       | `escape_sql_string(value)` returns malloc'd literal;| ✓      |
 |                                           | feed into existing setters                          |        |
 | `append_sql(ctx, "WITH cte AS (…)")`      | `sql_cte(b, name, query, recursive)`                | ✓      |
-| `add_pending_prop_join(ctx, sql)`         | **GAP** — needs `sql_builder` CTE-prepend section   | gap    |
-|                                           | (see S13 of I-0039)                                 |        |
+| `add_pending_prop_join(ctx, sql)`         | `sql_join_deferred(b, raw)` + flush/get/clear (S14) | ✓      |
 | INSERT/UPDATE/DELETE shapes               | `write_builder_*` API in sql_builder.{c,h}          | ✓      |
 
 **Remaining gaps (updated after S5 pre-flight, 2026-05-19):**
 
-1. **pending_prop_joins CTE-prepend** — already known; closed by S13.
+1. **pending_prop_joins** — closed by S13 (`sql_pre_cte`, CTE prefix) and
+   S14 (`deferred_joins`, the section the buffer actually needed).
 
 2. **DML statement emission** — discovered during the S5 pre-flight.
    `transform_delete.c` (6 calls), `transform_remove.c` (11), and
