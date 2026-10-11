@@ -65,7 +65,7 @@ jobs:
             if [ -e "dist/$tag" ]; then echo "dist/$tag is a page of the site"; exit 1; fi
             src="$RUNNER_TEMP/book-$tag"
             mkdir -p "$src"
-            git archive "$tag" docs | tar -x -C "$src"
+            git -C "$GITHUB_WORKSPACE" archive "$tag" docs | tar -x -C "$src"
             "$RUNNER_TEMP/bin/mdbook" build "$src/docs" -d "$PWD/dist/$tag"
           done
           ls dist
