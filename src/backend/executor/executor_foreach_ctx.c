@@ -48,6 +48,7 @@ static foreach_binding *foreach_slot(foreach_context *ctx, const char *variable)
                 free(ctx->bindings[i].value.string);
                 ctx->bindings[i].value.string = NULL;
             }
+            ctx->bindings[i].is_json = false;
             return &ctx->bindings[i];
         }
     }
@@ -63,6 +64,7 @@ static foreach_binding *foreach_slot(foreach_context *ctx, const char *variable)
     foreach_binding *b = &ctx->bindings[ctx->count];
     b->variable = strdup(variable);
     if (!b->variable) return NULL;
+    b->is_json = false;
     ctx->count++;
     return b;
 }
@@ -84,6 +86,13 @@ int set_foreach_binding_string(foreach_context *ctx, const char *variable, const
     if (!b) return -1;
     b->literal_type = LITERAL_STRING;
     b->value.string = value ? strdup(value) : NULL;
+    return 0;
+}
+
+int set_foreach_binding_json(foreach_context *ctx, const char *variable, const char *json)
+{
+    if (set_foreach_binding_string(ctx, variable, json) < 0) return -1;
+    get_foreach_binding(ctx, variable)->is_json = true;
     return 0;
 }
 
@@ -133,7 +142,7 @@ int bind_foreach_item_ast(foreach_context *ctx, const char *variable, ast_node *
     if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
         char *json = serialize_ast_to_json(item);
         if (!json) return -1;
-        int rc = set_foreach_binding_string(ctx, variable, json);
+        int rc = set_foreach_binding_json(ctx, variable, json);
         free(json);
         return rc;
     }
@@ -149,8 +158,12 @@ int bind_foreach_item_json_each(foreach_context *ctx, const char *variable,
     if (strcmp(type, "false") == 0)   return set_foreach_binding_bool(ctx, variable, false);
     if (strcmp(type, "integer") == 0) return set_foreach_binding_int(ctx, variable, sqlite3_column_int64(stmt, value_col));
     if (strcmp(type, "real") == 0)    return set_foreach_binding_real(ctx, variable, sqlite3_column_double(stmt, value_col));
-    /* text, object, array: objects and arrays come back as JSON text */
-    return set_foreach_binding_string(ctx, variable, (const char *)sqlite3_column_text(stmt, value_col));
+    /* objects and arrays come back as JSON text */
+    const char *value = (const char *)sqlite3_column_text(stmt, value_col);
+    if (strcmp(type, "object") == 0 || strcmp(type, "array") == 0) {
+        return set_foreach_binding_json(ctx, variable, value);
+    }
+    return set_foreach_binding_string(ctx, variable, value);
 }
 
 int json_map_property(sqlite3 *db, const char *json, const char *key,
@@ -205,6 +218,8 @@ int foreach_map_property(sqlite3 *db, foreach_context *ctx, ast_node *expr,
     foreach_binding *b = get_foreach_binding(ctx, ((cypher_identifier *)prop->expr)->name);
     if (!b) return -1;
     if (b->literal_type == LITERAL_NULL) return -2;
+    /* Any text that is a JSON object: FOREACH over an evaluated list binds
+     * maps as text without is_json. json_map_property checks validity. */
     if (b->literal_type != LITERAL_STRING || !b->value.string) return -1;
     return json_map_property(db, b->value.string, prop->property_name, out_type, out);
 }
@@ -234,7 +249,7 @@ int foreach_value(sqlite3 *db, foreach_context *ctx, ast_node *expr,
             return 0;
         case LITERAL_STRING:
             if (!b->value.string) return -2;
-            *out_type = PROP_TYPE_TEXT;
+            *out_type = b->is_json ? PROP_TYPE_JSON : PROP_TYPE_TEXT;
             out->as_str = strdup(b->value.string);
             out->as_str_len = out->as_str ? strlen(out->as_str) : 0;
             return out->as_str ? 0 : -1;

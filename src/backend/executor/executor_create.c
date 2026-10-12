@@ -230,7 +230,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     if (binding) {
                                         switch (binding->literal_type) {
                                             case LITERAL_STRING:
-                                                prop_type = PROP_TYPE_TEXT;
+                                                prop_type = binding->is_json ? PROP_TYPE_JSON : PROP_TYPE_TEXT;
                                                 prop_value = binding->value.string;
                                                 break;
                                             case LITERAL_INTEGER:
@@ -786,7 +786,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 if (binding) {
                                     switch (binding->literal_type) {
                                         case LITERAL_STRING:
-                                            prop_type = PROP_TYPE_TEXT;
+                                            prop_type = binding->is_json ? PROP_TYPE_JSON : PROP_TYPE_TEXT;
                                             prop_value = binding->value.string;
                                             break;
                                         case LITERAL_INTEGER:

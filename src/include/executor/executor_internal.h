@@ -46,6 +46,7 @@ typedef struct {
         char *string;
         bool boolean;
     } value;
+    bool is_json;      /* LITERAL_STRING holding a map or list as JSON text */
 } foreach_binding;
 
 typedef struct {
@@ -75,6 +76,8 @@ foreach_binding* get_foreach_binding(foreach_context *ctx, const char *variable)
 int set_foreach_binding_real(foreach_context *ctx, const char *variable, double value);
 int set_foreach_binding_bool(foreach_context *ctx, const char *variable, bool value);
 int set_foreach_binding_null(foreach_context *ctx, const char *variable);
+/* A map or list, as JSON text. */
+int set_foreach_binding_json(foreach_context *ctx, const char *variable, const char *json);
 
 /* Bind one UNWIND/FOREACH item, keeping its type (#124). Maps and lists
  * bind as JSON text, so `item.key` can read them. Returns -1 for an item

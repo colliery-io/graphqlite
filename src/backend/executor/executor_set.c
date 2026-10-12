@@ -20,6 +20,48 @@
  * a SELECT … FROM nodes WHERE id=… SQL query and reading the result.
  * Used by SET to handle any RHS shape beyond bare literals/params/funcs
  * (e.g. 'SET n.num = n.num + 1' where the RHS is a BINARY_OP). */
+/* Is text a valid JSON document? A string such as '[draft]' is not. */
+static bool text_is_json(sqlite3 *db, const char *text)
+{
+    sqlite3_stmt *st = NULL;
+    bool ok = false;
+    if (sqlite3_prepare_v2(db, "SELECT json_valid(?)", -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, text, -1, SQLITE_STATIC);
+        ok = sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 1;
+        sqlite3_finalize(st);
+    }
+    return ok;
+}
+
+/* Register the current UNWIND/FOREACH values as scalar variables, so an
+ * expression such as toString(i) or row.a * 2 can read them (#124).
+ * A variable that var_map binds to an entity wins. */
+static void register_foreach_values(cypher_transform_context *ctx)
+{
+    if (!g_foreach_ctx) return;
+    for (int i = 0; i < g_foreach_ctx->count; i++) {
+        foreach_binding *b = &g_foreach_ctx->bindings[i];
+        if (transform_var_lookup(ctx->var_ctx, b->variable)) continue;
+        char *lit = NULL;
+        switch (b->literal_type) {
+            case LITERAL_INTEGER: lit = sqlite3_mprintf("%lld", (long long)b->value.integer); break;
+            case LITERAL_DECIMAL: lit = sqlite3_mprintf("%!.17g", b->value.decimal); break;
+            case LITERAL_BOOLEAN: lit = sqlite3_mprintf("_gql_bool_str(%d)", b->value.boolean ? 1 : 0); break;
+            case LITERAL_STRING:
+                if (!b->value.string) lit = sqlite3_mprintf("NULL");
+                else if (b->is_json) lit = sqlite3_mprintf("json(%Q)", b->value.string);
+                else lit = sqlite3_mprintf("%Q", b->value.string);
+                break;
+            default: lit = sqlite3_mprintf("NULL"); break;
+        }
+        if (!lit) continue;
+        transform_var_register_projected(ctx->var_ctx, b->variable, lit);
+        transform_var_set_bound(ctx->var_ctx, b->variable, true);
+        transform_var_set_scalar_value(ctx->var_ctx, b->variable, true);
+        sqlite3_free(lit);
+    }
+}
+
 static int evaluate_ast_with_context(
     cypher_executor *executor,
     ast_node *expr,
@@ -64,6 +106,7 @@ static int evaluate_ast_with_context(
             sql_where(ctx->unified_builder, where_cond);
         }
     }
+    register_foreach_values(ctx);
 
     /* Transform the expression to SQL. T-0314: pick the type-preserving
      * (in_comparison) branch so property lookups stay typed — without
@@ -190,6 +233,7 @@ int evaluate_function_call_via_sqlite(
 {
     cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) return -1;
+    register_foreach_values(ctx);
 
     append_sql(ctx, "SELECT ");
     if (transform_expression(ctx, (ast_node*)func_call) < 0) {
@@ -227,7 +271,7 @@ int evaluate_function_call_via_sqlite(
             break;
         case SQLITE_TEXT: {
             const char *text = (const char*)sqlite3_column_text(stmt, 0);
-            if (text && (*text == '{' || *text == '[')) {
+            if (text && (*text == '{' || *text == '[') && text_is_json(executor->db, text)) {
                 *out_type = PROP_TYPE_JSON;
             } else {
                 *out_type = PROP_TYPE_TEXT;
@@ -1079,7 +1123,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             if (binding) {
                 switch (binding->literal_type) {
                     case LITERAL_STRING:
-                        prop_type = PROP_TYPE_TEXT;
+                        prop_type = binding->is_json ? PROP_TYPE_JSON : PROP_TYPE_TEXT;
                         prop_value = binding->value.string;
                         break;
                     case LITERAL_INTEGER:
