@@ -6,6 +6,7 @@
 
 #include <CUnit/CUnit.h>
 #include <CUnit/Basic.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "executor/cypher_executor.h"
@@ -211,6 +212,31 @@ static void test_dfs_linear_path(void)
     }
 }
 
+/* DFS pushes once per scanned edge, so a dense graph needs a stack of
+ * edge_count + 1, not 2 * node_count. A complete graph on 8 nodes has
+ * 56 edges; the old stack of 16 overflowed the heap. */
+static void test_dfs_dense_graph(void)
+{
+    cypher_executor_free(executor);
+    sqlite3_close(test_db);
+    sqlite3_open(":memory:", &test_db);
+    executor = cypher_executor_create(test_db);
+
+    exec_cypher("UNWIND range(0, 7) AS i CREATE (:Node {id: toString(i)})");
+    exec_cypher("MATCH (a:Node), (b:Node) WHERE a.id <> b.id CREATE (a)-[:L]->(b)");
+
+    char *json = exec_get_json("RETURN dfs('0')");
+    CU_ASSERT_PTR_NOT_NULL(json);
+    if (json) {
+        for (int i = 0; i < 8; i++) {
+            char needle[32];
+            snprintf(needle, sizeof(needle), "\"user_id\":\"%d\"", i);
+            CU_ASSERT_PTR_NOT_NULL(strstr(json, needle));
+        }
+        free(json);
+    }
+}
+
 static void test_dfs_max_depth(void)
 {
     cypher_executor_free(executor);
@@ -292,6 +318,7 @@ int init_executor_traversal_suite(void)
     if (!CU_add_test(suite, "DFS single node", test_dfs_single_node)) return CU_get_error();
     if (!CU_add_test(suite, "DFS linear path", test_dfs_linear_path)) return CU_get_error();
     if (!CU_add_test(suite, "DFS max depth", test_dfs_max_depth)) return CU_get_error();
+    if (!CU_add_test(suite, "DFS dense graph", test_dfs_dense_graph)) return CU_get_error();
     if (!CU_add_test(suite, "DFS alias", test_dfs_alias)) return CU_get_error();
 
     return CUE_SUCCESS;

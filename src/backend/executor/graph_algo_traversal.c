@@ -333,7 +333,10 @@ graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start
         return result;
     }
 
-    dfs_stack *stack = dfs_stack_create(n * 2);  /* Extra space for deep graphs */
+    /* A node is pushed once for each edge scanned from a visited node, and
+     * each node is visited once, so at most edge_count + 1 entries. n * 2
+     * overflowed the heap on dense graphs. */
+    dfs_stack *stack = dfs_stack_create(graph->edge_count + 1);
     if (!stack) {
         free(visited);
         free(order);
