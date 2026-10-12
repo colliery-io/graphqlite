@@ -464,6 +464,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     dynamic_buffer cte_body;
     bool has_aggregate = false;
     int group_count = 0;
+    bool dropped_outer_key = false;
 
     /* Handle WITH * - pass all visible variables through */
     if (with->pass_all) {
@@ -537,12 +538,30 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 { char idbuf[128];
                   dbuf_appendf(&col_buf, "%s%s AS %s", alias, id_suffix,
                                sql_ident(idbuf, sizeof(idbuf), col_name)); }
-                /* Add to GROUP BY */
-                if (group_count > 0) {
-                    dbuf_append(&group_buf, ", ");
+                /* Add to GROUP BY. Inside EXISTS { ... }, a variable of the
+                 * outer query is one value per outer row, so it is not a
+                 * key: SQLite 3.45 rejects GROUP BY on an outer column
+                 * ("no such column"). */
+                bool outer_key = false;
+                for (int oi = 0; oi < ctx->correlated_outer_count; oi++) {
+                    const char *tok = ctx->correlated_outer_aliases[oi];
+                    size_t tl = tok ? strlen(tok) : 0;
+                    /* the alias is the outer token or <token>.id */
+                    if (tok && strncmp(alias, tok, tl) == 0 &&
+                        (alias[tl] == '\0' || alias[tl] == '.')) {
+                        outer_key = true;
+                        break;
+                    }
                 }
-                dbuf_appendf(&group_buf, "%s%s", alias, id_suffix);
-                group_count++;
+                if (outer_key) {
+                    dropped_outer_key = true;
+                } else {
+                    if (group_count > 0) {
+                        dbuf_append(&group_buf, ", ");
+                    }
+                    dbuf_appendf(&group_buf, "%s%s", alias, id_suffix);
+                    group_count++;
+                }
             } else {
                 dbuf_append(&col_buf, id->name);
             }
@@ -769,6 +788,10 @@ with_star_columns_done:
     if (has_aggregate && group_count > 0) {
         dbuf_append(&cte_body, " GROUP BY ");
         dbuf_append(&cte_body, dbuf_get(&group_buf));
+    } else if (has_aggregate && dropped_outer_key && !group_by_clause) {
+        /* Every key was an outer variable: aggregate over all rows, but no
+         * input rows must still give no row, as with a grouping key. */
+        dbuf_append(&cte_body, " HAVING COUNT(*) > 0");
     } else if (group_by_clause) {
         /* Preserve existing GROUP BY from builder */
         dbuf_append(&cte_body, " GROUP BY ");

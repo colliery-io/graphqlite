@@ -1582,7 +1582,7 @@ void gql_extract_tz_func(
  * Where [tz] is one of:  Z | (+|-)HH:MM | (+|-)HH:MM[Region/Name]
  * Returns 0 on parse failure.
  */
-static long days_from_civil(int y, int m, int d);  /* defined below */
+static long long days_from_civil(int y, int m, int d);  /* defined below */
 
 /* Parse the leading calendar-date portion of an ISO temporal string.
  * Accepts the plain `YYYY-MM-DD` form and openCypher's extended-year form
@@ -1893,7 +1893,7 @@ static int days_in_month_c(int year, int month) {
  * is missing a date or time component, the result borrows zero for that
  * component. Components share sign per-section (date and time may have
  * opposite signs to match TCK examples like 'P-27DT-21H-40M-32.142S'). */
-static long days_from_civil(int y, int m, int d);  /* defined below */
+static long long days_from_civil(int y, int m, int d);  /* defined below */
 
 static int64_t time_ns_of(const tparts *p) {
     if (!p->has_time) return 0;
@@ -2227,19 +2227,19 @@ void gql_tz_offset_for_func(sqlite3_context *ctx, int argc, sqlite3_value **argv
 /* Days from 1970-01-01 to (y, m, d). Howard Hinnant's algorithm — works
  * for any proleptic Gregorian year (positive or negative), unlike timegm
  * which is bounded by the platform's epoch range. */
-static long days_from_civil(int y, int m, int d) {
+static long long days_from_civil(int y, int m, int d) {
     y -= (m <= 2) ? 1 : 0;
-    const long era = (y >= 0 ? y : y - 399) / 400;
+    const long long era = (y >= 0 ? y : y - 399) / 400;
     const unsigned yoe = (unsigned)(y - era * 400);
     const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
     const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + (long)doe - 719468;
+    return era * 146097 + (long long)doe - 719468;
 }
 
 /* Inverse of days_from_civil. */
-static void civil_from_days(long z, int *outy, int *outm, int *outd) {
+static void civil_from_days(long long z, int *outy, int *outm, int *outd) {
     z += 719468;
-    const long era = (z >= 0 ? z : z - 146096) / 146097;
+    const long long era = (z >= 0 ? z : z - 146096) / 146097;
     const unsigned doe = (unsigned)(z - era * 146097);
     const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     int y = (int)yoe + (int)(era * 400);
@@ -2333,7 +2333,7 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
         int dim = days_in_month_c(new_year, new_month);
         if (new_day > dim) new_day = dim;
         /* Add days. */
-        long base_days = days_from_civil(new_year, new_month, new_day) + (long)add_days;
+        long long base_days = days_from_civil(new_year, new_month, new_day) + (long long)add_days;
         /* Time-of-day contribution: only applies when the input itself has a
          * time component (datetime/localdatetime). Pure date inputs ignore
          * the duration's hours/minutes/seconds/ns (openCypher rule). */
@@ -2726,7 +2726,7 @@ void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         /* Thursday of week = base + (3 - ((base_dow-1+7)%7)). */
         int wd_iso = (base_dow + 6) % 7;  /* 0=Mon..6=Sun */
         int days_to_thu = 3 - wd_iso;
-        long base_days = days_from_civil(base_y, base_mo, base_d);
+        long long base_days = days_from_civil(base_y, base_mo, base_d);
         int ty, tmo, td;
         civil_from_days(base_days + days_to_thu, &ty, &tmo, &td);
         y = ty;
@@ -2754,13 +2754,13 @@ void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         }
         int jan4_wd = weekday_of(y, 1, 4);
         int monday_offset = (jan4_wd + 6) % 7;
-        long jan4_days = days_from_civil(y, 1, 4);
-        long target = jan4_days - monday_offset + (long)(week - 1) * 7 + (dow - 1);
+        long long jan4_days = days_from_civil(y, 1, 4);
+        long long target = jan4_days - monday_offset + (long long)(week - 1) * 7 + (dow - 1);
         civil_from_days(target, &oy, &omm, &odd);
         snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, omm, odd);
     } else if (sqlite3_value_type(argv[5]) != SQLITE_NULL) {
         int ord = sqlite3_value_int(argv[5]);
-        long jan1_days = days_from_civil(y, 1, 1);
+        long long jan1_days = days_from_civil(y, 1, 1);
         civil_from_days(jan1_days + (ord - 1), &oy, &omm, &odd);
         snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, omm, odd);
     } else if (sqlite3_value_type(argv[6]) != SQLITE_NULL) {
@@ -2769,7 +2769,7 @@ void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
             /* dayOfQuarter is absolute within the quarter. */
             int doq = sqlite3_value_int(argv[7]);
             int month = (q - 1) * 3 + 1;
-            long start_days = days_from_civil(y, month, 1);
+            long long start_days = days_from_civil(y, month, 1);
             civil_from_days(start_days + (doq - 1), &oy, &omm, &odd);
             snprintf(buf, sizeof(buf), "%04d-%02d-%02d", oy, omm, odd);
         } else {
@@ -3359,12 +3359,12 @@ void gql_normalize_date_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
     int oy, omm, odd;
     if (from_week) {
         int monday_offset = (weekday_of(y, 1, 4) + 6) % 7;
-        long jan4_days = days_from_civil(y, 1, 4);
-        long target = jan4_days - monday_offset + (long)(week - 1) * 7 + (dow - 1);
+        long long jan4_days = days_from_civil(y, 1, 4);
+        long long target = jan4_days - monday_offset + (long long)(week - 1) * 7 + (dow - 1);
         civil_from_days(target, &oy, &omm, &odd);
         format_iso_date(buf, sizeof(buf), oy, omm, odd);
     } else if (from_ord) {
-        long target = days_from_civil(y, 1, 1) + (ord - 1);
+        long long target = days_from_civil(y, 1, 1) + (ord - 1);
         civil_from_days(target, &oy, &omm, &odd);
         format_iso_date(buf, sizeof(buf), oy, omm, odd);
     } else {
@@ -3551,12 +3551,12 @@ void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value *
         int oy, omm, odd;
         if (from_week) {
             int monday_off = (weekday_of(y, 1, 4) + 6) % 7;
-            long jan4_days = days_from_civil(y, 1, 4);
-            long target = jan4_days - monday_off + (long)(week - 1) * 7 + (dow - 1);
+            long long jan4_days = days_from_civil(y, 1, 4);
+            long long target = jan4_days - monday_off + (long long)(week - 1) * 7 + (dow - 1);
             civil_from_days(target, &oy, &omm, &odd);
             format_iso_date(normalized_date, sizeof(normalized_date), oy, omm, odd);
         } else if (from_ord) {
-            long target = days_from_civil(y, 1, 1) + (ord - 1);
+            long long target = days_from_civil(y, 1, 1) + (ord - 1);
             civil_from_days(target, &oy, &omm, &odd);
             format_iso_date(normalized_date, sizeof(normalized_date), oy, omm, odd);
         } else {

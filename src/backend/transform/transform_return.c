@@ -26,6 +26,58 @@
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
+/* Defined in the executor (executor_helpers.c). */
+char* serialize_ast_to_json(ast_node *expr);
+
+/* Nesting depth of a list/map literal made only of constants (integers,
+ * strings, booleans, null), or -1. Decimals are excluded: the serializer
+ * prints them with %g. */
+static int const_literal_depth(ast_node *expr)
+{
+    if (!expr) return -1;
+    if (expr->type == AST_NODE_LITERAL) {
+        return ((cypher_literal*)expr)->literal_type == LITERAL_DECIMAL ? -1 : 0;
+    }
+    int deepest = 0;
+    if (expr->type == AST_NODE_LIST) {
+        cypher_list *l = (cypher_list*)expr;
+        for (int i = 0; l->items && i < l->items->count; i++) {
+            int d = const_literal_depth(l->items->items[i]);
+            if (d < 0) return -1;
+            if (d > deepest) deepest = d;
+        }
+        return deepest + 1;
+    }
+    if (expr->type == AST_NODE_MAP) {
+        cypher_map *m = (cypher_map*)expr;
+        for (int i = 0; m->pairs && i < m->pairs->count; i++) {
+            cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[i];
+            int d = pair ? const_literal_depth(pair->value) : -1;
+            if (d < 0) return -1;
+            if (d > deepest) deepest = d;
+        }
+        return deepest + 1;
+    }
+    return -1;
+}
+
+/* A deeply nested constant list/map literal as one json('...') constant.
+ * As nested _gql_list/_gql_map calls it overflowed the fixed parser stack
+ * of SQLite before 3.46 ("parser stack overflow", Literals7 [12],
+ * Literals8 [15]/[16] on Linux). Returns 1 if emitted. */
+#define CONST_LITERAL_FOLD_DEPTH 8
+static int emit_folded_literal(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (const_literal_depth(expr) < CONST_LITERAL_FOLD_DEPTH) return 0;
+    char *json = serialize_ast_to_json(expr);
+    if (!json) return 0;
+    append_sql(ctx, "json(");
+    append_string_literal(ctx, json);
+    append_sql(ctx, ")");
+    free(json);
+    return 1;
+}
+
 /*
  * Pending property JOINs buffer for aggregation optimization.
  * These are accumulated during RETURN item processing and injected
@@ -808,10 +860,13 @@ return_star_done:
     }
 }
 
-/* The current json_each element for json_group_array: JSON true/false as
- * JSON booleans (json_each.value gives 1/0), everything else as is. */
+/* The current json_each element for json_group_array, as JSON: true/false
+ * stay booleans (json_each.value gives 1/0). The CASE yields plain JSON
+ * text and json() outside it sets the JSON subtype: SQLite 3.45 drops a
+ * subtype through CASE, which turned nested lists into strings. */
 #define JSON_EACH_ELEMENT \
-    "(CASE json_each.type WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') " \
+    "json(CASE json_each.type WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' " \
+    "WHEN 'null' THEN 'null' WHEN 'text' THEN json_quote(json_each.value) " \
     "ELSE json_each.value END)"
 
 /* Transform an expression */
@@ -1361,6 +1416,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                  * [true, false] rather than [1, 0], and tags its output
                  * with the JSON subtype so nested lists embed cleanly. */
                 cypher_list *list = (cypher_list*)expr;
+                if (emit_folded_literal(ctx, expr)) break;
                 append_sql(ctx, "_gql_list(");
                 if (list->items) {
                     for (int i = 0; i < list->items->count; i++) {
@@ -1438,6 +1494,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                  * GQL_SUBTYPE_BOOLEAN for values and tags result with
                  * the JSON subtype. */
                 cypher_map *map = (cypher_map*)expr;
+                if (emit_folded_literal(ctx, expr)) break;
                 append_sql(ctx, "_gql_map(");
                 if (map->pairs) {
                     for (int i = 0; i < map->pairs->count; i++) {
@@ -1581,12 +1638,12 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                      * json_group_array only keeps its own JSON subtype
                      * (GQLITE-T-0387). */
                     bool as_bool = ast_yields_boolean(comp->transform_expr);
-                    if (as_bool) append_sql(ctx, "(CASE _gql_bool(");
+                    if (as_bool) append_sql(ctx, "json(CASE _gql_bool(");
                     if (transform_expression(ctx, comp->transform_expr) < 0) {
                         if (saved_alias) free(saved_alias);
                         return -1;
                     }
-                    if (as_bool) append_sql(ctx, ") WHEN 1 THEN json('true') WHEN 0 THEN json('false') END)");
+                    if (as_bool) append_sql(ctx, ") WHEN 1 THEN 'true' WHEN 0 THEN 'false' END)");
                 } else {
                     /* The element itself ([x IN l] or [x IN l | x]); JSON true/false stay booleans
                      * (json_each.value gives 1/0, GQLITE-T-0387) */
