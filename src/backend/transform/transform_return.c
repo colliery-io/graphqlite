@@ -811,8 +811,48 @@ return_star_done:
 /* Transform an expression */
 static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr);
 
+/* #123: a boolean property, parameter or function result can reach SQL as
+ * 'true'/'false' text, which SQLite reads as false in a condition. These
+ * node types take _gql_bool() in a boolean position. Operators already
+ * yield a SQL truth value and keep their form, so index-driven comparisons
+ * are unchanged. */
+static bool needs_condition_coercion(const ast_node *expr)
+{
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER:
+        case AST_NODE_PARAMETER:
+        case AST_NODE_PROPERTY:
+        case AST_NODE_FUNCTION_CALL:
+        case AST_NODE_CASE_EXPR:
+        case AST_NODE_REDUCE_EXPR:
+        case AST_NODE_SUBSCRIPT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+int transform_condition(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!expr || !needs_condition_coercion(expr)) {
+        return transform_expression(ctx, expr);
+    }
+    bool saved_wc = ctx->where_conjunct;
+    ctx->where_conjunct = false;
+    append_sql(ctx, "_gql_bool(");
+    int rc = transform_expression(ctx, expr);
+    append_sql(ctx, ")");
+    ctx->where_conjunct = saved_wc;
+    return rc;
+}
+
 int transform_expression(cypher_transform_context *ctx, ast_node *expr)
 {
+    /* A WHERE root (or an AND operand under it) is a boolean position. */
+    if (ctx->where_conjunct && expr && needs_condition_coercion(expr)) {
+        return transform_condition(ctx, expr);
+    }
+
     /* Perf review F7: the WHERE-conjunct flag survives only through binary
      * operators (AND keeps it, comparisons consume it, everything else
      * drops it); any other node type ends the conjunct context. */
@@ -1360,8 +1400,8 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         }
                         append_sql(ctx, ")");
                     } else {
-                        /* Searched CASE: condition is already a boolean expression */
-                        if (transform_expression(ctx, when->condition) < 0) {
+                        /* Searched CASE: the condition is a boolean position */
+                        if (transform_condition(ctx, when->condition) < 0) {
                             return -1;
                         }
                     }
@@ -1548,7 +1588,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 /* Optional WHERE filter */
                 if (comp->where_expr) {
                     append_sql(ctx, " WHERE ");
-                    if (transform_expression(ctx, comp->where_expr) < 0) {
+                    if (transform_condition(ctx, comp->where_expr) < 0) {
                         if (saved_alias) free(saved_alias);
                         return -1;
                     }
@@ -1837,7 +1877,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 /* Add WHERE clause from pattern comprehension */
                 if (comp->where_expr) {
                     append_sql(ctx, " AND (");
-                    if (transform_expression(ctx, comp->where_expr) < 0) {
+                    if (transform_condition(ctx, comp->where_expr) < 0) {
                         return -1;
                     }
                     append_sql(ctx, ")");

@@ -222,6 +222,10 @@ int transform_where_clause(cypher_transform_context *ctx, ast_node *where);
 
 /* Expression transformers */
 int transform_expression(cypher_transform_context *ctx, ast_node *expr);
+/* Transform expr in a boolean position (CASE WHEN, comprehension and
+ * EXISTS filters). WHERE roots get the same treatment through
+ * transform_expression. */
+int transform_condition(cypher_transform_context *ctx, ast_node *expr);
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop);
 int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr);
 int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr);

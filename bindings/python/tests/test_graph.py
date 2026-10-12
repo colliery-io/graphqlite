@@ -390,6 +390,17 @@ def test_query_raw_cypher(g):
     assert results[0]["n.value"] == 10
 
 
+def test_case_when_bare_boolean_property(g):
+    # #123: a true boolean property took the ELSE branch.
+    g.query("CREATE (:Person {active: true})")
+    rows = g.query(
+        "MATCH (p:Person) RETURN p.active AS active, "
+        "CASE WHEN p.active THEN 'yes' ELSE 'no' END AS result"
+    )
+    assert rows == [{"active": True, "result": "yes"}]
+    assert g.query("MATCH (p:Person) WHERE p.active RETURN count(p) AS c") == [{"c": 1}]
+
+
 # =============================================================================
 # String Escaping in Operations
 # =============================================================================

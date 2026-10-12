@@ -51,6 +51,8 @@ static int setup_executor_expressions_suite(void)
         "CREATE (d:Person {name: \"Diana\", age: 28})",
         "CREATE (e:Item {name: \"Widget\", price: 10, quantity: 5})",
         "CREATE (f:Item {name: \"Gadget\", price: 25, quantity: 3})",
+        "CREATE (:Flag {name: 'on', active: true, flags: [true, false]})",
+        "CREATE (:Flag {name: 'off', active: false})",
         NULL
     };
 
@@ -169,6 +171,72 @@ static void test_case_without_else(void)
         /* Result should be NULL when no match and no ELSE */
         cypher_result_free(result);
     }
+}
+
+/* ============================================================
+ * Bare boolean values in boolean positions (#123)
+ * ============================================================ */
+
+/* Run a query and join column 0 of all rows with ','. Caller frees. */
+static char *expr_column0(const char *query)
+{
+    cypher_result *result = cypher_executor_execute(executor, query);
+    if (!result) return NULL;
+    if (!result->success) {
+        printf("\nQuery failed: %s\n  %s\n", query, result->error_message);
+        cypher_result_free(result);
+        return NULL;
+    }
+    size_t cap = 256, len = 0;
+    char *out = calloc(1, cap);
+    for (int i = 0; out && i < result->row_count; i++) {
+        const char *v = result->data[i][0] ? result->data[i][0] : "null";
+        size_t need = len + strlen(v) + 2;
+        if (need > cap) { cap = need * 2; out = realloc(out, cap); if (!out) break; }
+        len += (size_t)snprintf(out + len, cap - len, "%s%s", i ? "," : "", v);
+    }
+    cypher_result_free(result);
+    return out;
+}
+
+#define ASSERT_COLUMN0(query, expected) do {                   \
+        char *got_ = expr_column0(query);                      \
+        CU_ASSERT_PTR_NOT_NULL(got_);                          \
+        if (got_) {                                            \
+            if (strcmp(got_, expected) != 0)                   \
+                printf("\n%s\n  expected %s, got %s\n", query, expected, got_); \
+            CU_ASSERT_STRING_EQUAL(got_, expected);            \
+            free(got_);                                        \
+        }                                                      \
+    } while (0)
+
+static void test_case_when_bare_boolean_property(void)
+{
+    ASSERT_COLUMN0("MATCH (f:Flag) RETURN CASE WHEN f.active THEN 'yes' ELSE 'no' END AS r ORDER BY f.name",
+                   "no,yes");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN CASE WHEN f.missing THEN 'yes' ELSE 'no' END AS r",
+                   "no");
+    ASSERT_COLUMN0("MATCH (f:Flag) WITH f.active AS a, f.name AS n "
+                   "RETURN CASE WHEN a THEN 'yes' ELSE 'no' END AS r ORDER BY n",
+                   "no,yes");
+}
+
+static void test_where_bare_boolean_property(void)
+{
+    ASSERT_COLUMN0("MATCH (f:Flag) WHERE f.active RETURN f.name", "on");
+    ASSERT_COLUMN0("MATCH (f:Flag) WHERE NOT f.active RETURN f.name", "off");
+    ASSERT_COLUMN0("MATCH (f:Flag) WHERE f.active AND f.name = 'on' RETURN f.name", "on");
+    ASSERT_COLUMN0("MATCH (f:Flag) WHERE f.active OR f.name = 'off' RETURN f.name ORDER BY f.name", "off,on");
+    ASSERT_COLUMN0("MATCH (f:Flag) WITH f WHERE f.active RETURN f.name", "on");
+    ASSERT_COLUMN0("MATCH (f:Flag) WITH f.active AS a, f.name AS n WHERE a RETURN n", "on");
+    ASSERT_COLUMN0("MATCH (f:Flag) WHERE f.missing RETURN f.name", "");
+}
+
+static void test_list_predicate_bare_boolean(void)
+{
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN any(x IN f.flags WHERE x)", "true");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN all(x IN f.flags WHERE x)", "false");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN size([x IN f.flags WHERE x])", "1");
 }
 
 /* Test nested CASE expressions */
@@ -1145,7 +1213,10 @@ int init_executor_expressions_suite(void)
         !CU_add_test(suite, "STARTS WITH", test_starts_with) ||
         !CU_add_test(suite, "ENDS WITH", test_ends_with) ||
         !CU_add_test(suite, "CONTAINS operator", test_contains_operator) ||
-        !CU_add_test(suite, "String concatenation", test_string_concat))
+        !CU_add_test(suite, "String concatenation", test_string_concat) ||
+        !CU_add_test(suite, "CASE WHEN bare boolean property (#123)", test_case_when_bare_boolean_property) ||
+        !CU_add_test(suite, "WHERE bare boolean property (#123)", test_where_bare_boolean_property) ||
+        !CU_add_test(suite, "List predicate bare boolean (#123)", test_list_predicate_bare_boolean))
     {
         return CU_get_error();
     }

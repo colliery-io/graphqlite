@@ -471,7 +471,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                          * ExistentialSubquery1 [2]/[4]. */
                         if (exists_expr->where_clause) {
                             append_sql(ctx, first_condition ? "(" : " AND (");
-                            if (transform_expression(ctx, exists_expr->where_clause) < 0) {
+                            if (transform_condition(ctx, exists_expr->where_clause) < 0) {
                                 transform_var_truncate_to(ctx->var_ctx, exists_saved_vars);
                                 return -1;
                             }
@@ -653,7 +653,7 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
                 break;
         }
         append_sql(ctx, "END FROM (SELECT (");
-        if (transform_expression(ctx, pred->predicate) < 0) {
+        if (transform_condition(ctx, pred->predicate) < 0) {
             if (saved_alias) free(saved_alias);
             return -1;
         }
