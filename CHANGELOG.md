@@ -4,11 +4,13 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.3] — 2026-10-11
 
-Fixes for GitHub issues #122–#125, a heap overflow in DFS, and an
-algorithm test suite checked against NetworkX. The openCypher TCK pass set
-is unchanged (3822 / 3880).
+A correctness release: GitHub issues #122–#125, a heap overflow in DFS,
+four graph algorithms that gave wrong results, and lost or mistyped
+property values. A new test suite checks every graph algorithm against
+NetworkX. The openCypher TCK pass count moves from **3822** to **3823** of
+3880 (98.5%, zero regressions).
 
 ### Fixed
 
@@ -32,6 +34,23 @@ is unchanged (3822 / 3880).
   `personalizedPageRank` now give standard PageRank scores.
 - **DFS heap overflow** (GQLITE-T-0381): DFS wrote past its stack buffer on
   graphs with more than two edges per node, which could crash the process.
+- **Louvain** (GQLITE-T-0382): results could be worse than every node alone,
+  and cliques were split. It is now multi-level Louvain with the standard
+  modularity gain.
+- **Label propagation** (GQLITE-T-0383): labels oscillated on stars and
+  paths, which gave disconnected communities. Updates are asynchronous and
+  every community is connected. `communityOf`, `communityMembers`,
+  `communityCount` and `labelPropagation` outside a plain `RETURN` give the
+  same communities.
+- **Eigenvector centrality** (GQLITE-T-0384): the result depended on whether
+  `iterations` was odd or even on periodic graphs.
+- **Triangle count** (GQLITE-T-0385): a self-loop counted as a triangle.
+- **Edge properties in expressions** (GQLITE-T-0386): `r.w + 1` gave `11`
+  and `[r.w]` gave `["1"]`.
+- **Booleans** (GQLITE-T-0387): `[x IN list]`, slices and `list[0]` gave
+  `1`/`0` for `true`/`false`; `CREATE (:X {t: NOT false})` stored `1`.
+- **UNWIND + MATCH + CREATE** (GQLITE-T-0388): properties that read the
+  UNWIND variable were not stored.
 
 ### Documentation
 
@@ -43,10 +62,9 @@ is unchanged (3822 / 3880).
 ### Tests
 
 - `bindings/python/tests/test_algorithms_oracle.py` checks every algorithm
-  against NetworkX on special and seeded random graphs. Known bugs are
-  strict `xfail`s: GQLITE-T-0382 (Louvain), GQLITE-T-0383 (label
-  propagation), GQLITE-T-0384 (eigenvector), GQLITE-T-0385 (triangles).
+  against NetworkX on special and seeded random graphs.
   `networkx` is added to the `dev` extra.
+- `tests/tck/baseline.json` regenerated (3823 / 3880).
 
 ## [0.9.2] — 2026-10-06
 

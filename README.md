@@ -53,7 +53,7 @@ suite for the Cypher query language. Current coverage:
 |------|-----------|---------|
 | **Overall** | **3,880** | **98.5%** |
 | Expressions (temporal, lists, maps, comparison, literals, …) | 2,599 | 98.5% |
-| Clauses (MATCH, WITH, MERGE, CREATE, SET, DELETE, UNWIND, …) | 1,251 | 98.1% |
+| Clauses (MATCH, WITH, MERGE, CREATE, SET, DELETE, UNWIND, …) | 1,251 | 98.6% |
 | Use cases (triadic selection, subgraph counting) | 30 | 100% |
 
 Run it yourself with `angreal test tck`. The remaining gaps are tracked in
