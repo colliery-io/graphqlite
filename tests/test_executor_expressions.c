@@ -53,6 +53,7 @@ static int setup_executor_expressions_suite(void)
         "CREATE (f:Item {name: \"Gadget\", price: 25, quantity: 3})",
         "CREATE (:Flag {name: 'on', active: true, flags: [true, false]})",
         "CREATE (:Flag {name: 'off', active: false})",
+        "CREATE (:EA)-[:ER {w: 1, f: 2.5}]->(:EB)",
         NULL
     };
 
@@ -237,6 +238,26 @@ static void test_list_predicate_bare_boolean(void)
     ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN any(x IN f.flags WHERE x)", "true");
     ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN all(x IN f.flags WHERE x)", "false");
     ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN size([x IN f.flags WHERE x])", "1");
+}
+
+/* GQLITE-T-0387: booleans keep their type in lists and subscripts */
+static void test_boolean_list_types(void)
+{
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN [x IN f.flags]", "[true,false]");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN [x IN f.flags WHERE x]", "[true]");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN [x IN f.flags | NOT x]", "[false,true]");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN f.flags[0..1]", "[true]");
+    ASSERT_COLUMN0("MATCH (f:Flag {name: 'on'}) RETURN f.flags[0]", "true");
+    ASSERT_COLUMN0("MATCH (f:Flag) WHERE f.flags[1] = false RETURN f.name", "on");
+    ASSERT_COLUMN0("RETURN [x IN [1, 2, null] | x > 1]", "[false,true,null]");
+}
+
+/* GQLITE-T-0386: edge properties keep their type in expressions */
+static void test_edge_property_types_in_expressions(void)
+{
+    ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN r.w + 1", "2");
+    ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN r.f * 2", "5");
+    ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN [r.w, r.f]", "[1,2.5]");
 }
 
 /* Test nested CASE expressions */
@@ -1216,7 +1237,9 @@ int init_executor_expressions_suite(void)
         !CU_add_test(suite, "String concatenation", test_string_concat) ||
         !CU_add_test(suite, "CASE WHEN bare boolean property (#123)", test_case_when_bare_boolean_property) ||
         !CU_add_test(suite, "WHERE bare boolean property (#123)", test_where_bare_boolean_property) ||
-        !CU_add_test(suite, "List predicate bare boolean (#123)", test_list_predicate_bare_boolean))
+        !CU_add_test(suite, "List predicate bare boolean (#123)", test_list_predicate_bare_boolean) ||
+        !CU_add_test(suite, "Edge property types in expressions (GQLITE-T-0386)", test_edge_property_types_in_expressions) ||
+        !CU_add_test(suite, "Boolean list types (GQLITE-T-0387)", test_boolean_list_types))
     {
         return CU_get_error();
     }

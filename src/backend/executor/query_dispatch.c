@@ -144,6 +144,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags);
 static int handle_match_create(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
+static bool unwind_before_create(cypher_query *query);
 static int handle_match_create_return(cypher_executor *executor, cypher_query *query,
                                       cypher_result *result, clause_flags flags);
 static int handle_match_return(cypher_executor *executor, cypher_query *query,
@@ -1477,6 +1478,7 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
 static int handle_match_create(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags)
 {
+    if (unwind_before_create(query)) return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_create *create = find_create_clause(query);
     cypher_set *set = find_set_clause(query);
@@ -1557,6 +1559,7 @@ static const char *projectable_base_var(ast_node *expr)
 static int handle_match_create_return(cypher_executor *executor, cypher_query *query,
                                       cypher_result *result, clause_flags flags)
 {
+    if (unwind_before_create(query)) return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_match *match = find_match_clause(query);
     cypher_create *create = find_create_clause(query);
@@ -1857,6 +1860,20 @@ static int handle_match_only(cypher_executor *executor, cypher_query *query,
 /* GQLITE-T-0371: UNWIND ... UNWIND ... CREATE needs the cartesian product of
  * the UNWINDs; the dedicated UNWIND+CREATE handlers iterate one list only, so
  * two or more UNWINDs before the CREATE go to the row-wise pipeline. */
+/* GQLITE-T-0388: UNWIND before a MATCH ... CREATE. The MATCH+CREATE
+ * handlers run CREATE per matched row without the UNWIND variable, so a
+ * property such as {tag: s} was dropped; the row-wise pipeline keeps it. */
+static bool unwind_before_create(cypher_query *query)
+{
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_CREATE) return false;
+        if (c->type == AST_NODE_UNWIND) return true;
+    }
+    return false;
+}
+
 static bool unwind_create_needs_pipeline(cypher_query *query)
 {
     int n_unwind = 0;
@@ -2701,6 +2718,9 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                     char b[64]; snprintf(b, sizeof(b), "%g", pv.as_real);
                     result->data[0][i] = strdup(b);
                     result->data_types[0][i] = SQLITE_FLOAT;
+                } else if (pt == PROP_TYPE_BOOLEAN) {
+                    result->data[0][i] = strdup(pv.as_bool ? "true" : "false");
+                    result->data_types[0][i] = GQL_COL_TYPE_BOOLEAN;
                 } else if (pv.as_str) {
                     result->data[0][i] = strdup(pv.as_str);
                     result->data_types[0][i] = SQLITE_TEXT;

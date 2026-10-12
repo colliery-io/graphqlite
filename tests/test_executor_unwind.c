@@ -518,6 +518,29 @@ static void test_unwind_expression_create_inline(void)
     ASSERT_UNWIND(w2, NULL, "MATCH (n:T {s: '{x}'}) RETURN n.u", "{X}");
 }
 
+/* GQLITE-T-0387: boolean expressions are stored as booleans */
+static void test_create_boolean_expression(void)
+{
+    const char *w[] = {"CREATE (:X {t: NOT false, u: 1 = 1, v: 2 > 3, w: 1 + 1})", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:X) RETURN [n.t, n.u, n.v, n.w]", "[true,true,false,2]");
+}
+
+/* GQLITE-T-0388: UNWIND before MATCH ... CREATE keeps the UNWIND variable */
+static void test_unwind_match_create(void)
+{
+    const char *w[] = {
+        "CREATE (:A {id: '0'})",
+        "UNWIND ['x', 'y'] AS s MATCH (n:A {id: '0'}) CREATE (n)-[:R {tag: s + '!'}]->(:D {name: s})",
+        NULL
+    };
+    ASSERT_UNWIND(w, NULL, "MATCH (:A)-[r:R]->(d:D) RETURN [r.tag, d.name] ORDER BY d.name",
+                  "[\"x!\",\"x\"],[\"y!\",\"y\"]");
+    const char *w2[] = {"CREATE (:A {id: '0'})", NULL};
+    ASSERT_UNWIND(w2, NULL,
+        "UNWIND [1, 2] AS i MATCH (n:A) CREATE (n)-[:S {i: i}]->(m:M {i: i}) RETURN m.i AS mi ORDER BY mi",
+        "1,2");
+}
+
 static void test_foreach_map_create_inline(void)
 {
     const char *w[] = {"FOREACH (r IN [{id: 'f1', n: 1}] | CREATE (:F {id: r.id, n: r.n}))", NULL};
@@ -554,7 +577,9 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "#124: two UNWINDs map CREATE inline", test_unwind_twice_map_create_inline) ||
         !CU_add_test(suite, "#124: UNWIND $param map MERGE typed", test_unwind_param_map_merge_typed) ||
         !CU_add_test(suite, "#124: FOREACH map CREATE inline", test_foreach_map_create_inline) ||
-        !CU_add_test(suite, "#124: UNWIND expression CREATE inline", test_unwind_expression_create_inline)) {
+        !CU_add_test(suite, "#124: UNWIND expression CREATE inline", test_unwind_expression_create_inline) ||
+        !CU_add_test(suite, "GQLITE-T-0387: CREATE boolean expression", test_create_boolean_expression) ||
+        !CU_add_test(suite, "GQLITE-T-0388: UNWIND + MATCH + CREATE", test_unwind_match_create)) {
         return CU_get_error();
     }
 

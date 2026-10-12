@@ -808,6 +808,12 @@ return_star_done:
     }
 }
 
+/* The current json_each element for json_group_array: JSON true/false as
+ * JSON booleans (json_each.value gives 1/0), everything else as is. */
+#define JSON_EACH_ELEMENT \
+    "(CASE json_each.type WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') " \
+    "ELSE json_each.value END)"
+
 /* Transform an expression */
 static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr);
 
@@ -1202,7 +1208,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     if (!has_start && !has_end) append_sql(ctx, "0");
                     append_sql(ctx, " THEN NULL ELSE ");
 
-                    append_sql(ctx, "(SELECT json_group_array(value) FROM json_each(");
+                    append_sql(ctx, "(SELECT json_group_array(" JSON_EACH_ELEMENT ") FROM json_each(");
                     if (transform_expression(ctx, subscript->expr) < 0) return -1;
                     append_sql(ctx, ")");
                     if (has_start || has_end) {
@@ -1279,11 +1285,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                  * mismatched index types) and handles negative indices.
                  * Falls back to plain json_extract semantics when types
                  * match. */
-                append_sql(ctx, "_gql_subscript(");
+                /* _gql_subscript gives a list's JSON true/false as a
+                 * boolean ('true'/'false', GQLITE-T-0387); in a comparison
+                 * turn it back into 1/0, which is what `= true` compares. */
+                append_sql(ctx, ctx->in_comparison ? "_gql_bool(_gql_subscript(" : "_gql_subscript(");
                 if (transform_expression(ctx, subscript->expr) < 0) return -1;
                 append_sql(ctx, ", ");
                 if (transform_expression(ctx, subscript->index) < 0) return -1;
-                append_sql(ctx, ")");
+                append_sql(ctx, ctx->in_comparison ? "))" : ")");
             }
             break;
 
@@ -1565,14 +1574,23 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 append_sql(ctx, "(SELECT json_group_array(");
 
                 /* The result expression - either the transform or the element itself */
-                if (comp->transform_expr) {
+                if (comp->transform_expr &&
+                    !(comp->transform_expr->type == AST_NODE_IDENTIFIER &&
+                      strcmp(((cypher_identifier*)comp->transform_expr)->name, comp_var) == 0)) {
+                    /* Boolean results stay JSON booleans in the list: SQLite's
+                     * json_group_array only keeps its own JSON subtype
+                     * (GQLITE-T-0387). */
+                    bool as_bool = ast_yields_boolean(comp->transform_expr);
+                    if (as_bool) append_sql(ctx, "(CASE _gql_bool(");
                     if (transform_expression(ctx, comp->transform_expr) < 0) {
                         if (saved_alias) free(saved_alias);
                         return -1;
                     }
+                    if (as_bool) append_sql(ctx, ") WHEN 1 THEN json('true') WHEN 0 THEN json('false') END)");
                 } else {
-                    /* Just return the element */
-                    append_sql(ctx, "json_each.value");
+                    /* The element itself ([x IN l] or [x IN l | x]); JSON true/false stay booleans
+                     * (json_each.value gives 1/0, GQLITE-T-0387) */
+                    append_sql(ctx, JSON_EACH_ELEMENT);
                 }
 
                 append_sql(ctx, ") FROM json_each(");

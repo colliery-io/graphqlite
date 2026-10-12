@@ -1018,8 +1018,10 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     append_sql(ctx, "(SELECT COALESCE(");
     if (is_edge) {
         const char *bool_expr = ctx->in_comparison ? "CAST(epb.value AS INTEGER)" : "_gql_bool_str(epb.value)";
-        const char *int_expr  = ctx->in_comparison ? "epi.value" : "CAST(epi.value AS TEXT)";
-        const char *real_expr = ctx->in_comparison ? "epr.value" : "CAST(epr.value AS TEXT)";
+        /* GQLITE-T-0386: typed values, as for nodes. A CAST to TEXT made
+         * r.w + 1 concatenate (11) and [r.w] a list of strings. */
+        const char *int_expr  = "epi.value";
+        const char *real_expr = "epr.value";
         append_prop_branch(ctx, gprefix, "edge_props_text", "ept", "edge_id", id_expr, "ept.value", key, key_id);
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "edge_props_int", "epi", "edge_id", id_expr, int_expr, key, key_id);

@@ -157,7 +157,7 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_subscript", 2,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
                          gql_subscript_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 

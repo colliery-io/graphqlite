@@ -629,13 +629,21 @@ void gql_subscript_func(
         sqlite3 *db = sqlite3_context_db_handle(context);
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(db,
-            "SELECT json_extract(?1, '$[' || "
+            "SELECT json_extract(?1, p), json_type(?1, p) FROM (SELECT '$[' || "
             " CAST(CASE WHEN ?2 < 0 THEN json_array_length(?1) + ?2 ELSE ?2 END AS INTEGER) "
-            " || ']')", -1, &stmt, NULL) == SQLITE_OK) {
+            " || ']' AS p)", -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_value(stmt, 1, argv[0]);
             sqlite3_bind_value(stmt, 2, argv[1]);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
-                sqlite3_result_value(context, sqlite3_column_value(stmt, 0));
+                /* GQLITE-T-0387: a JSON true/false element stays a boolean
+                 * (json_extract gives 1/0). Same form as _gql_bool_str. */
+                const char *jt = (const char*)sqlite3_column_text(stmt, 1);
+                if (jt && (strcmp(jt, "true") == 0 || strcmp(jt, "false") == 0)) {
+                    sqlite3_result_text(context, jt[0] == 't' ? "true" : "false", -1, SQLITE_STATIC);
+                    sqlite3_result_subtype(context, GQL_SUBTYPE_BOOLEAN);
+                } else {
+                    sqlite3_result_value(context, sqlite3_column_value(stmt, 0));
+                }
             } else {
                 sqlite3_result_null(context);
             }

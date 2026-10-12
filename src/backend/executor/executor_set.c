@@ -62,7 +62,71 @@ static void register_foreach_values(cypher_transform_context *ctx)
     }
 }
 
+/* Does expr yield a boolean by its shape? SQL gives these as 1/0. */
+static bool ast_is_boolean_expr(const ast_node *expr)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_NOT_EXPR:
+        case AST_NODE_NULL_CHECK:
+        case AST_NODE_LABEL_EXPR:
+        case AST_NODE_EXISTS_EXPR:
+        case AST_NODE_LIST_PREDICATE:
+            return true;
+        case AST_NODE_LITERAL:
+            return ((const cypher_literal *)expr)->literal_type == LITERAL_BOOLEAN;
+        case AST_NODE_BINARY_OP:
+            switch (((const cypher_binary_op *)expr)->op_type) {
+                case BINARY_OP_AND: case BINARY_OP_OR: case BINARY_OP_XOR:
+                case BINARY_OP_EQ: case BINARY_OP_NEQ:
+                case BINARY_OP_LT: case BINARY_OP_GT: case BINARY_OP_LTE: case BINARY_OP_GTE:
+                case BINARY_OP_REGEX_MATCH: case BINARY_OP_IN:
+                case BINARY_OP_STARTS_WITH: case BINARY_OP_ENDS_WITH: case BINARY_OP_CONTAINS:
+                    return true;
+                default:
+                    return false;
+            }
+        default:
+            return false;
+    }
+}
+
+static int evaluate_ast_with_context_raw(
+    cypher_executor *executor,
+    ast_node *expr,
+    variable_map *var_map,
+    property_type *out_type,
+    property_value *out_value);
+
+/* evaluate_ast_with_context_raw, with the 1/0 result of a boolean-shaped
+ * expression reported as a boolean, so CREATE / SET store
+ * {t: NOT false} as true, not 1 (GQLITE-T-0387). */
 static int evaluate_ast_with_context(
+    cypher_executor *executor,
+    ast_node *expr,
+    variable_map *var_map,
+    property_type *out_type,
+    property_value *out_value)
+{
+    int rc = evaluate_ast_with_context_raw(executor, expr, var_map, out_type, out_value);
+    if (rc == 0 && *out_type == PROP_TYPE_INTEGER && ast_is_boolean_expr(expr) &&
+        (out_value->as_int == 0 || out_value->as_int == 1)) {
+        int b = (int)out_value->as_int;
+        *out_type = PROP_TYPE_BOOLEAN;
+        out_value->as_bool = b;
+    } else if (rc == 0 && *out_type == PROP_TYPE_TEXT && ast_is_boolean_expr(expr) && out_value->as_str &&
+               (strcmp(out_value->as_str, "true") == 0 || strcmp(out_value->as_str, "false") == 0)) {
+        int b = out_value->as_str[0] == 't';
+        free(out_value->as_str);
+        out_value->as_str = NULL;
+        out_value->as_str_len = 0;
+        *out_type = PROP_TYPE_BOOLEAN;
+        out_value->as_bool = b;
+    }
+    return rc;
+}
+
+static int evaluate_ast_with_context_raw(
     cypher_executor *executor,
     ast_node *expr,
     variable_map *var_map,
@@ -203,6 +267,7 @@ int executor_eval_predicate(cypher_executor *executor,
      * via _gql_bool; integer/real non-zero is truthy; non-empty
      * text is truthy. */
     switch (t) {
+        case PROP_TYPE_BOOLEAN: return v.as_bool ? 1 : 0;
         case PROP_TYPE_INTEGER: return v.as_int != 0 ? 1 : 0;
         case PROP_TYPE_REAL:    return v.as_real != 0.0 ? 1 : 0;
         case PROP_TYPE_TEXT: {
