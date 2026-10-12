@@ -31,6 +31,10 @@ static int compare_pr_desc(const void *a, const void *b)
  * Execute PageRank algorithm (optimized)
  *
  * Formula: PR(n) = (1-d)/N + d * SUM(PR(m)/out_degree(m)) for all m -> n
+ *                 + d * SUM(PR(k))/N for all dangling k (no out-edges)
+ *
+ * Rank on a dangling node is spread over all nodes, as if it linked to
+ * every node, so the scores always sum to 1 (#125).
  *
  * Optimizations:
  * - Uses float instead of double (2x memory bandwidth)
@@ -104,9 +108,16 @@ graph_algo_result* execute_pagerank(sqlite3 *db, csr_graph *cached, double dampi
     for (int iter = 0; iter < iterations; iter++) {
         actual_iters++;
 
+        /* Rank held by dangling nodes goes to every node (#125). */
+        double dangling = 0.0;
+        for (int i = 0; i < n; i++) {
+            if (inv_out_degree[i] == 0.0f) dangling += pr[i];
+        }
+        float base = teleport + (float)(damping * dangling / n);
+
         /* Initialize new PR with teleport probability */
         for (int i = 0; i < n; i++) {
-            pr_new[i] = teleport;
+            pr_new[i] = base;
         }
 
         /* Push-based: each node distributes its rank to neighbors */

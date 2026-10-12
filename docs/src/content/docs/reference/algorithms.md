@@ -6,6 +6,16 @@ GraphQLite provides 18 built-in graph algorithms accessible via Cypher functions
 
 > For guidance on choosing the right algorithm for your use case, see [Using Graph Algorithms](../../how-to/graph-algorithms/).
 
+In Cypher, call an algorithm as a function in a `RETURN` clause with no other clause. The query gives one row. The value is a JSON array of result objects, or one JSON object for `dijkstra` and `astar`. The comment under each signature shows the keys. To get one row for each result in SQL, use `json_each`:
+
+```sql
+SELECT json_extract(value, '$.user_id') AS user_id,
+       json_extract(value, '$.score') AS score
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0');
+```
+
+The `CALL algorithm() YIELD ...` form is not supported.
+
 ---
 
 ## PageRank
@@ -13,7 +23,8 @@ GraphQLite provides 18 built-in graph algorithms accessible via Cypher functions
 **Cypher**
 
 ```cypher
-CALL pageRank([damping, iterations]) YIELD node, score
+RETURN pageRank([damping, iterations])
+// [{node_id, user_id, score}, ...]
 ```
 
 **Python**
@@ -58,7 +69,8 @@ for r in sorted(results, key=lambda x: x['score'], reverse=True)[:5]:
 **Cypher**
 
 ```cypher
-CALL degreeCentrality() YIELD node, in_degree, out_degree, degree
+RETURN degreeCentrality()
+// [{node_id, user_id, in_degree, out_degree, degree}, ...]
 ```
 
 **Python**
@@ -97,7 +109,8 @@ for r in graph.degree_centrality():
 **Cypher**
 
 ```cypher
-CALL betweennessCentrality() YIELD node, score
+RETURN betweennessCentrality()
+// [{node_id, user_id, score}, ...]
 ```
 
 **Python**
@@ -135,7 +148,8 @@ results = graph.betweenness_centrality()
 **Cypher**
 
 ```cypher
-CALL closenessCentrality() YIELD node, score
+RETURN closenessCentrality()
+// [{node_id, user_id, score}, ...]
 ```
 
 **Python**
@@ -173,7 +187,8 @@ results = graph.closeness_centrality()
 **Cypher**
 
 ```cypher
-CALL eigenvectorCentrality([iterations]) YIELD node, score
+RETURN eigenvectorCentrality([iterations])
+// [{node_id, user_id, score}, ...]
 ```
 
 **Python**
@@ -209,7 +224,8 @@ Rust: `Vec<EigenvectorCentralityResult>` — fields: `node_id: i64`, `user_id: S
 **Cypher**
 
 ```cypher
-CALL louvain([resolution]) YIELD node, community
+RETURN louvain([resolution])
+// [{node_id, user_id, community}, ...]
 ```
 
 **Python**
@@ -268,7 +284,8 @@ graph.leiden_communities(resolution=1.0, random_seed=None)
 **Cypher**
 
 ```cypher
-CALL labelPropagation([iterations]) YIELD node, community
+RETURN labelPropagation([iterations])
+// [{node_id, user_id, community}, ...]
 ```
 
 **Python**
@@ -302,7 +319,8 @@ Rust: `Vec<CommunityResult>` — fields: `node_id: i64`, `user_id: String`, `com
 **Cypher**
 
 ```cypher
-CALL weaklyConnectedComponents() YIELD node, component
+RETURN weaklyConnectedComponents()
+// [{node_id, user_id, component}, ...]
 ```
 
 **Python**
@@ -334,7 +352,8 @@ Rust: `Vec<ComponentResult>` — fields: `node_id: i64`, `user_id: String`, `com
 **Cypher**
 
 ```cypher
-CALL stronglyConnectedComponents() YIELD node, component
+RETURN stronglyConnectedComponents()
+// [{node_id, user_id, component}, ...]
 ```
 
 **Python**
@@ -373,7 +392,8 @@ RETURN p
 **Cypher (Dijkstra)**
 
 ```cypher
-CALL dijkstra(source, target[, weight_property]) YIELD path, distance
+RETURN dijkstra(source, target[, weight_property])
+// {path, distance, found}
 ```
 
 **Python**
@@ -417,7 +437,8 @@ if result['found']:
 **Cypher**
 
 ```cypher
-CALL astar(source, target[, lat_prop, lon_prop]) YIELD path, distance
+RETURN astar(source, target[, lat_prop, lon_prop])
+// {path, distance, found, nodes_explored}
 ```
 
 **Python**
@@ -454,7 +475,8 @@ Rust: `AStarResult` — fields: `path: Vec<String>`, `distance: f64`, `found: bo
 **Cypher**
 
 ```cypher
-CALL apsp() YIELD source, target, distance
+RETURN apsp()
+// [{source, target, distance}, ...]
 ```
 
 **Python**
@@ -486,7 +508,8 @@ Rust: `Vec<ApspResult>` — fields: `source: String`, `target: String`, `distanc
 **Cypher**
 
 ```cypher
-CALL bfs(start[, max_depth]) YIELD node, depth, order
+RETURN bfs(start[, max_depth])
+// [{node_id, user_id, depth, order}, ...]
 ```
 
 **Python**
@@ -521,7 +544,8 @@ Rust: `Vec<TraversalResult>` — fields: `user_id: String`, `depth: usize`, `ord
 **Cypher**
 
 ```cypher
-CALL dfs(start[, max_depth]) YIELD node, depth, order
+RETURN dfs(start[, max_depth])
+// [{node_id, user_id, depth, order}, ...]
 ```
 
 **Python**
@@ -552,7 +576,10 @@ graph.dfs(start: &str, max_depth: i64) -> Result<Vec<TraversalResult>>
 **Cypher**
 
 ```cypher
-CALL nodeSimilarity([node1, node2, threshold, top_k]) YIELD node1, node2, similarity
+RETURN nodeSimilarity()                   // all pairs
+RETURN nodeSimilarity(threshold[, top_k]) // pairs at or above threshold
+RETURN nodeSimilarity(node1, node2)       // one pair
+// [{node1, node2, similarity}, ...]
 ```
 
 **Python**
@@ -598,7 +625,8 @@ Rust: `Vec<NodeSimilarityResult>` — fields: `node1: String`, `node2: String`, 
 **Cypher**
 
 ```cypher
-CALL knn(node, k) YIELD neighbor, similarity, rank
+RETURN knn(node, k)
+// [{neighbor, similarity, rank}, ...]
 ```
 
 **Python**
@@ -633,7 +661,8 @@ Rust: `Vec<KnnResult>` — fields: `neighbor: String`, `similarity: f64`, `rank:
 **Cypher**
 
 ```cypher
-CALL triangleCount() YIELD node, triangles, clustering_coefficient
+RETURN triangleCount()
+// [{node_id, user_id, triangles, clustering_coefficient}, ...]
 ```
 
 **Python**

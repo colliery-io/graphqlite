@@ -56,7 +56,7 @@ SELECT cypher('MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name');
 SELECT
     json_extract(value, '$.user_id') AS person,
     printf('%.4f', json_extract(value, '$.score')) AS score
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 ORDER BY score DESC;
 ```
 

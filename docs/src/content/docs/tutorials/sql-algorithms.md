@@ -116,7 +116,7 @@ SELECT
     json_extract(value, '$.user_id')                           AS paper,
     printf('%.4f', json_extract(value, '$.score'))             AS pagerank_score,
     json_extract(value, '$.node_id')                           AS internal_id
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.score') DESC;
 ```
 
@@ -143,7 +143,7 @@ SELECT
     json_extract(value, '$.in_degree')  AS cited_by,
     json_extract(value, '$.out_degree') AS cites,
     json_extract(value, '$.degree')     AS total
-FROM json_each(cypher('RETURN degreeCentrality()'))
+FROM json_each(cypher('RETURN degreeCentrality()'), '$[0].column_0')
 ORDER BY json_extract(value, '$.in_degree') DESC;
 ```
 
@@ -165,7 +165,7 @@ Measures how often a paper lies on the shortest path between two other papers â€
 SELECT
     json_extract(value, '$.user_id')                           AS paper,
     printf('%.4f', json_extract(value, '$.score'))             AS betweenness
-FROM json_each(cypher('RETURN betweennessCentrality()'))
+FROM json_each(cypher('RETURN betweennessCentrality()'), '$[0].column_0')
 ORDER BY json_extract(value, '$.score') DESC;
 ```
 
@@ -175,7 +175,7 @@ ORDER BY json_extract(value, '$.score') DESC;
 SELECT
     json_extract(value, '$.user_id')                           AS paper,
     printf('%.4f', json_extract(value, '$.score'))             AS closeness
-FROM json_each(cypher('RETURN closenessCentrality()'))
+FROM json_each(cypher('RETURN closenessCentrality()'), '$[0].column_0')
 ORDER BY json_extract(value, '$.score') DESC;
 ```
 
@@ -185,7 +185,7 @@ ORDER BY json_extract(value, '$.score') DESC;
 SELECT
     json_extract(value, '$.user_id')                           AS paper,
     printf('%.4f', json_extract(value, '$.score'))             AS eigenvector
-FROM json_each(cypher('RETURN eigenvectorCentrality(100)'))
+FROM json_each(cypher('RETURN eigenvectorCentrality(100)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.score') DESC;
 ```
 
@@ -206,7 +206,7 @@ Group by community:
 SELECT
     json_extract(value, '$.community') AS community,
     json_extract(value, '$.user_id')   AS paper
-FROM json_each(cypher('RETURN labelPropagation(10)'))
+FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.community'), paper;
 ```
 
@@ -217,7 +217,7 @@ WITH community_data AS (
     SELECT
         json_extract(value, '$.community') AS community,
         json_extract(value, '$.user_id')   AS paper
-    FROM json_each(cypher('RETURN labelPropagation(10)'))
+    FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0')
 )
 SELECT
     community,
@@ -237,7 +237,7 @@ WITH louvain_data AS (
     SELECT
         json_extract(value, '$.community') AS community,
         json_extract(value, '$.user_id')   AS paper
-    FROM json_each(cypher('RETURN louvain(1.0)'))
+    FROM json_each(cypher('RETURN louvain(1.0)'), '$[0].column_0')
 )
 SELECT
     community,
@@ -268,7 +268,7 @@ Finds groups of nodes reachable from one another, ignoring edge direction.
 SELECT
     json_extract(value, '$.component') AS component,
     json_extract(value, '$.user_id')   AS paper
-FROM json_each(cypher('RETURN wcc()'))
+FROM json_each(cypher('RETURN wcc()'), '$[0].column_0')
 ORDER BY json_extract(value, '$.component'), paper;
 ```
 
@@ -279,7 +279,7 @@ WITH wcc_data AS (
     SELECT
         json_extract(value, '$.component') AS component,
         json_extract(value, '$.user_id')   AS paper
-    FROM json_each(cypher('RETURN wcc()'))
+    FROM json_each(cypher('RETURN wcc()'), '$[0].column_0')
 )
 SELECT
     component,
@@ -297,7 +297,7 @@ WITH scc_data AS (
     SELECT
         json_extract(value, '$.component') AS component,
         json_extract(value, '$.user_id')   AS paper
-    FROM json_each(cypher('RETURN scc()'))
+    FROM json_each(cypher('RETURN scc()'), '$[0].column_0')
 )
 SELECT component, count(*) AS size, group_concat(paper, ', ') AS members
 FROM scc_data
@@ -327,8 +327,7 @@ Extract fields:
 
 ```sql
 WITH path_result AS (
-    SELECT json_extract(value, '$.dijkstra("BERT", "ImageNet Classification with CNN")') AS raw
-    FROM json_each(cypher('RETURN dijkstra("BERT", "ImageNet Classification with CNN")'))
+    SELECT json_extract(cypher('RETURN dijkstra("BERT", "ImageNet Classification with CNN")'), '$[0].column_0') AS raw
 )
 SELECT
     json_extract(raw, '$.found')    AS found,
@@ -359,7 +358,7 @@ SELECT
     json_extract(value, '$.source')   AS source,
     json_extract(value, '$.target')   AS target,
     json_extract(value, '$.distance') AS distance
-FROM json_each(cypher('RETURN apsp()'))
+FROM json_each(cypher('RETURN apsp()'), '$[0].column_0')
 WHERE json_extract(value, '$.source') <> json_extract(value, '$.target')
 ORDER BY json_extract(value, '$.distance') DESC
 LIMIT 10;
@@ -375,7 +374,7 @@ SELECT
     json_extract(value, '$.user_id') AS paper,
     json_extract(value, '$.depth')   AS depth,
     json_extract(value, '$.order')   AS visit_order
-FROM json_each(cypher('RETURN bfs("BERT", 3)'))
+FROM json_each(cypher('RETURN bfs("BERT", 3)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.order');
 ```
 
@@ -386,7 +385,7 @@ SELECT
     json_extract(value, '$.user_id') AS paper,
     json_extract(value, '$.depth')   AS depth,
     json_extract(value, '$.order')   AS visit_order
-FROM json_each(cypher('RETURN dfs("BERT", 4)'))
+FROM json_each(cypher('RETURN dfs("BERT", 4)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.order');
 ```
 
@@ -401,7 +400,7 @@ SELECT
     json_extract(value, '$.node1')      AS paper1,
     json_extract(value, '$.node2')      AS paper2,
     printf('%.3f', json_extract(value, '$.similarity')) AS jaccard
-FROM json_each(cypher('RETURN nodeSimilarity()'))
+FROM json_each(cypher('RETURN nodeSimilarity()'), '$[0].column_0')
 ORDER BY json_extract(value, '$.similarity') DESC;
 ```
 
@@ -413,7 +412,7 @@ SELECT
     json_extract(value, '$.neighbor')                   AS similar_paper,
     printf('%.3f', json_extract(value, '$.similarity')) AS similarity,
     json_extract(value, '$.rank')                       AS rank
-FROM json_each(cypher('RETURN knn("BERT", 3)'))
+FROM json_each(cypher('RETURN knn("BERT", 3)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.rank');
 ```
 
@@ -424,7 +423,7 @@ SELECT
     json_extract(value, '$.user_id')                            AS paper,
     json_extract(value, '$.triangles')                          AS triangles,
     printf('%.3f', json_extract(value, '$.clustering_coefficient')) AS clustering_coeff
-FROM json_each(cypher('RETURN triangleCount()'))
+FROM json_each(cypher('RETURN triangleCount()'), '$[0].column_0')
 ORDER BY json_extract(value, '$.triangles') DESC;
 ```
 
@@ -439,7 +438,7 @@ SELECT
     json_extract(value, '$.node_id')  AS node_id,
     json_extract(value, '$.user_id')  AS paper,
     json_extract(value, '$.score')    AS score
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'));
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0');
 
 -- Community view
 CREATE VIEW IF NOT EXISTS v_communities AS
@@ -447,7 +446,7 @@ SELECT
     json_extract(value, '$.node_id')  AS node_id,
     json_extract(value, '$.user_id')  AS paper,
     json_extract(value, '$.community') AS community
-FROM json_each(cypher('RETURN labelPropagation(10)'));
+FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0');
 
 -- Degree view
 CREATE VIEW IF NOT EXISTS v_degree AS
@@ -456,7 +455,7 @@ SELECT
     json_extract(value, '$.in_degree')  AS in_degree,
     json_extract(value, '$.out_degree') AS out_degree,
     json_extract(value, '$.degree')     AS degree
-FROM json_each(cypher('RETURN degreeCentrality()'));
+FROM json_each(cypher('RETURN degreeCentrality()'), '$[0].column_0');
 ```
 
 Query the views:
@@ -501,7 +500,7 @@ WITH rankings AS (
     SELECT
         json_extract(value, '$.user_id') AS title,
         json_extract(value, '$.score')   AS pagerank
-    FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+    FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 )
 SELECT
     r.title,
@@ -521,7 +520,7 @@ WITH comm AS (
     SELECT
         json_extract(value, '$.user_id')   AS title,
         json_extract(value, '$.community') AS community
-    FROM json_each(cypher('RETURN louvain(1.0)'))
+    FROM json_each(cypher('RETURN louvain(1.0)'), '$[0].column_0')
 )
 SELECT
     pm.title,
@@ -545,7 +544,7 @@ SELECT
     json_extract(value, '$.user_id')  AS paper,
     json_extract(value, '$.score')    AS score,
     datetime('now')                   AS computed_at
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'));
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0');
 
 CREATE INDEX IF NOT EXISTS idx_pagerank_score ON pagerank_cache(score DESC);
 

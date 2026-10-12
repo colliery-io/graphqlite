@@ -44,7 +44,7 @@ WITH rankings AS (
     SELECT
         json_extract(value, '$.node_id') as node_id,
         json_extract(value, '$.score') as score
-    FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+    FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 )
 SELECT
     n.value as name,
@@ -63,7 +63,7 @@ WITH communities AS (
     SELECT
         json_extract(value, '$.node_id') as node_id,
         json_extract(value, '$.community') as community
-    FROM json_each(cypher('RETURN labelPropagation(10)'))
+    FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0')
 )
 SELECT
     c.community as group_id,
@@ -82,13 +82,13 @@ rankings AS (
     SELECT
         json_extract(value, '$.node_id') as node_id,
         json_extract(value, '$.score') as score
-    FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+    FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 ),
 communities AS (
     SELECT
         json_extract(value, '$.node_id') as node_id,
         json_extract(value, '$.community') as community
-    FROM json_each(cypher('RETURN labelPropagation(10)'))
+    FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0')
 ),
 ranked_by_community AS (
     SELECT

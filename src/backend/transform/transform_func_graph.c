@@ -19,6 +19,16 @@
 #include "parser/cypher_debug.h"
 
 /*
+ * The unrolled steps below drop the rank of nodes without out-edges. With
+ * teleport and that rank going to the same nodes, the leaky iteration
+ * converges to the PageRank vector times a constant, so dividing by the
+ * total gives the PageRank scores (#125). Computing the dangling total at
+ * each step instead reads the previous step twice, and SQLite inlines a
+ * CTE once per reference, so the SQL doubles at each step.
+ */
+#define PAGERANK_NORMALIZED_SCORE "score / NULLIF(SUM(score) OVER (), 0)"
+
+/*
  * PageRank Algorithm
  *
  * Computes PageRank scores using iterative power method.
@@ -99,9 +109,11 @@ int transform_pagerank_function(cypher_transform_context *ctx, cypher_function_c
 
     ctx->cte_count++;
 
-    /* Return JSON array of {node_id, score} objects ordered by score descending */
+    /* Return JSON array of {node_id, score} objects ordered by score descending.
+     * The steps leak the rank of nodes without out-edges; normalizing gives
+     * the same vector as spreading that rank to every node (#125). */
     append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
-               "FROM (SELECT node_id, score FROM %s_pr%d ORDER BY score DESC))",
+               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC))",
                cte_base, iterations);
 
     return 0;
@@ -195,9 +207,9 @@ int transform_top_pagerank_function(cypher_transform_context *ctx, cypher_functi
 
     ctx->cte_count++;
 
-    /* Return top-k as JSON array */
+    /* Return top-k as JSON array, normalized over all nodes before LIMIT (#125) */
     append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
-               "FROM (SELECT node_id, score FROM %s_pr%d ORDER BY score DESC LIMIT %d))",
+               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC LIMIT %d))",
                cte_base, iterations, k);
 
     return 0;
@@ -314,9 +326,11 @@ int transform_personalized_pagerank_function(cypher_transform_context *ctx, cyph
 
     ctx->cte_count++;
 
-    /* Return JSON array ordered by score descending */
+    /* Return JSON array ordered by score descending, normalized (#125):
+     * teleport and the leaked rank both go to the seeds, so the same
+     * scaling holds. */
     append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
-               "FROM (SELECT node_id, score FROM %s_pr%d ORDER BY score DESC))",
+               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC))",
                cte_base, iterations);
 
     return 0;

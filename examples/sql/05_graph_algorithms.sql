@@ -45,7 +45,7 @@ SELECT '=== PageRank as table ===';
 SELECT
     json_extract(value, '$.node_id') as id,
     printf('%.4f', json_extract(value, '$.score')) as score
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'));
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0');
 
 -- Join with paper titles
 SELECT '';
@@ -54,7 +54,7 @@ WITH rankings AS (
     SELECT
         json_extract(value, '$.node_id') as node_id,
         json_extract(value, '$.score') as score
-    FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+    FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 )
 SELECT
     p.value as paper,
@@ -75,7 +75,7 @@ WITH communities AS (
     SELECT
         json_extract(value, '$.node_id') as node_id,
         json_extract(value, '$.community') as community
-    FROM json_each(cypher('RETURN labelPropagation(10)'))
+    FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0')
 )
 SELECT
     c.community,

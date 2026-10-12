@@ -275,7 +275,7 @@ Run PageRank and display the results as a table:
 SELECT
     json_extract(value, '$.user_id')                         AS person,
     printf('%.4f', json_extract(value, '$.score'))           AS pagerank
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.score') DESC;
 ```
 
@@ -325,7 +325,7 @@ SELECT '--- PageRank ---';
 SELECT cypher('RETURN gql_load_graph()');
 SELECT json_extract(value, '$.user_id')               AS person,
        printf('%.4f', json_extract(value, '$.score')) AS score
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 ORDER BY json_extract(value, '$.score') DESC;
 ```
 

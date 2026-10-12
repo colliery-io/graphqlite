@@ -111,7 +111,7 @@ for r in &results {
 SELECT
     json_extract(value, '$.node_id') AS node,
     json_extract(value, '$.score')   AS score
-FROM json_each(cypher('RETURN pageRank(0.85, 20)'))
+FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0')
 ORDER BY score DESC
 LIMIT 5;
 ```
@@ -152,7 +152,7 @@ for r in &results {
 SELECT
     json_extract(value, '$.node_id')    AS node,
     json_extract(value, '$.out_degree') AS out_degree
-FROM json_each(cypher('RETURN degreeCentrality()'))
+FROM json_each(cypher('RETURN degreeCentrality()'), '$[0].column_0')
 ORDER BY out_degree DESC;
 ```
 
@@ -189,7 +189,7 @@ for r in &results {
 SELECT
     json_extract(value, '$.node_id') AS node,
     json_extract(value, '$.score')   AS score
-FROM json_each(cypher('RETURN betweennessCentrality()'))
+FROM json_each(cypher('RETURN betweennessCentrality()'), '$[0].column_0')
 ORDER BY score DESC;
 ```
 
@@ -222,7 +222,7 @@ let results = g.closeness_centrality()?;
 SELECT
     json_extract(value, '$.node_id') AS node,
     json_extract(value, '$.score')   AS score
-FROM json_each(cypher('RETURN closenessCentrality()'))
+FROM json_each(cypher('RETURN closenessCentrality()'), '$[0].column_0')
 ORDER BY score DESC;
 ```
 
@@ -253,7 +253,7 @@ let results = g.eigenvector_centrality(100)?;
 SELECT
     json_extract(value, '$.node_id') AS node,
     json_extract(value, '$.score')   AS score
-FROM json_each(cypher('RETURN eigenvectorCentrality(100)'))
+FROM json_each(cypher('RETURN eigenvectorCentrality(100)'), '$[0].column_0')
 ORDER BY score DESC;
 ```
 
@@ -302,7 +302,7 @@ for r in &results {
 SELECT
     json_extract(value, '$.node_id')   AS node,
     json_extract(value, '$.community') AS community
-FROM json_each(cypher('RETURN labelPropagation(10)'))
+FROM json_each(cypher('RETURN labelPropagation(10)'), '$[0].column_0')
 ORDER BY community;
 ```
 
@@ -336,7 +336,7 @@ let results = g.louvain(1.0)?;
 SELECT
     json_extract(value, '$.node_id')   AS node,
     json_extract(value, '$.community') AS community
-FROM json_each(cypher('RETURN louvain(1.0)'))
+FROM json_each(cypher('RETURN louvain(1.0)'), '$[0].column_0')
 ORDER BY community;
 ```
 
@@ -483,7 +483,7 @@ SELECT
     json_extract(value, '$.source')   AS src,
     json_extract(value, '$.target')   AS tgt,
     json_extract(value, '$.distance') AS dist
-FROM json_each(cypher('RETURN apsp()'))
+FROM json_each(cypher('RETURN apsp()'), '$[0].column_0')
 ORDER BY dist;
 ```
 
@@ -528,7 +528,7 @@ let results = g.wcc()?;
 SELECT
     json_extract(value, '$.component') AS component,
     COUNT(*) AS size
-FROM json_each(cypher('RETURN wcc()'))
+FROM json_each(cypher('RETURN wcc()'), '$[0].column_0')
 GROUP BY component
 ORDER BY size DESC;
 ```
@@ -565,7 +565,7 @@ let results = g.scc()?;
 SELECT
     json_extract(value, '$.component') AS component,
     COUNT(*) AS size
-FROM json_each(cypher('RETURN scc()'))
+FROM json_each(cypher('RETURN scc()'), '$[0].column_0')
 GROUP BY component
 ORDER BY size DESC;
 ```
@@ -608,7 +608,7 @@ for r in &results {
 SELECT
     json_extract(value, '$.user_id') AS node,
     json_extract(value, '$.depth')   AS depth
-FROM json_each(cypher('RETURN bfs(''alice'', 2)'))
+FROM json_each(cypher('RETURN bfs(''alice'', 2)'), '$[0].column_0')
 ORDER BY depth, json_extract(value, '$.order');
 ```
 
@@ -647,7 +647,7 @@ SELECT
     json_extract(value, '$.user_id') AS node,
     json_extract(value, '$.depth')   AS depth,
     json_extract(value, '$.order')   AS visit_order
-FROM json_each(cypher('RETURN dfs(''alice'', 5)'))
+FROM json_each(cypher('RETURN dfs(''alice'', 5)'), '$[0].column_0')
 ORDER BY visit_order;
 ```
 
@@ -695,7 +695,7 @@ SELECT
     json_extract(value, '$.node1')      AS n1,
     json_extract(value, '$.node2')      AS n2,
     json_extract(value, '$.similarity') AS sim
-FROM json_each(cypher('RETURN nodeSimilarity()'))
+FROM json_each(cypher('RETURN nodeSimilarity()'), '$[0].column_0')
 WHERE json_extract(value, '$.similarity') > 0.3
 ORDER BY sim DESC;
 ```
@@ -736,7 +736,7 @@ SELECT
     json_extract(value, '$.neighbor')   AS neighbor,
     json_extract(value, '$.similarity') AS similarity,
     json_extract(value, '$.rank')       AS rank
-FROM json_each(cypher('RETURN knn(''alice'', 5)'))
+FROM json_each(cypher('RETURN knn(''alice'', 5)'), '$[0].column_0')
 ORDER BY rank;
 ```
 
@@ -777,7 +777,7 @@ SELECT
     json_extract(value, '$.node_id')                AS node,
     json_extract(value, '$.triangles')              AS triangles,
     json_extract(value, '$.clustering_coefficient') AS clustering
-FROM json_each(cypher('RETURN triangleCount()'))
+FROM json_each(cypher('RETURN triangleCount()'), '$[0].column_0')
 ORDER BY triangles DESC;
 ```
 

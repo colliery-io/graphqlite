@@ -408,6 +408,126 @@ static void test_pagerank_ranking_order(void)
     }
 }
 
+
+/* ============================================================
+ * #125: rank on nodes without out-edges is not lost
+ * ============================================================ */
+
+/* Run `setup` then `query` on a fresh graph; first cell, caller frees. */
+static char *pagerank_fresh(const char **setup, const char *query)
+{
+    sqlite3 *db = NULL;
+    if (sqlite3_open(":memory:", &db) != SQLITE_OK) return NULL;
+    cypher_executor *ex = cypher_executor_create(db);
+    char *out = NULL;
+    if (ex) {
+        for (int i = 0; setup[i]; i++) {
+            cypher_result *r = cypher_executor_execute(ex, setup[i]);
+            if (r) cypher_result_free(r);
+        }
+        cypher_result *r = cypher_executor_execute(ex, query);
+        if (r && r->success && r->row_count > 0 && r->data && r->data[0][0]) {
+            out = strdup(r->data[0][0]);
+        } else if (r && !r->success) {
+            printf("\n%s\n  error: %s\n", query, r->error_message);
+        }
+        if (r) cypher_result_free(r);
+        cypher_executor_free(ex);
+    }
+    sqlite3_close(db);
+    return out;
+}
+
+/* Sum of every "score" in a JSON result. */
+static double sum_scores(const char *json)
+{
+    double total = 0.0, v;
+    for (const char *p = json; (p = strstr(p, "\"score\":")) != NULL; p += 8) {
+        if (sscanf(p + 8, "%lf", &v) == 1) total += v;
+    }
+    return total;
+}
+
+/* a -> b: the #125 reproduction. Standard PageRank, d = 0.85:
+ * a = 1/2.85 = 0.350877, b = 1.85/2.85 = 0.649123. */
+static const char *TWO_NODE_GRAPH[] = {
+    "CREATE (:N {id: 'a'}), (:N {id: 'b'})",
+    "MATCH (a:N {id: 'a'}), (b:N {id: 'b'}) CREATE (a)-[:L]->(b)",
+    NULL
+};
+
+static void check_two_node_scores(const char *query)
+{
+    char *json = pagerank_fresh(TWO_NODE_GRAPH, query);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 1), 0.350877, 1e-4);
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 2), 0.649123, 1e-4);
+    CU_ASSERT_DOUBLE_EQUAL(sum_scores(json), 1.0, 1e-4);
+    free(json);
+}
+
+static void test_pagerank_dangling_node(void)
+{
+    check_two_node_scores("RETURN pageRank(0.85, 100)");
+}
+
+static void test_top_pagerank_dangling_node(void)
+{
+    check_two_node_scores("RETURN topPageRank(2, 0.85, 100)");
+}
+
+static void test_pagerank_sql_path_dangling_node(void)
+{
+    /* Not a plain RETURN, so the SQL form is used. */
+    char *json = pagerank_fresh(TWO_NODE_GRAPH,
+        "MATCH (n:N {id: 'a'}) WITH n RETURN pageRank(0.85, 100)");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 1), 0.350877, 1e-4);
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 2), 0.649123, 1e-4);
+    free(json);
+}
+
+/* Several sinks and an isolated node: scores still sum to 1. */
+static void test_pagerank_sums_to_one_with_sinks(void)
+{
+    const char *setup[] = {
+        "CREATE (:N {id: 'a'}), (:N {id: 'b'}), (:N {id: 'c'}), (:N {id: 'd'}), (:N {id: 'e'})",
+        "MATCH (a:N {id: 'a'}), (b:N {id: 'b'}) CREATE (a)-[:L]->(b)",
+        "MATCH (a:N {id: 'a'}), (c:N {id: 'c'}) CREATE (a)-[:L]->(c)",
+        "MATCH (d:N {id: 'd'}), (a:N {id: 'a'}) CREATE (d)-[:L]->(a)",
+        NULL
+    };
+    char *json = pagerank_fresh(setup, "RETURN pageRank(0.85, 100)");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_DOUBLE_EQUAL(sum_scores(json), 1.0, 1e-4);
+    /* b and c are symmetric */
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 2), extract_score_for_node(json, 3), 1e-6);
+    free(json);
+}
+
+/* No edges: every node is a sink, so the scores stay uniform. */
+static void test_pagerank_no_edges_uniform(void)
+{
+    const char *setup[] = {"CREATE (:N {id: 'a'}), (:N {id: 'b'}), (:N {id: 'c'}), (:N {id: 'd'})", NULL};
+    char *json = pagerank_fresh(setup, "RETURN pageRank(0.85, 50)");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    for (int id = 1; id <= 4; id++) {
+        CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, id), 0.25, 1e-4);
+    }
+    free(json);
+}
+
+/* Personalized: rank on the sink returns to the seed.
+ * Seed a, a -> b: pi_b = 0.85 pi_a, pi_a + pi_b = 1. */
+static void test_personalized_pagerank_dangling_node(void)
+{
+    char *json = pagerank_fresh(TWO_NODE_GRAPH, "RETURN personalizedPageRank('[1]', 0.85, 100)");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 1), 1.0 / 1.85, 1e-4);
+    CU_ASSERT_DOUBLE_EQUAL(extract_score_for_node(json, 2), 0.85 / 1.85, 1e-4);
+    free(json);
+}
+
 /* Initialize the PageRank executor test suite */
 int init_executor_pagerank_suite(void)
 {
@@ -426,7 +546,13 @@ int init_executor_pagerank_suite(void)
         !CU_add_test(suite, "personalizedPageRank custom params", test_personalized_pagerank_custom_params) ||
         !CU_add_test(suite, "PageRank empty graph", test_pagerank_empty_graph) ||
         !CU_add_test(suite, "PageRank ranking order", test_pagerank_ranking_order) ||
-        !CU_add_test(suite, "PageRank correctness", test_pagerank_correctness)) {
+        !CU_add_test(suite, "PageRank correctness", test_pagerank_correctness) ||
+        !CU_add_test(suite, "PageRank dangling node (#125)", test_pagerank_dangling_node) ||
+        !CU_add_test(suite, "topPageRank dangling node (#125)", test_top_pagerank_dangling_node) ||
+        !CU_add_test(suite, "PageRank SQL path dangling node (#125)", test_pagerank_sql_path_dangling_node) ||
+        !CU_add_test(suite, "PageRank sums to 1 with sinks (#125)", test_pagerank_sums_to_one_with_sinks) ||
+        !CU_add_test(suite, "PageRank no edges is uniform (#125)", test_pagerank_no_edges_uniform) ||
+        !CU_add_test(suite, "personalizedPageRank dangling node (#125)", test_personalized_pagerank_dangling_node)) {
         return CU_get_error();
     }
 

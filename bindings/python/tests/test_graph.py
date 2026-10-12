@@ -696,6 +696,17 @@ def test_pagerank(g):
     assert user_ids == {"pr1", "pr2", "pr3"}
 
 
+
+def test_pagerank_dangling_node(g):
+    # #125: rank on nodes without out-edges was dropped; scores must sum to 1.
+    g.upsert_node("a", {}, label="Node")
+    g.upsert_node("b", {}, label="Node")
+    g.upsert_edge("a", "b", {}, rel_type="LINK")
+    scores = {r["user_id"]: r["score"] for r in g.pagerank(damping=0.85, iterations=100)}
+    assert scores["a"] == pytest.approx(0.350877, abs=1e-4)
+    assert scores["b"] == pytest.approx(0.649123, abs=1e-4)
+    assert sum(scores.values()) == pytest.approx(1.0, abs=1e-4)
+
 def test_community_detection(g):
     g.upsert_node("cd1", {"name": "CD1"})
     g.upsert_node("cd2", {"name": "CD2"})
