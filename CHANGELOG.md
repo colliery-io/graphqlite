@@ -4,6 +4,37 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] — 2026-10-12
+
+Fixes for faults that CI found on Linux and Windows after 0.9.3 (GQLITE-T-0390).
+Upgrade from 0.9.3 if you run on Linux. The openCypher TCK pass count is unchanged
+(3823 / 3880) and now also holds on Linux.
+
+### Fixed
+
+- **Crash on Linux:** the row-wise write pipeline freed memory with the wrong
+  allocator, which aborted with `free(): invalid pointer`, for example on
+  `UNWIND [1, 2] AS i MATCH (n) CREATE (n)-[:S {i: i}]->(:M)`. Present since 0.9.2.
+- **SQLite 3.45 and earlier** (for example Ubuntu 24.04):
+  - Nested lists in slices and list comprehensions came back as strings
+    (`[[6, 7]]` gave `["[6,7]"]`).
+  - `EXISTS { MATCH (n)-->(m) WITH n, count(*) AS c ... }` failed with
+    "no such column".
+  - List and map literals nested 20 or more deep failed with
+    "parser stack overflow".
+- **Windows:** durations that span hundreds of millions of years gave malformed
+  JSON (32-bit date arithmetic).
+
+### Tests
+
+- `tests/functional/54_v093_regressions.sql` covers the 0.9.3 fixes and these
+  faults, and runs on the SQLite of each CI platform.
+
+### Known issue
+
+- On Windows CI, `SET n.x = timestamp()` stores a wrong value in the functional
+  tests (GQLITE-T-0391). This is not new in 0.9.4.
+
 ## [0.9.3] — 2026-10-11
 
 A correctness release: GitHub issues #122–#125, a heap overflow in DFS,
