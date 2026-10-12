@@ -270,7 +270,7 @@ static void test_node_property_operations(void)
     CU_ASSERT_TRUE(node_id > 0);
     
     /* Test setting different property types */
-    int int_value = 42;
+    int64_t int_value = 42;
     result = cypher_schema_set_node_property(schema_mgr, node_id, "age", PROP_TYPE_INTEGER, &int_value);
     CU_ASSERT_EQUAL(result, 0);
     
@@ -287,7 +287,7 @@ static void test_node_property_operations(void)
     CU_ASSERT_EQUAL(result, 0);
     
     /* Test updating existing property */
-    int new_age = 43;
+    int64_t new_age = 43;
     result = cypher_schema_set_node_property(schema_mgr, node_id, "age", PROP_TYPE_INTEGER, &new_age);
     CU_ASSERT_EQUAL(result, 0);
     

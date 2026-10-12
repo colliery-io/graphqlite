@@ -3395,10 +3395,14 @@ static int rw_scope_after_prefix(ast_list *clauses, int prefix_len, char ***out_
 }
 
 /* SQL literal text for a scalar, for splicing into an expression. Owned. */
+/* SQL literal for a scalar. Always sqlite3_mprintf memory: the caller
+ * frees it with sqlite3_free. strdup memory freed that way crashed on
+ * Linux, where SQLite's allocator keeps a size header ("free(): invalid
+ * pointer"). */
 static char *rw_scalar_sql(const rw_scalar *sc)
 {
-    if (!sc || !sc->text) return strdup("NULL");
-    if (sc->type == SQLITE_INTEGER || sc->type == SQLITE_FLOAT) return strdup(sc->text);
+    if (!sc || !sc->text) return sqlite3_mprintf("NULL");
+    if (sc->type == SQLITE_INTEGER || sc->type == SQLITE_FLOAT) return sqlite3_mprintf("%s", sc->text);
     const char *t = sc->text;
     if ((t[0] == '[' || t[0] == '{')) return sqlite3_mprintf("json(%Q)", t);
     return sqlite3_mprintf("%Q", t);
