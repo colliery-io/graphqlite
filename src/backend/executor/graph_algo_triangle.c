@@ -34,38 +34,35 @@ static int edge_exists(csr_graph *graph, int u, int v) {
     return 0;
 }
 
-/* Get all neighbors of a node (both directions for undirected) */
+/* Distinct neighbors of a node in the undirected graph. A self-loop is not a
+ * neighbor (GQLITE-T-0385: it was counted as a triangle) and parallel
+ * edges count once. */
 static int* get_neighbors(csr_graph *graph, int node, int *neighbor_count) {
-    /* Count total neighbors */
     int out_count = graph->row_ptr[node + 1] - graph->row_ptr[node];
     int in_count = graph->in_row_ptr[node + 1] - graph->in_row_ptr[node];
     int max_neighbors = out_count + in_count;
 
-    int *neighbors = malloc(max_neighbors * sizeof(int));
+    int *neighbors = malloc((max_neighbors > 0 ? max_neighbors : 1) * sizeof(int));
     if (!neighbors) {
         *neighbor_count = 0;
         return NULL;
     }
 
     int count = 0;
-
-    /* Add outgoing neighbors */
-    for (int i = graph->row_ptr[node]; i < graph->row_ptr[node + 1]; i++) {
-        neighbors[count++] = graph->col_idx[i];
-    }
-
-    /* Add incoming neighbors (avoid duplicates) */
-    for (int i = graph->in_row_ptr[node]; i < graph->in_row_ptr[node + 1]; i++) {
-        int neighbor = graph->in_col_idx[i];
-        int is_dup = 0;
-        for (int j = 0; j < count; j++) {
-            if (neighbors[j] == neighbor) {
-                is_dup = 1;
-                break;
+    for (int dir = 0; dir < 2; dir++) {
+        const int *ptr = dir == 0 ? graph->row_ptr : graph->in_row_ptr;
+        const int *idx = dir == 0 ? graph->col_idx : graph->in_col_idx;
+        for (int i = ptr[node]; i < ptr[node + 1]; i++) {
+            int neighbor = idx[i];
+            if (neighbor == node) continue;
+            int is_dup = 0;
+            for (int j = 0; j < count; j++) {
+                if (neighbors[j] == neighbor) {
+                    is_dup = 1;
+                    break;
+                }
             }
-        }
-        if (!is_dup) {
-            neighbors[count++] = neighbor;
+            if (!is_dup) neighbors[count++] = neighbor;
         }
     }
 

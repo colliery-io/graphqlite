@@ -14,6 +14,26 @@
 #include "graphqlite_sqlite.h"
 #include "runtime/udf_register.h"
 #include "runtime/udf_helpers.h"
+#include "executor/graph_algorithms.h"
+
+/* _gql_label_propagation(iterations): the C label propagation as JSON
+ * text, [{node_id, user_id, community}, ...]. The SQL forms of
+ * labelPropagation / communityOf / communityMembers / communityCount read
+ * it, so every form gives the same communities (GQLITE-T-0383: the
+ * unrolled SQL version updated labels synchronously and oscillated). */
+static void gql_label_propagation_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+  int iterations = argc > 0 ? sqlite3_value_int(argv[0]) : 10;
+  if (iterations < 1) iterations = 1;
+  graph_algo_result *r = execute_label_propagation(sqlite3_context_db_handle(context), NULL, iterations);
+  if (!r) { sqlite3_result_error_nomem(context); return; }
+  if (!r->success) {
+    sqlite3_result_error(context, r->error_message ? r->error_message : "labelPropagation failed", -1);
+  } else {
+    sqlite3_result_text(context, r->json_result ? r->json_result : "[]", -1, SQLITE_TRANSIENT);
+  }
+  graph_algo_result_free(r);
+}
 
 
 #ifdef _WIN32
@@ -37,6 +57,10 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
 
   rc = sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
                          regexp_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_label_propagation", 1, SQLITE_UTF8, 0,
+                         gql_label_propagation_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_extract_ns", 1, SQLITE_UTF8, 0,

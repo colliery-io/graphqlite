@@ -6,6 +6,12 @@
  *
  * Formula: x[i] = (1/λ) * Σ A[i,j] * x[j]
  * where λ is the largest eigenvalue (computed implicitly via normalization)
+ *
+ * The iteration runs on (Aᵀ + I), which has the same eigenvectors. Plain
+ * Aᵀ oscillates on periodic graphs (e.g. 2-cycles), so the result depended
+ * on the parity of `iterations` (GQLITE-T-0384). NetworkX does the same.
+ * On a graph without cycles there is no dominant eigenvector; the result
+ * is the iterate after `iterations` steps.
  */
 
 #include <stdio.h>
@@ -91,9 +97,9 @@ graph_algo_result* execute_eigenvector_centrality(sqlite3 *db, csr_graph *cached
     for (int iter = 0; iter < iterations; iter++) {
         actual_iters++;
 
-        /* Initialize new eigenvector to zero */
+        /* Start from x: the identity term of (Aᵀ + I) */
         for (int i = 0; i < n; i++) {
-            ev_new[i] = 0.0;
+            ev_new[i] = ev[i];
         }
 
         /* Multiply by adjacency matrix (using incoming edges) */

@@ -35,6 +35,7 @@ int init_executor_louvain_suite(void);
 int init_executor_triangle_suite(void);
 int init_executor_astar_suite(void);
 int init_executor_traversal_suite(void);
+int init_executor_algo_regressions_suite(void);
 int init_executor_similarity_suite(void);
 int init_executor_knn_suite(void);
 int init_executor_eigenvector_suite(void);
@@ -237,6 +238,12 @@ int main(void)
 
     if (init_executor_traversal_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add executor traversal suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_algo_regressions_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor algorithm regressions suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

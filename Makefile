@@ -240,6 +240,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_triangle.c \
 	$(TEST_DIR)/test_executor_astar.c \
 	$(TEST_DIR)/test_executor_traversal.c \
+	$(TEST_DIR)/test_executor_algo_regressions.c \
 	$(TEST_DIR)/test_executor_similarity.c \
 	$(TEST_DIR)/test_executor_knn.c \
 	$(TEST_DIR)/test_executor_eigenvector.c \

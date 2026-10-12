@@ -16,6 +16,13 @@
  *
  * Each node adopts the most common label among its neighbors.
  * Optimized with sparse label counting for O(E) per iteration.
+ *
+ * GQLITE-T-0383: updates are asynchronous (a node sees the labels already
+ * updated in this round) and a node keeps its label on a tie. Synchronous
+ * updates oscillated on bipartite shapes (stars, paths), so a hub and its
+ * leaves swapped labels. Self-loops do not vote. A final pass splits a
+ * label held by nodes with no path between them, so every community is
+ * connected in the undirected graph.
  */
 graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int iterations)
 {
@@ -88,15 +95,13 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int
 
             int neighbor_count = (in_end - in_start) + (out_end - out_start);
 
-            if (neighbor_count == 0) {
-                new_labels[i] = labels[i];
-                continue;
-            }
+            if (neighbor_count == 0) continue;
 
             int touched_count = 0;
 
             /* Count incoming neighbor labels */
             for (int j = in_start; j < in_end; j++) {
+                if (graph->in_col_idx[j] == i) continue;
                 int label = labels[graph->in_col_idx[j]];
                 if (label_counts[label] == 0) {
                     touched_labels[touched_count++] = label;
@@ -106,6 +111,7 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int
 
             /* Count outgoing neighbor labels */
             for (int j = out_start; j < out_end; j++) {
+                if (graph->col_idx[j] == i) continue;
                 int label = labels[graph->col_idx[j]];
                 if (label_counts[label] == 0) {
                     touched_labels[touched_count++] = label;
@@ -113,14 +119,15 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int
                 label_counts[label]++;
             }
 
-            /* Find best label */
+            /* Find best label: highest count; on a tie keep the current
+             * label, else take the smallest. */
             int best_label = labels[i];
-            int best_count = 0;
+            int best_count = label_counts[labels[i]];
 
             for (int t = 0; t < touched_count; t++) {
                 int label = touched_labels[t];
                 int count = label_counts[label];
-                if (count > best_count || (count == best_count && label < best_label)) {
+                if (count > best_count || (count == best_count && best_label != labels[i] && label < best_label)) {
                     best_count = count;
                     best_label = label;
                 }
@@ -131,13 +138,11 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int
                 label_counts[touched_labels[t]] = 0;
             }
 
-            new_labels[i] = best_label;
-            if (new_labels[i] != labels[i]) changes++;
+            if (best_label != labels[i]) {
+                labels[i] = best_label;  /* asynchronous update */
+                changes++;
+            }
         }
-
-        int *tmp = labels;
-        labels = new_labels;
-        new_labels = tmp;
 
         CYPHER_DEBUG("Label propagation iter %d: %d changes", iter, changes);
 
@@ -146,6 +151,38 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int
 
     free(label_counts);
     free(touched_labels);
+
+    /* Split each label into its connected parts (undirected): a BFS over
+     * neighbors with the same label gives each part its own label.
+     * new_labels is reused as the part id (-1 = not yet visited). */
+    {
+        int *queue = malloc((n > 0 ? n : 1) * sizeof(int));
+        if (queue) {
+            for (int i = 0; i < n; i++) new_labels[i] = -1;
+            for (int start = 0; start < n; start++) {
+                if (new_labels[start] >= 0) continue;
+                int head = 0, tail = 0;
+                queue[tail++] = start;
+                new_labels[start] = start;
+                while (head < tail) {
+                    int u = queue[head++];
+                    for (int dir = 0; dir < 2; dir++) {
+                        const int *ptr = dir == 0 ? graph->row_ptr : graph->in_row_ptr;
+                        const int *idx = dir == 0 ? graph->col_idx : graph->in_col_idx;
+                        for (int j = ptr[u]; j < ptr[u + 1]; j++) {
+                            int v = idx[j];
+                            if (new_labels[v] < 0 && labels[v] == labels[start]) {
+                                new_labels[v] = start;
+                                queue[tail++] = v;
+                            }
+                        }
+                    }
+                }
+            }
+            for (int i = 0; i < n; i++) labels[i] = new_labels[i];
+            free(queue);
+        }
+    }
 
     /* Map labels to community IDs */
     int *label_to_community = malloc(n * sizeof(int));

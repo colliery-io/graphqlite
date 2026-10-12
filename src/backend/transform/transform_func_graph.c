@@ -365,38 +365,8 @@ int transform_label_propagation_function(cypher_transform_context *ctx, cypher_f
         }
     }
 
-    /* Generate unique CTE name */
-    char cte_base[64];
-    snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
-
-    char cte_name[128], cte_query[1024];
-
-    /* Initial labels: each node gets its own ID */
-    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
-    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
-
-    /* Generate iterations using window functions to avoid correlated subqueries */
-    for (int i = 1; i <= iterations; i++) {
-        /* Each iteration: count neighbor label votes, pick most frequent */
-        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
-        snprintf(cte_query, sizeof(cte_query),
-            "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
-            "SELECT n.id AS node_id, p.label, "
-            "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
-            "FROM nodes n "
-            "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
-            "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1",
-            cte_base, i - 1);
-        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-    }
-
-    ctx->cte_count++;
-
-    /* Return JSON array of {node_id, community} pairs ordered by community then node */
-    append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'community', label)) "
-               "FROM (SELECT node_id, label FROM %s_lbl%d ORDER BY label, node_id))",
-               cte_base, iterations);
+    /* The C algorithm via _gql_label_propagation (GQLITE-T-0383) */
+    append_sql(ctx, "json(_gql_label_propagation(%d))", iterations);
 
     return 0;
 }
@@ -441,36 +411,9 @@ int transform_community_of_function(cypher_transform_context *ctx, cypher_functi
         }
     }
 
-    /* Generate unique CTE name */
-    char cte_base[64];
-    snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
-
-    char cte_name[128], cte_query[1024];
-
-    /* Initial labels */
-    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
-    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
-
-    /* Generate iterations using window functions */
-    for (int i = 1; i <= iterations; i++) {
-        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
-        snprintf(cte_query, sizeof(cte_query),
-            "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
-            "SELECT n.id AS node_id, p.label, "
-            "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
-            "FROM nodes n "
-            "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
-            "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1",
-            cte_base, i - 1);
-        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-    }
-
-    ctx->cte_count++;
-
-    /* Return just the community label for the specified node */
-    append_sql(ctx, "(SELECT label FROM %s_lbl%d WHERE node_id = %d)",
-               cte_base, iterations, node_id);
+    append_sql(ctx, "(SELECT json_extract(value, '$.community') FROM json_each(_gql_label_propagation(%d)) "
+               "WHERE json_extract(value, '$.node_id') = %d)",
+               iterations, node_id);
 
     return 0;
 }
@@ -515,36 +458,10 @@ int transform_community_members_function(cypher_transform_context *ctx, cypher_f
         }
     }
 
-    /* Generate unique CTE name */
-    char cte_base[64];
-    snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
-
-    char cte_name[128], cte_query[1024];
-
-    /* Initial labels */
-    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
-    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
-
-    /* Generate iterations using window functions */
-    for (int i = 1; i <= iterations; i++) {
-        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
-        snprintf(cte_query, sizeof(cte_query),
-            "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
-            "SELECT n.id AS node_id, p.label, "
-            "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
-            "FROM nodes n "
-            "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
-            "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1",
-            cte_base, i - 1);
-        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-    }
-
-    ctx->cte_count++;
-
-    /* Return JSON array of node IDs in the community */
-    append_sql(ctx, "(SELECT json_group_array(node_id) FROM %s_lbl%d WHERE label = %d ORDER BY node_id)",
-               cte_base, iterations, community_id);
+    append_sql(ctx, "(SELECT json_group_array(nid) FROM (SELECT json_extract(value, '$.node_id') AS nid "
+               "FROM json_each(_gql_label_propagation(%d)) WHERE json_extract(value, '$.community') = %d "
+               "ORDER BY nid))",
+               iterations, community_id);
 
     return 0;
 }
@@ -571,36 +488,9 @@ int transform_community_count_function(cypher_transform_context *ctx, cypher_fun
         }
     }
 
-    /* Generate unique CTE name */
-    char cte_base[64];
-    snprintf(cte_base, sizeof(cte_base), "_lp_%d", ctx->cte_count);
-
-    char cte_name[128], cte_query[1024];
-
-    /* Initial labels */
-    snprintf(cte_name, sizeof(cte_name), "%s_lbl0", cte_base);
-    sql_cte(ctx->unified_builder, cte_name, "SELECT id AS node_id, id AS label FROM nodes", false);
-
-    /* Generate iterations using window functions */
-    for (int i = 1; i <= iterations; i++) {
-        snprintf(cte_name, sizeof(cte_name), "%s_lbl%d", cte_base, i);
-        snprintf(cte_query, sizeof(cte_query),
-            "SELECT node_id, COALESCE(label, node_id) AS label FROM ("
-            "SELECT n.id AS node_id, p.label, "
-            "ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY COUNT(*) DESC, p.label ASC) AS rn "
-            "FROM nodes n "
-            "LEFT JOIN edges e ON e.target_id = n.id OR e.source_id = n.id "
-            "LEFT JOIN %s_lbl%d p ON p.node_id = CASE WHEN e.target_id = n.id THEN e.source_id ELSE e.target_id END "
-            "GROUP BY n.id, p.label) WHERE rn = 1",
-            cte_base, i - 1);
-        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-    }
-
-    ctx->cte_count++;
-
-    /* Return count of distinct communities */
-    append_sql(ctx, "(SELECT COUNT(DISTINCT label) FROM %s_lbl%d)",
-               cte_base, iterations);
+    append_sql(ctx, "(SELECT COUNT(DISTINCT json_extract(value, '$.community')) "
+               "FROM json_each(_gql_label_propagation(%d)))",
+               iterations);
 
     return 0;
 }

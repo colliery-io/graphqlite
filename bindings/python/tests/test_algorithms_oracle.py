@@ -6,6 +6,9 @@ stars, DAG, complete graph, two components, reciprocal edges) and seeded
 random graphs with an isolated node, so the rank of nodes without
 out-edges, unreachable pairs and weights from 1 to 9 are always covered.
 
+Each test was written against a known bug first (GQLITE-T-0381 to
+GQLITE-T-0385) and passes now.
+
 Semantics that the comparisons pin down:
 - betweenness: directed, not normalized
 - closeness: harmonic, on the undirected graph, divided by n - 1
@@ -179,7 +182,6 @@ def test_closeness_centrality(pair):
     _assert_scores(_by_user(g.closeness_centrality(), "score"), expected, tol=1e-3)
 
 
-@pytest.mark.xfail(strict=True, reason="GQLITE-T-0384: power iteration oscillates on periodic graphs")
 def test_eigenvector_centrality():
     def check(G, g):
         try:
@@ -215,7 +217,6 @@ def _undirected_weighted(G):
     return U
 
 
-@pytest.mark.xfail(strict=True, reason="GQLITE-T-0382: Louvain can end below the singleton modularity")
 def test_louvain_modularity():
     def check(G, g):
         U = _undirected_weighted(G)
@@ -243,7 +244,6 @@ def test_label_propagation_covers_every_node_once(pair):
     assert sorted(r["user_id"] for r in rows) == sorted(G)
 
 
-@pytest.mark.xfail(strict=True, reason="GQLITE-T-0383: label propagation can return disconnected communities")
 def test_label_propagation_communities_are_connected():
     def check(G, g):
         U = G.to_undirected()
@@ -342,6 +342,15 @@ def test_triangle_count_and_clustering(pair):
 
 # --- graphs that the random set does not produce ------------------------------
 
+def test_label_propagation_sql_form_matches(pair):
+    """Outside a plain RETURN the SQL form runs; it must give the same communities."""
+    G, g = pair
+    direct = _partition(g.community_detection(iterations=10), "community")
+    first = sorted(G)[0]
+    rows = _cypher_list(g, f"MATCH (n:N {{id: '{first}'}}) WITH n RETURN labelPropagation(10) AS l")
+    assert _partition(rows, "community") == direct
+
+
 @pytest.fixture
 def g():
     graph = Graph(":memory:", extension_path=get_extension_path())
@@ -349,7 +358,6 @@ def g():
     graph.close()
 
 
-@pytest.mark.xfail(strict=True, reason="GQLITE-T-0385: a self-loop is counted as a triangle")
 def test_triangle_count_ignores_self_loops(g):
     g.upsert_node("a", {}, label="N")
     g.upsert_node("b", {}, label="N")
