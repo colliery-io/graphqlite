@@ -31,7 +31,7 @@ Homepage = "https://github.com/colliery-io/graphqlite"
 Repository = "https://github.com/colliery-io/graphqlite"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov"]
+dev = ["pytest>=7.0", "pytest-cov", "networkx>=3.0"]
 leiden = ["graspologic>=3.0"]
 rustworkx = ["rustworkx>=0.13"]
 

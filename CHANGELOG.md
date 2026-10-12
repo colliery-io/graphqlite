@@ -4,6 +4,50 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Fixes for GitHub issues #122–#125, a heap overflow in DFS, and an
+algorithm test suite checked against NetworkX. The openCypher TCK pass set
+is unchanged (3822 / 3880).
+
+### Fixed
+
+- **Dijkstra and A\* weights** (#122, GQLITE-T-0377): integer weights were
+  read as 1, and parallel edges shared one weight. Weights now come from
+  integer and float properties, matched to each edge by its id. A\* loaded
+  weights but did not use them.
+- **Bare boolean conditions** (#123, GQLITE-T-0378): `CASE WHEN p.active`,
+  `WHERE p.active`, and `any(x IN list WHERE x)` read a true boolean
+  property as false.
+- **UNWIND values in CREATE and MERGE** (#124, GQLITE-T-0379):
+  `UNWIND $rows AS row CREATE (:Item {id: row.id})` stored no properties.
+  Literal lists of maps created no nodes, floats were cut to integers,
+  booleans and nulls were skipped, and expressions such as `toString(i)` or
+  `row.a * 2` were dropped. MERGE stored UNWIND values as text.
+  **Upgrade note:** data written before by `UNWIND … MERGE` with numbers or
+  booleans is stored as text; a MERGE after the upgrade matches typed
+  values, so it does not match those old rows.
+- **PageRank** (#125, GQLITE-T-0380): the rank of nodes without out-edges
+  was lost, so scores summed to less than 1. `pageRank`, `topPageRank` and
+  `personalizedPageRank` now give standard PageRank scores.
+- **DFS heap overflow** (GQLITE-T-0381): DFS wrote past its stack buffer on
+  graphs with more than two edges per node, which could crash the process.
+
+### Documentation
+
+- The algorithm reference showed `CALL algo() YIELD …`, which is not
+  supported; it now shows `RETURN algo(…)` and the result keys (#125).
+- SQL examples that read algorithm results with `json_each(cypher(…))`
+  returned no rows; they now read `$[0].column_0`.
+
+### Tests
+
+- `bindings/python/tests/test_algorithms_oracle.py` checks every algorithm
+  against NetworkX on special and seeded random graphs. Known bugs are
+  strict `xfail`s: GQLITE-T-0382 (Louvain), GQLITE-T-0383 (label
+  propagation), GQLITE-T-0384 (eigenvector), GQLITE-T-0385 (triangles).
+  `networkx` is added to the `dev` extra.
+
 ## [0.9.2] — 2026-10-06
 
 A MERGE correctness release. The openCypher TCK pass count moves from
