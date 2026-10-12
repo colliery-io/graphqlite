@@ -394,6 +394,118 @@ static void test_unwind_literal_set_binding(void)
 }
 
 /* Initialize the UNWIND executor test suite */
+
+/* ============================================================
+ * #124: UNWIND values keep their type; row.key reads a map
+ * ============================================================ */
+
+/* Run `writes` (each with `params`, may be NULL) on a fresh graph, then
+ * `query`; return column 0 of all rows joined with ','. Caller frees. */
+static char *unwind_fresh(const char **writes, const char *params, const char *query)
+{
+    sqlite3 *db = NULL;
+    if (sqlite3_open(":memory:", &db) != SQLITE_OK) return NULL;
+    cypher_executor *ex = cypher_executor_create(db);
+    char *out = NULL;
+    if (ex) {
+        for (int i = 0; writes[i]; i++) {
+            cypher_result *r = params ? cypher_executor_execute_params(ex, writes[i], params)
+                                      : cypher_executor_execute(ex, writes[i]);
+            if (r && !r->success) printf("\n%s\n  error: %s\n", writes[i], r->error_message);
+            if (r) cypher_result_free(r);
+        }
+        cypher_result *r = cypher_executor_execute(ex, query);
+        if (r && r->success) {
+            size_t cap = 256, len = 0;
+            out = calloc(1, cap);
+            for (int i = 0; out && i < r->row_count; i++) {
+                const char *v = r->data[i][0] ? r->data[i][0] : "null";
+                size_t need = len + strlen(v) + 2;
+                if (need > cap) { cap = need * 2; out = realloc(out, cap); if (!out) break; }
+                len += (size_t)snprintf(out + len, cap - len, "%s%s", i ? "," : "", v);
+            }
+        } else if (r) {
+            printf("\n%s\n  error: %s\n", query, r->error_message);
+        }
+        if (r) cypher_result_free(r);
+        cypher_executor_free(ex);
+    }
+    sqlite3_close(db);
+    return out;
+}
+
+#define ASSERT_UNWIND(writes, params, query, expected) do {               \
+        char *got_ = unwind_fresh(writes, params, query);                 \
+        CU_ASSERT_PTR_NOT_NULL(got_);                                     \
+        if (got_) {                                                       \
+            if (strcmp(got_, expected) != 0)                              \
+                printf("\n%s\n  expected %s, got %s\n", query, expected, got_); \
+            CU_ASSERT_STRING_EQUAL(got_, expected);                       \
+            free(got_);                                                   \
+        }                                                                 \
+    } while (0)
+
+static const char *ROWS_PARAMS =
+    "{\"rows\": [{\"id\": \"a\", \"value\": 1, \"f\": 1.5, \"b\": true},"
+    " {\"id\": \"b\", \"value\": 2}]}";
+
+static void test_unwind_param_map_create_inline(void)
+{
+    const char *w[] = {"UNWIND $rows AS row CREATE (:Item {id: row.id, value: row.value, f: row.f, b: row.b})", NULL};
+    ASSERT_UNWIND(w, ROWS_PARAMS,
+        "MATCH (n:Item) RETURN [n.id, n.value, n.f, n.b] ORDER BY n.id",
+        "[\"a\",1,1.5,true],[\"b\",2,null,null]");
+    ASSERT_UNWIND(w, ROWS_PARAMS,
+        "MATCH (n:Item {id: 'a'}) RETURN n.value + 1", "2");
+}
+
+static void test_unwind_literal_map_create_inline(void)
+{
+    const char *w[] = {"UNWIND [{id: 'c', value: 3}, {id: 'd', value: 4}] AS row CREATE (:Lit {id: row.id, value: row.value})", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:Lit) RETURN [n.id, n.value] ORDER BY n.id", "[\"c\",3],[\"d\",4]");
+}
+
+static void test_unwind_scalar_types_kept(void)
+{
+    const char *w[] = {"UNWIND [1, 2.5, true, null, 'x'] AS v CREATE (:S {v: v})", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:S) RETURN count(n)", "5");
+    ASSERT_UNWIND(w, NULL, "MATCH (n:S) WHERE n.v = 2.5 RETURN n.v", "2.5");
+    ASSERT_UNWIND(w, NULL, "MATCH (n:S) WHERE n.v = true RETURN n.v", "true");
+}
+
+static void test_unwind_param_map_create_relationship(void)
+{
+    const char *w[] = {"UNWIND $rows AS row CREATE (:A {id: row.id})-[:R {w: row.value}]->(:B {id: row.id})", NULL};
+    ASSERT_UNWIND(w, ROWS_PARAMS, "MATCH (:A)-[r:R]->(b:B) RETURN r.w ORDER BY b.id", "1,2");
+}
+
+static void test_unwind_twice_map_create_inline(void)
+{
+    /* Two UNWINDs take the row-wise pipeline. */
+    const char *w[] = {"UNWIND $rows AS row UNWIND [1] AS k CREATE (:Item {id: row.id, value: row.value, b: row.b})", NULL};
+    ASSERT_UNWIND(w, ROWS_PARAMS,
+        "MATCH (n:Item) RETURN [n.id, n.value, n.b] ORDER BY n.id",
+        "[\"a\",1,true],[\"b\",2,null]");
+}
+
+static void test_unwind_param_map_merge_typed(void)
+{
+    /* Run twice: the second MERGE must match the typed values. */
+    const char *w[] = {
+        "UNWIND $rows AS row MERGE (:M {id: row.id, value: row.value})",
+        "UNWIND $rows AS row MERGE (:M {id: row.id, value: row.value})",
+        NULL
+    };
+    ASSERT_UNWIND(w, ROWS_PARAMS, "MATCH (n:M) RETURN count(n)", "2");
+    ASSERT_UNWIND(w, ROWS_PARAMS, "MATCH (n:M {id: 'a'}) RETURN n.value + 1", "2");
+}
+
+static void test_foreach_map_create_inline(void)
+{
+    const char *w[] = {"FOREACH (r IN [{id: 'f1', n: 1}] | CREATE (:F {id: r.id, n: r.n}))", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:F) RETURN [n.id, n.n]", "[\"f1\",1]");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -416,7 +528,14 @@ int init_executor_unwind_suite(void)
         /* Issue #49: UNWIND $param write paths */
         !CU_add_test(suite, "Issue #49: UNWIND $param+CREATE+SET", test_unwind_param_create_set) ||
         !CU_add_test(suite, "Issue #49: UNWIND $param+MERGE", test_unwind_param_merge) ||
-        !CU_add_test(suite, "Issue #49: UNWIND literal+SET binding", test_unwind_literal_set_binding)) {
+        !CU_add_test(suite, "Issue #49: UNWIND literal+SET binding", test_unwind_literal_set_binding) ||
+        !CU_add_test(suite, "#124: UNWIND $param map CREATE inline", test_unwind_param_map_create_inline) ||
+        !CU_add_test(suite, "#124: UNWIND literal map CREATE inline", test_unwind_literal_map_create_inline) ||
+        !CU_add_test(suite, "#124: UNWIND scalar types kept", test_unwind_scalar_types_kept) ||
+        !CU_add_test(suite, "#124: UNWIND $param map CREATE relationship", test_unwind_param_map_create_relationship) ||
+        !CU_add_test(suite, "#124: two UNWINDs map CREATE inline", test_unwind_twice_map_create_inline) ||
+        !CU_add_test(suite, "#124: UNWIND $param map MERGE typed", test_unwind_param_map_merge_typed) ||
+        !CU_add_test(suite, "#124: FOREACH map CREATE inline", test_foreach_map_create_inline)) {
         return CU_get_error();
     }
 

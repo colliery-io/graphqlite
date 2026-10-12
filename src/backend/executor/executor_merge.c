@@ -12,54 +12,6 @@
 #include "parser/cypher_debug.h"
 #include "transform/transform_variables.h"
 
-/*
- * Resolve a property value from an AST expression, handling foreach-bound variables.
- * Returns the resolved string value (caller must free), or NULL if unresolvable.
- * For AST_NODE_PROPERTY on a foreach variable (item.id), extracts via json_extract.
- * For AST_NODE_IDENTIFIER on a foreach variable (item), returns the binding value.
- */
-static char *resolve_foreach_value(cypher_executor *executor, ast_node *value_expr)
-{
-    if (!value_expr || !g_foreach_ctx) return NULL;
-
-    if (value_expr->type == AST_NODE_PROPERTY) {
-        cypher_property *prop = (cypher_property*)value_expr;
-        if (prop->expr && prop->expr->type == AST_NODE_IDENTIFIER) {
-            cypher_identifier *id = (cypher_identifier*)prop->expr;
-            foreach_binding *binding = get_foreach_binding(g_foreach_ctx, id->name);
-            if (binding && binding->literal_type == LITERAL_STRING && binding->value.string) {
-                /* JSON object — extract property */
-                char sql[256];
-                snprintf(sql, sizeof(sql), "SELECT json_extract(?, '$.%s')", prop->property_name);
-                sqlite3_stmt *stmt;
-                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-                    sqlite3_bind_text(stmt, 1, binding->value.string, -1, SQLITE_STATIC);
-                    if (sqlite3_step(stmt) == SQLITE_ROW &&
-                        sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
-                        char *result = strdup((const char*)sqlite3_column_text(stmt, 0));
-                        sqlite3_finalize(stmt);
-                        return result;
-                    }
-                    sqlite3_finalize(stmt);
-                }
-            }
-        }
-    } else if (value_expr->type == AST_NODE_IDENTIFIER) {
-        cypher_identifier *id = (cypher_identifier*)value_expr;
-        foreach_binding *binding = get_foreach_binding(g_foreach_ctx, id->name);
-        if (binding) {
-            if (binding->literal_type == LITERAL_STRING && binding->value.string) {
-                return strdup(binding->value.string);
-            } else if (binding->literal_type == LITERAL_INTEGER) {
-                char buf[32];
-                snprintf(buf, sizeof(buf), "%lld", (long long)binding->value.integer);
-                return strdup(buf);
-            }
-        }
-    }
-    return NULL;
-}
-
 /* Parameter binding types for prepared statements */
 typedef enum {
     BIND_TEXT,
@@ -188,41 +140,26 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
         if (map->pairs) {
             for (int i = 0; i < map->pairs->count; i++) {
                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[i];
-                if (pair->key && pair->value && (pair->value->type == AST_NODE_PROPERTY ||
-                    pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) {
-                    /* Resolve value from foreach context (e.g., item.id) */
-                    char *resolved = resolve_foreach_value(executor, pair->value);
-                    if (resolved && bind_count + 2 <= MAX_BINDINGS) {
-                        sqlite3_str_appendf(sqls,
-                                          " JOIN node_props_text np%d ON n.id = np%d.node_id"
-                                          " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
-                                          " AND np%d.value = ?",
-                                          i, i, i, i, i, i, i);
-                        bindings[bind_count].type = BIND_TEXT;
-                        bindings[bind_count].value.text = pair->key;
-                        bind_count++;
-                        bindings[bind_count].type = BIND_TEXT;
-                        bindings[bind_count].value.text = resolved;
-                        bind_count++;
-                        /* Note: resolved is leaked here. For now this is acceptable
-                         * as it lives for the duration of the query. */
-                    } else {
-                        free(resolved);
-                    }
-                } else if (pair->key && pair->value &&
-                           pair->value->type == AST_NODE_PARAMETER &&
-                           executor->params_json) {
+                if (pair->key && pair->value &&
+                    (((pair->value->type == AST_NODE_PROPERTY ||
+                       pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) ||
+                     (pair->value->type == AST_NODE_PARAMETER && executor->params_json))) {
                     /* Parameter-valued inline property, e.g.
                      * MERGE (n:L {id: $id}). Previously skipped, so the
                      * match phase ignored the filter entirely (same family
                      * as GitHub #96) and MERGE could match an unrelated
                      * node of the label. Resolve the parameter and add the
-                     * same join a literal value would get. */
-                    cypher_parameter *param = (cypher_parameter*)pair->value;
+                     * same join a literal value would get. A FOREACH/UNWIND
+                     * value (`item`, `row.id`) takes the same typed join
+                     * (#124: it was always matched and stored as text). */
                     property_type ptype;
                     property_value pv;
                     property_value_init(&pv);
-                    if (get_param_value(executor->params_json, param->name, &ptype, &pv) != 0) {
+                    int vrc = (pair->value->type == AST_NODE_PARAMETER)
+                        ? get_param_value(executor->params_json,
+                                          ((cypher_parameter*)pair->value)->name, &ptype, &pv)
+                        : foreach_value(executor->db, g_foreach_ctx, pair->value, &ptype, &pv);
+                    if (vrc != 0) {
                         property_value_free(&pv);
                         continue;
                     }
@@ -710,14 +647,16 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
                                 if (pair->key && pair->value && (pair->value->type == AST_NODE_PROPERTY ||
                                     pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) {
-                                    /* Resolve from foreach context (e.g., item.id) */
-                                    char *resolved = resolve_foreach_value(executor, pair->value);
-                                    if (resolved) {
+                                    /* Resolve from foreach context (e.g., item.id), keeping the type (#124) */
+                                    property_type fv_type = PROP_TYPE_TEXT;
+                                    property_value fv;
+                                    property_value_init(&fv);
+                                    if (foreach_value(executor->db, g_foreach_ctx, pair->value, &fv_type, &fv) == 0 &&
                                         cypher_schema_set_node_property(executor->schema_mgr, node_id,
-                                            pair->key, PROP_TYPE_TEXT, resolved);
+                                            pair->key, fv_type, property_value_ptr(fv_type, &fv)) == 0) {
                                         result->properties_set++;
-                                        free(resolved);
                                     }
+                                    property_value_free(&fv);
                                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                                     cypher_literal *lit = (cypher_literal*)pair->value;
                                     property_type prop_type = PROP_TYPE_TEXT;
@@ -1406,14 +1345,16 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
                                 if (pair->key && pair->value && (pair->value->type == AST_NODE_PROPERTY ||
                                     pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) {
-                                    /* Resolve from foreach context (e.g., item.id) */
-                                    char *resolved = resolve_foreach_value(executor, pair->value);
-                                    if (resolved) {
+                                    /* Resolve from foreach context (e.g., item.id), keeping the type (#124) */
+                                    property_type fv_type = PROP_TYPE_TEXT;
+                                    property_value fv;
+                                    property_value_init(&fv);
+                                    if (foreach_value(executor->db, g_foreach_ctx, pair->value, &fv_type, &fv) == 0 &&
                                         cypher_schema_set_node_property(executor->schema_mgr, node_id,
-                                            pair->key, PROP_TYPE_TEXT, resolved);
+                                            pair->key, fv_type, property_value_ptr(fv_type, &fv)) == 0) {
                                         result->properties_set++;
-                                        free(resolved);
                                     }
+                                    property_value_free(&fv);
                                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                                     cypher_literal *lit = (cypher_literal*)pair->value;
                                     property_type prop_type = PROP_TYPE_TEXT;

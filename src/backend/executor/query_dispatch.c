@@ -1893,7 +1893,7 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
         /* Query: SELECT value FROM json_each(json_extract(:params, '$.paramname')) */
         char sql[512];
         snprintf(sql, sizeof(sql),
-                 "SELECT value FROM json_each(json_extract(?, '$.%s'))", param->name);
+                 "SELECT value, type FROM json_each(json_extract(?, '$.%s'))", param->name);
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
             set_result_error(result, "Failed to prepare UNWIND parameter query");
@@ -1911,14 +1911,7 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
         g_foreach_ctx = ctx;
 
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            int col_type = sqlite3_column_type(stmt, 0);
-            if (col_type == SQLITE_TEXT) {
-                set_foreach_binding_string(ctx, unwind->alias,
-                    (const char*)sqlite3_column_text(stmt, 0));
-            } else if (col_type == SQLITE_INTEGER) {
-                set_foreach_binding_int(ctx, unwind->alias,
-                    sqlite3_column_int64(stmt, 0));
-            }
+            bind_foreach_item_json_each(ctx, unwind->alias, stmt, 0, 1);
 
             /* Execute CREATE, capturing the variable map */
             variable_map *create_vars = NULL;
@@ -2029,24 +2022,8 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
     for (int i = 0; i < list->items->count; i++) {
         ast_node *item = list->items->items[i];
 
-        /* Bind the loop variable based on item type */
-        if (item->type == AST_NODE_LITERAL) {
-            cypher_literal *lit = (cypher_literal *)item;
-            switch (lit->literal_type) {
-                case LITERAL_INTEGER:
-                    set_foreach_binding_int(ctx, unwind->alias, lit->value.integer);
-                    break;
-                case LITERAL_STRING:
-                    set_foreach_binding_string(ctx, unwind->alias, lit->value.string);
-                    break;
-                case LITERAL_DECIMAL:
-                    set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal);
-                    break;
-                default:
-                    CYPHER_DEBUG("Unsupported literal type in UNWIND list: %d", lit->literal_type);
-                    continue;
-            }
-        } else {
+        /* Bind the loop variable, keeping the item's type */
+        if (bind_foreach_item_ast(ctx, unwind->alias, item) < 0) {
             CYPHER_DEBUG("Unsupported item type in UNWIND list: %d", item->type);
             continue;
         }
@@ -2113,7 +2090,7 @@ static int handle_unwind_merge(cypher_executor *executor, cypher_query *query,
 
         char sql[512];
         snprintf(sql, sizeof(sql),
-                 "SELECT value FROM json_each(json_extract(?, '$.%s'))", param->name);
+                 "SELECT value, type FROM json_each(json_extract(?, '$.%s'))", param->name);
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
             set_result_error(result, "Failed to prepare UNWIND parameter query");
@@ -2127,13 +2104,7 @@ static int handle_unwind_merge(cypher_executor *executor, cypher_query *query,
         g_foreach_ctx = ctx;
 
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            int col_type = sqlite3_column_type(stmt, 0);
-            if (col_type == SQLITE_TEXT) {
-                set_foreach_binding_string(ctx, unwind->alias,
-                    (const char*)sqlite3_column_text(stmt, 0));
-            } else if (col_type == SQLITE_INTEGER) {
-                set_foreach_binding_int(ctx, unwind->alias, sqlite3_column_int64(stmt, 0));
-            }
+            bind_foreach_item_json_each(ctx, unwind->alias, stmt, 0, 1);
 
             if (execute_merge_clause(executor, merge, result, NULL, NULL) < 0) {
                 g_foreach_ctx = prev_ctx;
@@ -2165,16 +2136,7 @@ static int handle_unwind_merge(cypher_executor *executor, cypher_query *query,
 
         for (int i = 0; i < list->items->count; i++) {
             ast_node *item = list->items->items[i];
-            if (item->type == AST_NODE_LITERAL) {
-                cypher_literal *lit = (cypher_literal *)item;
-                switch (lit->literal_type) {
-                    case LITERAL_INTEGER: set_foreach_binding_int(ctx, unwind->alias, lit->value.integer); break;
-                    case LITERAL_STRING: set_foreach_binding_string(ctx, unwind->alias, lit->value.string); break;
-                    default: continue;
-                }
-            } else {
-                continue;
-            }
+            if (bind_foreach_item_ast(ctx, unwind->alias, item) < 0) continue;
 
             if (execute_merge_clause(executor, merge, result, NULL, NULL) < 0) {
                 g_foreach_ctx = prev_ctx;
@@ -2804,23 +2766,9 @@ static int handle_unwind_create_return(cypher_executor *executor, cypher_query *
 
     for (int i = 0; i < list->items->count; i++) {
         ast_node *item = list->items->items[i];
-        if (item->type != AST_NODE_LITERAL) {
-            CYPHER_DEBUG("UNWIND+CREATE+RETURN: skipping non-literal item %d", item->type);
+        if (bind_foreach_item_ast(ctx, unwind->alias, item) < 0) {
+            CYPHER_DEBUG("UNWIND+CREATE+RETURN: skipping item type %d", item->type);
             continue;
-        }
-        cypher_literal *lit = (cypher_literal*)item;
-        switch (lit->literal_type) {
-            case LITERAL_INTEGER:
-                set_foreach_binding_int(ctx, unwind->alias, lit->value.integer);
-                break;
-            case LITERAL_STRING:
-                set_foreach_binding_string(ctx, unwind->alias, lit->value.string);
-                break;
-            case LITERAL_DECIMAL:
-                set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal);
-                break;
-            default:
-                continue;
         }
         variable_map *vm = NULL;
         if (execute_create_clause_with_varmap(executor, create, result, &vm) < 0) {
@@ -3081,20 +3029,7 @@ static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *q
         if (list->items) {
             for (int i = 0; i < list->items->count; i++) {
                 ast_node *item = list->items->items[i];
-                if (item->type == AST_NODE_LITERAL) {
-                    cypher_literal *lit = (cypher_literal*)item;
-                    switch (lit->literal_type) {
-                        case LITERAL_INTEGER: set_foreach_binding_int(ctx, unwind->alias, lit->value.integer); break;
-                        case LITERAL_STRING: set_foreach_binding_string(ctx, unwind->alias, lit->value.string); break;
-                        case LITERAL_DECIMAL: set_foreach_binding_int(ctx, unwind->alias, (int64_t)lit->value.decimal); break;
-                        default: continue;
-                    }
-                } else if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
-                    char *js = serialize_ast_to_json(item);
-                    if (!js) continue;
-                    set_foreach_binding_string(ctx, unwind->alias, js);
-                    free(js);
-                } else continue;
+                if (bind_foreach_item_ast(ctx, unwind->alias, item) < 0) continue;
                 UMR_RUN_BODY();
                 if (err_out) break;
             }
@@ -3107,7 +3042,7 @@ static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *q
         }
         char sql[512];
         snprintf(sql, sizeof(sql),
-                 "SELECT value FROM json_each(json_extract(?, '$.%s'))", param->name);
+                 "SELECT value, type FROM json_each(json_extract(?, '$.%s'))", param->name);
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
             set_result_error(result, "Failed to prepare UNWIND parameter query");
@@ -3115,13 +3050,7 @@ static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *q
         }
         sqlite3_bind_text(stmt, 1, executor->params_json, -1, SQLITE_STATIC);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            int ct = sqlite3_column_type(stmt, 0);
-            if (ct == SQLITE_TEXT) {
-                set_foreach_binding_string(ctx, unwind->alias,
-                    (const char*)sqlite3_column_text(stmt, 0));
-            } else if (ct == SQLITE_INTEGER) {
-                set_foreach_binding_int(ctx, unwind->alias, sqlite3_column_int64(stmt, 0));
-            } else { continue; }
+            bind_foreach_item_json_each(ctx, unwind->alias, stmt, 0, 1);
             UMR_RUN_BODY();
             if (err_out) break;
         }
@@ -3357,6 +3286,23 @@ static const rw_scalar *rw_row_scalar(const rw_row *r, const char *name)
     return NULL;
 }
 
+/* The id of a rendered entity: a node {"id":N,"labels":[..],"properties":{..}}
+ * or an edge {"id":N,"type":..,"startNode":..,..}. -1 for any other cell, so
+ * a plain map such as {"id":"a","value":1} stays a value (#124). */
+static long long rw_entity_id(const char *cell, bool *is_edge)
+{
+    if (!cell || strncmp(cell, "{\"id\":", 6) != 0) return -1;
+    const char *p = cell + 6;
+    if (*p < '0' || *p > '9') return -1;
+    char *end = NULL;
+    long long id = strtoll(p, &end, 10);
+    if (!end || *end != ',') return -1;
+    if (!strstr(cell, "\"properties\":")) return -1;
+    if (strncmp(end, ",\"labels\":", 10) == 0) { *is_edge = false; return id; }
+    if (strncmp(end, ",\"type\":", 8) == 0 && strstr(cell, "\"startNode\":")) { *is_edge = true; return id; }
+    return -1;
+}
+
 static bool rw_is_write_clause(ast_node_type t)
 {
     return t == AST_NODE_CREATE || t == AST_NODE_MERGE || t == AST_NODE_DELETE ||
@@ -3446,6 +3392,8 @@ static bool rw_expr_scalar_only(ast_node *expr, const rw_row *row)
         case AST_NODE_LITERAL: return true;
         case AST_NODE_PARAMETER: return true;
         case AST_NODE_IDENTIFIER: return rw_row_scalar(row, ((cypher_identifier*)expr)->name) != NULL;
+        case AST_NODE_PROPERTY:   /* #124: row.key on an UNWIND map */
+            return rw_expr_scalar_only(((cypher_property*)expr)->expr, row);
         case AST_NODE_BINARY_OP: {
             cypher_binary_op *b = (cypher_binary_op*)expr;
             return rw_expr_scalar_only(b->left, row) && rw_expr_scalar_only(b->right, row);
@@ -3538,6 +3486,37 @@ static ast_node *rw_make_literal(cypher_executor *executor, const char *text, in
     return (ast_node*)make_string_literal((char*)text, 0);
 }
 
+/* `row.key` where row holds a JSON map: a literal with the JSON type kept,
+ * so true stays a boolean (SQL json_extract gives 1). NULL when expr is not
+ * that shape; the caller then evaluates it through SQL. */
+static ast_node *rw_map_property_literal(cypher_executor *executor, ast_node *expr, const rw_row *row)
+{
+    if (expr->type != AST_NODE_PROPERTY) return NULL;
+    cypher_property *prop = (cypher_property*)expr;
+    if (!prop->expr || prop->expr->type != AST_NODE_IDENTIFIER || !prop->property_name) return NULL;
+    const rw_scalar *sc = rw_row_scalar(row, ((cypher_identifier*)prop->expr)->name);
+    if (!sc || sc->type != SQLITE_TEXT || !sc->text || sc->text[0] != '{') return NULL;
+
+    property_type type = PROP_TYPE_TEXT;
+    property_value pv;
+    property_value_init(&pv);
+    int rc = json_map_property(executor->db, sc->text, prop->property_name, &type, &pv);
+    ast_node *lit = NULL;
+    if (rc == -2) {
+        lit = (ast_node*)make_null_literal(0);
+    } else if (rc == 0) {
+        switch (type) {
+            case PROP_TYPE_BOOLEAN: lit = (ast_node*)make_boolean_literal(pv.as_bool != 0, 0); break;
+            case PROP_TYPE_INTEGER: lit = (ast_node*)make_integer_literal(pv.as_int, 0); break;
+            case PROP_TYPE_REAL:    lit = (ast_node*)make_decimal_literal(pv.as_real, 0); break;
+            case PROP_TYPE_TEXT:    lit = (ast_node*)make_string_literal(pv.as_str, 0); break;
+            default:                lit = rw_make_literal(executor, pv.as_str, SQLITE_TEXT); break;
+        }
+    }
+    property_value_free(&pv);
+    return lit;
+}
+
 typedef struct { cypher_map_pair *pair; ast_node *original; ast_node *substitute; } rw_subst;
 
 static void rw_literalize_props(cypher_executor *executor, ast_node *props, const rw_row *row,
@@ -3551,11 +3530,14 @@ static void rw_literalize_props(cypher_executor *executor, ast_node *props, cons
         if (!pair || !pair->value) continue;
         if (pair->value->type == AST_NODE_LITERAL || pair->value->type == AST_NODE_PARAMETER) continue;
         if (!rw_expr_scalar_only(pair->value, row)) continue;
-        char *text = NULL;
-        int type = rw_eval_scalar(executor, pair->value, row, &text);
-        if (type < 0) { free(text); continue; }
-        ast_node *lit = rw_make_literal(executor, text, type);
-        free(text);
+        ast_node *lit = rw_map_property_literal(executor, pair->value, row);
+        if (!lit) {
+            char *text = NULL;
+            int type = rw_eval_scalar(executor, pair->value, row, &text);
+            if (type < 0) { free(text); continue; }
+            lit = rw_make_literal(executor, text, type);
+            free(text);
+        }
         if (!lit) continue;
         rw_subst *grown = realloc(*subs, (size_t)(*n_subs + 1) * sizeof(rw_subst));
         if (!grown) { ast_node_free(lit); continue; }
@@ -3741,16 +3723,13 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 for (int c = 0; c < n_scope && c < pr->column_count; c++) {
                     const char *cell = pr->data[r][c];
                     int ty = pr->data_types ? pr->data_types[r][c] : SQLITE_TEXT;
-                    if (cell && cell[0] == '{' && strstr(cell, "\"id\"")) {
-                        /* entity object: {"id":N,...}; edges carry "startNode" */
-                        const char *idp = strstr(cell, "\"id\":");
-                        long long id = idp ? strtoll(idp + 5, NULL, 10) : -1;
-                        if (id >= 0) {
-                            if (strstr(cell, "\"startNode\"")) set_variable_edge_id(row->vm, scope[c], (int)id);
-                            else set_variable_node_id(row->vm, scope[c], (int)id);
-                            scope_is_entity[c] = true;
-                            continue;
-                        }
+                    bool is_edge = false;
+                    long long id = rw_entity_id(cell, &is_edge);
+                    if (id >= 0) {
+                        if (is_edge) set_variable_edge_id(row->vm, scope[c], (int)id);
+                        else set_variable_node_id(row->vm, scope[c], (int)id);
+                        scope_is_entity[c] = true;
+                        continue;
                     }
                     rw_row_add_scalar(row, scope[c], cell, cell ? ty : SQLITE_NULL);
                 }

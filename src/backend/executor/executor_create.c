@@ -135,6 +135,20 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 property_type prop_type = PROP_TYPE_TEXT;
                                 const void *prop_value = NULL;
 
+                                /* #124: `row.key` where row is an UNWIND/FOREACH map */
+                                if (g_foreach_ctx && pair->value->type == AST_NODE_PROPERTY) {
+                                    property_value fm_pv;
+                                    property_value_init(&fm_pv);
+                                    int fm = foreach_map_property(executor->db, g_foreach_ctx, pair->value, &prop_type, &fm_pv);
+                                    if (fm != -1) {
+                                        if (fm == 0 && cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, property_value_ptr(prop_type, &fm_pv), true) == 0) {
+                                            result->properties_set++;
+                                        }
+                                        property_value_free(&fm_pv);
+                                        continue;
+                                    }
+                                }
+
                                 if (pair->value->type == AST_NODE_LITERAL) {
                                     cypher_literal *lit = (cypher_literal*)pair->value;
                                     switch (lit->literal_type) {
@@ -451,6 +465,20 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 property_type prop_type = PROP_TYPE_TEXT;
                                 const void *prop_value = NULL;
 
+                                /* #124: `row.key` where row is an UNWIND/FOREACH map */
+                                if (g_foreach_ctx && pair->value->type == AST_NODE_PROPERTY) {
+                                    property_value fm_pv;
+                                    property_value_init(&fm_pv);
+                                    int fm = foreach_map_property(executor->db, g_foreach_ctx, pair->value, &prop_type, &fm_pv);
+                                    if (fm != -1) {
+                                        if (fm == 0 && cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, property_value_ptr(prop_type, &fm_pv), true) == 0) {
+                                            result->properties_set++;
+                                        }
+                                        property_value_free(&fm_pv);
+                                        continue;
+                                    }
+                                }
+
                                 if (pair->value->type == AST_NODE_LITERAL) {
                                     cypher_literal *lit = (cypher_literal*)pair->value;
                                     switch (lit->literal_type) {
@@ -633,6 +661,20 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                             /* Determine property type and value */
                             property_type prop_type = PROP_TYPE_TEXT;
                             const void *prop_value = NULL;
+
+                            /* #124: `row.key` where row is an UNWIND/FOREACH map */
+                            if (g_foreach_ctx && pair->value->type == AST_NODE_PROPERTY) {
+                                property_value fm_pv;
+                                property_value_init(&fm_pv);
+                                int fm = foreach_map_property(executor->db, g_foreach_ctx, pair->value, &prop_type, &fm_pv);
+                                if (fm != -1) {
+                                    if (fm == 0 && cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, property_value_ptr(prop_type, &fm_pv)) == 0) {
+                                        result->properties_set++;
+                                    }
+                                    property_value_free(&fm_pv);
+                                    continue;
+                                }
+                            }
 
                             if (pair->value->type == AST_NODE_MAP || pair->value->type == AST_NODE_LIST) {
                                 /* Map or list literal - serialize to JSON and store as JSON type */

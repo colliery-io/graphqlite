@@ -72,6 +72,47 @@ void free_foreach_context(foreach_context *ctx);
 int set_foreach_binding_int(foreach_context *ctx, const char *variable, int64_t value);
 int set_foreach_binding_string(foreach_context *ctx, const char *variable, const char *value);
 foreach_binding* get_foreach_binding(foreach_context *ctx, const char *variable);
+int set_foreach_binding_real(foreach_context *ctx, const char *variable, double value);
+int set_foreach_binding_bool(foreach_context *ctx, const char *variable, bool value);
+int set_foreach_binding_null(foreach_context *ctx, const char *variable);
+
+/* Bind one UNWIND/FOREACH item, keeping its type (#124). Maps and lists
+ * bind as JSON text, so `item.key` can read them. Returns -1 for an item
+ * that cannot be bound; the caller skips it. */
+int bind_foreach_item_ast(foreach_context *ctx, const char *variable, ast_node *item);
+/* Bind the current row of `SELECT value, type FROM json_each(...)`. */
+int bind_foreach_item_json_each(foreach_context *ctx, const char *variable,
+                                sqlite3_stmt *stmt, int value_col, int type_col);
+
+/* The value pointer that the schema setters take for a property_value. */
+static inline const void *property_value_ptr(property_type type, const property_value *pv)
+{
+    switch (type) {
+        case PROP_TYPE_INTEGER: return &pv->as_int;
+        case PROP_TYPE_REAL:    return &pv->as_real;
+        case PROP_TYPE_BOOLEAN: return &pv->as_bool;
+        default:                return pv->as_str;
+    }
+}
+
+/* Typed value of `x` or `x.key` where x is a FOREACH/UNWIND binding.
+ * Returns 0 with *out_type and *out set (caller frees out), -2 for null,
+ * -1 when expr is not one of these. */
+int foreach_value(sqlite3 *db, foreach_context *ctx, ast_node *expr,
+                  property_type *out_type, property_value *out);
+
+/* Read `key` from a JSON object, keeping the JSON type (true/false become
+ * PROP_TYPE_BOOLEAN). Returns 0 with *out_type and *out set (caller frees
+ * out), -2 when the key is missing or null, -1 when json is not an object. */
+int json_map_property(sqlite3 *db, const char *json, const char *key,
+                      property_type *out_type, property_value *out);
+
+/* Read `var.key` where var is a binding that holds a JSON map, e.g.
+ * `UNWIND $rows AS row CREATE (:X {id: row.id})` (#124). Returns 0 with
+ * *out_type and *out set (caller frees out), -2 when the key is missing or
+ * null, -1 when expr is not a property of such a binding. */
+int foreach_map_property(sqlite3 *db, foreach_context *ctx, ast_node *expr,
+                         property_type *out_type, property_value *out);
 
 /* Result helper functions */
 cypher_result* create_empty_result(void);

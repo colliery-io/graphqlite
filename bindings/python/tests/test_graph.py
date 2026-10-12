@@ -401,6 +401,19 @@ def test_case_when_bare_boolean_property(g):
     assert g.query("MATCH (p:Person) WHERE p.active RETURN count(p) AS c") == [{"c": 1}]
 
 
+
+def test_unwind_param_maps_create_inline_properties(g):
+    # #124: properties from UNWIND parameter maps were dropped in CREATE.
+    rows = [{"id": "a", "value": 1, "ratio": 0.5, "active": True}]
+    g.query(
+        "UNWIND $rows AS row CREATE (:Item {id: row.id, value: row.value, "
+        "ratio: row.ratio, active: row.active})",
+        {"rows": rows},
+    )
+    assert g.query(
+        "MATCH (n:Item) RETURN n.id AS id, n.value AS value, n.ratio AS ratio, n.active AS active"
+    ) == [{"id": "a", "value": 1, "ratio": 0.5, "active": True}]
+
 # =============================================================================
 # String Escaping in Operations
 # =============================================================================

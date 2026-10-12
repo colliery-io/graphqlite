@@ -104,23 +104,7 @@ int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, c
             }
 
             /* Bind the loop variable based on item type */
-            if (item->type == AST_NODE_LITERAL) {
-                cypher_literal *lit = (cypher_literal*)item;
-                switch (lit->literal_type) {
-                    case LITERAL_INTEGER:
-                        set_foreach_binding_int(ctx, foreach->variable, lit->value.integer);
-                        break;
-                    case LITERAL_STRING:
-                        set_foreach_binding_string(ctx, foreach->variable, lit->value.string);
-                        break;
-                    case LITERAL_DECIMAL:
-                        set_foreach_binding_int(ctx, foreach->variable, (int64_t)lit->value.decimal);
-                        break;
-                    default:
-                        CYPHER_DEBUG("Unsupported literal type in FOREACH list: %d", lit->literal_type);
-                        continue;
-                }
-            } else {
+            if (bind_foreach_item_ast(ctx, foreach->variable, item) < 0) {
                 CYPHER_DEBUG("Unsupported item type in FOREACH list: %d", item->type);
                 continue;
             }
