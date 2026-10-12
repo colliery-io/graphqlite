@@ -300,6 +300,128 @@ static void test_dijkstra_shortest_path_choice(void)
     }
 }
 
+/* Run one query on a fresh in-memory graph built by setup_queries.
+ * Returns the first cell (caller frees) or NULL. */
+static char *dijkstra_fresh_query(const char **setup_queries, const char *query)
+{
+    sqlite3 *db = NULL;
+    if (sqlite3_open(":memory:", &db) != SQLITE_OK) return NULL;
+    cypher_executor *ex = cypher_executor_create(db);
+    char *out = NULL;
+    if (ex) {
+        for (int i = 0; setup_queries[i]; i++) {
+            cypher_result *r = cypher_executor_execute(ex, setup_queries[i]);
+            if (r) cypher_result_free(r);
+        }
+        cypher_result *r = cypher_executor_execute(ex, query);
+        if (r) {
+            if (r->success && r->row_count > 0 && r->data && r->data[0][0]) {
+                out = strdup(r->data[0][0]);
+            } else if (!r->success) {
+                printf("Dijkstra error: %s\n", r->error_message);
+            }
+            cypher_result_free(r);
+        }
+        cypher_executor_free(ex);
+    }
+    sqlite3_close(db);
+    return out;
+}
+
+/* #122: integer weights must be read, not treated as 1. */
+static void test_dijkstra_integer_weights(void)
+{
+    cypher_result *result = cypher_executor_execute(shared_executor,
+        "RETURN dijkstra(\"A\", \"E\", \"weight\")");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(result);
+    CU_ASSERT_TRUE(result->success);
+    if (result->success && result->row_count > 0 && result->data) {
+        const char *json = result->data[0][0];
+        /* A->D->E = 3+1 = 4 beats A->B->E = 2+4 = 6 */
+        CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"distance\":4"));
+        CU_ASSERT_PTR_NOT_NULL(strstr(json, "[\"A\",\"D\",\"E\"]"));
+    }
+    cypher_result_free(result);
+}
+
+/* #122 reproduction: the cheap two-hop path beats the expensive direct edge. */
+static void test_dijkstra_integer_weights_issue_122(void)
+{
+    const char *setup[] = {
+        "CREATE (:Node {id: 'a'}), (:Node {id: 'b'}), (:Node {id: 'c'})",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK {cost: 1}]->(b)",
+        "MATCH (b:Node {id: 'b'}), (c:Node {id: 'c'}) CREATE (b)-[:LINK {cost: 2}]->(c)",
+        "MATCH (a:Node {id: 'a'}), (c:Node {id: 'c'}) CREATE (a)-[:LINK {cost: 10}]->(c)",
+        NULL
+    };
+    char *json = dijkstra_fresh_query(setup, "RETURN dijkstra('a', 'c', 'cost')");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"distance\":3"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "[\"a\",\"b\",\"c\"]"));
+    free(json);
+}
+
+/* Integer and float weights in one graph. */
+static void test_dijkstra_mixed_int_float_weights(void)
+{
+    const char *setup[] = {
+        "CREATE (:Node {id: 'a'}), (:Node {id: 'b'}), (:Node {id: 'c'})",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK {cost: 1}]->(b)",
+        "MATCH (b:Node {id: 'b'}), (c:Node {id: 'c'}) CREATE (b)-[:LINK {cost: 0.5}]->(c)",
+        "MATCH (a:Node {id: 'a'}), (c:Node {id: 'c'}) CREATE (a)-[:LINK {cost: 2}]->(c)",
+        NULL
+    };
+    char *json = dijkstra_fresh_query(setup, "RETURN dijkstra('a', 'c', 'cost')");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"distance\":1.5"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "[\"a\",\"b\",\"c\"]"));
+    free(json);
+}
+
+/* #122: parallel edges keep their own weights; the cheapest one wins,
+ * whichever order the edges were created in. */
+static void test_dijkstra_parallel_edges(void)
+{
+    const char *slow_first[] = {
+        "CREATE (:Node {id: 'a'}), (:Node {id: 'b'})",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK {cost: 2.0}]->(b)",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK {cost: 0.5}]->(b)",
+        NULL
+    };
+    const char *fast_first[] = {
+        "CREATE (:Node {id: 'a'}), (:Node {id: 'b'})",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK {cost: 0.5}]->(b)",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK {cost: 2.0}]->(b)",
+        NULL
+    };
+    char *json = dijkstra_fresh_query(slow_first, "RETURN dijkstra('a', 'b', 'cost')");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"distance\":0.5"));
+    free(json);
+
+    json = dijkstra_fresh_query(fast_first, "RETURN dijkstra('a', 'b', 'cost')");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"distance\":0.5"));
+    free(json);
+}
+
+/* Edges without the weight property weigh 1. */
+static void test_dijkstra_missing_weight_defaults_to_one(void)
+{
+    const char *setup[] = {
+        "CREATE (:Node {id: 'a'}), (:Node {id: 'b'}), (:Node {id: 'c'})",
+        "MATCH (a:Node {id: 'a'}), (b:Node {id: 'b'}) CREATE (a)-[:LINK]->(b)",
+        "MATCH (b:Node {id: 'b'}), (c:Node {id: 'c'}) CREATE (b)-[:LINK]->(c)",
+        "MATCH (a:Node {id: 'a'}), (c:Node {id: 'c'}) CREATE (a)-[:LINK {cost: 5}]->(c)",
+        NULL
+    };
+    char *json = dijkstra_fresh_query(setup, "RETURN dijkstra('a', 'c', 'cost')");
+    CU_ASSERT_PTR_NOT_NULL_FATAL(json);
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "\"distance\":2"));
+    CU_ASSERT_PTR_NOT_NULL(strstr(json, "[\"a\",\"b\",\"c\"]"));
+    free(json);
+}
+
 /* Initialize the Dijkstra executor test suite */
 int init_executor_dijkstra_suite(void)
 {
@@ -315,7 +437,12 @@ int init_executor_dijkstra_suite(void)
         !CU_add_test(suite, "Dijkstra no path", test_dijkstra_no_path) ||
         !CU_add_test(suite, "Dijkstra non-existent node", test_dijkstra_nonexistent_node) ||
         !CU_add_test(suite, "Dijkstra empty graph", test_dijkstra_empty_graph) ||
-        !CU_add_test(suite, "Dijkstra shortest path choice", test_dijkstra_shortest_path_choice)) {
+        !CU_add_test(suite, "Dijkstra shortest path choice", test_dijkstra_shortest_path_choice) ||
+        !CU_add_test(suite, "Dijkstra integer weights", test_dijkstra_integer_weights) ||
+        !CU_add_test(suite, "Dijkstra integer weights (#122)", test_dijkstra_integer_weights_issue_122) ||
+        !CU_add_test(suite, "Dijkstra mixed int/float weights", test_dijkstra_mixed_int_float_weights) ||
+        !CU_add_test(suite, "Dijkstra parallel edges (#122)", test_dijkstra_parallel_edges) ||
+        !CU_add_test(suite, "Dijkstra missing weight defaults to 1", test_dijkstra_missing_weight_defaults_to_one)) {
         return CU_get_error();
     }
 

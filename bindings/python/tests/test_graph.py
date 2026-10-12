@@ -726,6 +726,30 @@ def test_shortest_path_same_node(g):
     assert result["path"] == ["same1"]
 
 
+@pytest.mark.parametrize("costs", [(1, 2, 10), (1.0, 2.0, 10.0)])
+def test_shortest_path_weighted_int_and_float(g, costs):
+    # #122: integer weights were read as 1.
+    for n in ("a", "b", "c"):
+        g.upsert_node(n, {}, label="Node")
+    g.upsert_edge("a", "b", {"cost": costs[0]}, rel_type="LINK")
+    g.upsert_edge("b", "c", {"cost": costs[1]}, rel_type="LINK")
+    g.upsert_edge("a", "c", {"cost": costs[2]}, rel_type="LINK")
+
+    result = g.shortest_path("a", "c", weight_property="cost")
+    assert result == {"path": ["a", "b", "c"], "distance": 3, "found": True}
+
+
+def test_shortest_path_parallel_edges(g):
+    # #122: each parallel edge keeps its own weight.
+    for n in ("a", "b"):
+        g.upsert_node(n, {}, label="Node")
+    g.upsert_edge("a", "b", {"cost": 2.0}, rel_type="LINK", edge_id="slow")
+    g.upsert_edge("a", "b", {"cost": 0.5}, rel_type="LINK", edge_id="fast")
+
+    result = g.shortest_path("a", "b", weight_property="cost")
+    assert result == {"path": ["a", "b"], "distance": 0.5, "found": True}
+
+
 def test_degree_centrality(g):
     # Create a simple graph: dc1 -> dc2 -> dc3, dc1 -> dc3
     g.upsert_node("dc1", {"name": "DC1"})

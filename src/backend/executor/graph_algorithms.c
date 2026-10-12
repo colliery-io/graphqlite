@@ -26,6 +26,7 @@ void csr_graph_free(csr_graph *graph)
 
     free(graph->row_ptr);
     free(graph->col_idx);
+    free(graph->edge_ids);
     free(graph->node_ids);
     if (graph->user_ids) {
         for (int i = 0; i < graph->node_count; i++) {
@@ -228,7 +229,8 @@ csr_graph* csr_graph_load(sqlite3 *db)
     /* Step 3: Fill col_idx arrays */
     graph->col_idx = malloc(graph->edge_count * sizeof(int));
     graph->in_col_idx = malloc(graph->edge_count * sizeof(int));
-    if (!graph->col_idx || !graph->in_col_idx) {
+    graph->edge_ids = malloc(graph->edge_count * sizeof(int));
+    if (!graph->col_idx || !graph->in_col_idx || !graph->edge_ids) {
         csr_graph_free(graph);
         return NULL;
     }
@@ -242,7 +244,7 @@ csr_graph* csr_graph_load(sqlite3 *db)
         return NULL;
     }
 
-    rc = sqlite3_prepare_v2(db, "SELECT source_id, target_id FROM edges", -1, &stmt, NULL);
+    rc = sqlite3_prepare_v2(db, "SELECT source_id, target_id, id FROM edges", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         free(out_count);
         free(in_count);
@@ -269,6 +271,7 @@ csr_graph* csr_graph_load(sqlite3 *db)
         if (source_idx >= 0 && target_idx >= 0) {
             int out_pos = graph->row_ptr[source_idx] + out_count[source_idx]++;
             graph->col_idx[out_pos] = target_idx;
+            graph->edge_ids[out_pos] = sqlite3_column_int(stmt, 2);
 
             int in_pos = graph->in_row_ptr[target_idx] + in_count[target_idx]++;
             graph->in_col_idx[in_pos] = source_idx;
@@ -282,6 +285,61 @@ csr_graph* csr_graph_load(sqlite3 *db)
     CYPHER_DEBUG("CSR graph loaded: %d nodes, %d edges", graph->node_count, graph->edge_count);
 
     return graph;
+}
+
+typedef struct {
+    int edge_id;
+    int slot;
+} csr_edge_slot;
+
+static int csr_edge_slot_cmp(const void *a, const void *b)
+{
+    int x = ((const csr_edge_slot *)a)->edge_id;
+    int y = ((const csr_edge_slot *)b)->edge_id;
+    return (x > y) - (x < y);
+}
+
+double* csr_load_edge_weights(sqlite3 *db, const csr_graph *graph, const char *weight_prop)
+{
+    int m = graph->edge_count;
+    double *weights = malloc((m > 0 ? m : 1) * sizeof(double));
+    if (!weights) return NULL;
+    for (int i = 0; i < m; i++) weights[i] = 1.0;
+    if (!weight_prop || m == 0 || !graph->edge_ids) return weights;
+
+    /* Edge rowid -> col_idx slot, sorted for bsearch. */
+    csr_edge_slot *slots = malloc(m * sizeof(csr_edge_slot));
+    if (!slots) {
+        free(weights);
+        return NULL;
+    }
+    for (int i = 0; i < m; i++) {
+        slots[i].edge_id = graph->edge_ids[i];
+        slots[i].slot = i;
+    }
+    qsort(slots, m, sizeof(csr_edge_slot), csr_edge_slot_cmp);
+
+    /* Integers and floats are stored in separate tables (#122). */
+    const char *sql =
+        "SELECT ep.edge_id, ep.value FROM edge_props_real ep "
+        "JOIN property_keys pk ON pk.id = ep.key_id WHERE pk.key = ?1 "
+        "UNION ALL "
+        "SELECT ep.edge_id, ep.value FROM edge_props_int ep "
+        "JOIN property_keys pk ON pk.id = ep.key_id WHERE pk.key = ?1";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, weight_prop, -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            csr_edge_slot key = { sqlite3_column_int(stmt, 0), 0 };
+            csr_edge_slot *hit = bsearch(&key, slots, m, sizeof(csr_edge_slot), csr_edge_slot_cmp);
+            if (hit) weights[hit->slot] = sqlite3_column_double(stmt, 1);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    free(slots);
+    return weights;
 }
 
 /*

@@ -69,50 +69,7 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, csr_graph *cached, const char *
     /* Load edge weights if specified */
     double *weights = NULL;
     if (weight_prop) {
-        weights = malloc(graph->edge_count * sizeof(double));
-        if (weights) {
-            for (int i = 0; i < graph->edge_count; i++) {
-                weights[i] = 1.0;
-            }
-
-            char sql[256];
-            snprintf(sql, sizeof(sql),
-                "SELECT e.source_id, e.target_id, ep.value FROM edges e "
-                "JOIN edge_props_real ep ON ep.edge_id = e.id "
-                "JOIN property_keys pk ON pk.id = ep.key_id AND pk.key = '%s'",
-                weight_prop);
-
-            sqlite3_stmt *stmt = NULL;
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    int src_id = sqlite3_column_int(stmt, 0);
-                    int tgt_id = sqlite3_column_int(stmt, 1);
-                    double weight = sqlite3_column_double(stmt, 2);
-
-                    int h = hash_int(src_id, graph->node_idx_size);
-                    while (graph->node_idx[h] != -1 && graph->node_ids[graph->node_idx[h]] != src_id) {
-                        h = (h + 1) % graph->node_idx_size;
-                    }
-                    int src_idx = (graph->node_idx[h] != -1) ? graph->node_idx[h] : -1;
-
-                    h = hash_int(tgt_id, graph->node_idx_size);
-                    while (graph->node_idx[h] != -1 && graph->node_ids[graph->node_idx[h]] != tgt_id) {
-                        h = (h + 1) % graph->node_idx_size;
-                    }
-                    int tgt_idx = (graph->node_idx[h] != -1) ? graph->node_idx[h] : -1;
-
-                    if (src_idx >= 0 && tgt_idx >= 0) {
-                        for (int j = graph->row_ptr[src_idx]; j < graph->row_ptr[src_idx + 1]; j++) {
-                            if (graph->col_idx[j] == tgt_idx) {
-                                weights[j] = weight;
-                                break;
-                            }
-                        }
-                    }
-                }
-                sqlite3_finalize(stmt);
-            }
-        }
+        weights = csr_load_edge_weights(db, graph, weight_prop);
     }
 
     /* Dijkstra's algorithm */

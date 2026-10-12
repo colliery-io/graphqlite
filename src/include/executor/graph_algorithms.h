@@ -23,6 +23,8 @@ typedef struct csr_graph {
 
     int *row_ptr;         /* Size: node_count + 1. row_ptr[i] = start of node i's edges in col_idx */
     int *col_idx;         /* Size: edge_count. Target node IDs for each edge */
+    int *edge_ids;        /* Size: edge_count. Edge rowid for each col_idx slot, so
+                           * parallel edges keep their own properties (#122) */
 
     int *node_ids;        /* Size: node_count. Maps internal index -> original node ID (rowid) */
     char **user_ids;      /* Size: node_count. Maps internal index -> user-defined 'id' property */
@@ -104,6 +106,11 @@ typedef struct {
 /* Graph loading */
 csr_graph* csr_graph_load(sqlite3 *db);
 void csr_graph_free(csr_graph *graph);
+
+/* Weight of each col_idx slot from the numeric edge property weight_prop
+ * (integer or float). Edges without the property weigh 1.0. With a NULL
+ * weight_prop every edge weighs 1.0. Returns NULL on OOM. Caller frees. */
+double* csr_load_edge_weights(sqlite3 *db, const csr_graph *graph, const char *weight_prop);
 
 /* Algorithm detection - check if a RETURN clause contains a graph algorithm function */
 typedef enum {

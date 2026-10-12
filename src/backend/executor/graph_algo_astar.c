@@ -199,49 +199,6 @@ static int load_node_coordinates(sqlite3 *db, csr_graph *graph,
     return 0;
 }
 
-/* Load edge weights from database */
-static double* load_edge_weights(sqlite3 *db, csr_graph *graph, const char *weight_prop) {
-    int edge_count = graph->edge_count;
-    double *weights = malloc(edge_count * sizeof(double));
-
-    if (!weights) return NULL;
-
-    /* Default weight = 1.0 */
-    for (int i = 0; i < edge_count; i++) {
-        weights[i] = 1.0;
-    }
-
-    if (!weight_prop) return weights;
-
-    /* Query edge weights */
-    char sql[512];
-    snprintf(sql, sizeof(sql),
-        "SELECT e.rowid, ep.value FROM edges e "
-        "JOIN edge_props_real ep ON e.rowid = ep.edge_id "
-        "WHERE ep.key_id = (SELECT id FROM property_keys WHERE key = '%s')",
-        weight_prop);
-
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            int edge_id = sqlite3_column_int(stmt, 0);
-            double weight = sqlite3_column_double(stmt, 1);
-
-            /* Find edge in CSR structure */
-            for (int u = 0; u < graph->node_count; u++) {
-                for (int j = graph->row_ptr[u]; j < graph->row_ptr[u + 1]; j++) {
-                    /* This is a simplification - we'd need edge IDs in CSR for exact matching */
-                    (void)edge_id;  /* Suppress unused warning */
-                    (void)weight;
-                }
-            }
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    return weights;
-}
-
 graph_algo_result* execute_astar(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id,
                                   const char *weight_prop, const char *lat_prop, const char *lon_prop) {
     graph_algo_result *result = malloc(sizeof(graph_algo_result));
@@ -300,7 +257,7 @@ graph_algo_result* execute_astar(sqlite3 *db, csr_graph *cached, const char *sou
     }
 
     /* Load edge weights */
-    double *edge_weights = load_edge_weights(db, graph, weight_prop);
+    double *edge_weights = csr_load_edge_weights(db, graph, weight_prop);
 
     /* A* algorithm */
     double *g_score = malloc(n * sizeof(double));
