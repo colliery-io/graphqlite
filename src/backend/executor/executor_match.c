@@ -302,7 +302,12 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                 char func_name[256];
                 size_t pos = 0;
                 pos += snprintf(func_name + pos, sizeof(func_name) - pos, "%s(", func->function_name);
-                if (func->args) {
+                /* count(*) carries one NULL argument (or none). */
+                if (strcasecmp(func->function_name, "count") == 0 &&
+                    (!func->args || func->args->count == 0 ||
+                     (func->args->count == 1 && !func->args->items[0]))) {
+                    pos += snprintf(func_name + pos, sizeof(func_name) - pos, "*");
+                } else if (func->args) {
                     for (int j = 0; j < func->args->count && pos < sizeof(func_name) - 10; j++) {
                         if (j > 0) {
                             pos += snprintf(func_name + pos, sizeof(func_name) - pos, ", ");
@@ -416,19 +421,24 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
              * If the UDF that produced this cell tagged it with the
              * boolean subtype, override with GQL_COL_TYPE_BOOLEAN so
              * the renderer emits unquoted JSON booleans (I-0040 M13). */
-            int ct = sqlite3_column_type(stmt, col);
-            sqlite3_value *cv = sqlite3_column_value(stmt, col);
-            if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) {
-                ct = GQL_COL_TYPE_BOOLEAN;
+            /* SQLite type, subtype, and the hidden RETURN tag column
+             * (GQLITE-A-0007). */
+            int ct = gql_result_cell_type(stmt, col, column_count);
+            /* A property read with no tag column: its TEXT is a string (the
+             * bool / JSON subtypes are still attached). */
+            if (ct == SQLITE_TEXT) {
+                cypher_return_item *ri = (cypher_return_item*)return_clause->items->items[col];
+                if (ri && ri->expr && ri->expr->type == AST_NODE_PROPERTY)
+                    ct = GQL_COL_TYPE_STRING;
             }
             result->data_types[current_row][col] = ct;
             const char *value = (const char*)sqlite3_column_text(stmt, col);
             char float_buf[40];
             if (ct == SQLITE_FLOAT && value) {
-                /* Override SQLite's default text formatting to preserve
-                 * full double precision (matches Cypher TCK expectations). */
-                snprintf(float_buf, sizeof(float_buf), "%.17g",
-                         sqlite3_column_double(stmt, col));
+                /* Full double precision (TCK), and a whole float keeps
+                 * ".0" (GQLITE-T-0403). */
+                gql_format_double(float_buf, sizeof(float_buf),
+                                  sqlite3_column_double(stmt, col));
                 value = float_buf;
             }
             if (value) {
@@ -529,18 +539,25 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                                 free(label);
                             }
                         } else {
-                            /* Not a graph entity - treat as scalar value */
-                            result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                            /* Not a graph entity - treat as scalar value. A
+                             * projected value that crossed a CTE has its
+                             * boolean / JSON subtype put back from its tag
+                             * column (GQLITE-A-0007): text is a string. */
+                            result->agtype_data[current_row][col] =
+                                create_property_agtype_value(value, ct);
                         }
                     } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
-                        /* Property access - try to detect the original data type */
-                        result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                        /* Property access reads the typed property tables
+                         * directly: the SQL type and subtype are the
+                         * property's type (GQLITE-T-0394). */
+                        result->agtype_data[current_row][col] = create_property_agtype_value(value, ct);
                     } else {
                         /* For other non-entity columns (binary ops, NOT,
                          * function calls, etc.) detect the type from the
                          * value so booleans, integers, and floats get the
                          * right agtype rather than being stringified. */
-                        result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                        result->agtype_data[current_row][col] =
+                            create_property_agtype_value(value, ct);
                     }
                 }
             } else {
@@ -586,11 +603,33 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
     return 0;
 }
 
-/* Create agtype value for property access by detecting data type from string value */
-agtype_value* create_property_agtype_value(const char* value)
+/* Create agtype value for a scalar cell. `col_type` is the SQLite type of the
+ * cell, or GQL_COL_TYPE_BOOLEAN / _JSON / _STRING from its subtype or its
+ * RETURN tag column (GQLITE-A-0007): those keep their type, so the string
+ * '123' stays a string (GQLITE-T-0394). Plain TEXT (type unknown: some
+ * functions return JSON text without the subtype) and col_type < 0 are
+ * typed from the text as before. */
+agtype_value* create_property_agtype_value(const char* value, int col_type)
 {
     if (!value) {
         return agtype_value_create_null();
+    }
+
+    if (col_type >= 0 && strcmp(value, GQL_NAN_SENTINEL) != 0) {
+        switch (col_type) {
+            case SQLITE_INTEGER:
+                return agtype_value_create_integer((int64_t)strtoll(value, NULL, 10));
+            case SQLITE_FLOAT:
+                return agtype_value_create_float(strtod(value, NULL));
+            case GQL_COL_TYPE_BOOLEAN:
+                return agtype_value_create_bool(strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+            case GQL_COL_TYPE_JSON:
+                return agtype_value_create_json(value);
+            case GQL_COL_TYPE_STRING:
+                return agtype_value_create_string(value);
+            default:
+                break;
+        }
     }
 
     /* NaN sentinel (GQLITE-T-0340): carried as the private string

@@ -23,10 +23,19 @@ typedef struct {
     bind_type type;
     union {
         const char *text;
-        int integer;
+        int64_t integer;     /* int truncated 64-bit ids/values */
         double real;
     } value;
 } param_binding;
+
+/* GQLITE-T-0402: a list or map literal of literals, serialized to JSON for a
+ * MERGE property (match and create); NULL otherwise. Caller frees. */
+static char *merge_json_value(ast_node *value)
+{
+    if (!value || (value->type != AST_NODE_LIST && value->type != AST_NODE_MAP)) return NULL;
+    return serialize_ast_to_json(value);
+}
+
 
 #define MAX_BINDINGS 64
 
@@ -180,7 +189,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                         case PROP_TYPE_INTEGER:
                             prop_table = "node_props_int";
                             val_bind.type = BIND_INT;
-                            val_bind.value.integer = (int)pv.as_int;
+                            val_bind.value.integer = pv.as_int;
                             break;
                         case PROP_TYPE_REAL:
                             prop_table = "node_props_real";
@@ -206,6 +215,24 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                     bindings[bind_count].value.text = pair->key;
                     bind_count++;
                     bindings[bind_count] = val_bind;
+                    bind_count++;
+                } else if (pair->key && (pair->value->type == AST_NODE_LIST ||
+                                         pair->value->type == AST_NODE_MAP)) {
+                    /* GQLITE-T-0402: a list or map matches by JSON value. */
+                    char *js = merge_json_value(pair->value);
+                    if (!js) continue;
+                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) { free(js); break; }
+                    owned_strs[owned_count++] = js;
+                    sqlite3_str_appendf(sqls,
+                                      " JOIN node_props_json np%d ON n.id = np%d.node_id"
+                                      " JOIN property_keys pk%d ON np%d.key_id = pk%d.id AND pk%d.key = ?"
+                                      " AND json(np%d.value) = json(?)",
+                                      i, i, i, i, i, i, i);
+                    bindings[bind_count].type = BIND_TEXT;
+                    bindings[bind_count].value.text = pair->key;
+                    bind_count++;
+                    bindings[bind_count].type = BIND_TEXT;
+                    bindings[bind_count].value.text = js;
                     bind_count++;
                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
@@ -393,7 +420,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                         case PROP_TYPE_INTEGER:
                             prop_table = "edge_props_int";
                             val_bind.type = BIND_INT;
-                            val_bind.value.integer = (int)pv.as_int;
+                            val_bind.value.integer = pv.as_int;
                             break;
                         case PROP_TYPE_REAL:
                             prop_table = "edge_props_real";
@@ -419,6 +446,24 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                     bindings[bind_count].value.text = pair->key;
                     bind_count++;
                     bindings[bind_count] = val_bind;
+                    bind_count++;
+                } else if (pair->key && (pair->value->type == AST_NODE_LIST ||
+                                         pair->value->type == AST_NODE_MAP)) {
+                    /* GQLITE-T-0402: a list or map matches by JSON value. */
+                    char *js = merge_json_value(pair->value);
+                    if (!js) continue;
+                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) { free(js); break; }
+                    owned_strs[owned_count++] = js;
+                    sqlite3_str_appendf(sqls,
+                                      " AND EXISTS (SELECT 1 FROM edge_props_json ep%d"
+                                      " JOIN property_keys pk%d ON ep%d.key_id = pk%d.id"
+                                      " WHERE ep%d.edge_id = e.id AND pk%d.key = ? AND json(ep%d.value) = json(?))",
+                                      i, i, i, i, i, i, i);
+                    bindings[bind_count].type = BIND_TEXT;
+                    bindings[bind_count].value.text = pair->key;
+                    bind_count++;
+                    bindings[bind_count].type = BIND_TEXT;
+                    bindings[bind_count].value.text = js;
                     bind_count++;
                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
@@ -688,6 +733,15 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                                         result->properties_set++;
                                     }
                                 } else if (pair->key && pair->value &&
+                                           (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
+                                    /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
+                                    char *js = merge_json_value(pair->value);
+                                    if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id,
+                                            pair->key, PROP_TYPE_JSON, js) == 0) {
+                                        result->properties_set++;
+                                    }
+                                    free(js);
+                                } else if (pair->key && pair->value &&
                                            pair->value->type == AST_NODE_PARAMETER) {
                                     set_node_prop_from_param(executor, node_id, pair->key,
                                         (cypher_parameter*)pair->value, result);
@@ -815,6 +869,15 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                                             result->properties_set++;
                                         }
                                     } else if (pair->key && pair->value &&
+                                               (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
+                                        /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
+                                        char *js = merge_json_value(pair->value);
+                                        if (js && cypher_schema_set_node_property(executor->schema_mgr, target_node_id,
+                                                pair->key, PROP_TYPE_JSON, js) == 0) {
+                                            result->properties_set++;
+                                        }
+                                        free(js);
+                                    } else if (pair->key && pair->value &&
                                                pair->value->type == AST_NODE_PARAMETER) {
                                         set_node_prop_from_param(executor, target_node_id, pair->key,
                                             (cypher_parameter*)pair->value, result);
@@ -931,10 +994,17 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                                     }
                                 }
 
+                                /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
+                                char *merge_js = NULL;
+                                if (!prop_value && (merge_js = merge_json_value(pair->value)) != NULL) {
+                                    prop_type = PROP_TYPE_JSON;
+                                    prop_value = merge_js;
+                                }
                                 if (prop_value) {
                                     cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
                                     result->properties_set++;
                                 }
+                                free(merge_js);
                             }
                         }
                     }
@@ -1386,6 +1456,15 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                                         result->properties_set++;
                                     }
                                 } else if (pair->key && pair->value &&
+                                           (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
+                                    /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
+                                    char *js = merge_json_value(pair->value);
+                                    if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id,
+                                            pair->key, PROP_TYPE_JSON, js) == 0) {
+                                        result->properties_set++;
+                                    }
+                                    free(js);
+                                } else if (pair->key && pair->value &&
                                            pair->value->type == AST_NODE_PARAMETER) {
                                     set_node_prop_from_param(executor, node_id, pair->key,
                                         (cypher_parameter*)pair->value, result);
@@ -1514,6 +1593,15 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                                             result->properties_set++;
                                         }
                                     } else if (pair->key && pair->value &&
+                                               (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
+                                        /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
+                                        char *js = merge_json_value(pair->value);
+                                        if (js && cypher_schema_set_node_property(executor->schema_mgr, target_node_id,
+                                                pair->key, PROP_TYPE_JSON, js) == 0) {
+                                            result->properties_set++;
+                                        }
+                                        free(js);
+                                    } else if (pair->key && pair->value &&
                                                pair->value->type == AST_NODE_PARAMETER) {
                                         set_node_prop_from_param(executor, target_node_id, pair->key,
                                             (cypher_parameter*)pair->value, result);
@@ -1628,10 +1716,17 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                                     }
                                 }
 
+                                /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
+                                char *merge_js = NULL;
+                                if (!prop_value && (merge_js = merge_json_value(pair->value)) != NULL) {
+                                    prop_type = PROP_TYPE_JSON;
+                                    prop_value = merge_js;
+                                }
                                 if (prop_value) {
                                     cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
                                     result->properties_set++;
                                 }
+                                free(merge_js);
                             }
                         }
                     }

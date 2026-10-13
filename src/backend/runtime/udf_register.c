@@ -79,6 +79,26 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_bool_str_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* _gql_typetag reads subtypes (SQLITE_SUBTYPE); _gql_retag sets them
+   * (GQLITE-T-0406, GQLITE-A-0007). */
+#ifndef SQLITE_SUBTYPE
+#define SQLITE_SUBTYPE 0x000100000
+#endif
+  rc = sqlite3_create_function(db, "_gql_typetag", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_SUBTYPE, 0,
+                         gql_typetag_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_json_elem", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_SUBTYPE | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_json_elem_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_retag", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_retag_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_to_bool_strict", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_to_bool_strict_func, 0, 0);
@@ -142,7 +162,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          SQLITE_UTF8, 0, gql_edge_prop_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_dyn_prop", 2,
-                         SQLITE_UTF8, 0, gql_dyn_prop_func, 0, 0);
+                         SQLITE_UTF8 | SQLITE_RESULT_SUBTYPE, 0, gql_dyn_prop_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  /* Same lookup, returning the value's type tag (GQLITE-A-0007). */
+  rc = sqlite3_create_function(db, "_gql_dyn_prop_tag", 2,
+                         SQLITE_UTF8, (void *)1, gql_dyn_prop_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   /* Cypher-orderability min()/max() aggregates (step + final, no scalar fn). */
@@ -154,6 +178,17 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   rc = sqlite3_create_function(db, "_gql_max", 1,
                          SQLITE_UTF8, 0,
                          0, gql_max_step, gql_max_final);
+  if (rc != SQLITE_OK) return rc;
+
+  /* GQLITE-T-0414: a map key read with json_each (any key text). */
+  rc = sqlite3_create_function(db, "_gql_map_get", 3,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_map_get_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_subscript_tag", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_subscript_tag_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_subscript", 2,
@@ -211,7 +246,8 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_tz_offset_for_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
-  rc = sqlite3_create_function(db, "_gql_dyn_add", 2, SQLITE_UTF8, 0,
+  rc = sqlite3_create_function(db, "_gql_dyn_add", 2,
+                         SQLITE_UTF8 | SQLITE_SUBTYPE | SQLITE_RESULT_SUBTYPE, 0,
                          gql_dyn_add_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_dyn_sub", 2, SQLITE_UTF8, 0,

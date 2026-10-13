@@ -123,6 +123,17 @@ When Cypher writes a property, the type is inferred from the value:
 
 Python's `bool` type is checked before `int` (since `bool` is a subclass of `int` in Python), so `True` goes to `_bool` rather than `_int`.
 
+A computed value (`SET n.x = n.y + 1`, `SET n.b = n.y > 2`) goes to the table of its type at run time, not to `_text`.
+
+## How a Value Keeps Its Type in Results
+
+SQLite has no boolean or list type. In the SQL that GraphQLite generates, a boolean is the text `'true'` / `'false'` and a list or map is JSON text, each marked with an SQLite *subtype*. SQLite drops subtypes at a CTE boundary (`WITH`, `UNWIND`) and in its sorter (`ORDER BY`, `DISTINCT`, grouping). So that the string `'true'` does not come back as a boolean, or `'[1]'` as a list:
+
+- Each projected value of a `WITH` or `UNWIND` CTE has a type tag column next to it (`x__gqlt`: `'bool'`, `'json'` or `'text'`). A read of the variable puts the subtype back.
+- `RETURN` adds a hidden tag column per item when a sorter or a CTE is in the way. The result reader applies it and drops the column.
+
+Integers and floats keep their SQLite type everywhere and need no tag.
+
 ## Property Key Cache
 
 Looking up a key's integer ID in `property_keys` is necessary for every property read or write. Without caching, a simple `MATCH (n) RETURN n.name, n.age` would issue two `SELECT id FROM property_keys WHERE key = ?` queries per result row, which becomes expensive when returning thousands of rows.

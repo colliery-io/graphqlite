@@ -22,6 +22,7 @@
 #include <math.h>
 #include <float.h>
 #include "executor/graph_algorithms.h"
+#include "transform/sql_builder.h"
 
 #define EARTH_RADIUS_KM 6371.0
 #define PI 3.14159265358979323846
@@ -152,9 +153,13 @@ static int load_node_coordinates(sqlite3 *db, csr_graph *graph,
     /* Query for lat property */
     char sql[512];
     snprintf(sql, sizeof(sql),
+        /* Integer coordinates too (only the float table was read), and the
+         * key escaped (GQLITE-T-0414). */
         "SELECT node_id, value FROM node_props_real "
+        "WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s') "
+        "UNION ALL SELECT node_id, value FROM node_props_int "
         "WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s')",
-        lat_prop);
+        sql_esc_tmp(lat_prop), sql_esc_tmp(lat_prop));
 
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -176,8 +181,10 @@ static int load_node_coordinates(sqlite3 *db, csr_graph *graph,
     /* Query for lon property */
     snprintf(sql, sizeof(sql),
         "SELECT node_id, value FROM node_props_real "
+        "WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s') "
+        "UNION ALL SELECT node_id, value FROM node_props_int "
         "WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s')",
-        lon_prop);
+        sql_esc_tmp(lon_prop), sql_esc_tmp(lon_prop));
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {

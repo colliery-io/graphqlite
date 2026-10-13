@@ -13,6 +13,14 @@
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
+/* GQLITE-A-0007: the type tag column of an UNWIND CTE. json_each.value
+ * gives a JSON boolean as 1/0 and a list as text; the tag keeps the type
+ * so a read of the variable restores it (_gql_retag). */
+#define UNWIND_TAG_COL "value__gqlt"
+#define UNWIND_JSON_EACH_TAG \
+    ", (CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' " \
+    "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END) AS " UNWIND_TAG_COL
+
 /* Declared in executor/executor_internal.h. Re-declared here to avoid a
  * cross-layer include from transform → executor internals. */
 extern char *serialize_ast_to_json(ast_node *expr);
@@ -60,6 +68,10 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     char *carry_names[64];
     char *carry_aliases[64];
     var_kind carry_kinds[64];
+    char *carry_tags[64];    /* GQLITE-A-0007: tag column of a carried value */
+    bool carry_splice_only[64]; /* a MATCH-bound entity: carried by id only
+                                 * where the MATCH tables are spliced in */
+    bool used_splice = false;
     int carry_count = 0;
     {
         int n = transform_var_count(ctx->var_ctx);
@@ -81,10 +93,24 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
              * vars (just-emitted MATCH), table_alias is the SQL table
              * alias and we can't carry those through an UNWIND CTE —
              * skip them. */
-            if ((v->kind == VAR_KIND_NODE || v->kind == VAR_KIND_EDGE) && !v->alias_is_id) continue;
+            bool splice_only = false;
+            char id_ref[300];
+            if ((v->kind == VAR_KIND_NODE || v->kind == VAR_KIND_EDGE) && !v->alias_is_id) {
+                /* GQLITE-T-0416: a named MATCH entity is carried by its id
+                 * when the MATCH tables are spliced into the UNWIND CTE
+                 * (MATCH (n) UNWIND n.l AS x RETURN n.id, x). */
+                if (strncmp(v->name, "_gql_default_alias_", 19) == 0 ||
+                    strncmp(v->name, "__unnamed", 9) == 0 || v->cte_name) continue;
+                snprintf(id_ref, sizeof(id_ref), "%s.id", alias);
+                alias = id_ref;
+                splice_only = true;
+            }
+            carry_splice_only[carry_count] = splice_only;
             carry_names[carry_count]   = strdup(v->name);
             carry_aliases[carry_count] = strdup(alias);
             carry_kinds[carry_count]   = v->kind;
+            carry_tags[carry_count]    = (v->kind == VAR_KIND_PROJECTED && v->tag_expr)
+                                         ? strdup(v->tag_expr) : NULL;
             carry_count++;
         }
     }
@@ -160,16 +186,22 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         for (int i = 0; i < carry_count; i++) {
             /* Projected variables' table_alias is typically `<cte>.<col>`;
              * we just need the column name when sourcing from _prev. */
-            const char *col = strrchr(carry_aliases[i], '.');
-            col = col ? col + 1 : carry_aliases[i];
-            { char _ib1[128], _ib2[128];
-              dbuf_appendf(&carry_cols, ", _prev.%s AS %s",
-                           sql_ident(_ib1, sizeof(_ib1), col),
+            const char *col = sql_ref_column(carry_aliases[i]);
+            if (!carry_splice_only[i]) {
+              char _ib2[128];
+              dbuf_appendf(&carry_cols, ", _prev.%s AS %s", col,
                            sql_ident(_ib2, sizeof(_ib2), carry_names[i])); }
             { char _ib2[128];
               dbuf_appendf(&carry_cols_orig, ", %s AS %s",
                            carry_aliases[i],
                            sql_ident(_ib2, sizeof(_ib2), carry_names[i])); }
+            if (carry_tags[i]) {
+                char tn[256], _ib3[300];
+                snprintf(tn, sizeof(tn), "%s__gqlt", carry_names[i]);
+                sql_ident(_ib3, sizeof(_ib3), tn);
+                dbuf_appendf(&carry_cols, ", _prev.%s AS %s", sql_ref_column(carry_tags[i]), _ib3);
+                dbuf_appendf(&carry_cols_orig, ", %s AS %s", carry_tags[i], _ib3);
+            }
         }
     }
 
@@ -177,7 +209,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
      * CTE; the common tail below handles var registration and FROM. */
     if (unwind->expr->type == AST_NODE_LITERAL &&
         ((cypher_literal *)unwind->expr)->literal_type == LITERAL_NULL) {
-        dbuf_append(&cte_query, "SELECT NULL AS value");
+        dbuf_append(&cte_query, "SELECT NULL AS value, NULL AS " UNWIND_TAG_COL);
         if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
         dbuf_append(&cte_query, " WHERE 0");
     } else if (unwind->expr->type == AST_NODE_LIST) {
@@ -195,7 +227,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         if (!list->items || list->items->count == 0) {
             /* Empty list: return no rows using impossible condition */
-            dbuf_append(&cte_query, "SELECT NULL AS value");
+            dbuf_append(&cte_query, "SELECT NULL AS value, NULL AS " UNWIND_TAG_COL);
             if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
             dbuf_append(&cte_query, " WHERE 0");
         } else {
@@ -207,6 +239,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
                 /* Transform the expression to get its SQL value */
                 ast_node *item = list->items->items[i];
+                char *item_sql = NULL;  /* SQL of a general expression item */
                 if (item->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)item;
                     switch (lit->literal_type) {
@@ -214,10 +247,12 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_appendf(&cte_query, "%lld", (long long)lit->value.integer);
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&cte_query, "%.17g", lit->value.decimal);
+                            { char fb[40]; dbuf_append(&cte_query, gql_format_double(fb, sizeof(fb), lit->value.decimal)); }
                             break;
                         case LITERAL_STRING:
-                            dbuf_appendf(&cte_query, "'%s'", lit->value.string ? lit->value.string : "");
+                            { char *esc = escape_sql_string(lit->value.string ? lit->value.string : "");
+                              dbuf_appendf(&cte_query, "'%s'", esc ? esc : "");
+                              free(esc); }
                             break;
                         case LITERAL_BOOLEAN:
                             /* Emit as 'true'/'false' string so downstream
@@ -268,6 +303,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                         ctx->emit_hydrated_path = true;
                         if (transform_expression(ctx, item) == 0 && ctx->sql_buffer[0]) {
                             dbuf_appendf(&cte_query, "(%s)", ctx->sql_buffer);
+                            item_sql = strdup(ctx->sql_buffer);
                             ok = true;
                         }
                         ctx->emit_hydrated_path = saved_ehp;
@@ -281,7 +317,37 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     if (!ok) dbuf_append(&cte_query, "NULL");
                 }
                 dbuf_append(&cte_query, " AS value");
+                {
+                    /* Tag of this element (GQLITE-A-0007). */
+                    const char *tag = "NULL";
+                    if (item->type == AST_NODE_LITERAL &&
+                        ((cypher_literal *)item)->literal_type == LITERAL_BOOLEAN) {
+                        tag = "'bool'";
+                    } else if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
+                        tag = "'json'";
+                    } else if (item->type == AST_NODE_LITERAL &&
+                               ((cypher_literal *)item)->literal_type == LITERAL_STRING) {
+                        tag = "'text'";
+                    }
+                    char *dyn_tag = NULL;
+                    if (item_sql) {
+                        /* An expression item: its tag while the subtype is
+                         * still there (a property read: two key probes). */
+                        if (item->type == AST_NODE_PROPERTY) {
+                            dyn_tag = transform_property_tag_sql(ctx, (cypher_property *)item);
+                        }
+                        if (!dyn_tag) {
+                            size_t n = strlen(item_sql) + 32;
+                            dyn_tag = malloc(n);
+                            if (dyn_tag) snprintf(dyn_tag, n, "_gql_typetag((%s))", item_sql);
+                        }
+                        free(item_sql);
+                    }
+                    dbuf_appendf(&cte_query, ", %s AS " UNWIND_TAG_COL, dyn_tag ? dyn_tag : tag);
+                    free(dyn_tag);
+                }
                 if (list_splicable) {
+                    used_splice = true;
                     /* Element exprs reference the original MATCH aliases, so
                      * splice the FROM tables directly (not wrapped as _prev). */
                     if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols_orig));
@@ -299,44 +365,12 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                 }
             }
         }
-    } else if (unwind->expr->type == AST_NODE_PROPERTY) {
-        /* Property access: assume JSON array, use json_each */
-        cypher_property *prop = (cypher_property*)unwind->expr;
-
-        if (prop->expr->type == AST_NODE_IDENTIFIER) {
-            cypher_identifier *id = (cypher_identifier*)prop->expr;
-            const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
-            bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
-
-            /* Build json_each on the property value */
-            dbuf_append(&cte_query, "SELECT json_each.value AS value");
-            if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
-            dbuf_append(&cte_query, " FROM ");
-
-            if (inner_sql && strlen(inner_sql) > 0) {
-                dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
-            }
-
-            /* Get property from appropriate property table */
-            dbuf_appendf(&cte_query, "json_each(COALESCE("
-                "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id "
-                "WHERE npt.node_id = %s%s AND pk.key = '%s'), '[]'))",
-                alias ? alias : id->name,
-                is_projected ? "" : ".id",
-                prop->property_name);
-        } else {
-            ctx->has_error = true;
-            ctx->error_message = strdup("UNWIND property access requires identifier base");
-            dbuf_free(&cte_query);
-            free(inner_sql);
-            return -1;
-        }
     } else if (unwind->expr->type == AST_NODE_IDENTIFIER) {
         /* Variable reference - assume it's a list variable from previous clause */
         cypher_identifier *id = (cypher_identifier*)unwind->expr;
         const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
 
-        dbuf_append(&cte_query, "SELECT json_each.value AS value");
+        dbuf_append(&cte_query, "SELECT json_each.value AS value" UNWIND_JSON_EACH_TAG);
         if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
         dbuf_append(&cte_query, " FROM ");
 
@@ -346,11 +380,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         const char *json_each_arg = alias ? alias : id->name;
         char prev_arg[128];
         if (has_carry && alias) {
-            const char *col = strrchr(alias, '.');
-            if (col) {
-                char _ib[128];
-                snprintf(prev_arg, sizeof(prev_arg), "_prev.%s",
-                         sql_ident(_ib, sizeof(_ib), col + 1));
+            const char *col = sql_ref_column(alias);
+            if (col != alias) {
+                snprintf(prev_arg, sizeof(prev_arg), "_prev.%s", col);
                 json_each_arg = prev_arg;
             }
         }
@@ -362,9 +394,12 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         dbuf_appendf(&cte_query, "json_each(%s)", json_each_arg);
     } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL ||
                unwind->expr->type == AST_NODE_SUBSCRIPT ||
-               unwind->expr->type == AST_NODE_BINARY_OP) {
+               unwind->expr->type == AST_NODE_BINARY_OP ||
+               unwind->expr->type == AST_NODE_PROPERTY) {
         /* Function call that returns a list (e.g., range(), keys(), etc.),
-         * subscript expression (qrows[p]), or binary op (list concat). */
+         * subscript expression (qrows[p]), binary op (list concat), or a
+         * property (GQLITE-T-0416: its own branch read only the text table
+         * through an alias out of scope, so `MATCH (n) UNWIND n.l` failed). */
         /* Transform the function expression to SQL, then use json_each on the result */
 
         /* Save current SQL buffer state */
@@ -425,7 +460,8 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         if (splicable) {
             where_in_inner = strstr(inner_sql, " WHERE ");
         }
-        dbuf_append(&cte_query, "SELECT json_each.value AS value");
+        dbuf_append(&cte_query, "SELECT json_each.value AS value" UNWIND_JSON_EACH_TAG);
+        if (splicable) used_splice = true;
         if (has_carry) {
             dbuf_append(&cte_query,
                 splicable ? dbuf_get(&carry_cols_orig) : dbuf_get(&carry_cols));
@@ -469,7 +505,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         register_parameter(ctx, param->name);
 
-        dbuf_append(&cte_query, "SELECT json_each.value AS value");
+        dbuf_append(&cte_query, "SELECT json_each.value AS value" UNWIND_JSON_EACH_TAG);
         if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
         dbuf_append(&cte_query, " FROM ");
 
@@ -503,7 +539,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             char src[256], _ib[128];
             snprintf(src, sizeof(src), "%s.%s", cte_name,
                      sql_ident(_ib, sizeof(_ib), carry_names[i]));
-            if (carry_kinds[i] == VAR_KIND_NODE) {
+            if (carry_splice_only[i] && !used_splice) {
+                /* Not carried by this branch: out of scope, as before. */
+            } else if (carry_kinds[i] == VAR_KIND_NODE) {
                 transform_var_register_node(ctx->var_ctx, carry_names[i], src, NULL);
                 transform_var_set_alias_is_id(ctx->var_ctx, carry_names[i], true);
             } else if (carry_kinds[i] == VAR_KIND_EDGE) {
@@ -511,10 +549,18 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                 transform_var_set_alias_is_id(ctx->var_ctx, carry_names[i], true);
             } else {
                 transform_var_register_projected(ctx->var_ctx, carry_names[i], src);
+                if (carry_tags[i]) {
+                    char tn[256], tb[300], tag_ref[400];
+                    snprintf(tn, sizeof(tn), "%s__gqlt", carry_names[i]);
+                    snprintf(tag_ref, sizeof(tag_ref), "%s.%s", cte_name,
+                             sql_ident(tb, sizeof(tb), tn));
+                    transform_var_set_tag(ctx->var_ctx, carry_names[i], tag_ref);
+                }
             }
         }
         free(carry_names[i]);
         free(carry_aliases[i]);
+        free(carry_tags[i]);
     }
     dbuf_free(&carry_cols);
     dbuf_free(&carry_cols_orig);
@@ -542,6 +588,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         transform_var_set_alias_is_id(ctx->var_ctx, unwind->alias, true);
     } else {
         transform_var_register_projected(ctx->var_ctx, unwind->alias, unwind_source);
+        char tag_ref[300];
+        snprintf(tag_ref, sizeof(tag_ref), "%s." UNWIND_TAG_COL, cte_name);
+        transform_var_set_tag(ctx->var_ctx, unwind->alias, tag_ref);
     }
 
     /* Set up FROM for the outer query — SELECT columns are added by RETURN clause */

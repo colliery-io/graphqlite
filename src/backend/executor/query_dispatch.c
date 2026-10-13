@@ -11,6 +11,7 @@
 #include "executor/query_patterns.h"
 #include "gql_thread_local.h"
 #include "executor/executor_internal.h"
+#include "transform/sql_builder.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
 #include "runtime/gql_error.h"
@@ -261,6 +262,17 @@ static const query_pattern patterns[] = {
         .forbidden = CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
         .handler = handle_rowwise_write,
         .priority = 96
+    },
+    {
+        /* GQLITE-T-0401: `WITH 42 AS x CREATE (:V {p: x})` — the CREATE
+         * handler skipped the WITH, so x was unbound (and a WITH ... WHERE
+         * did not filter). The WITH is a read prefix of the pipeline. */
+        .name = "ROWWISE_WRITE (WITH+CREATE)",
+        .required = CLAUSE_WITH | CLAUSE_CREATE,
+        .forbidden = CLAUSE_MATCH | CLAUSE_UNWIND | CLAUSE_MERGE | CLAUSE_CALL |
+                     CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
+        .handler = handle_rowwise_write,
+        .priority = 95
     },
     {
         .name = "ROWWISE_WRITE (MATCH+WITH+MERGE)",
@@ -747,7 +759,7 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
             /* No return clause - manually collect results from SQL columns */
             result->data = NULL;
             result->row_count = 0;
-            result->column_count = sqlite3_column_count(transform_result->stmt);
+            result->column_count = gql_visible_column_count(transform_result->stmt);
 
             /* Get column names from the SQL result */
             if (result->column_count > 0) {
@@ -793,6 +805,247 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
 }
 
 /*
+ * GQLITE-T-0393: RETURN after SET or REMOVE projects the rows the MATCH
+ * bound before the write, read after it.
+ *
+ * Before the write, every node and fixed-length relationship of the pattern
+ * gets a variable (anonymous ones a temporary name) and the id of each is
+ * read per row. After the write, RETURN runs over the same pattern with the
+ * WHERE, labels and inline properties of those elements replaced by an id
+ * filter: the write may have changed what they test. The rows are the
+ * original rows, one for one.
+ */
+typedef struct {
+    char *var;               /* variable of the element */
+    bool named_here;         /* var is a temporary name set by row_pin */
+    cypher_node_pattern *node;
+    cypher_rel_pattern *rel;
+    ast_list *saved_labels;
+    ast_node *saved_props;
+} pinned_elem;
+
+typedef struct {
+    pinned_elem *elems;
+    int count;
+    char **vars;             /* distinct variables, in capture column order */
+    int var_count;
+    char ***ids;             /* ids[row][var] */
+    int row_count;
+    bool captured;
+} row_pin;
+
+static void row_pin_add_var(row_pin *pin, const char *var)
+{
+    for (int i = 0; i < pin->var_count; i++) {
+        if (strcmp(pin->vars[i], var) == 0) return;
+    }
+    char **grown = realloc(pin->vars, (size_t)(pin->var_count + 1) * sizeof(char *));
+    if (!grown) return;
+    pin->vars = grown;
+    pin->vars[pin->var_count++] = strdup(var);
+}
+
+static void row_pin_prepare(row_pin *pin, cypher_match *match)
+{
+    memset(pin, 0, sizeof(*pin));
+    if (!match || !match->pattern) return;
+    int cap = 0;
+    for (int pi = 0; pi < match->pattern->count; pi++) {
+        cypher_path *path = (cypher_path *)match->pattern->items[pi];
+        if (!path || path->base.type != AST_NODE_PATH || !path->elements) continue;
+        cap += path->elements->count;
+    }
+    if (cap == 0) return;
+    pin->elems = calloc((size_t)cap, sizeof(pinned_elem));
+    if (!pin->elems) return;
+
+    for (int pi = 0; pi < match->pattern->count; pi++) {
+        cypher_path *path = (cypher_path *)match->pattern->items[pi];
+        if (!path || path->base.type != AST_NODE_PATH || !path->elements) continue;
+        for (int ei = 0; ei < path->elements->count; ei++) {
+            ast_node *el = path->elements->items[ei];
+            if (!el) continue;
+            char **varp = NULL;
+            pinned_elem *pe = &pin->elems[pin->count];
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                pe->node = (cypher_node_pattern *)el;
+                varp = &pe->node->variable;
+            } else if (el->type == AST_NODE_REL_PATTERN) {
+                pe->rel = (cypher_rel_pattern *)el;
+                /* A variable-length relationship is a list, not one id; its
+                 * endpoints are pinned and its own filters stay. */
+                if (pe->rel->varlen) { pe->rel = NULL; continue; }
+                varp = &pe->rel->variable;
+            } else {
+                continue;
+            }
+            if (!*varp) {
+                char name[32];
+                snprintf(name, sizeof(name), "_gql_pin_%d", pin->count);
+                *varp = strdup(name);
+                pe->named_here = true;
+            }
+            pe->var = *varp;
+            row_pin_add_var(pin, pe->var);
+            pin->count++;
+        }
+    }
+}
+
+/* Read the id of each pinned variable for every row the MATCH binds now. */
+static void row_pin_capture(row_pin *pin, cypher_executor *executor, cypher_match *match)
+{
+    if (pin->var_count == 0) return;
+    ast_list *items = ast_list_create();
+    for (int i = 0; i < pin->var_count; i++) {
+        ast_list *args = ast_list_create();
+        ast_list_append(args, (ast_node *)make_identifier(pin->vars[i], 0));
+        ast_node *call = (ast_node *)make_function_call("id", args, false, 0);
+        ast_list_append(items, (ast_node *)make_return_item(call, pin->vars[i]));
+    }
+    cypher_return *ret = make_cypher_return(false, items, NULL, NULL, NULL);
+    cypher_result *res = create_empty_result();
+    if (ret && res && execute_match_return_query(executor, match, ret, res) >= 0 &&
+        res->column_count == pin->var_count) {
+        pin->ids = calloc((size_t)(res->row_count > 0 ? res->row_count : 1), sizeof(char **));
+        if (pin->ids) {
+            for (int r = 0; r < res->row_count; r++) {
+                pin->ids[r] = calloc((size_t)pin->var_count, sizeof(char *));
+                if (!pin->ids[r]) break;
+                for (int c = 0; c < pin->var_count; c++) {
+                    const char *v = res->data && res->data[r] ? res->data[r][c] : NULL;
+                    pin->ids[r][c] = strdup(v ? v : "-1");
+                }
+                pin->row_count++;
+            }
+            pin->captured = (pin->row_count == res->row_count);
+        }
+    }
+    if (res) cypher_result_free(res);
+    if (ret) ast_node_free((ast_node *)ret);
+}
+
+/* id(v) IN [ids] for each variable, and for more than one variable the
+ * row key toString(id(a)) + ',' + toString(id(b)) IN ['1,2', ...] so that
+ * only the captured combinations match. */
+static ast_node *row_pin_where(row_pin *pin)
+{
+    if (pin->row_count == 0) return (ast_node *)make_boolean_literal(false, 0);
+    ast_node *where = NULL;
+    for (int c = 0; c < pin->var_count; c++) {
+        ast_list *vals = ast_list_create();
+        for (int r = 0; r < pin->row_count; r++) {
+            ast_list_append(vals, (ast_node *)make_integer_literal(strtoll(pin->ids[r][c], NULL, 10), 0));
+        }
+        ast_list *args = ast_list_create();
+        ast_list_append(args, (ast_node *)make_identifier(pin->vars[c], 0));
+        ast_node *in = (ast_node *)make_binary_op(BINARY_OP_IN,
+            (ast_node *)make_function_call("id", args, false, 0),
+            (ast_node *)make_list(vals, 0), 0);
+        where = where ? (ast_node *)make_binary_op(BINARY_OP_AND, where, in, 0) : in;
+    }
+    if (pin->var_count > 1) {
+        ast_node *key = NULL;
+        for (int c = 0; c < pin->var_count; c++) {
+            ast_list *id_args = ast_list_create();
+            ast_list_append(id_args, (ast_node *)make_identifier(pin->vars[c], 0));
+            ast_list *str_args = ast_list_create();
+            ast_list_append(str_args, (ast_node *)make_function_call("id", id_args, false, 0));
+            ast_node *part = (ast_node *)make_function_call("toString", str_args, false, 0);
+            if (key) {
+                key = (ast_node *)make_binary_op(BINARY_OP_ADD, key,
+                                                 (ast_node *)make_string_literal(",", 0), 0);
+                key = (ast_node *)make_binary_op(BINARY_OP_ADD, key, part, 0);
+            } else {
+                key = part;
+            }
+        }
+        ast_list *keys = ast_list_create();
+        for (int r = 0; r < pin->row_count; r++) {
+            dynamic_buffer kb;
+            dbuf_init(&kb);
+            for (int c = 0; c < pin->var_count; c++) {
+                if (c > 0) dbuf_append(&kb, ",");
+                dbuf_append(&kb, pin->ids[r][c]);
+            }
+            ast_list_append(keys, (ast_node *)make_string_literal((char *)dbuf_get(&kb), 0));
+            dbuf_free(&kb);
+        }
+        ast_node *in = (ast_node *)make_binary_op(BINARY_OP_IN, key,
+                                                  (ast_node *)make_list(keys, 0), 0);
+        where = (ast_node *)make_binary_op(BINARY_OP_AND, where, in, 0);
+    }
+    return where;
+}
+
+/* A MATCH over the captured rows (see row_pin): the same pattern, with the
+ * labels and inline properties of the pinned elements switched off and the
+ * WHERE replaced by the id filter. row_pin_end puts the pattern back. */
+static cypher_match *row_pin_begin(row_pin *pin, cypher_match *match)
+{
+    for (int i = 0; i < pin->count; i++) {
+        pinned_elem *pe = &pin->elems[i];
+        if (pe->node) {
+            pe->saved_labels = pe->node->labels;
+            pe->saved_props = pe->node->properties;
+            pe->node->labels = NULL;
+            pe->node->properties = NULL;
+        } else if (pe->rel) {
+            pe->saved_props = pe->rel->properties;
+            pe->rel->properties = NULL;
+        }
+    }
+    return make_cypher_match(match->pattern, row_pin_where(pin), match->optional,
+                             match->from_graph);
+}
+
+static void row_pin_end(row_pin *pin, cypher_match *synth)
+{
+    if (synth) {
+        if (synth->where) ast_node_free(synth->where);
+        free(synth);
+    }
+    for (int i = 0; i < pin->count; i++) {
+        pinned_elem *pe = &pin->elems[i];
+        if (pe->node) {
+            pe->node->labels = pe->saved_labels;
+            pe->node->properties = pe->saved_props;
+        } else if (pe->rel) {
+            pe->rel->properties = pe->saved_props;
+        }
+    }
+}
+
+/* Run RETURN over the captured rows. */
+static int row_pin_return(row_pin *pin, cypher_executor *executor, cypher_match *match,
+                          cypher_return *ret, cypher_result *result)
+{
+    cypher_match *synth = row_pin_begin(pin, match);
+    int rc = synth ? execute_match_return_query(executor, synth, ret, result) : -1;
+    row_pin_end(pin, synth);
+    return rc;
+}
+
+static void row_pin_release(row_pin *pin)
+{
+    for (int i = 0; i < pin->count; i++) {
+        pinned_elem *pe = &pin->elems[i];
+        if (!pe->named_here) continue;
+        if (pe->node) { free(pe->node->variable); pe->node->variable = NULL; }
+        if (pe->rel) { free(pe->rel->variable); pe->rel->variable = NULL; }
+    }
+    for (int r = 0; r < pin->row_count; r++) {
+        for (int c = 0; c < pin->var_count; c++) free(pin->ids[r][c]);
+        free(pin->ids[r]);
+    }
+    free(pin->ids);
+    for (int i = 0; i < pin->var_count; i++) free(pin->vars[i]);
+    free(pin->vars);
+    free(pin->elems);
+    memset(pin, 0, sizeof(*pin));
+}
+
+/*
  * Pattern-specific handlers - wrap existing executor functions
  */
 
@@ -808,6 +1061,15 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
     }
 
     CYPHER_DEBUG("Executing MATCH+SET via pattern dispatch (match_count=%d)", match_count);
+
+    /* GQLITE-T-0393: pin the rows before the write; RETURN reads them after. */
+    row_pin pin;
+    memset(&pin, 0, sizeof(pin));
+    cypher_return *pin_ret = (flags & CLAUSE_RETURN) ? find_return_clause(query) : NULL;
+    if (pin_ret && match_count == 1) {
+        row_pin_prepare(&pin, match);
+        row_pin_capture(&pin, executor, match);
+    }
 
     int rc;
     if (match_count > 1) {
@@ -830,25 +1092,45 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
         rc = execute_set_operations(executor, set, ms_vars, result);
         free_variable_map(ms_vars);
     } else {
-        rc = execute_match_set_query(executor, match, set, result);
+        /* GQLITE-T-0405: every SET and REMOVE clause runs, in order. The
+         * first runs on the MATCH; the others on the pinned rows, since an
+         * earlier write may change what the MATCH tests. */
+        int writes = 0;
+        for (int i = 0; i < query->clauses->count; i++) {
+            ast_node_type t = query->clauses->items[i]->type;
+            if (t == AST_NODE_SET || t == AST_NODE_REMOVE) writes++;
+        }
+        if (writes > 1 && !pin.elems) {
+            row_pin_prepare(&pin, match);
+            row_pin_capture(&pin, executor, match);
+        }
+        rc = 0;
+        bool first = true;
+        for (int i = 0; i < query->clauses->count && rc >= 0; i++) {
+            ast_node *clause = query->clauses->items[i];
+            if (clause->type != AST_NODE_SET && clause->type != AST_NODE_REMOVE) continue;
+            cypher_match *synth = (!first && pin.captured) ? row_pin_begin(&pin, match) : NULL;
+            cypher_match *m = synth ? synth : match;
+            if (clause->type == AST_NODE_SET) {
+                rc = execute_match_set_query(executor, m, (cypher_set *)clause, result);
+            } else {
+                rc = execute_match_remove_query(executor, m, (cypher_remove *)clause, result);
+            }
+            if (synth) row_pin_end(&pin, synth);
+            first = false;
+        }
     }
 
     if (rc >= 0) {
         result->success = true;
         if (flags & CLAUSE_RETURN) {
             cypher_return *ret = find_return_clause(query);
-            if (ret) {
-                /* T-0297 / I-0042 E5 light: SET may have modified properties
-                 * referenced in the original WHERE (e.g. `WHERE n.name =
-                 * 'Andres' SET n.name = 'Michael' RETURN n`). Re-running the
-                 * full MATCH+WHERE would now find zero rows. Use a synthetic
-                 * match with the same pattern but no WHERE so the re-MATCH
-                 * finds the (post-SET) nodes purely by structure.
-                 *
-                 * This works for the common case of single bound entity
-                 * being updated. Multi-row scenarios where the WHERE
-                 * was the only filter could over-return, but those are
-                 * caught by row-count tests downstream. */
+            if (ret && pin.captured) {
+                /* SET may change what the WHERE or the inline properties
+                 * test (`WHERE n.name = 'Andres' SET n.name = 'Michael'
+                 * RETURN n`), so RETURN reads the pinned rows. */
+                rc = row_pin_return(&pin, executor, match, ret, result);
+            } else if (ret) {
                 cypher_match *synth = make_cypher_match(match->pattern,
                                                        NULL,
                                                        match->optional,
@@ -859,6 +1141,7 @@ static int handle_match_set(cypher_executor *executor, cypher_query *query,
             }
         }
     }
+    row_pin_release(&pin);
     return rc;
 }
 
@@ -1116,121 +1399,32 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
 
     CYPHER_DEBUG("Executing MATCH+REMOVE via pattern dispatch");
 
-    /* T-0315: detect label-removal items. When REMOVE strips labels,
-     * the post-REMOVE pattern `(n:N)` finds 0 rows (the label is
-     * gone), so a re-MATCH for RETURN returns nothing. The fix is
-     * to RUN the RETURN against the PRE-REMOVE state first, then
-     * execute the REMOVE. Property-only REMOVE preserves the
-     * existing synth-match-without-WHERE path (which already
-     * handles the stale WHERE issue). */
-    bool has_label_remove = false;
-    if (remove && remove->items) {
-        for (int i = 0; i < remove->items->count; i++) {
-            cypher_remove_item *it = (cypher_remove_item*)remove->items->items[i];
-            if (it && it->target && it->target->type == AST_NODE_LABEL_EXPR) {
-                has_label_remove = true;
-                break;
-            }
-        }
+    /* GQLITE-T-0393: REMOVE may take away a label or property the pattern
+     * or the WHERE tests (T-0315), so RETURN reads the rows pinned before
+     * the write. */
+    row_pin pin;
+    memset(&pin, 0, sizeof(pin));
+    cypher_return *ret = (flags & CLAUSE_RETURN) ? find_return_clause(query) : NULL;
+    if (ret) {
+        row_pin_prepare(&pin, match);
+        row_pin_capture(&pin, executor, match);
     }
 
     int rc = execute_match_remove_query(executor, match, remove, result);
     if (rc >= 0) {
         result->success = true;
-        if (flags & CLAUSE_RETURN) {
-            cypher_return *ret = find_return_clause(query);
-            if (ret) {
-                /* T-0315: when REMOVE strips labels, the synth pattern
-                 * `(n:Label)` would find 0 rows because Label is gone.
-                 * Mutate-then-restore: walk match->pattern, remove
-                 * the to-be-stripped labels from node patterns, run
-                 * the synth re-MATCH, then restore the labels so the
-                 * AST is unchanged after our handler returns.
-                 *
-                 * The variable binding is preserved (we re-match by
-                 * structure without the removed label); RETURN reads
-                 * the CURRENT post-REMOVE state for labels(n) and
-                 * untouched properties alike.
-                 *
-                 * Property REMOVE doesn't need stripping (the WHERE
-                 * is the only stale-state concern, handled by
-                 * passing NULL where in synth match). */
-                typedef struct { ast_list *labels; int idx; ast_node *removed; } stripped_t;
-                stripped_t strip_buf[16];
-                int strip_count = 0;
-                if (has_label_remove && remove && remove->items) {
-                    for (int i = 0; i < remove->items->count && strip_count < 16; i++) {
-                        cypher_remove_item *it = (cypher_remove_item*)remove->items->items[i];
-                        if (!it || !it->target ||
-                            it->target->type != AST_NODE_LABEL_EXPR) continue;
-                        cypher_label_expr *le = (cypher_label_expr*)it->target;
-                        if (!le->expr || le->expr->type != AST_NODE_IDENTIFIER) continue;
-                        const char *var = ((cypher_identifier*)le->expr)->name;
-                        const char *lbl = le->label_name;
-                        if (!var || !lbl) continue;
-                        /* Walk pattern paths. */
-                        if (!match->pattern) continue;
-                        for (int pi = 0; pi < match->pattern->count; pi++) {
-                            cypher_path *path = (cypher_path*)match->pattern->items[pi];
-                            if (!path || !path->elements) continue;
-                            for (int ei = 0; ei < path->elements->count; ei++) {
-                                ast_node *el = path->elements->items[ei];
-                                if (!el || el->type != AST_NODE_NODE_PATTERN) continue;
-                                cypher_node_pattern *np = (cypher_node_pattern*)el;
-                                if (!np->variable || strcmp(np->variable, var) != 0) continue;
-                                if (!np->labels) continue;
-                                /* Find label in np->labels and strip it. */
-                                for (int li = 0; li < np->labels->count; li++) {
-                                    ast_node *lab_node = np->labels->items[li];
-                                    if (!lab_node) continue;
-                                    const char *lab_name = NULL;
-                                    if (lab_node->type == AST_NODE_LITERAL) {
-                                        cypher_literal *lit = (cypher_literal*)lab_node;
-                                        if (lit->literal_type == LITERAL_STRING)
-                                            lab_name = lit->value.string;
-                                    } else if (lab_node->type == AST_NODE_IDENTIFIER) {
-                                        lab_name = ((cypher_identifier*)lab_node)->name;
-                                    }
-                                    if (lab_name && strcmp(lab_name, lbl) == 0 && strip_count < 16) {
-                                        strip_buf[strip_count].labels = np->labels;
-                                        strip_buf[strip_count].idx = li;
-                                        strip_buf[strip_count].removed = lab_node;
-                                        strip_count++;
-                                        /* Remove from list by shifting. */
-                                        for (int sh = li; sh < np->labels->count - 1; sh++) {
-                                            np->labels->items[sh] = np->labels->items[sh + 1];
-                                        }
-                                        np->labels->count--;
-                                        li--; /* Re-check this index */
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                cypher_match *synth = make_cypher_match(match->pattern,
-                                                       NULL,
-                                                       match->optional,
-                                                       match->from_graph);
-                rc = execute_match_return_query(executor,
-                    synth ? synth : match, ret, result);
-                if (synth) free(synth);
-
-                /* Restore stripped labels in reverse order. */
-                for (int i = strip_count - 1; i >= 0; i--) {
-                    ast_list *labs = strip_buf[i].labels;
-                    int idx = strip_buf[i].idx;
-                    /* Insert back at original index. */
-                    for (int sh = labs->count; sh > idx; sh--) {
-                        labs->items[sh] = labs->items[sh - 1];
-                    }
-                    labs->items[idx] = strip_buf[i].removed;
-                    labs->count++;
-                }
-            }
+        if (ret && pin.captured) {
+            rc = row_pin_return(&pin, executor, match, ret, result);
+        } else if (ret) {
+            cypher_match *synth = make_cypher_match(match->pattern, NULL,
+                                                   match->optional,
+                                                   match->from_graph);
+            rc = execute_match_return_query(executor, synth ? synth : match,
+                                            ret, result);
+            if (synth) free(synth);
         }
     }
+    row_pin_release(&pin);
     return rc;
 }
 
@@ -2590,7 +2784,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                             "SELECT value FROM %s "
                             "WHERE %s = %d AND key_id = "
                             "(SELECT id FROM property_keys WHERE key = '%s')",
-                            type_tables[t], id_col, entity_id, prop_name);
+                            type_tables[t], id_col, entity_id, sql_esc_tmp(prop_name));
 
                         sqlite3_stmt *stmt;
                         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -2715,7 +2909,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                     result->data[0][i] = strdup(b);
                     result->data_types[0][i] = SQLITE_INTEGER;
                 } else if (pt == PROP_TYPE_REAL) {
-                    char b[64]; snprintf(b, sizeof(b), "%g", pv.as_real);
+                    char b[64]; gql_format_double(b, sizeof(b), pv.as_real);
                     result->data[0][i] = strdup(b);
                     result->data_types[0][i] = SQLITE_FLOAT;
                 } else if (pt == PROP_TYPE_BOOLEAN) {
@@ -3403,6 +3597,11 @@ static char *rw_scalar_sql(const rw_scalar *sc)
 {
     if (!sc || !sc->text) return sqlite3_mprintf("NULL");
     if (sc->type == SQLITE_INTEGER || sc->type == SQLITE_FLOAT) return sqlite3_mprintf("%s", sc->text);
+    /* GQLITE-A-0007: a boolean keeps its subtype; a known string is never
+     * read as JSON. */
+    if (sc->type == GQL_COL_TYPE_BOOLEAN)
+        return sqlite3_mprintf("_gql_bool_str(%d)", strcmp(sc->text, "true") == 0 || strcmp(sc->text, "1") == 0);
+    if (sc->type == GQL_COL_TYPE_STRING) return sqlite3_mprintf("%Q", sc->text);
     const char *t = sc->text;
     if ((t[0] == '[' || t[0] == '{')) return sqlite3_mprintf("json(%Q)", t);
     return sqlite3_mprintf("%Q", t);
@@ -3464,6 +3663,8 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
         if (executor->params_json) bind_params_from_json(st, executor->params_json);
         if (sqlite3_step(st) == SQLITE_ROW) {
             type = sqlite3_column_type(st, 0);
+            sqlite3_value *cv = sqlite3_column_value(st, 0);
+            if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) type = GQL_COL_TYPE_BOOLEAN;
             const char *v = (const char*)sqlite3_column_text(st, 0);
             *out_text = v ? strdup(v) : NULL;
         }
@@ -3477,8 +3678,12 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
 static ast_node *rw_make_literal(cypher_executor *executor, const char *text, int type)
 {
     if (!text || type == SQLITE_NULL) return (ast_node*)make_null_literal(0);
+    /* A boolean cell stays a boolean (it was stored as the text 'true'). */
+    if (type == GQL_COL_TYPE_BOOLEAN)
+        return (ast_node*)make_boolean_literal(strcmp(text, "true") == 0 || strcmp(text, "1") == 0, 0);
     if (type == SQLITE_INTEGER) return (ast_node*)make_integer_literal(strtoll(text, NULL, 10), 0);
     if (type == SQLITE_FLOAT) return (ast_node*)make_decimal_literal(strtod(text, NULL), 0);
+    if (type == GQL_COL_TYPE_STRING) return (ast_node*)make_string_literal((char*)text, 0);
     if (text[0] == '[') {
         ast_list *items = ast_list_create();
         sqlite3_stmt *st = NULL;
@@ -3555,6 +3760,12 @@ static void rw_literalize_props(cypher_executor *executor, ast_node *props, cons
         if (pair->value->type == AST_NODE_LITERAL || pair->value->type == AST_NODE_PARAMETER) continue;
         if (!rw_expr_scalar_only(pair->value, row)) continue;
         ast_node *lit = rw_map_property_literal(executor, pair->value, row);
+        if (!lit && pair->value->type == AST_NODE_IDENTIFIER) {
+            /* A bound value: its own text and type, so a string that looks
+             * like JSON stays a string (GQLITE-A-0007). */
+            const rw_scalar *sc = rw_row_scalar(row, ((cypher_identifier *)pair->value)->name);
+            if (sc) lit = rw_make_literal(executor, sc->text, sc->text ? sc->type : SQLITE_NULL);
+        }
         if (!lit) {
             char *text = NULL;
             int type = rw_eval_scalar(executor, pair->value, row, &text);
@@ -3659,11 +3870,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     ast_list *clauses = query->clauses;
     if (!clauses || clauses->count == 0) return -1;
 
-    /* Shape check: the first clause must be MATCH, UNWIND or CREATE. Anything
-     * else goes to the handlers that owned these flag sets before. */
+    /* Shape check: the first clause must be MATCH, UNWIND, CREATE or WITH
+     * (a WITH is a read prefix, GQLITE-T-0401). Anything else goes to the
+     * handlers that owned these flag sets before. */
     ast_node *first = clauses->items[0];
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
-                    first->type == AST_NODE_CREATE)) {
+                    first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH)) {
         if (flags & CLAUSE_WITH) return handle_merge_with_pipeline(executor, query, result, flags);
         return handle_merge_return(executor, query, result, flags);
     }
@@ -3747,6 +3959,9 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 for (int c = 0; c < n_scope && c < pr->column_count; c++) {
                     const char *cell = pr->data[r][c];
                     int ty = pr->data_types ? pr->data_types[r][c] : SQLITE_TEXT;
+                    /* JSON and string cells are TEXT to the row-wise
+                     * evaluator (GQLITE-A-0007 result types). */
+                    if (ty == GQL_COL_TYPE_JSON) ty = SQLITE_TEXT;
                     bool is_edge = false;
                     long long id = rw_entity_id(cell, &is_edge);
                     if (id >= 0) {

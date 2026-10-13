@@ -40,6 +40,7 @@ static void free_var(transform_var *var)
     free(var->label);
     free(var->cte_name);
     free(var->source_expr);
+    free(var->tag_expr);
     free(var->graph);
     /* path_elements is owned by AST, don't free */
 }
@@ -114,6 +115,9 @@ int transform_var_register(transform_var_context *ctx,
         var->kind = kind;
         var->is_visible = true;
         var->declared_in_clause = ctx->current_clause;
+        /* A new binding has its own type tag, if any (GQLITE-A-0007). */
+        free(var->tag_expr);
+        var->tag_expr = NULL;
 
         if (table_alias) {
             char *new_alias = strdup(table_alias);
@@ -238,6 +242,23 @@ int transform_var_register_projected(transform_var_context *ctx,
     }
 
     return 0;
+}
+
+int transform_var_set_tag(transform_var_context *ctx, const char *name, const char *tag_expr)
+{
+    int idx = find_var_index(ctx, name);
+    if (idx < 0) return -1;
+    char *copy = tag_expr ? strdup(tag_expr) : NULL;
+    if (tag_expr && !copy) return -1;
+    free(ctx->vars[idx].tag_expr);
+    ctx->vars[idx].tag_expr = copy;
+    return 0;
+}
+
+const char *transform_var_get_tag(transform_var_context *ctx, const char *name)
+{
+    transform_var *var = transform_var_lookup(ctx, name);
+    return var ? var->tag_expr : NULL;
 }
 
 /* Variable lookup */

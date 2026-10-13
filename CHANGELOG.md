@@ -4,6 +4,84 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] — 2026-10-13
+
+GitHub issue #128, and the bugs that three new tests found once they checked
+types, rows that must not come back, and unusual names. Two of the bugs lost
+data. The openCypher TCK now compares booleans, integers and floats by type
+(it passed `1` for `true` before): 3826 / 3880 with the strict comparison.
+
+### Upgrade notes
+
+- **Values keep their type.** A string that looks like a number, a boolean or
+  JSON (`'123'`, `'true'`, `'[1]'`) comes back as a string. Before, results were
+  typed by their text. `RETURN true`, `toBoolean()`, `isEmpty()` and label
+  predicates return booleans, not `1` / `0`. A float keeps its `.0` (`2.0`).
+- **Column name of `count(*)`** without an alias is `count(*)`, not `count()`.
+- **Rust:** `format_value("123")` gives the string literal `'123'` (it gave `123`).
+- **Rust:** a string property (`("age", "30")`, `PropertyValue::from("30")`) is
+  stored as text. Before, the Rust binding typed a string by its text, so
+  `"123"` became an integer and `"true"` a boolean. Pass `30`, `1.5`, `true` or
+  a `PropertyValue` variant for other types.
+- **Data written by earlier versions:** a `SET` after `WITH` (for example
+  `MATCH (n) SET n.x = n.x + 1 WITH n ...`) stored numbers and booleans as text.
+  Those values now read back as strings. Run the `SET` again to store them with
+  their type.
+
+### Fixed
+
+- **Data loss:** `MATCH (n:Item {id: 'a'}) DETACH DELETE n RETURN count(*)`
+  deleted every `:Item` node, and `DELETE r ... RETURN` every relationship of
+  the type, when the pattern had an inline property (#128 family).
+- **Data loss:** `CREATE (:B {x: a.y})` copied no lists and cut text at 255
+  characters.
+- `SET` / `REMOVE` with `RETURN` returned rows the `MATCH` did not bind (#128).
+  A query with both `SET` and `REMOVE` skipped the `REMOVE`.
+- Text properties came back as numbers or booleans (#128); booleans from
+  `UNWIND $param` came back as `0` / `1` (#128).
+- Backtick names with spaces, dashes, dots, quotes or SQL keywords failed in
+  aliases, and `` `a``b` `` failed everywhere (#128).
+- `WITH 42 AS x CREATE (:V {p: x})` dropped the property, and `WITH ... WHERE`
+  did not filter the `CREATE`.
+- `MERGE` dropped list and map properties. A `MERGE` on an integer id above
+  2^31 never matched, so each run made a duplicate.
+- `SET n.p = n.list` stored nothing; `SET n.l = [n.x]` stored `[null]`;
+  `SET n.b = n.x > 2` did not parse.
+- `[n.p]`, `collect(n.p)` and `n {.p}` turned lists and booleans into strings.
+- `UNWIND` of a list literal with an apostrophe in a string failed.
+- `{k: 1}.k` was "not yet supported"; `isEmpty([])` was false; `toBoolean('TRUE')`
+  was null; `[false] + true` appended `1`.
+- **Data loss:** the Python and Rust bindings stored a newline, carriage return
+  or tab in a string property as a space. They are escaped now.
+- `MATCH (n {p: 3.14159265})` never matched (the value was cut to 6 decimals);
+  `MATCH (n {s: "it's"})` failed with an SQL error; `MATCH (n {l: [3]})`
+  ignored the list and matched every node.
+- `MATCH (n) UNWIND n.list AS x` failed with "no such column", and a MATCH
+  variable was not in scope after `UNWIND` unless passed through `WITH`.
+- `r {.w}` on a relationship gave nulls.
+- `toString(5)`, `left('[1]', 3)` and other string results that look like a
+  number or JSON came back typed.
+- Property keys with an apostrophe, a dot or a quote broke `UNWIND n.key`,
+  nested map keys and aggregates; integer coordinates were ignored by `astar`.
+
+### Tests
+
+- `bindings/python/tests/test_type_round_trip.py`: each value type through each
+  write path and each read path (723 cases).
+- `bindings/python/tests/test_write_return_scope.py`: write + `RETURN` with
+  rows that must not be returned or changed.
+- `bindings/python/tests/test_backtick_identifiers.py`: unusual names in each
+  slot.
+- The TCK compares booleans, integers and floats by type
+  (`GQL_TCK_LOOSE_TYPES=1` for the old comparison).
+
+### Performance
+
+- Results carry a type tag where SQLite drops the type (after `WITH` / `UNWIND`,
+  and with `ORDER BY` / `DISTINCT` / grouping). Against 0.9.4 on 20K nodes:
+  `RETURN` of properties +3%, `collect` +4%; `WITH` of properties +37%,
+  `ORDER BY` on properties +28%, `UNWIND range()` +28%.
+
 ## [0.9.4] — 2026-10-12
 
 Fixes for faults that CI found on Linux and Windows after 0.9.3 (GQLITE-T-0390).

@@ -588,7 +588,9 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
 
                     result->data = NULL;
                     result->row_count = 0;
-                    result->column_count = sqlite3_column_count(transform_result->stmt);
+                    /* Hidden RETURN tag columns are not result columns
+                     * (GQLITE-A-0007). */
+                    result->column_count = gql_visible_column_count(transform_result->stmt);
 
                     /* Get column names from the SQL result */
                     result->column_names = malloc(result->column_count * sizeof(char*));
@@ -630,13 +632,8 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                              * boolean subtype, override the type with
                              * GQL_COL_TYPE_BOOLEAN so the JSON renderer
                              * emits an unquoted JSON boolean (I-0040 M13). */
-                            sqlite3_value *vv = sqlite3_column_value(transform_result->stmt, c);
-                            unsigned int sub = vv ? sqlite3_value_subtype(vv) : 0;
-                            if (sub == GQL_SUBTYPE_BOOLEAN) {
-                                result->data_types[result->row_count][c] = GQL_COL_TYPE_BOOLEAN;
-                            } else {
-                                result->data_types[result->row_count][c] = sqlite3_column_type(transform_result->stmt, c);
-                            }
+                            result->data_types[result->row_count][c] =
+                                gql_result_cell_type(transform_result->stmt, c, result->column_count);
                             const char *val = (const char*)sqlite3_column_text(transform_result->stmt, c);
                             result->data[result->row_count][c] = val ? strdup(val) : NULL;
                         }

@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
 #include "transform/transform_func_entity.h"
@@ -695,9 +696,16 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         }
         if (!both_int_lit) {
             append_sql(ctx, binary_op->op_type == BINARY_OP_ADD ? "_gql_dyn_add(" : "_gql_dyn_sub(");
-            if (transform_expression(ctx, binary_op->left) < 0) return -1;
-            append_sql(ctx, ", ");
-            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            /* A boolean operand carries its subtype, so list + false appends
+             * false, not 0. */
+            for (int side = 0; side < 2; side++) {
+                ast_node *opnd = side ? binary_op->right : binary_op->left;
+                if (side) append_sql(ctx, ", ");
+                bool b = ast_is_boolean_expr(opnd);
+                if (b) append_sql(ctx, "_gql_bool_str(");
+                if (transform_expression(ctx, opnd) < 0) return -1;
+                if (b) append_sql(ctx, ")");
+            }
             append_sql(ctx, "))");  /* closes the helper + the outer paren */
             ctx->in_comparison = was_in_comparison;
             return 0;
@@ -866,19 +874,60 @@ static void append_prop_branch(cypher_transform_context *ctx, const char *gprefi
     }
 }
 
+char *transform_property_tag_sql(cypher_transform_context *ctx, cypher_property *prop)
+{
+    if (!ctx || !prop) return NULL;
+    bool saved_mode = ctx->prop_tag_mode;
+    ctx->prop_tag_mode = true;
+    ctx->prop_tag_unknown = false;
+    char *sql = cypher_transform_capture_expression(ctx, (ast_node *)prop);
+    bool unknown = ctx->prop_tag_unknown;
+    ctx->prop_tag_mode = saved_mode;
+    ctx->prop_tag_unknown = false;
+    if (unknown) { free(sql); return NULL; }
+    return sql;
+}
+
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop)
 {
     CYPHER_DEBUG("Transforming property access");
 
+    /* GQLITE-A-0007: tag mode handles a node/relationship property, an
+     * UNWIND map member, and a key of any other value (_gql_dyn_prop_tag);
+     * startNode()/endNode() bases have no cheap tag. */
+    if (ctx->prop_tag_mode && prop->expr->type != AST_NODE_IDENTIFIER) {
+        if (prop->expr->type == AST_NODE_FUNCTION_CALL || prop->expr->type == AST_NODE_PROPERTY) {
+            ctx->prop_tag_unknown = true;
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        bool saved = ctx->prop_tag_mode;
+        ctx->prop_tag_mode = false;
+        append_sql(ctx, "_gql_dyn_prop_tag(");
+        int rc = transform_expression(ctx, prop->expr);
+        ctx->prop_tag_mode = saved;
+        if (rc < 0) return -1;
+        { char *esc_prop = escape_sql_string(prop->property_name);
+          append_sql(ctx, ", '%s')", esc_prop ? esc_prop : prop->property_name);
+          free(esc_prop); }
+        return 0;
+    }
+
     /* Handle nested property access: n.metadata.name → json_extract(n.metadata_sql, '$.name') */
     if (prop->expr->type == AST_NODE_PROPERTY) {
-        append_sql(ctx, "json_extract(");
-        if (transform_property_access(ctx, (cypher_property*)prop->expr) < 0) return -1;
-        append_sql(ctx, ", '$.");
-        { char *esc_prop = escape_sql_string(prop->property_name);
-          append_sql(ctx, "%s", esc_prop ? esc_prop : prop->property_name);
-          free(esc_prop); }
-        append_sql(ctx, "')");
+        /* A value position keeps a boolean or a list typed
+         * (_gql_dyn_prop); a comparison reads the raw value (true is 1).
+         * Both look the key up with json_each, so any key text works,
+         * also on SQLite before 3.47 (GQLITE-T-0414). */
+        if (ctx->in_comparison) {
+            append_sql(ctx, "_gql_map_get(");
+            if (transform_property_access(ctx, (cypher_property*)prop->expr) < 0) return -1;
+            append_sql(ctx, ", '%s', 0)", sql_esc_tmp(prop->property_name));
+        } else {
+            append_sql(ctx, "_gql_dyn_prop(");
+            if (transform_property_access(ctx, (cypher_property*)prop->expr) < 0) return -1;
+            append_sql(ctx, ", '%s')", sql_esc_tmp(prop->property_name));
+        }
         return 0;
     }
 
@@ -938,11 +987,16 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return -1;
     }
 
-    /* Get the base expression (should be an identifier) */
+    /* Any other base (a map literal, CASE, a parameter...): read the key
+     * from the value, as for a subscript base (GQLITE-T-0397: `{k: 1}.k`
+     * was "Complex property access not yet supported"). */
     if (prop->expr->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("Complex property access not yet supported");
-        return -1;
+        append_sql(ctx, "_gql_dyn_prop(");
+        if (transform_expression(ctx, prop->expr) < 0) return -1;
+        { char *esc_prop = escape_sql_string(prop->property_name);
+          append_sql(ctx, ", '%s')", esc_prop ? esc_prop : prop->property_name);
+          free(esc_prop); }
+        return 0;
     }
 
     cypher_identifier *id = (cypher_identifier*)prop->expr;
@@ -965,9 +1019,17 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
      * instead of property table lookup. Detect by checking if the alias source
      * references an UNWIND CTE value column. */
     if (is_projected && alias && strstr(alias, "_unwind_") && strstr(alias, ".value")) {
-        { char *esc_prop = escape_sql_string(prop->property_name);
-          append_sql(ctx, "json_extract(%s, '$.%s')", alias, esc_prop ? esc_prop : prop->property_name);
-          free(esc_prop); }
+        {
+          if (ctx->prop_tag_mode) {
+              append_sql(ctx, "_gql_map_get(%s, '%s', 3)", alias, sql_esc_tmp(prop->property_name));
+          } else if (ctx->in_comparison) {
+              append_sql(ctx, "_gql_map_get(%s, '%s', 0)", alias, sql_esc_tmp(prop->property_name));
+          } else {
+              /* GQLITE-T-0395: json_extract gives a JSON boolean as 1/0;
+               * in a value position keep it a boolean. */
+              append_sql(ctx, "_gql_map_get(%s, '%s', 2)", alias, sql_esc_tmp(prop->property_name));
+          }
+        }
         return 0;
     }
 
@@ -977,6 +1039,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
      * JSON objects like durations); fall back to _gql_temporal_field which
      * parses temporal strings for `.year`/`.hour`/etc. */
     if (is_projected && !is_edge && !alias_is_id) {
+        if (ctx->prop_tag_mode) {
+            ctx->prop_tag_unknown = true;
+            append_sql(ctx, "NULL");
+            return 0;
+        }
         /* json_extract raises 'malformed JSON' on non-JSON inputs (e.g. a
          * temporal string like '1984-10-11'), so guard with json_valid. */
         { char *esc_prop = escape_sql_string(prop->property_name);
@@ -1015,6 +1082,19 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     int key_id = cypher_transform_property_key_id(ctx, gprefix, prop->property_name);
     const char *key = prop->property_name;
 
+    if (ctx->prop_tag_mode) {
+        /* Booleans and lists need a tag (two key probes); 'text' tells a
+         * TEXT value from text that looks like JSON. */
+        append_sql(ctx, "(SELECT COALESCE(");
+        append_prop_branch(ctx, gprefix, is_edge ? "edge_props_bool" : "node_props_bool",
+                           "tb", is_edge ? "edge_id" : "node_id", id_expr, "'bool'", key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, is_edge ? "edge_props_json" : "node_props_json",
+                           "tj", is_edge ? "edge_id" : "node_id", id_expr, "'json'", key, key_id);
+        append_sql(ctx, ", 'text'))");
+        return 0;
+    }
+
     append_sql(ctx, "(SELECT COALESCE(");
     if (is_edge) {
         const char *bool_expr = ctx->in_comparison ? "CAST(epb.value AS INTEGER)" : "_gql_bool_str(epb.value)";
@@ -1030,7 +1110,10 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "edge_props_bool", "epb", "edge_id", id_expr, bool_expr, key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr, "epj.value", key, key_id);
+        /* json() tags a list value with the JSON subtype, so the result
+         * reader can tell it from text that looks like JSON (GQLITE-T-0394). */
+        append_prop_branch(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr,
+                           ctx->in_comparison ? "epj.value" : "json(epj.value)", key, key_id);
     } else {
         const char *bool_expr = ctx->in_comparison ? "CAST(npb.value AS INTEGER)" : "_gql_bool_str(npb.value)";
         append_prop_branch(ctx, gprefix, "node_props_text", "npt", "node_id", id_expr, "npt.value", key, key_id);
@@ -1041,7 +1124,8 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "node_props_bool", "npb", "node_id", id_expr, bool_expr, key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr, "npj.value", key, key_id);
+        append_prop_branch(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr,
+                           ctx->in_comparison ? "npj.value" : "json(npj.value)", key, key_id);
     }
     append_sql(ctx, "))");
 

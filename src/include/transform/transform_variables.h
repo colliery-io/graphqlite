@@ -57,6 +57,9 @@ struct transform_var {
 
     /* For projected variables */
     char *source_expr;       /* Original expression (for WITH aliasing) */
+    char *tag_expr;          /* GQLITE-A-0007: SQL of the type tag column
+                              * that travels with source_expr across a CTE
+                              * ('bool', 'json', ...); NULL when none */
 
     /* T-0333 (Unwind1 [12]): when this projected var holds a list-of-nodes
      * or list-of-edges (e.g. `collect(n) AS bees`), record the inner kind
@@ -99,6 +102,11 @@ int transform_var_register_path(transform_var_context *ctx,
                                const char *table_alias,
                                ast_list *elements,
                                var_path_type path_type);
+
+/* GQLITE-A-0007: set (or clear, with NULL) the type tag column of a
+ * projected variable; get it, or NULL. */
+int transform_var_set_tag(transform_var_context *ctx, const char *name, const char *tag_expr);
+const char *transform_var_get_tag(transform_var_context *ctx, const char *name);
 
 int transform_var_register_projected(transform_var_context *ctx,
                                     const char *name,

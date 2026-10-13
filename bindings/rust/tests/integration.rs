@@ -2,6 +2,7 @@
 
 use graphqlite::{
     escape_string, graphs, sanitize_rel_type, Connection, Error, Graph, GraphManager,
+    PropertyValue,
 };
 use serde_json::json;
 
@@ -405,7 +406,7 @@ fn test_upsert_edge_multiple_types() {
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
     // Create two different relation types between same nodes
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+    g.upsert_edge("a", "b", [("since", 2020i64)], "KNOWS")
         .unwrap();
     g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH")
         .unwrap();
@@ -422,7 +423,7 @@ fn test_get_edge_by_type() {
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+    g.upsert_edge("a", "b", [("since", 2020i64)], "KNOWS")
         .unwrap();
     g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH")
         .unwrap();
@@ -461,7 +462,7 @@ fn test_delete_edge_by_type() {
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+    g.upsert_edge("a", "b", [("since", 2020i64)], "KNOWS")
         .unwrap();
     g.upsert_edge("a", "b", [("project", "X")], "WORKS_WITH")
         .unwrap();
@@ -480,7 +481,7 @@ fn test_has_edge_by_type() {
     g.upsert_node("a", [("name", "A")], "Node").unwrap();
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
-    g.upsert_edge("a", "b", [("since", "2020")], "KNOWS")
+    g.upsert_edge("a", "b", [("since", 2020i64)], "KNOWS")
         .unwrap();
 
     assert!(g.has_edge("a", "b", Some("KNOWS")).unwrap());
@@ -495,10 +496,10 @@ fn test_upsert_edge_updates_properties() {
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
     // Create edge with initial properties
-    g.upsert_edge("a", "b", [("weight", "1")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("weight", 1i64)], "KNOWS").unwrap();
 
     // Upsert again with updated properties — should SET, not create a second edge
-    g.upsert_edge("a", "b", [("weight", "2")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("weight", 2i64)], "KNOWS").unwrap();
 
     // Still only one edge
     let edges = g.get_all_edges().unwrap();
@@ -525,7 +526,7 @@ fn test_upsert_edge_update_empty_props() {
     g.upsert_node("b", [("name", "B")], "Node").unwrap();
 
     // Create edge with properties
-    g.upsert_edge("a", "b", [("weight", "1")], "KNOWS").unwrap();
+    g.upsert_edge("a", "b", [("weight", 1i64)], "KNOWS").unwrap();
 
     // Upsert with empty props should preserve existing properties
     let empty: [(&str, &str); 0] = [];
@@ -1065,7 +1066,8 @@ fn test_utility_functions() {
     // escape_string
     assert_eq!(escape_string("hello"), "hello");
     assert_eq!(escape_string("it's"), "it\\'s");
-    assert_eq!(escape_string("line\nbreak"), "line break");
+    assert_eq!(escape_string("line\nbreak"), "line\\nbreak");
+    assert_eq!(escape_string("a\tb\u{1}"), "a\\tb\\u0001");
 
     // sanitize_rel_type
     assert_eq!(sanitize_rel_type("KNOWS"), "KNOWS");
@@ -1773,13 +1775,13 @@ fn test_to_boolean() {
 
     let results = conn.cypher("RETURN toBoolean('true') AS result").unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>("result").unwrap();
-    assert_eq!(val, 1);
+    let val = results[0].get::<bool>("result").unwrap();
+    assert!(val);
 
     let results = conn.cypher("RETURN toBoolean('false') AS result").unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>("result").unwrap();
-    assert_eq!(val, 0);
+    let val = results[0].get::<bool>("result").unwrap();
+    assert!(!val);
 }
 
 // =============================================================================
@@ -2466,9 +2468,9 @@ fn test_bulk_insert_edges() {
     let edges_inserted = g
         .insert_edges_bulk(
             [
-                ("a", "b", vec![("weight", "1.5")], "CONNECTS"),
-                ("b", "c", vec![("weight", "2.5")], "CONNECTS"),
-                ("a", "c", vec![("weight", "3.5")], "CONNECTS"),
+                ("a", "b", vec![("weight", 1.5)], "CONNECTS"),
+                ("b", "c", vec![("weight", 2.5)], "CONNECTS"),
+                ("a", "c", vec![("weight", 3.5)], "CONNECTS"),
             ],
             &id_map,
         )
@@ -2640,12 +2642,20 @@ fn test_bulk_insert_with_typed_properties() {
         .insert_nodes_bulk([
             (
                 "node1",
-                vec![("name", "Node1"), ("count", "42"), ("active", "true")],
+                vec![
+                    ("name", PropertyValue::Text("Node1".into())),
+                    ("count", PropertyValue::Integer(42)),
+                    ("active", PropertyValue::Bool(true)),
+                ],
                 "TypedNode",
             ),
             (
                 "node2",
-                vec![("name", "Node2"), ("score", "3.14"), ("active", "false")],
+                vec![
+                    ("name", PropertyValue::Text("Node2".into())),
+                    ("score", PropertyValue::Float(3.14)),
+                    ("active", PropertyValue::Bool(false)),
+                ],
                 "TypedNode",
             ),
         ])
@@ -3377,10 +3387,13 @@ fn test_return_star_with_relationship() {
 fn test_isempty() {
     let conn = test_connection();
     let r = conn.cypher("RETURN isEmpty('') AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+    assert!(r[0].get::<bool>("r").unwrap());
 
     let r = conn.cypher("RETURN isEmpty('hello') AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 0);
+    assert!(!r[0].get::<bool>("r").unwrap());
+
+    let r = conn.cypher("RETURN isEmpty([]) AS r").unwrap();
+    assert!(r[0].get::<bool>("r").unwrap());
 }
 
 #[test]
@@ -3417,7 +3430,7 @@ fn test_to_float_or_null() {
 fn test_to_boolean_or_null() {
     let conn = test_connection();
     let r = conn.cypher("RETURN toBooleanOrNull('true') AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+    assert!(r[0].get::<bool>("r").unwrap());
 
     let r = conn.cypher("RETURN toBooleanOrNull('maybe') AS r").unwrap();
     let val = r[0].get::<Option<String>>("r").unwrap();
@@ -4465,7 +4478,7 @@ fn test_valid_identifiers_still_pass() {
     let g = test_graph();
     g.upsert_node(
         "ok1",
-        [("snake_case_2", "1"), ("_leading", "2"), ("CamelCase", "3")],
+        [("snake_case_2", 1i64), ("_leading", 2), ("CamelCase", 3)],
         "Label_9",
     )
     .unwrap();
@@ -4780,3 +4793,62 @@ fn test_capabilities_reports_version_and_flags() {
     assert!(!caps.neo4j_compat);
 }
 
+
+/// Values keep their type through the Rust result API: text that looks like a
+/// number, a boolean or JSON stays text, through RETURN, WITH and ORDER BY
+/// (#128, GQLITE-T-0394).
+#[test]
+fn test_value_types_round_trip() {
+    use graphqlite::Value as V;
+    let conn = test_connection();
+    conn.cypher("CREATE (:V {t: '123', b: 'true', j: '[1]', n: 123, f: 2.0, x: true, l: [1, 2]})")
+        .unwrap();
+    for query in [
+        "MATCH (v:V) RETURN v.t AS t, v.b AS b, v.j AS j, v.n AS n, v.f AS f, v.x AS x, v.l AS l",
+        "MATCH (v:V) WITH v.t AS t, v.b AS b, v.j AS j, v.n AS n, v.f AS f, v.x AS x, v.l AS l \
+         RETURN t, b, j, n, f, x, l ORDER BY t",
+    ] {
+        let rows = conn.cypher(query).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.get_value("t"), Some(&V::String("123".into())), "{query}");
+        assert_eq!(row.get_value("b"), Some(&V::String("true".into())), "{query}");
+        assert_eq!(row.get_value("j"), Some(&V::String("[1]".into())), "{query}");
+        assert_eq!(row.get_value("n"), Some(&V::Integer(123)), "{query}");
+        assert_eq!(row.get_value("f"), Some(&V::Float(2.0)), "{query}");
+        assert_eq!(row.get_value("x"), Some(&V::Bool(true)), "{query}");
+        assert_eq!(row.get_value("l"), Some(&V::Array(vec![V::Integer(1), V::Integer(2)])), "{query}");
+    }
+}
+
+/// A boolean parameter stays a boolean (#128).
+#[test]
+fn test_boolean_parameter_types() {
+    use graphqlite::Value as V;
+    let conn = test_connection();
+    let rows = conn
+        .cypher_builder("UNWIND $flags AS f RETURN f")
+        .param("flags", json!([false, true]))
+        .run()
+        .unwrap();
+    let got: Vec<_> = rows.iter().map(|r| r.get_value("f").cloned()).collect();
+    assert_eq!(got, vec![Some(V::Bool(false)), Some(V::Bool(true))]);
+}
+
+/// A string property is text, also when it looks like a number or a boolean
+/// (#128): the Rust binding typed a string by its text before 0.10.0.
+#[test]
+fn test_string_properties_stay_text() {
+    use graphqlite::Value as V;
+    let g = test_graph();
+    g.upsert_node("n", [("code", "123"), ("flag", "true"), ("zip", "02134")], "Thing")
+        .unwrap();
+    let node = g.get_node("n").unwrap().unwrap();
+    let props = &node["properties"];
+    assert_eq!(props["code"], V::String("123".into()));
+    assert_eq!(props["flag"], V::String("true".into()));
+    assert_eq!(props["zip"], V::String("02134".into()));
+    g.upsert_node("m", [("count", 123i64)], "Thing").unwrap();
+    let node = g.get_node("m").unwrap().unwrap();
+    assert_eq!(node["properties"]["count"], V::Integer(123));
+}

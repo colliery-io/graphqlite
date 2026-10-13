@@ -18,17 +18,18 @@ graphqlite = "0.1.0-beta"
 The `Graph` struct provides an ergonomic interface for common graph operations:
 
 ```rust
-use graphqlite::Graph;
+use graphqlite::{Graph, PropertyValue as P};
 
 fn main() -> graphqlite::Result<()> {
     let g = Graph::open(":memory:")?;
 
-    // Add nodes
-    g.upsert_node("alice", [("name", "Alice"), ("age", "30")], "Person")?;
-    g.upsert_node("bob", [("name", "Bob"), ("age", "25")], "Person")?;
+    // Add nodes. A string is stored as text ("30" stays "30"); use a number
+    // or a PropertyValue for other types.
+    g.upsert_node("alice", [("name", P::from("Alice")), ("age", P::from(30))], "Person")?;
+    g.upsert_node("bob", [("name", P::from("Bob")), ("age", P::from(25))], "Person")?;
 
     // Add edge
-    g.upsert_edge("alice", "bob", [("since", "2020")], "KNOWS")?;
+    g.upsert_edge("alice", "bob", [("since", 2020)], "KNOWS")?;
 
     // Query
     println!("{:?}", g.stats()?);           // GraphStats { nodes: 2, edges: 1 }
@@ -169,7 +170,7 @@ g.upsert_nodes_batch([
 
 // Batch insert edges (upsert semantics)
 g.upsert_edges_batch([
-    ("n1", "n2", [("weight", "1.0")], "CONNECTS"),
+    ("n1", "n2", [("weight", 1.0)], "CONNECTS"),
 ])?;
 ```
 
@@ -181,16 +182,16 @@ These bypass Cypher parsing entirely and use direct SQL, achieving **100-500x fa
 ```rust
 // Bulk insert nodes - returns HashMap<external_id, internal_rowid>
 let id_map = g.insert_nodes_bulk([
-    ("alice", vec![("name", "Alice"), ("age", "30")], "Person"),
-    ("bob", vec![("name", "Bob"), ("age", "25")], "Person"),
-    ("charlie", vec![("name", "Charlie")], "Person"),
+    ("alice", vec![("name", P::from("Alice")), ("age", P::from(30))], "Person"),
+    ("bob", vec![("name", P::from("Bob")), ("age", P::from(25))], "Person"),
+    ("charlie", vec![("name", P::from("Charlie"))], "Person"),
 ])?;
 
 // Bulk insert edges using the ID map - no MATCH queries needed!
 let edges_inserted = g.insert_edges_bulk(
     [
-        ("alice", "bob", vec![("since", "2020")], "KNOWS"),
-        ("bob", "charlie", vec![("since", "2021")], "KNOWS"),
+        ("alice", "bob", vec![("since", 2020)], "KNOWS"),
+        ("bob", "charlie", vec![("since", 2021)], "KNOWS"),
     ],
     &id_map,
 )?;

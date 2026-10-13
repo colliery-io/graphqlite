@@ -47,6 +47,52 @@ typedef struct {
 
 /* Return the connection's executor, creating it on first use, and keep
  * its CSR-cache pointer in sync. Shared by cypher() and cypher_rows. */
+/* Append `s` to buf at off as the inside of a JSON string: quote, backslash
+ * and control characters escaped. Column names are Cypher aliases and can hold
+ * any character (GQLITE-T-0396). Returns the new offset; never writes past
+ * size - 1. */
+static size_t json_put_escaped(char *buf, size_t size, size_t off, const char *s)
+{
+    for (; s && *s; s++) {
+        unsigned char ch = (unsigned char)*s;
+        char tmp[8];
+        const char *esc = NULL;
+        switch (ch) {
+            case '"':  esc = "\\\""; break;
+            case '\\': esc = "\\\\"; break;
+            case '\n': esc = "\\n"; break;
+            case '\r': esc = "\\r"; break;
+            case '\t': esc = "\\t"; break;
+            case '\b': esc = "\\b"; break;
+            case '\f': esc = "\\f"; break;
+            default:
+                if (ch < 0x20) { snprintf(tmp, sizeof(tmp), "\\u%04x", ch); esc = tmp; }
+                break;
+        }
+        if (esc) {
+            size_t elen = strlen(esc);
+            if (off + elen >= size) break;
+            memcpy(buf + off, esc, elen);
+            off += elen;
+        } else {
+            if (off + 1 >= size) break;
+            buf[off++] = (char)ch;
+        }
+    }
+    return off;
+}
+
+/* Bytes a column name can take in the JSON output, escaped, per row. */
+static size_t column_names_json_size(cypher_result *result)
+{
+    size_t n = 0;
+    for (int col = 0; col < result->column_count; col++) {
+        const char *name = result->column_names ? result->column_names[col] : NULL;
+        n += (name ? strlen(name) * 6 : 16) + 4;
+    }
+    return n;
+}
+
 static cypher_executor *cache_get_executor(void *arg) {
     connection_cache *cache = (connection_cache *)arg;
     if (!cache) return NULL;
@@ -153,10 +199,12 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                     const char *render = agtype_str ? agtype_str : text_val;
                     const char *col_name = (result->column_names && result->column_names[0])
                         ? result->column_names[0] : "result";
-                    int json_size = strlen(render) + strlen(col_name) + 32;
+                    size_t json_size = strlen(render) + strlen(col_name) * 6 + 32;
                     char *json_result = malloc(json_size);
                     if (json_result) {
-                        snprintf(json_result, json_size, "[{\"%s\": %s}]", col_name, render);
+                        size_t o = (size_t)snprintf(json_result, json_size, "[{\"");
+                        o = json_put_escaped(json_result, json_size, o, col_name);
+                        snprintf(json_result + o, json_size - o, "\": %s}]", render);
                         sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
                         free(json_result);
                     } else {
@@ -168,7 +216,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                 }
             } else {
                 /* Multiple results - return as JSON array */
-                size_t buffer_size = 1024;
+                size_t buffer_size = 1024 + (size_t)result->row_count * column_names_json_size(result);
                 for (int row = 0; row < result->row_count; row++) {
                     for (int col = 0; col < result->column_count; col++) {
                         if (result->agtype_data[row][col]) {
@@ -201,8 +249,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                         /* Single column - wrap with column name for consistent format */
                         offset += snprintf(json_result + offset, buffer_size - offset, "{\"");
                         if (result->column_names && result->column_names[0]) {
-                            size_t slen = strlen(result->column_names[0]);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, result->column_names[0], slen); offset += slen; }
+                            offset = json_put_escaped(json_result, buffer_size, offset, result->column_names[0]);
                         } else {
                             offset += snprintf(json_result + offset, buffer_size - offset, "result");
                         }
@@ -236,8 +283,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
 
                             offset += snprintf(json_result + offset, buffer_size - offset, "\"");
                             if (result->column_names && result->column_names[col]) {
-                                size_t slen = strlen(result->column_names[col]);
-                                if (offset + slen < buffer_size) { memcpy(json_result + offset, result->column_names[col], slen); offset += slen; }
+                                offset = json_put_escaped(json_result, buffer_size, offset, result->column_names[col]);
                             } else {
                                 char col_name[32];
                                 snprintf(col_name, sizeof(col_name), "column_%d", col);
@@ -277,7 +323,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
             }
         } else if (result->row_count > 0 && result->data) {
             /* Format results as JSON with column names */
-            size_t buffer_size = 1024;
+            size_t buffer_size = 1024 + (size_t)result->row_count * column_names_json_size(result);
             for (int row = 0; row < result->row_count; row++) {
                 for (int col = 0; col < result->column_count; col++) {
                     if (result->data[row][col]) {
@@ -307,8 +353,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
 
                     offset += snprintf(json_result + offset, buffer_size - offset, "\"");
                     if (result->column_names && result->column_names[col]) {
-                        size_t slen = strlen(result->column_names[col]);
-                        if (offset + slen < buffer_size) { memcpy(json_result + offset, result->column_names[col], slen); offset += slen; }
+                        offset = json_put_escaped(json_result, buffer_size, offset, result->column_names[col]);
                     } else {
                         char col_name[32];
                         snprintf(col_name, sizeof(col_name), "column_%d", col);
@@ -325,8 +370,21 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             col_type = result->data_types[row][col];
                         }
 
+                        /* GQLITE-A-0007: a cell known to be a string is
+                         * quoted even when it looks like JSON; a JSON cell
+                         * is raw. Untagged text keeps the old rule. */
+                        if (col_type == GQL_COL_TYPE_STRING) {
+                            col_type = SQLITE_TEXT;
+                            goto render_string;
+                        }
+                        if (col_type == GQL_COL_TYPE_BOOLEAN) {
+                            const char *b = (strcmp(val, "1") == 0) ? "true"
+                                          : (strcmp(val, "0") == 0) ? "false" : val;
+                            size_t slen = strlen(b);
+                            if (offset + slen < buffer_size) { memcpy(json_result + offset, b, slen); offset += slen; }
+                        } else
                         /* Check if value is already JSON (starts with [, { or "). */
-                        if (val[0] == '[' || val[0] == '{' || val[0] == '"') {
+                        if (col_type == GQL_COL_TYPE_JSON || val[0] == '[' || val[0] == '{' || val[0] == '"') {
                             size_t slen = strlen(val);
                             if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
                         } else if (col_type == SQLITE_INTEGER) {
@@ -363,6 +421,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             /* NaN sentinel (GQLITE-T-0340) — emit unquoted NaN. */
                             offset += snprintf(json_result + offset, buffer_size - offset, "NaN");
                         } else {
+                            render_string:
                             /* String value - quote and escape. Control
                              * characters must be escaped too or the output is
                              * not valid JSON (perf review C1: RETURN 'a\\nb' and

@@ -12,6 +12,7 @@
 #include <stdarg.h>
 
 #include "transform/sql_builder.h"
+#include "gql_thread_local.h"
 
 /*
  * Ensure buffer has at least 'needed' bytes of additional capacity.
@@ -151,6 +152,20 @@ char *escape_sql_string(const char *str)
     *out = '\0';
 
     return result;
+}
+
+/* escape_sql_string into one of 16 per-thread buffers, for a key used inline
+ * in a printf-style SQL build (GQLITE-T-0414: some property keys reached SQL
+ * unescaped, so a key with an apostrophe broke the query). The result is
+ * valid until 16 later calls on the same thread. */
+const char *sql_esc_tmp(const char *s)
+{
+    static GQL_THREAD_LOCAL char *ring[16];
+    static GQL_THREAD_LOCAL int pos;
+    pos = (pos + 1) % 16;
+    free(ring[pos]);
+    ring[pos] = escape_sql_string(s ? s : "");
+    return ring[pos] ? ring[pos] : "";
 }
 
 /*

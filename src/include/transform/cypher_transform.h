@@ -43,6 +43,10 @@ struct cypher_transform_context {
     
     /* Context flags */
     bool in_comparison;             /* True when transforming expressions in comparison context */
+    bool prop_tag_mode;             /* GQLITE-A-0007: transform_property_access emits the
+                                     * property's type tag ('bool', 'json' or NULL), not
+                                     * its value; prop_tag_unknown when it cannot */
+    bool prop_tag_unknown;
     bool in_union;                  /* True when transforming UNION branches (skip buffer reset) */
     bool emit_hydrated_path;        /* True when a path expression must emit the full
                                      * {nodes,rels} JSON object inline (e.g. as a list
@@ -95,13 +99,19 @@ struct cypher_transform_context {
     sql_builder *unified_builder;
 
     /* Perf review F2: when generate_node_match consumes a node's first inline
-     * literal pair into the driving JOIN it nulls the pair's key. The pair's
-     * `SELECT node_id ...` fragment is remembered here, keyed by node alias,
-     * so a later variable-length CTE can still anchor at that node. */
+     * literal pair into the driving JOIN, the pair goes in consumed_pairs so
+     * the per-property filters skip it. The AST is not changed: a MATCH is
+     * transformed again for RETURN after SET/REMOVE/DELETE (GQLITE-T-0393,
+     * GQLITE-T-0400). The pair's `SELECT node_id ...` fragment is remembered
+     * here, keyed by node alias, so a later variable-length CTE can still
+     * anchor at that node. */
     char **anchor_aliases;
     char **anchor_sqls;
     int anchor_count;
     int anchor_cap;
+    const void **consumed_pairs;
+    int consumed_count;
+    int consumed_cap;
 
     /* Perf review F6: per-statement cache of property key name -> id (per
      * graph prefix), so property access filters on key_id directly instead
@@ -227,6 +237,12 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr);
  * transform_expression. */
 int transform_condition(cypher_transform_context *ctx, ast_node *expr);
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop);
+/* GQLITE-A-0007: SQL of the type tag of a property read: 'bool' or 'json'
+ * when it holds one, else NULL (int, real and text keep their SQLite type).
+ * Returns NULL when the tag cannot be read this way. Caller frees. */
+char *transform_property_tag_sql(cypher_transform_context *ctx, cypher_property *prop);
+/* GQLITE-A-0007: SQL of the type tag of an expression, or NULL. Caller frees. */
+char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const char *value_sql);
 int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr *label_expr);
 int transform_not_expression(cypher_transform_context *ctx, cypher_not_expr *not_expr);
 int transform_null_check(cypher_transform_context *ctx, cypher_null_check *null_check);

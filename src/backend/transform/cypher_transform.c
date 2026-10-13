@@ -153,6 +153,9 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         ctx->anchor_aliases = NULL;
         ctx->anchor_sqls = NULL;
         ctx->anchor_count = ctx->anchor_cap = 0;
+        free(ctx->consumed_pairs);
+        ctx->consumed_pairs = NULL;
+        ctx->consumed_count = ctx->consumed_cap = 0;
         for (int i = 0; i < ctx->pk_count; i++) {
             free(ctx->pk_graphs[i]);
             free(ctx->pk_names[i]);
@@ -1002,7 +1005,11 @@ cypher_query_result* cypher_transform_query(cypher_transform_context *ctx, cyphe
                      * them after the AS (a WITH may not precede DDL). */
                     const char *as_kw = NULL;
                     if (strncmp(s, "CREATE TEMP TABLE ", 18) == 0) as_kw = strstr(s, " AS ");
-                    if (strncmp(s, "DROP ", 5) == 0) {
+                    /* GQLITE-T-0406: a plain CREATE (the SET staging
+                     * table) takes no CTEs either. */
+                    bool plain_ddl = strncmp(s, "DROP ", 5) == 0 ||
+                        (strncmp(s, "CREATE ", 7) == 0 && !(as_kw && as_kw < p));
+                    if (plain_ddl) {
                         dbuf_appendf(&out, "%.*s", (int)(p - s), s);
                     } else if (as_kw && as_kw < p) {
                         dbuf_appendf(&out, "%.*s", (int)(as_kw + 4 - s), s);

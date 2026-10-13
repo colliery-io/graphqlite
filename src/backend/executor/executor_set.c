@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include "executor/executor_internal.h"
+#include "transform/transform_helpers.h"
+#include "runtime/gql_error.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
 #include "transform/transform_variables.h"
@@ -62,30 +64,30 @@ static void register_foreach_values(cypher_transform_context *ctx)
     }
 }
 
-/* Does expr yield a boolean by its shape? SQL gives these as 1/0. */
-static bool ast_is_boolean_expr(const ast_node *expr)
+/* A list or map literal whose elements are all literals (so it can be
+ * serialized from the AST). One that reads a property or a variable is
+ * evaluated in SQL instead; serializing it stored null for those
+ * elements (GQLITE-T-0407). */
+static bool ast_is_constant(const ast_node *expr)
 {
-    if (!expr) return false;
+    if (!expr) return true;
     switch (expr->type) {
-        case AST_NODE_NOT_EXPR:
-        case AST_NODE_NULL_CHECK:
-        case AST_NODE_LABEL_EXPR:
-        case AST_NODE_EXISTS_EXPR:
-        case AST_NODE_LIST_PREDICATE:
-            return true;
         case AST_NODE_LITERAL:
-            return ((const cypher_literal *)expr)->literal_type == LITERAL_BOOLEAN;
-        case AST_NODE_BINARY_OP:
-            switch (((const cypher_binary_op *)expr)->op_type) {
-                case BINARY_OP_AND: case BINARY_OP_OR: case BINARY_OP_XOR:
-                case BINARY_OP_EQ: case BINARY_OP_NEQ:
-                case BINARY_OP_LT: case BINARY_OP_GT: case BINARY_OP_LTE: case BINARY_OP_GTE:
-                case BINARY_OP_REGEX_MATCH: case BINARY_OP_IN:
-                case BINARY_OP_STARTS_WITH: case BINARY_OP_ENDS_WITH: case BINARY_OP_CONTAINS:
-                    return true;
-                default:
-                    return false;
+            return true;
+        case AST_NODE_LIST: {
+            const cypher_list *l = (const cypher_list *)expr;
+            for (int i = 0; l->items && i < l->items->count; i++)
+                if (!ast_is_constant(l->items->items[i])) return false;
+            return true;
+        }
+        case AST_NODE_MAP: {
+            const cypher_map *m = (const cypher_map *)expr;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++) {
+                const cypher_map_pair *p = (const cypher_map_pair *)m->pairs->items[i];
+                if (p && !ast_is_constant(p->value)) return false;
             }
+            return true;
+        }
         default:
             return false;
     }
@@ -175,7 +177,9 @@ static int evaluate_ast_with_context_raw(
     /* Transform the expression to SQL. T-0314: pick the type-preserving
      * (in_comparison) branch so property lookups stay typed — without
      * this, `r.num + 1` becomes text "1" || "1" = "11" instead of 2. */
-    ctx->in_comparison = true;
+    /* A list or map keeps the types of its elements (a boolean stays a
+     * JSON boolean) in value mode (GQLITE-T-0407). */
+    ctx->in_comparison = !(expr->type == AST_NODE_LIST || expr->type == AST_NODE_MAP);
     append_sql(ctx, "SELECT ");
     if (transform_expression(ctx, expr) < 0) {
         cypher_transform_free_context(ctx);
@@ -216,6 +220,8 @@ static int evaluate_ast_with_context_raw(
     }
 
     int col_type = sqlite3_column_type(stmt, 0);
+    sqlite3_value *cv0 = sqlite3_column_value(stmt, 0);
+    bool json_sub = cv0 && sqlite3_value_subtype(cv0) == GQL_SUBTYPE_JSON;
     switch (col_type) {
         case SQLITE_INTEGER:
             *out_type = PROP_TYPE_INTEGER;
@@ -227,7 +233,8 @@ static int evaluate_ast_with_context_raw(
             break;
         case SQLITE_TEXT: {
             const char *text = (const char*)sqlite3_column_text(stmt, 0);
-            *out_type = PROP_TYPE_TEXT;
+            /* A list or map (JSON subtype) is stored as JSON (GQLITE-T-0407). */
+            *out_type = json_sub ? PROP_TYPE_JSON : PROP_TYPE_TEXT;
             out_value->as_str = text ? strdup(text) : strdup("");
             out_value->as_str_len = text ? strlen(text) : 0;
             break;
@@ -1064,7 +1071,8 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                     continue;
                 }
             }
-        } else if (item->expr->type == AST_NODE_MAP || item->expr->type == AST_NODE_LIST) {
+        } else if ((item->expr->type == AST_NODE_MAP || item->expr->type == AST_NODE_LIST) &&
+                   (!var_map || ast_is_constant(item->expr))) {
             /* Map or list literal - serialize to JSON and store as JSON type */
             char *json_str = serialize_ast_to_json(item->expr);
             if (!json_str) {
@@ -1275,13 +1283,15 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 property_value_free(&set_pv);
                 return -1;
             }
-            /* Probe property tables (text, int, real, bool) for the value. */
+            /* Probe property tables (text, int, real, bool, json) for the
+             * value; a list was not looked for and was lost (GQLITE-T-0407). */
             const char *id_col = src_is_edge ? "edge_id" : "node_id";
             const char *tables[][2] = {
                 {src_is_edge ? "edge_props_text" : "node_props_text", "text"},
                 {src_is_edge ? "edge_props_int"  : "node_props_int",  "int"},
                 {src_is_edge ? "edge_props_real" : "node_props_real", "real"},
                 {src_is_edge ? "edge_props_bool" : "node_props_bool", "bool"},
+                {src_is_edge ? "edge_props_json" : "node_props_json", "json"},
                 {NULL, NULL}
             };
             bool found = false;
@@ -1289,11 +1299,12 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 char sql[512];
                 snprintf(sql, sizeof(sql),
                     "SELECT value FROM %s WHERE %s = %d AND key_id = "
-                    "(SELECT id FROM property_keys WHERE key = '%s')",
-                    tables[t][0], id_col, src_id_val, src_prop->property_name);
+                    "(SELECT id FROM property_keys WHERE key = ?)",
+                    tables[t][0], id_col, src_id_val);
                 sqlite3_stmt *jstmt;
                 if (sqlite3_prepare_v2(executor->db, sql, -1, &jstmt, NULL) != SQLITE_OK)
                     continue;
+                sqlite3_bind_text(jstmt, 1, src_prop->property_name, -1, SQLITE_STATIC);
                 if (sqlite3_step(jstmt) == SQLITE_ROW) {
                     const char *tname = tables[t][1];
                     if (strcmp(tname, "text") == 0) {
@@ -1312,6 +1323,10 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                         prop_type = PROP_TYPE_BOOLEAN;
                         set_bool_buf = sqlite3_column_int(jstmt, 0);
                         prop_value = &set_bool_buf;
+                    } else if (strcmp(tname, "json") == 0) {
+                        prop_type = PROP_TYPE_JSON;
+                        set_pv.as_str = strdup((const char*)sqlite3_column_text(jstmt, 0));
+                        prop_value = set_pv.as_str;
                     }
                     found = true;
                 }
@@ -1336,7 +1351,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                    (item->expr->type == AST_NODE_BINARY_OP ||
                     item->expr->type == AST_NODE_NOT_EXPR ||
                     item->expr->type == AST_NODE_NULL_CHECK ||
-                    item->expr->type == AST_NODE_SUBSCRIPT)) {
+                    item->expr->type == AST_NODE_SUBSCRIPT ||
+                    item->expr->type == AST_NODE_LIST ||
+                    item->expr->type == AST_NODE_MAP)) {
             /* Arbitrary expression RHS: SET n.num = n.num + 1, etc.
              * Evaluate via SQL with the var_map's nodes joined in. */
             int rc = evaluate_ast_with_context(executor, item->expr, var_map,

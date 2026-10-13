@@ -14,6 +14,7 @@
 #include "executor/query_patterns.h"
 #include "gql_thread_local.h"
 #include "executor/executor_internal.h"
+#include "transform/sql_builder.h"
 #include "entity_json_sql.h"
 #include "parser/cypher_debug.h"
 
@@ -117,7 +118,7 @@ bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
                     sqltype = SQLITE_INTEGER;
                     break;
                 case LITERAL_DECIMAL:
-                    snprintf(buf, sizeof(buf), "%g", lit->value.decimal);
+                    gql_format_double(buf, sizeof(buf), lit->value.decimal);
                     sqltype = SQLITE_FLOAT;
                     break;
                 case LITERAL_STRING:
@@ -179,7 +180,7 @@ static bool fetch_node_prop_int(cypher_executor *executor, int node_id,
         snprintf(sql, sizeof(sql),
             "SELECT value FROM %s WHERE node_id = %d AND key_id = "
             "(SELECT id FROM property_keys WHERE key = '%s')",
-            type_tables[t], node_id, prop_name);
+            type_tables[t], node_id, sql_esc_tmp(prop_name));
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
             int rc = sqlite3_step(stmt);
@@ -203,7 +204,7 @@ static bool fetch_node_prop_double(cypher_executor *executor, int node_id,
         snprintf(sql, sizeof(sql),
             "SELECT value FROM %s WHERE node_id = %d AND key_id = "
             "(SELECT id FROM property_keys WHERE key = '%s')",
-            type_tables[t], node_id, prop_name);
+            type_tables[t], node_id, sql_esc_tmp(prop_name));
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
             int rc = sqlite3_step(stmt);
@@ -227,7 +228,7 @@ static bool fetch_edge_prop_int(cypher_executor *executor, int edge_id,
         snprintf(sql, sizeof(sql),
             "SELECT value FROM %s WHERE edge_id = %d AND key_id = "
             "(SELECT id FROM property_keys WHERE key = '%s')",
-            type_tables[t], edge_id, prop_name);
+            type_tables[t], edge_id, sql_esc_tmp(prop_name));
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
             int rc = sqlite3_step(stmt);
@@ -248,7 +249,7 @@ static bool fetch_edge_prop_double(cypher_executor *executor, int edge_id,
         snprintf(sql, sizeof(sql),
             "SELECT value FROM %s WHERE edge_id = %d AND key_id = "
             "(SELECT id FROM property_keys WHERE key = '%s')",
-            type_tables[t], edge_id, prop_name);
+            type_tables[t], edge_id, sql_esc_tmp(prop_name));
         sqlite3_stmt *stmt;
         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
             int rc = sqlite3_step(stmt);
@@ -359,21 +360,21 @@ void project_aggregate_cell(cypher_executor *executor,
     char buf[64];
     if (!strcmp(agg, "sum")) {
         if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)isum); result->data_types[0][col_idx] = SQLITE_INTEGER; }
-        else { snprintf(buf, sizeof(buf), "%g", dsum); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        else { gql_format_double(buf, sizeof(buf), dsum); result->data_types[0][col_idx] = SQLITE_FLOAT; }
         result->data[0][col_idx] = strdup(buf);
     } else if (!strcmp(agg, "min")) {
         if (seen == 0) { result->data[0][col_idx] = NULL; return; }
         if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)imin); result->data_types[0][col_idx] = SQLITE_INTEGER; }
-        else { snprintf(buf, sizeof(buf), "%g", dmin); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        else { gql_format_double(buf, sizeof(buf), dmin); result->data_types[0][col_idx] = SQLITE_FLOAT; }
         result->data[0][col_idx] = strdup(buf);
     } else if (!strcmp(agg, "max")) {
         if (seen == 0) { result->data[0][col_idx] = NULL; return; }
         if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)imax); result->data_types[0][col_idx] = SQLITE_INTEGER; }
-        else { snprintf(buf, sizeof(buf), "%g", dmax); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        else { gql_format_double(buf, sizeof(buf), dmax); result->data_types[0][col_idx] = SQLITE_FLOAT; }
         result->data[0][col_idx] = strdup(buf);
     } else if (!strcmp(agg, "avg")) {
         if (seen == 0) { result->data[0][col_idx] = NULL; return; }
-        snprintf(buf, sizeof(buf), "%g", dsum / seen);
+        gql_format_double(buf, sizeof(buf), dsum / seen);
         result->data_types[0][col_idx] = SQLITE_FLOAT;
         result->data[0][col_idx] = strdup(buf);
     } else {
@@ -423,7 +424,7 @@ void project_return_row_from_var_map(cypher_executor *executor,
                         snprintf(sql, sizeof(sql),
                             "SELECT value FROM %s WHERE %s = %d AND key_id = "
                             "(SELECT id FROM property_keys WHERE key = '%s')",
-                            type_tables[t], id_col, ent_id, prop_name);
+                            type_tables[t], id_col, ent_id, sql_esc_tmp(prop_name));
                         sqlite3_stmt *stmt;
                         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
                             if (sqlite3_step(stmt) == SQLITE_ROW) {

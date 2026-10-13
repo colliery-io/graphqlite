@@ -78,10 +78,22 @@ pub static CYPHER_RESERVED: &[&str] = &[
 ///
 /// Handles backslashes, quotes, and whitespace characters.
 pub fn escape_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace('"', "\\\"")
-        .replace(['\n', '\r', '\t'], " ")
+    // Control characters are escaped, not replaced: a newline or tab was
+    // stored as a space (GQLITE-T-0417).
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Sanitize a relationship type for use in Cypher.
@@ -147,40 +159,26 @@ pub fn rel_type_pattern(rel_type: Option<&str>) -> String {
     }
 }
 
-/// Check if a string has a leading zero that would be lost in numeric parsing.
+/// Format a string as a Cypher string literal: quoted and escaped.
 ///
-/// Returns `true` for strings like "02134", "007", "-0123" that would lose
-/// their leading zeros if parsed as numbers. Returns `false` for "0", "0.5",
-/// "-0.5", "42", etc.
-fn has_leading_zero(s: &str) -> bool {
-    let digits = s.strip_prefix('-').unwrap_or(s);
-    digits.len() > 1 && digits.starts_with('0') && !digits.starts_with("0.")
-}
-
-/// Format a value for inclusion in a Cypher query.
+/// A string is always a string literal: `"123"` gives `'123'` and `"true"`
+/// gives `'true'` (GQLITE-T-0415; before 0.10.0 they gave `123` and `true`).
+/// For a typed value use [`PropertyValue::to_cypher`].
+///
+/// ```
+/// use graphqlite::format_value;
+/// assert_eq!(format_value("123"), "'123'");
+/// assert_eq!(format_value("it's"), "'it\\'s'");
+/// ```
 pub fn format_value(v: &str) -> String {
-    // Preserve leading-zero strings as text (e.g., zip codes "02134")
-    if has_leading_zero(v) {
-        return format!("'{}'", escape_string(v));
-    }
-    // Numbers, booleans, and null pass through as-is
-    if v.parse::<i64>().is_ok()
-        || v.parse::<f64>().is_ok()
-        || v == "true"
-        || v == "false"
-        || v == "null"
-    {
-        v.to_string()
-    } else {
-        format!("'{}'", escape_string(v))
-    }
+    format!("'{}'", escape_string(v))
 }
 
 /// A typed property value for graph nodes and edges.
 ///
-/// Use this instead of raw strings when you need explicit type control
-/// (e.g., to preserve a string like `"02134"` that would otherwise be
-/// auto-detected as an integer).
+/// A string (`&str`, `String`) is always [`PropertyValue::Text`]: `"123"`
+/// and `"true"` stay strings. Pass an `i64`, `f64` or `bool`, or a typed
+/// variant, for other types. (Before 0.10.0 a string was typed by its text.)
 ///
 /// # Example
 ///
@@ -197,8 +195,8 @@ pub fn format_value(v: &str) -> String {
 ///     ("zipcode", PropertyValue::Text("02134".into())),
 /// ], "Thing")?;
 ///
-/// // String pairs still work — auto-detected like before
-/// g.upsert_node("n2", [("name", "Alice")], "Person")?;
+/// // A string is text, also when it looks like a number
+/// g.upsert_node("n2", [("name", "Alice"), ("code", "123")], "Person")?;
 /// # Ok::<(), graphqlite::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -234,26 +232,10 @@ impl PropertyValue {
 }
 
 impl From<&str> for PropertyValue {
-    /// Auto-detect type from string (backward-compatible behavior).
-    ///
-    /// Parses as integer, then float, then boolean, falling back to text.
-    /// Leading-zero strings like `"02134"` are preserved as text.
+    /// A string is text: `"123"` stays the string `"123"` (#128). Before
+    /// 0.10.0 it was typed by its text.
     fn from(s: &str) -> Self {
-        // Preserve leading-zero strings (zip codes, padded IDs, etc.)
-        if has_leading_zero(s) {
-            return PropertyValue::Text(s.to_string());
-        }
-        if let Ok(v) = s.parse::<i64>() {
-            return PropertyValue::Integer(v);
-        }
-        if let Ok(v) = s.parse::<f64>() {
-            return PropertyValue::Float(v);
-        }
-        match s {
-            "true" => PropertyValue::Bool(true),
-            "false" => PropertyValue::Bool(false),
-            _ => PropertyValue::Text(s.to_string()),
-        }
+        PropertyValue::Text(s.to_string())
     }
 }
 

@@ -103,8 +103,16 @@ static int render_cell_json(const cypher_result *r, int row, int col, gbuf *b) {
     }
     if (!val) return gb_puts(b, "null");
     int ct = (r->data_types && r->data_types[row]) ? r->data_types[row][col] : SQLITE_TEXT;
+    /* GQLITE-A-0007: a known string is quoted even when it looks like JSON;
+     * a boolean tagged on a 1/0 cell renders as true/false. */
+    if (ct == GQL_COL_TYPE_STRING) return gb_put_json_string(b, val);
+    if (ct == GQL_COL_TYPE_BOOLEAN) {
+        if (strcmp(val, "1") == 0) return gb_puts(b, "true");
+        if (strcmp(val, "0") == 0) return gb_puts(b, "false");
+        return gb_puts(b, val);
+    }
     if (val[0] == '[' || val[0] == '{' || val[0] == '"') return gb_puts(b, val);
-    if (ct == SQLITE_INTEGER || ct == GQL_COL_TYPE_BOOLEAN) return gb_puts(b, val);
+    if (ct == SQLITE_INTEGER) return gb_puts(b, val);
     if (ct == SQLITE_FLOAT) {
         if (gb_puts(b, val) < 0) return -1;
         if (!strpbrk(val, ".eE")) return gb_puts(b, ".0");

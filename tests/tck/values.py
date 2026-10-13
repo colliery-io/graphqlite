@@ -23,6 +23,7 @@ identity (TCK convention — identity is not observable in result tables).
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,12 +61,30 @@ def parse_value(text: str) -> Any:
     return v
 
 
+# Compare booleans, integers and floats by type as well as value: in Python
+# True == 1 and 2 == 2.0, so a result of 1 for `RETURN true` passed
+# (GQLITE-T-0397). GQL_TCK_LOOSE_TYPES=1 restores the old comparison.
+STRICT_TYPES = os.environ.get("GQL_TCK_LOOSE_TYPES") != "1"
+
+
+def _scalar_kind(v: Any) -> str:
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, int):
+        return "int"
+    if isinstance(v, float):
+        return "float"
+    return "other"
+
+
 def values_equal(a: Any, b: Any, lists_unordered: bool = False) -> bool:
     # Normalize: the extension emits nodes/relationships as dicts; the TCK
     # comparator parses them into Node/Relationship dataclasses. Coerce dicts
     # that look like nodes/rels into the dataclass before comparing.
     a = _coerce_graph_value(a)
     b = _coerce_graph_value(b)
+    if STRICT_TYPES and _scalar_kind(a) != _scalar_kind(b):
+        return False
     if isinstance(a, float) or isinstance(b, float):
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             if math.isnan(float(a)) and math.isnan(float(b)):
