@@ -2897,7 +2897,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                     result->data[0][i] = strdup(b);
                     result->data_types[0][i] = SQLITE_INTEGER;
                 } else if (pt == PROP_TYPE_REAL) {
-                    char b[64]; snprintf(b, sizeof(b), "%g", pv.as_real);
+                    char b[64]; gql_format_double(b, sizeof(b), pv.as_real);
                     result->data[0][i] = strdup(b);
                     result->data_types[0][i] = SQLITE_FLOAT;
                 } else if (pt == PROP_TYPE_BOOLEAN) {

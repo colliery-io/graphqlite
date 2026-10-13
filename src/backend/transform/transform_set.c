@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
 
@@ -254,145 +255,66 @@ static int generate_property_update(cypher_transform_context *ctx,
         sql_raw(ctx->unified_builder, "; ");
     }
     
-    /* Determine the property type from the value expression */
-    bool is_text = false;
-    bool is_integer = false;
-    bool is_real = false;
-    bool is_json = false;
-
-    if (value_expr->type == AST_NODE_MAP || value_expr->type == AST_NODE_LIST) {
-        /* Map or list literal — store as JSON */
-        is_json = true;
-    } else if (value_expr->type == AST_NODE_LITERAL) {
-        cypher_literal *lit = (cypher_literal*)value_expr;
-        switch (lit->literal_type) {
-            case LITERAL_STRING:
-                is_text = true;
-                break;
-            case LITERAL_INTEGER:
-                is_integer = true;
-                break;
-            case LITERAL_DECIMAL:
-                is_real = true;
-                break;
-            case LITERAL_BOOLEAN:
-                is_text = true; /* Store booleans as text */
-                break;
-            case LITERAL_NULL:
-                is_text = true; /* Default to text for NULL */
-                break;
-        }
-    } else {
-        /* For non-literal expressions, default to text */
-        is_text = true;
-    }
-
-    /* T-0314: choose node vs edge property table based on variable
-     * kind. Pre-T-0314, SET always emitted node_props_* + node_id
-     * even for edge variables — SET on relationships silently wrote
-     * to the wrong table (Set6 [19]/[21] family). */
+    /* GQLITE-T-0406: the value's type decides its table, at run time. The
+     * value, the entity id and a type tag are staged in one pass over the
+     * MATCH (so a WHERE on the property being set is read once, before the
+     * write), then each row goes to the table of its type and is removed
+     * from the others. A null removes the property. The tag comes from the
+     * expression's shape when that is enough (literal, comparison, list or
+     * map), else from _gql_typetag, which reads the boolean and JSON
+     * subtypes. Before, every expression that was not a literal was stored
+     * as text, booleans too. */
     bool is_edge = transform_var_is_edge(ctx->var_ctx, variable);
-    const char *prop_table;
     const char *entity_col = is_edge ? "edge_id" : "node_id";
-    if (is_edge) {
-        if (is_json)        prop_table = "edge_props_json";
-        else if (is_integer) prop_table = "edge_props_int";
-        else if (is_real)    prop_table = "edge_props_real";
-        else                 prop_table = "edge_props_text";
-    } else {
-        if (is_json)        prop_table = "node_props_json";
-        else if (is_integer) prop_table = "node_props_int";
-        else if (is_real)    prop_table = "node_props_real";
-        else                 prop_table = "node_props_text";
-    }
+    const char *pfx = is_edge ? "edge_props_" : "node_props_";
 
-    /* T-0314: capture the value expression with typed (non-CAST-to-TEXT)
-     * property lookups. The default RETURN-context lookup wraps integer
-     * properties in CAST AS TEXT — fine for projection but breaks
-     * arithmetic (`r.num + 1` becomes string concat → "1" + "1" = "11"
-     * instead of 2). Borrow the in_comparison flag so transform_property_
-     * access picks the type-preserving branch. */
-    bool saved_in_cmp = ctx->in_comparison;
-    ctx->in_comparison = true;
     char *value_sql = cypher_transform_capture_expression(ctx, value_expr);
-    ctx->in_comparison = saved_in_cmp;
     if (!value_sql) return -1;
+
+    const char *static_tag = NULL;
+    if (ast_is_boolean_expr(value_expr)) {
+        static_tag = "bool";
+    } else if (value_expr->type == AST_NODE_MAP || value_expr->type == AST_NODE_LIST) {
+        static_tag = "json";
+    } else if (value_expr->type == AST_NODE_LITERAL) {
+        switch (((cypher_literal *)value_expr)->literal_type) {
+            case LITERAL_STRING:  static_tag = "text"; break;
+            case LITERAL_INTEGER: static_tag = "int"; break;
+            case LITERAL_DECIMAL: static_tag = "real"; break;
+            case LITERAL_NULL:    static_tag = "null"; break;
+            default: break;
+        }
+    }
 
     char *escaped_prop = escape_sql_string(property_name);
     if (!escaped_prop) escaped_prop = strdup(property_name ? property_name : "");
 
-    /* Statement separator before this SET item's emission. */
-    if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
-        sql_raw(ctx->unified_builder, "; ");
-    }
-
-    /* T-0314: emit INSERT OR REPLACE INTO <prop_table> FIRST, while
-     * the value expression's `n.num` lookup can still see the old
-     * value across all typed tables. (Reversing this order — DELETE
-     * other tables first, then INSERT — breaks because the value SQL
-     * reads n.num through COALESCE across all tables, returning NULL
-     * after the DELETE.) Then DELETE the same (entity_id, key_id)
-     * row from every OTHER typed prop table so the next read returns
-     * the just-written value (Set6 [7]/[21] aggregating-after-SET). */
-    /* T-0370: a key first seen in this SET has no property_keys row yet;
-     * the specialized MATCH+SET executor registers keys itself, the
-     * generic transform path (SET after WITH/UNWIND) did not. */
-    sql_raw(ctx->unified_builder,
-        "INSERT OR IGNORE INTO property_keys (key) VALUES ('%s'); ", escaped_prop);
-    sql_raw(ctx->unified_builder,
-        "INSERT OR REPLACE INTO %s (%s, key_id, value) SELECT %s, "
-        "(SELECT id FROM property_keys WHERE key = '%s'), %s",
-        prop_table, entity_col, id_expr, escaped_prop, value_sql);
-    free(value_sql);
-
-    /* Build the post-INSERT DELETE list for the other typed tables. */
-    const char *node_tables[] = {
-        "node_props_text", "node_props_int", "node_props_real",
-        "node_props_bool", "node_props_json", NULL
-    };
-    const char *edge_tables[] = {
-        "edge_props_text", "edge_props_int", "edge_props_real",
-        "edge_props_bool", "edge_props_json", NULL
-    };
-    const char **all_tables = is_edge ? edge_tables : node_tables;
     const char *from_str = sql_builder_get_from(ctx->unified_builder);
     const char *joins_str = sql_builder_get_joins(ctx->unified_builder);
     const char *where_str = sql_builder_get_where(ctx->unified_builder);
     bool have_from = (from_str && from_str[0]);
 
-    /* We need the INSERT's FROM/JOINs/WHERE to be emitted BEFORE we
-     * append the DELETEs (so the INSERT's SELECT is well-formed).
-     * The caller appends those right after this function returns
-     * (see lines below). Defer DELETE emission until after the
-     * caller-side FROM/JOIN/WHERE block — emit them now by capturing
-     * the strings and appending after a final "; " separator. */
-    dynamic_buffer post_dml;
-    dbuf_init(&post_dml);
-    for (int ti = 0; all_tables[ti]; ti++) {
-        if (strcmp(all_tables[ti], prop_table) == 0) continue;
-        if (!dbuf_is_empty(&post_dml)) {
-            dbuf_append(&post_dml, "; ");
-        }
-        dbuf_appendf(&post_dml,
-            "DELETE FROM %s WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s')",
-            all_tables[ti], escaped_prop);
-        if (have_from) {
-            dbuf_appendf(&post_dml,
-                " AND %s IN (SELECT %s FROM %s",
-                entity_col, id_expr, from_str);
-            if (joins_str && joins_str[0]) {
-                dbuf_appendf(&post_dml, " %s", joins_str);
-            }
-            if (where_str && where_str[0]) {
-                dbuf_appendf(&post_dml, " WHERE %s", where_str);
-            }
-            dbuf_appendf(&post_dml, ")");
-        }
+    /* Statement separator before this SET item's emission. */
+    if (!dbuf_is_empty(&ctx->unified_builder->raw_output)) {
+        sql_raw(ctx->unified_builder, "; ");
     }
-    free(escaped_prop);
-
-    /* Append the INSERT's FROM / JOINs / WHERE so the statement is
-     * one complete SQL unit. */
+    /* T-0370: a key first seen in this SET has no property_keys row yet;
+     * the specialized MATCH+SET executor registers keys itself, the
+     * generic transform path (SET after WITH/UNWIND) did not. */
+    sql_raw(ctx->unified_builder,
+        "CREATE TEMP TABLE IF NOT EXISTS _gql_set_stage (eid INTEGER, v, t TEXT); "
+        "DELETE FROM temp._gql_set_stage; "
+        "INSERT OR IGNORE INTO property_keys (key) VALUES ('%s'); ", escaped_prop);
+    if (static_tag) {
+        sql_raw(ctx->unified_builder,
+            "INSERT INTO temp._gql_set_stage (eid, v, t) SELECT %s, %s, '%s'",
+            id_expr, value_sql, static_tag);
+    } else {
+        sql_raw(ctx->unified_builder,
+            "INSERT INTO temp._gql_set_stage (eid, v, t) SELECT %s, %s, _gql_typetag(%s)",
+            id_expr, value_sql, value_sql);
+    }
+    free(value_sql);
     if (have_from) {
         sql_raw(ctx->unified_builder, " FROM %s", from_str);
         if (joins_str && joins_str[0]) {
@@ -406,12 +328,26 @@ static int generate_property_update(cypher_transform_context *ctx,
         sql_raw(ctx->unified_builder, " FROM nodes AS %s", table_alias);
     }
 
-    /* Now emit the post-INSERT cross-table DELETEs. */
-    const char *post = dbuf_get(&post_dml);
-    if (post && *post) {
-        sql_raw(ctx->unified_builder, "; %s", post);
+    static const struct { const char *suffix; const char *tag; const char *value; } typed[] = {
+        { "int",  "int",  "v" },
+        { "real", "real", "v" },
+        { "text", "text", "v" },
+        { "bool", "bool", "CASE WHEN v = 'true' OR v = 1 THEN 1 ELSE 0 END" },
+        { "json", "json", "v" },
+    };
+    for (size_t i = 0; i < sizeof(typed) / sizeof(typed[0]); i++) {
+        sql_raw(ctx->unified_builder,
+            "; INSERT OR REPLACE INTO %s%s (%s, key_id, value) "
+            "SELECT eid, (SELECT id FROM property_keys WHERE key = '%s'), %s "
+            "FROM temp._gql_set_stage WHERE t = '%s'",
+            pfx, typed[i].suffix, entity_col, escaped_prop, typed[i].value, typed[i].tag);
+        sql_raw(ctx->unified_builder,
+            "; DELETE FROM %s%s WHERE key_id = (SELECT id FROM property_keys WHERE key = '%s') "
+            "AND %s IN (SELECT eid FROM temp._gql_set_stage WHERE t <> '%s')",
+            pfx, typed[i].suffix, escaped_prop, entity_col, typed[i].tag);
     }
-    dbuf_free(&post_dml);
+    sql_raw(ctx->unified_builder, "; DELETE FROM temp._gql_set_stage");
+    free(escaped_prop);
 
     CYPHER_DEBUG("Generated property update SQL");
     return 0;

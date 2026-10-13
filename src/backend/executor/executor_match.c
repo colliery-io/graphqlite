@@ -420,6 +420,8 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
             sqlite3_value *cv = sqlite3_column_value(stmt, col);
             if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) {
                 ct = GQL_COL_TYPE_BOOLEAN;
+            } else if (cv && ct == SQLITE_TEXT && sqlite3_value_subtype(cv) == GQL_SUBTYPE_JSON) {
+                ct = GQL_COL_TYPE_JSON;
             }
             result->data_types[current_row][col] = ct;
             const char *value = (const char*)sqlite3_column_text(stmt, col);
@@ -529,18 +531,25 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                                 free(label);
                             }
                         } else {
-                            /* Not a graph entity - treat as scalar value */
-                            result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                            /* Not a graph entity - treat as scalar value.
+                             * A projected value may have crossed a CTE, which
+                             * drops the boolean and JSON subtypes: text is
+                             * still typed by its content. */
+                            result->agtype_data[current_row][col] =
+                                create_property_agtype_value(value, ct == SQLITE_TEXT ? -1 : ct);
                         }
                     } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
-                        /* Property access - try to detect the original data type */
-                        result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                        /* Property access reads the typed property tables
+                         * directly: the SQL type and subtype are the
+                         * property's type (GQLITE-T-0394). */
+                        result->agtype_data[current_row][col] = create_property_agtype_value(value, ct);
                     } else {
                         /* For other non-entity columns (binary ops, NOT,
                          * function calls, etc.) detect the type from the
                          * value so booleans, integers, and floats get the
                          * right agtype rather than being stringified. */
-                        result->agtype_data[current_row][col] = create_property_agtype_value(value);
+                        result->agtype_data[current_row][col] =
+                            create_property_agtype_value(value, ct == SQLITE_TEXT ? -1 : ct);
                     }
                 }
             } else {
@@ -586,11 +595,33 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
     return 0;
 }
 
-/* Create agtype value for property access by detecting data type from string value */
-agtype_value* create_property_agtype_value(const char* value)
+/* Create agtype value for a scalar cell. `col_type` is the SQLite type of the
+ * cell (or GQL_COL_TYPE_BOOLEAN / GQL_COL_TYPE_JSON from its subtype): an
+ * INTEGER, FLOAT, boolean or JSON cell keeps that type, and TEXT is a string.
+ * Text that only looks like a number or a boolean ('123', 'true') stays a
+ * string (GQLITE-T-0394). With col_type < 0 (unknown) the type is guessed
+ * from the text as before. */
+agtype_value* create_property_agtype_value(const char* value, int col_type)
 {
     if (!value) {
         return agtype_value_create_null();
+    }
+
+    if (col_type >= 0 && strcmp(value, GQL_NAN_SENTINEL) != 0) {
+        switch (col_type) {
+            case SQLITE_INTEGER:
+                return agtype_value_create_integer((int64_t)strtoll(value, NULL, 10));
+            case SQLITE_FLOAT:
+                return agtype_value_create_float(strtod(value, NULL));
+            case GQL_COL_TYPE_BOOLEAN:
+                return agtype_value_create_bool(strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+            case GQL_COL_TYPE_JSON:
+                return agtype_value_create_json(value);
+            case SQLITE_TEXT:
+                return agtype_value_create_string(value);
+            default:
+                break;
+        }
     }
 
     /* NaN sentinel (GQLITE-T-0340): carried as the private string

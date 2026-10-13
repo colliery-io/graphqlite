@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "executor/executor_internal.h"
+#include "transform/transform_helpers.h"
 #include "executor/cypher_executor.h"
 #include "parser/cypher_debug.h"
 #include "transform/transform_variables.h"
@@ -59,35 +60,6 @@ static void register_foreach_values(cypher_transform_context *ctx)
         transform_var_set_bound(ctx->var_ctx, b->variable, true);
         transform_var_set_scalar_value(ctx->var_ctx, b->variable, true);
         sqlite3_free(lit);
-    }
-}
-
-/* Does expr yield a boolean by its shape? SQL gives these as 1/0. */
-static bool ast_is_boolean_expr(const ast_node *expr)
-{
-    if (!expr) return false;
-    switch (expr->type) {
-        case AST_NODE_NOT_EXPR:
-        case AST_NODE_NULL_CHECK:
-        case AST_NODE_LABEL_EXPR:
-        case AST_NODE_EXISTS_EXPR:
-        case AST_NODE_LIST_PREDICATE:
-            return true;
-        case AST_NODE_LITERAL:
-            return ((const cypher_literal *)expr)->literal_type == LITERAL_BOOLEAN;
-        case AST_NODE_BINARY_OP:
-            switch (((const cypher_binary_op *)expr)->op_type) {
-                case BINARY_OP_AND: case BINARY_OP_OR: case BINARY_OP_XOR:
-                case BINARY_OP_EQ: case BINARY_OP_NEQ:
-                case BINARY_OP_LT: case BINARY_OP_GT: case BINARY_OP_LTE: case BINARY_OP_GTE:
-                case BINARY_OP_REGEX_MATCH: case BINARY_OP_IN:
-                case BINARY_OP_STARTS_WITH: case BINARY_OP_ENDS_WITH: case BINARY_OP_CONTAINS:
-                    return true;
-                default:
-                    return false;
-            }
-        default:
-            return false;
     }
 }
 

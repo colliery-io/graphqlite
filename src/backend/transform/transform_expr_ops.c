@@ -966,7 +966,17 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
      * references an UNWIND CTE value column. */
     if (is_projected && alias && strstr(alias, "_unwind_") && strstr(alias, ".value")) {
         { char *esc_prop = escape_sql_string(prop->property_name);
-          append_sql(ctx, "json_extract(%s, '$.%s')", alias, esc_prop ? esc_prop : prop->property_name);
+          const char *k = esc_prop ? esc_prop : prop->property_name;
+          if (ctx->in_comparison) {
+              append_sql(ctx, "json_extract(%s, '$.%s')", alias, k);
+          } else {
+              /* GQLITE-T-0395: json_extract gives a JSON boolean as 1/0;
+               * in a value position keep it a boolean. */
+              append_sql(ctx,
+                  "(CASE json_type(%s, '$.%s') WHEN 'true' THEN _gql_bool_str(1) "
+                  "WHEN 'false' THEN _gql_bool_str(0) ELSE json_extract(%s, '$.%s') END)",
+                  alias, k, alias, k);
+          }
           free(esc_prop); }
         return 0;
     }
@@ -1030,7 +1040,10 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "edge_props_bool", "epb", "edge_id", id_expr, bool_expr, key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr, "epj.value", key, key_id);
+        /* json() tags a list value with the JSON subtype, so the result
+         * reader can tell it from text that looks like JSON (GQLITE-T-0394). */
+        append_prop_branch(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr,
+                           ctx->in_comparison ? "epj.value" : "json(epj.value)", key, key_id);
     } else {
         const char *bool_expr = ctx->in_comparison ? "CAST(npb.value AS INTEGER)" : "_gql_bool_str(npb.value)";
         append_prop_branch(ctx, gprefix, "node_props_text", "npt", "node_id", id_expr, "npt.value", key, key_id);
@@ -1041,7 +1054,8 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "node_props_bool", "npb", "node_id", id_expr, bool_expr, key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr, "npj.value", key, key_id);
+        append_prop_branch(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr,
+                           ctx->in_comparison ? "npj.value" : "json(npj.value)", key, key_id);
     }
     append_sql(ctx, "))");
 

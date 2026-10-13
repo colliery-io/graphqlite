@@ -303,6 +303,24 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
 
         /* Find parameter index */
         int idx = sqlite3_bind_parameter_index(stmt, param_name);
+
+        /* GQLITE-T-0395: a parameter in a value position is rendered as
+         * _gql_retag(:name, :name__gqlt); bind the JSON type of the value
+         * to the tag so a boolean or a list keeps its type (SQLite binds
+         * true as 1). */
+        {
+            char tag_name[272];
+            snprintf(tag_name, sizeof(tag_name), "%s__gqlt", param_name);
+            int tidx = sqlite3_bind_parameter_index(stmt, tag_name);
+            if (tidx > 0) {
+                const char *tag = (*p == '"') ? "text"
+                                : (*p == 't' || *p == 'f') ? "bool"
+                                : (*p == 'n') ? "null"
+                                : (*p == '[' || *p == '{') ? "json" : "num";
+                sqlite3_bind_text(stmt, tidx, tag, -1, SQLITE_STATIC);
+            }
+        }
+
         if (idx == 0) {
             /* Parameter not used in query, skip value */
             if (*p == '"') {
@@ -478,7 +496,7 @@ static void serialize_ast_node(json_builder *jb, ast_node *expr)
                     jbuf_appendf(jb, "%lld", (long long)lit->value.integer);
                     break;
                 case LITERAL_DECIMAL:
-                    jbuf_appendf(jb, "%g", lit->value.decimal);
+                    { char fb[40]; jbuf_append(jb, gql_format_double(fb, sizeof(fb), lit->value.decimal)); }
                     break;
                 case LITERAL_BOOLEAN:
                     jbuf_append(jb, lit->value.boolean ? "true" : "false");

@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <math.h>
 #include "executor/agtype.h"
+#include "transform/transform_helpers.h"
 #include "parser/cypher_debug.h"
 
 /* Forward declarations */
@@ -1000,8 +1001,9 @@ char* agtype_value_to_string(agtype_value *val)
                      * not the platform's "nan"/"-nan". */
                     snprintf(result, 40, "NaN");
                 } else {
-                    /* %.17g preserves full double precision (TCK expects). */
-                    snprintf(result, 40, "%.17g", val->val.float_value);
+                    /* Full precision, and a whole float keeps ".0" so 2.0
+                     * does not read back as the integer 2 (GQLITE-T-0403). */
+                    gql_format_double(result, 40, val->val.float_value);
                 }
             }
             break;

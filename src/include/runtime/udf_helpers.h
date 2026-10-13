@@ -29,6 +29,8 @@ void gql_to_integer_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **
 void gql_to_float_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_to_string_strict_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_bool_str_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_typetag_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_retag_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_bool_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 
 /* T-0308: cross-type ordering comparison (returns null on type mismatch). */

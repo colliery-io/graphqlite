@@ -79,6 +79,21 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_bool_str_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* _gql_typetag reads subtypes (SQLITE_SUBTYPE); _gql_retag sets them
+   * (GQLITE-T-0406, GQLITE-A-0007). */
+#ifndef SQLITE_SUBTYPE
+#define SQLITE_SUBTYPE 0x000100000
+#endif
+  rc = sqlite3_create_function(db, "_gql_typetag", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_SUBTYPE, 0,
+                         gql_typetag_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_retag", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_retag_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_to_bool_strict", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_to_bool_strict_func, 0, 0);

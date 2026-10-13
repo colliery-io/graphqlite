@@ -1409,7 +1409,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 if (param->name) {
                     /* Register parameter for tracking */
                     register_parameter(ctx, param->name);
-                    append_sql(ctx, ":%s", param->name);
+                    if (ctx->in_comparison) {
+                        append_sql(ctx, ":%s", param->name);
+                    } else {
+                        /* GQLITE-T-0395: the binder sets :name__gqlt to the
+                         * JSON type of the value, so a boolean or a list
+                         * keeps its type in a value position. */
+                        append_sql(ctx, "_gql_retag(:%s, :%s__gqlt)", param->name, param->name);
+                    }
                 } else {
                     /* Unnamed parameter - use positional placeholder */
                     append_sql(ctx, "?");

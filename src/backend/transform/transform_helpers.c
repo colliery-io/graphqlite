@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <stdbool.h>
 
 #include "transform/transform_helpers.h"
@@ -121,4 +122,50 @@ const char *get_label_string(ast_node *label_node)
 bool has_labels(cypher_node_pattern *node)
 {
     return node && node->labels && node->labels->count > 0;
+}
+
+/* An expression whose value is a boolean, by its shape (comparison, logic,
+ * predicate, boolean literal). Its SQL value is 1/0 with no subtype, so
+ * CREATE and SET use this to store it as a boolean (GQLITE-T-0387,
+ * GQLITE-T-0406). */
+bool ast_is_boolean_expr(const ast_node *expr)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_NOT_EXPR:
+        case AST_NODE_NULL_CHECK:
+        case AST_NODE_LABEL_EXPR:
+        case AST_NODE_EXISTS_EXPR:
+        case AST_NODE_LIST_PREDICATE:
+            return true;
+        case AST_NODE_LITERAL:
+            return ((const cypher_literal *)expr)->literal_type == LITERAL_BOOLEAN;
+        case AST_NODE_BINARY_OP:
+            switch (((const cypher_binary_op *)expr)->op_type) {
+                case BINARY_OP_AND: case BINARY_OP_OR: case BINARY_OP_XOR:
+                case BINARY_OP_EQ: case BINARY_OP_NEQ:
+                case BINARY_OP_LT: case BINARY_OP_GT: case BINARY_OP_LTE: case BINARY_OP_GTE:
+                case BINARY_OP_REGEX_MATCH: case BINARY_OP_IN:
+                case BINARY_OP_STARTS_WITH: case BINARY_OP_ENDS_WITH: case BINARY_OP_CONTAINS:
+                    return true;
+                default:
+                    return false;
+            }
+        default:
+            return false;
+    }
+}
+
+/* Render a double as the shortest text that reads back as the same value,
+ * keeping ".0" on a whole number so a float never reads back as an integer
+ * (GQLITE-T-0403). "%g" kept 6 digits and dropped the ".0". */
+const char *gql_format_double(char *buf, size_t buflen, double v)
+{
+    if (!buf || buflen == 0) return buf;
+    if (isnan(v)) { snprintf(buf, buflen, "NaN"); return buf; }
+    if (isinf(v)) { snprintf(buf, buflen, v > 0 ? "Infinity" : "-Infinity"); return buf; }
+    snprintf(buf, buflen, "%.15g", v);
+    if (strtod(buf, NULL) != v) snprintf(buf, buflen, "%.17g", v);
+    if (!strpbrk(buf, ".eE") && strlen(buf) + 3 <= buflen) strcat(buf, ".0");
+    return buf;
 }

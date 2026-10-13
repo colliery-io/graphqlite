@@ -37,6 +37,8 @@ VALUES = {
     "text_list": ("'[1]'", "[1]"),
     "text_map": ("'{\"a\":1}'", '{"a":1}'),
     "text_quote": ("'say \"hi\"'", 'say "hi"'),
+    "text_apostrophe": ('"it\'s"', "it's"),
+    "float_precise": ("3.14159265358979", 3.14159265358979),
     "list_int": ("[1, 2]", [1, 2]),
     "list_float": ("[1.5, 2.0]", [1.5, 2.0]),
     "list_bool": ("[true, false]", [True, False]),
@@ -137,6 +139,21 @@ def _w_unwind_rows_merge(g, lit, val):
     g.query("UNWIND $rows AS r MERGE (:V {p: r.p})", {"rows": [{"p": val}]})
 
 
+def _w_set_after_with(g, lit, val):
+    g.query("CREATE (:V)")
+    g.query(f"MATCH (n:V) WITH n SET n.p = {lit}")
+
+
+def _w_set_copy(g, lit, val):
+    g.query(f"CREATE (:V {{q: {lit}}})")
+    g.query("MATCH (n:V) SET n.p = n.q")
+
+
+def _w_set_copy_after_with(g, lit, val):
+    g.query(f"CREATE (:V {{q: {lit}}})")
+    g.query("MATCH (n:V) WITH n SET n.p = n.q")
+
+
 def _w_upsert_node(g, lit, val):
     g.upsert_node("x", {"p": val}, label="V")
 
@@ -155,6 +172,9 @@ NODE_WRITES = {
     "unwind_param_set": _w_unwind_param_set,
     "unwind_rows": _w_unwind_rows,
     "unwind_rows_merge": _w_unwind_rows_merge,
+    "set_after_with": _w_set_after_with,
+    "set_copy": _w_set_copy,
+    "set_copy_after_with": _w_set_copy_after_with,
     "upsert_node": _w_upsert_node,
 }
 
@@ -218,6 +238,16 @@ def _e_set_param(g, lit, val):
     g.query("MATCH ()-[r:R]->() SET r.p = $v", {"v": val})
 
 
+def _e_set_after_with(g, lit, val):
+    g.query("CREATE (:A)-[:R]->(:B)")
+    g.query(f"MATCH ()-[r:R]->() WITH r SET r.p = {lit}")
+
+
+def _e_set_copy_after_with(g, lit, val):
+    g.query(f"CREATE (:A)-[:R {{q: {lit}}}]->(:B)")
+    g.query("MATCH ()-[r:R]->() WITH r SET r.p = r.q")
+
+
 def _e_merge(g, lit, val):
     g.query("CREATE (:A), (:B)")
     g.query(f"MATCH (a:A), (b:B) MERGE (a)-[:R {{p: {lit}}}]->(b)")
@@ -242,6 +272,8 @@ EDGE_WRITES = {
     "create_param": _e_create_param,
     "set": _e_set,
     "set_param": _e_set_param,
+    "set_after_with": _e_set_after_with,
+    "set_copy_after_with": _e_set_copy_after_with,
     "merge": _e_merge,
     "unwind_rows": _e_unwind_rows,
     "upsert_edge": _e_upsert_edge,

@@ -34,6 +34,13 @@
  * (SQLITE_INTEGER=1 .. SQLITE_NULL=5) so existing readers ignore it. */
 #define GQL_COL_TYPE_BOOLEAN  100
 
+/* SQLite's JSON subtype ('J'), set by the json functions, and the matching
+ * data_types sentinel for cells that carry it. */
+#ifndef GQL_SUBTYPE_JSON
+#define GQL_SUBTYPE_JSON      0x4A
+#endif
+#define GQL_COL_TYPE_JSON     101
+
 /* NaN sentinel. SQLite collapses float NaN to NULL and drops subtypes across
  * CTE boundaries, so a runtime NaN value (e.g. produced by `0.0/0.0` inside an
  * UNWIND list) is carried as a private TEXT string recognized by content. The

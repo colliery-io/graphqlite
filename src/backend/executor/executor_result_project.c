@@ -117,7 +117,7 @@ bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
                     sqltype = SQLITE_INTEGER;
                     break;
                 case LITERAL_DECIMAL:
-                    snprintf(buf, sizeof(buf), "%g", lit->value.decimal);
+                    gql_format_double(buf, sizeof(buf), lit->value.decimal);
                     sqltype = SQLITE_FLOAT;
                     break;
                 case LITERAL_STRING:
@@ -359,21 +359,21 @@ void project_aggregate_cell(cypher_executor *executor,
     char buf[64];
     if (!strcmp(agg, "sum")) {
         if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)isum); result->data_types[0][col_idx] = SQLITE_INTEGER; }
-        else { snprintf(buf, sizeof(buf), "%g", dsum); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        else { gql_format_double(buf, sizeof(buf), dsum); result->data_types[0][col_idx] = SQLITE_FLOAT; }
         result->data[0][col_idx] = strdup(buf);
     } else if (!strcmp(agg, "min")) {
         if (seen == 0) { result->data[0][col_idx] = NULL; return; }
         if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)imin); result->data_types[0][col_idx] = SQLITE_INTEGER; }
-        else { snprintf(buf, sizeof(buf), "%g", dmin); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        else { gql_format_double(buf, sizeof(buf), dmin); result->data_types[0][col_idx] = SQLITE_FLOAT; }
         result->data[0][col_idx] = strdup(buf);
     } else if (!strcmp(agg, "max")) {
         if (seen == 0) { result->data[0][col_idx] = NULL; return; }
         if (all_int) { snprintf(buf, sizeof(buf), "%lld", (long long)imax); result->data_types[0][col_idx] = SQLITE_INTEGER; }
-        else { snprintf(buf, sizeof(buf), "%g", dmax); result->data_types[0][col_idx] = SQLITE_FLOAT; }
+        else { gql_format_double(buf, sizeof(buf), dmax); result->data_types[0][col_idx] = SQLITE_FLOAT; }
         result->data[0][col_idx] = strdup(buf);
     } else if (!strcmp(agg, "avg")) {
         if (seen == 0) { result->data[0][col_idx] = NULL; return; }
-        snprintf(buf, sizeof(buf), "%g", dsum / seen);
+        gql_format_double(buf, sizeof(buf), dsum / seen);
         result->data_types[0][col_idx] = SQLITE_FLOAT;
         result->data[0][col_idx] = strdup(buf);
     } else {

@@ -212,10 +212,12 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_appendf(&cte_query, "%lld", (long long)lit->value.integer);
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&cte_query, "%.17g", lit->value.decimal);
+                            { char fb[40]; dbuf_append(&cte_query, gql_format_double(fb, sizeof(fb), lit->value.decimal)); }
                             break;
                         case LITERAL_STRING:
-                            dbuf_appendf(&cte_query, "'%s'", lit->value.string ? lit->value.string : "");
+                            { char *esc = escape_sql_string(lit->value.string ? lit->value.string : "");
+                              dbuf_appendf(&cte_query, "'%s'", esc ? esc : "");
+                              free(esc); }
                             break;
                         case LITERAL_BOOLEAN:
                             /* Emit as 'true'/'false' string so downstream

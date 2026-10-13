@@ -33,6 +33,13 @@ const char *sql_ident(char *buf, size_t buflen, const char *name);
 /* The column part of an SQL reference `<table>.<column>`, quotes kept. */
 const char *sql_ref_column(const char *ref);
 
+/* True when the expression is boolean by its shape (comparison, logic,
+ * predicate, boolean literal). */
+bool ast_is_boolean_expr(const ast_node *expr);
+
+/* Shortest round-trip text of a double; a whole number keeps ".0". */
+const char *gql_format_double(char *buf, size_t buflen, double v);
+
 /* True if `expr` evaluates to a Cypher boolean (comparison, AND/OR/NOT/XOR,
  * IS NULL, quantifier, EXISTS, boolean literal). Used to wrap projections in
  * _gql_bool_str so the result renders as a JSON boolean. Defined in
