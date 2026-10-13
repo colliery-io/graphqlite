@@ -69,6 +69,11 @@ jobs:
             "$RUNNER_TEMP/bin/mdbook" build "$src/docs" -d "$PWD/dist/$tag"
           done
           ls dist
+      # After the mdBook copies: the earlier-versions pages link to them.
+      - name: Check the links
+        run: npx starlight-aurora-check-links dist --base="$DOCS_BASE"
+        env:
+          DOCS_BASE: ${{ steps.pages.outputs.base_path }}
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
