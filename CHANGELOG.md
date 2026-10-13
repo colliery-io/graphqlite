@@ -4,7 +4,7 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.10.0] — unreleased
+## [0.10.0] — 2026-10-13
 
 GitHub issue #128, and the bugs that three new tests found once they checked
 types, rows that must not come back, and unusual names. Two of the bugs lost
