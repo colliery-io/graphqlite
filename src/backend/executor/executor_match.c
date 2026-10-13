@@ -424,6 +424,13 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
             /* SQLite type, subtype, and the hidden RETURN tag column
              * (GQLITE-A-0007). */
             int ct = gql_result_cell_type(stmt, col, column_count);
+            /* A property read with no tag column: its TEXT is a string (the
+             * bool / JSON subtypes are still attached). */
+            if (ct == SQLITE_TEXT) {
+                cypher_return_item *ri = (cypher_return_item*)return_clause->items->items[col];
+                if (ri && ri->expr && ri->expr->type == AST_NODE_PROPERTY)
+                    ct = GQL_COL_TYPE_STRING;
+            }
             result->data_types[current_row][col] = ct;
             const char *value = (const char*)sqlite3_column_text(stmt, col);
             char float_buf[40];

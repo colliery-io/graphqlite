@@ -264,8 +264,16 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
             return dbuf_finish(&b);
         }
         case AST_NODE_FUNCTION_CALL: {
-            /* coalesce(): the tag of the first non-null argument. */
             cypher_function_call *fc = (cypher_function_call *)expr;
+            /* Aggregates: collect() is a list; the numeric ones are native
+             * numbers. No second evaluation of the aggregate. */
+            if (fc->function_name) {
+                const char *n = fc->function_name;
+                if (!strcasecmp(n, "collect")) return strdup("'json'");
+                if (!strcasecmp(n, "count") || !strcasecmp(n, "sum") || !strcasecmp(n, "avg") ||
+                    !strncasecmp(n, "stDev", 5) || !strncasecmp(n, "percentile", 10)) return NULL;
+            }
+            /* coalesce(): the tag of the first non-null argument. */
             if (!fc->function_name || strcasecmp(fc->function_name, "coalesce") != 0 ||
                 !fc->args || fc->args->count == 0) break;
             dynamic_buffer b;
@@ -298,9 +306,47 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
  * __gqlt_<i> after the visible columns, as plain text that survives the
  * sorter of ORDER BY / DISTINCT / GROUP BY, which drops subtypes. The
  * result reader applies it. */
-static char *return_item_tag_sql(cypher_transform_context *ctx, ast_node *expr,
-                                 const char *expr_sql)
+static bool expr_has_aggregate(const ast_node *expr)
 {
+    if (!expr) return false;
+    if (expr->type == AST_NODE_FUNCTION_CALL) {
+        const cypher_function_call *fc = (const cypher_function_call *)expr;
+        const char *n = fc->function_name;
+        if (n && (!strcasecmp(n, "count") || !strcasecmp(n, "sum") || !strcasecmp(n, "avg") ||
+                  !strcasecmp(n, "min") || !strcasecmp(n, "max") || !strcasecmp(n, "collect") ||
+                  !strncasecmp(n, "stDev", 5) || !strncasecmp(n, "percentile", 10)))
+            return true;
+        for (int i = 0; fc->args && i < fc->args->count; i++)
+            if (expr_has_aggregate(fc->args->items[i])) return true;
+        return false;
+    }
+    if (expr->type == AST_NODE_BINARY_OP) {
+        const cypher_binary_op *b = (const cypher_binary_op *)expr;
+        return expr_has_aggregate(b->left) || expr_has_aggregate(b->right);
+    }
+    return false;
+}
+
+/* Does the RETURN pass its rows through SQLite's sorter (ORDER BY,
+ * DISTINCT, grouping, UNION), which drops subtypes? */
+static bool return_uses_sorter(cypher_transform_context *ctx, cypher_return *ret)
+{
+    if (ret->distinct || ctx->in_union) return true;
+    if (ret->order_by && ret->order_by->count > 0) return true;
+    for (int i = 0; ret->items && i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+        if (it && expr_has_aggregate(it->expr)) return true;
+    }
+    return false;
+}
+
+static char *return_item_tag_sql(cypher_transform_context *ctx, cypher_return *ret,
+                                 ast_node *expr, const char *expr_sql)
+{
+    /* A property read keeps its subtype to the reader when no sorter is in
+     * the way, and the reader takes its TEXT as a string: the tag (two key
+     * probes per row) is needed only with a sorter. */
+    if (expr && expr->type == AST_NODE_PROPERTY && !return_uses_sorter(ctx, ret)) return NULL;
     return cypher_expr_tag_sql(ctx, expr, expr_sql);
 }
 
@@ -717,7 +763,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             if (!alias && item->expr->type == AST_NODE_IDENTIFIER)
                 alias = sql_ident(alias_buf, sizeof(alias_buf), ((cypher_identifier *)item->expr)->name);
             sql_select(ctx->unified_builder, expr_str, alias);
-            if (item_tags) item_tags[i] = return_item_tag_sql(ctx, item->expr, expr_str);
+            if (item_tags) item_tags[i] = return_item_tag_sql(ctx, ret, item->expr, expr_str);
             free(expr_str);
 
             /* Defer alias registration so subsequent return items can still
@@ -971,7 +1017,7 @@ return_star_done:
                 if (!alias && item->expr->type == AST_NODE_IDENTIFIER)
                     alias = sql_ident(alias_buf, sizeof(alias_buf), ((cypher_identifier *)item->expr)->name);
                 sql_select(ctx->unified_builder, expr_str, alias);
-                if (item_tags2) item_tags2[i] = return_item_tag_sql(ctx, item->expr, expr_str);
+                if (item_tags2) item_tags2[i] = return_item_tag_sql(ctx, ret, item->expr, expr_str);
                 free(expr_str);
 
                 /* Register alias for ORDER BY reference */
