@@ -1773,13 +1773,13 @@ fn test_to_boolean() {
 
     let results = conn.cypher("RETURN toBoolean('true') AS result").unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>("result").unwrap();
-    assert_eq!(val, 1);
+    let val = results[0].get::<bool>("result").unwrap();
+    assert!(val);
 
     let results = conn.cypher("RETURN toBoolean('false') AS result").unwrap();
     assert_eq!(results.len(), 1);
-    let val = results[0].get::<i64>("result").unwrap();
-    assert_eq!(val, 0);
+    let val = results[0].get::<bool>("result").unwrap();
+    assert!(!val);
 }
 
 // =============================================================================
@@ -3377,10 +3377,13 @@ fn test_return_star_with_relationship() {
 fn test_isempty() {
     let conn = test_connection();
     let r = conn.cypher("RETURN isEmpty('') AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+    assert!(r[0].get::<bool>("r").unwrap());
 
     let r = conn.cypher("RETURN isEmpty('hello') AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 0);
+    assert!(!r[0].get::<bool>("r").unwrap());
+
+    let r = conn.cypher("RETURN isEmpty([]) AS r").unwrap();
+    assert!(r[0].get::<bool>("r").unwrap());
 }
 
 #[test]
@@ -3417,7 +3420,7 @@ fn test_to_float_or_null() {
 fn test_to_boolean_or_null() {
     let conn = test_connection();
     let r = conn.cypher("RETURN toBooleanOrNull('true') AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 1);
+    assert!(r[0].get::<bool>("r").unwrap());
 
     let r = conn.cypher("RETURN toBooleanOrNull('maybe') AS r").unwrap();
     let val = r[0].get::<Option<String>>("r").unwrap();
@@ -4780,3 +4783,44 @@ fn test_capabilities_reports_version_and_flags() {
     assert!(!caps.neo4j_compat);
 }
 
+
+/// Values keep their type through the Rust result API: text that looks like a
+/// number, a boolean or JSON stays text, through RETURN, WITH and ORDER BY
+/// (#128, GQLITE-T-0394).
+#[test]
+fn test_value_types_round_trip() {
+    use graphqlite::Value as V;
+    let conn = test_connection();
+    conn.cypher("CREATE (:V {t: '123', b: 'true', j: '[1]', n: 123, f: 2.0, x: true, l: [1, 2]})")
+        .unwrap();
+    for query in [
+        "MATCH (v:V) RETURN v.t AS t, v.b AS b, v.j AS j, v.n AS n, v.f AS f, v.x AS x, v.l AS l",
+        "MATCH (v:V) WITH v.t AS t, v.b AS b, v.j AS j, v.n AS n, v.f AS f, v.x AS x, v.l AS l \
+         RETURN t, b, j, n, f, x, l ORDER BY t",
+    ] {
+        let rows = conn.cypher(query).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.get_value("t"), Some(&V::String("123".into())), "{query}");
+        assert_eq!(row.get_value("b"), Some(&V::String("true".into())), "{query}");
+        assert_eq!(row.get_value("j"), Some(&V::String("[1]".into())), "{query}");
+        assert_eq!(row.get_value("n"), Some(&V::Integer(123)), "{query}");
+        assert_eq!(row.get_value("f"), Some(&V::Float(2.0)), "{query}");
+        assert_eq!(row.get_value("x"), Some(&V::Bool(true)), "{query}");
+        assert_eq!(row.get_value("l"), Some(&V::Array(vec![V::Integer(1), V::Integer(2)])), "{query}");
+    }
+}
+
+/// A boolean parameter stays a boolean (#128).
+#[test]
+fn test_boolean_parameter_types() {
+    use graphqlite::Value as V;
+    let conn = test_connection();
+    let rows = conn
+        .cypher_builder("UNWIND $flags AS f RETURN f")
+        .param("flags", json!([false, true]))
+        .run()
+        .unwrap();
+    let got: Vec<_> = rows.iter().map(|r| r.get_value("f").cloned()).collect();
+    assert_eq!(got, vec![Some(V::Bool(false)), Some(V::Bool(true))]);
+}
