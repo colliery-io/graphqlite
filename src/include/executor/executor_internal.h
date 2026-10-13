@@ -258,6 +258,10 @@ void project_return_row_from_var_map(cypher_executor *executor,
                                      int row_idx);
 void set_return_column_names(cypher_return *ret, cypher_result *result);
 agtype_value* create_property_agtype_value(const char* value, int col_type);
+
+/* GQLITE-A-0007: result columns with the hidden type tags of RETURN. */
+int gql_visible_column_count(sqlite3_stmt *stmt);
+int gql_result_cell_type(sqlite3_stmt *stmt, int col, int visible);
 agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_context *ctx,
                                   const char *path_name, const char *json_ids);
 

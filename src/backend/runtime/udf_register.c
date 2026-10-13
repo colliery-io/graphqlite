@@ -89,6 +89,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_typetag_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  rc = sqlite3_create_function(db, "_gql_json_elem", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_SUBTYPE | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_json_elem_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_retag", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
                          gql_retag_func, 0, 0);

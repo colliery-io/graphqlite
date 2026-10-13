@@ -156,6 +156,155 @@ static int transform_list_item_value(cypher_transform_context *ctx, ast_node *ex
  */
 static char *transform_expression_to_string(cypher_transform_context *ctx, ast_node *expr);
 
+/* Capture the SQL of `expr` as a boolean condition (transform_condition). */
+static char *condition_to_string(cypher_transform_context *ctx, ast_node *expr)
+{
+    char *saved_buffer = ctx->sql_buffer;
+    size_t saved_size = ctx->sql_size;
+    size_t saved_capacity = ctx->sql_capacity;
+    char *temp = malloc(4096);
+    if (!temp) return NULL;
+    temp[0] = '\0';
+    ctx->sql_buffer = temp;
+    ctx->sql_size = 0;
+    ctx->sql_capacity = 4096;
+    int rc = transform_condition(ctx, expr);
+    char *out = (rc == 0 && ctx->sql_size > 0) ? strdup(ctx->sql_buffer) : NULL;
+    free(ctx->sql_buffer);
+    ctx->sql_buffer = saved_buffer;
+    ctx->sql_size = saved_size;
+    ctx->sql_capacity = saved_capacity;
+    return out;
+}
+
+static char *str_printf(const char *fmt, const char *a, const char *b)
+{
+    size_t n = strlen(fmt) + (a ? strlen(a) : 0) + (b ? strlen(b) : 0) + 1;
+    char *out = malloc(n);
+    if (out) snprintf(out, n, fmt, a ? a : "", b ? b : "");
+    return out;
+}
+
+/* GQLITE-A-0007: SQL of the type tag of an expression ('bool', 'json',
+ * 'text', ...), or NULL when none is needed or known (a node, edge or path;
+ * an int or real keeps its SQLite type; text of unknown origin keeps the old
+ * handling). `value_sql` is the expression's SQL, for the _gql_typetag
+ * fallback (NULL to transform it here). Caller frees. */
+char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const char *value_sql)
+{
+    if (!ctx || !expr) return NULL;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER: {
+            const char *name = ((cypher_identifier *)expr)->name;
+            if (!transform_var_is_projected(ctx->var_ctx, name)) return NULL;
+            const char *t = transform_var_get_tag(ctx->var_ctx, name);
+            return t ? strdup(t) : NULL;
+        }
+        case AST_NODE_PARAMETER: {
+            const char *name = ((cypher_parameter *)expr)->name;
+            return name ? str_printf(":%s__gqlt", name, NULL) : NULL;
+        }
+        case AST_NODE_PROPERTY: {
+            char *t = transform_property_tag_sql(ctx, (cypher_property *)expr);
+            if (t) return t;
+            break;
+        }
+        case AST_NODE_LITERAL:
+            switch (((cypher_literal *)expr)->literal_type) {
+                case LITERAL_BOOLEAN: return strdup("'bool'");
+                case LITERAL_STRING:  return strdup("'text'");
+                default:              return NULL;
+            }
+        case AST_NODE_LIST:
+        case AST_NODE_MAP:
+            return strdup("'json'");
+        case AST_NODE_CASE_EXPR: {
+            /* The tag of the branch the CASE takes. */
+            cypher_case_expr *ce = (cypher_case_expr *)expr;
+            if (!ce->when_clauses) break;
+            dynamic_buffer b;
+            dbuf_init(&b);
+            dbuf_append(&b, "(CASE");
+            if (ce->operand) {
+                char *op = transform_expression_to_string(ctx, ce->operand);
+                if (!op) { dbuf_free(&b); return NULL; }
+                dbuf_appendf(&b, " %s", op);
+                free(op);
+            }
+            bool ok = true;
+            for (int i = 0; i < ce->when_clauses->count && ok; i++) {
+                cypher_when_clause *wc = (cypher_when_clause *)ce->when_clauses->items[i];
+                char *cond = ce->operand ? transform_expression_to_string(ctx, wc->condition)
+                                         : condition_to_string(ctx, wc->condition);
+                char *t = cypher_expr_tag_sql(ctx, wc->result, NULL);
+                if (!cond) ok = false;
+                else dbuf_appendf(&b, " WHEN %s THEN %s", cond, t ? t : "NULL");
+                free(cond);
+                free(t);
+            }
+            if (ce->else_expr) {
+                char *t = cypher_expr_tag_sql(ctx, ce->else_expr, NULL);
+                dbuf_appendf(&b, " ELSE %s", t ? t : "NULL");
+                free(t);
+            }
+            dbuf_append(&b, " END)");
+            if (!ok) { dbuf_free(&b); return NULL; }
+            return dbuf_finish(&b);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            /* coalesce(): the tag of the first non-null argument. */
+            cypher_function_call *fc = (cypher_function_call *)expr;
+            if (!fc->function_name || strcasecmp(fc->function_name, "coalesce") != 0 ||
+                !fc->args || fc->args->count == 0) break;
+            dynamic_buffer b;
+            dbuf_init(&b);
+            dbuf_append(&b, "(CASE");
+            for (int i = 0; i < fc->args->count; i++) {
+                ast_node *a = fc->args->items[i];
+                char *v = transform_expression_to_string(ctx, a);
+                if (!v) { dbuf_free(&b); return NULL; }
+                char *t = cypher_expr_tag_sql(ctx, a, v);
+                dbuf_appendf(&b, " WHEN (%s) IS NOT NULL THEN %s", v, t ? t : "NULL");
+                free(v);
+                free(t);
+            }
+            dbuf_append(&b, " END)");
+            return dbuf_finish(&b);
+        }
+        default:
+            break;
+    }
+    if (ast_is_boolean_expr(expr)) return strdup("'bool'");
+    char *own = NULL;
+    if (!value_sql) value_sql = own = transform_expression_to_string(ctx, expr);
+    char *out = (value_sql && value_sql[0]) ? str_printf("_gql_typetag(%s)", value_sql, NULL) : NULL;
+    free(own);
+    return out;
+}
+
+/* GQLITE-A-0007: the tag of a RETURN item goes in a hidden column
+ * __gqlt_<i> after the visible columns, as plain text that survives the
+ * sorter of ORDER BY / DISTINCT / GROUP BY, which drops subtypes. The
+ * result reader applies it. */
+static char *return_item_tag_sql(cypher_transform_context *ctx, ast_node *expr,
+                                 const char *expr_sql)
+{
+    return cypher_expr_tag_sql(ctx, expr, expr_sql);
+}
+
+/* Append the hidden tag columns __gqlt_0 .. __gqlt_<n-1> (NULL when an item
+ * has none, so every arm of a UNION has the same shape). */
+static void return_append_tags(cypher_transform_context *ctx, char **tags, int n)
+{
+    for (int i = 0; i < n; i++) {
+        char nm[32];
+        snprintf(nm, sizeof(nm), "__gqlt_%d", i);
+        sql_select(ctx->unified_builder, tags && tags[i] ? tags[i] : "NULL", nm);
+        if (tags) free(tags[i]);
+    }
+    free(tags);
+}
+
 static bool alias_shadows_sql_column(const char *name)
 {
     static const char *const shadowed[] = {
@@ -390,7 +539,20 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                      * column ref) lives on source_expr; table_alias is NULL.
                      * T-0333: use get_alias to pick the right one. */
                     const char *src = transform_var_get_alias(ctx->var_ctx, var->name);
-                    if (src) { char vb[256]; sql_select(ctx->unified_builder, src, sql_ident(vb, sizeof(vb), var->name)); }
+                    if (src) {
+                        char vb[256];
+                        if (var->tag_expr) {
+                            /* GQLITE-A-0007 */
+                            size_t n = strlen(src) + strlen(var->tag_expr) + 24;
+                            char *rt = malloc(n);
+                            if (!rt) return -1;
+                            snprintf(rt, n, "_gql_retag(%s, %s)", src, var->tag_expr);
+                            sql_select(ctx->unified_builder, rt, sql_ident(vb, sizeof(vb), var->name));
+                            free(rt);
+                        } else {
+                            sql_select(ctx->unified_builder, src, sql_ident(vb, sizeof(vb), var->name));
+                        }
+                    }
                 }
                 added++;
             }
@@ -412,6 +574,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         }
 
         /* Add SELECT columns to unified builder */
+        char **item_tags = ret->items->count > 0 ? calloc(ret->items->count, sizeof(char *)) : NULL;
         for (int i = 0; i < ret->items->count; i++) {
             cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
 
@@ -476,6 +639,12 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     if (func->function_name) {
                         size_t pos = 0;
                         pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "\"%s(", func->function_name);
+                        /* count(*) carries one NULL argument (or none). */
+                        if (strcasecmp(func->function_name, "count") == 0 &&
+                            (!func->args || func->args->count == 0 ||
+                             (func->args->count == 1 && !func->args->items[0]))) {
+                            pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "*");
+                        }
                         if (func->args) {
                             for (int j = 0; j < func->args->count && pos < sizeof(auto_alias) - 20; j++) {
                                 if (j > 0) pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, ", ");
@@ -496,6 +665,12 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 if (func->function_name) {
                     size_t pos = 0;
                     pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "\"%s(", func->function_name);
+                        /* count(*) carries one NULL argument (or none). */
+                        if (strcasecmp(func->function_name, "count") == 0 &&
+                            (!func->args || func->args->count == 0 ||
+                             (func->args->count == 1 && !func->args->items[0]))) {
+                            pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "*");
+                        }
                     if (func->args) {
                         for (int j = 0; j < func->args->count && pos < sizeof(auto_alias) - 10; j++) {
                             if (j > 0) {
@@ -525,7 +700,12 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
              * (GQLITE-T-0396), an auto alias is quoted already. */
             char alias_buf[256];
             if (alias && alias == item->alias) alias = sql_ident(alias_buf, sizeof(alias_buf), alias);
+            /* A bare identifier keeps its name as the column name, also
+             * when its SQL is wrapped in _gql_retag (GQLITE-A-0007). */
+            if (!alias && item->expr->type == AST_NODE_IDENTIFIER)
+                alias = sql_ident(alias_buf, sizeof(alias_buf), ((cypher_identifier *)item->expr)->name);
             sql_select(ctx->unified_builder, expr_str, alias);
+            if (item_tags) item_tags[i] = return_item_tag_sql(ctx, item->expr, expr_str);
             free(expr_str);
 
             /* Defer alias registration so subsequent return items can still
@@ -534,6 +714,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 deferred_aliases[deferred_count++] = item->alias;
             }
         }
+        return_append_tags(ctx, item_tags, ret->items->count);
         for (int i = 0; i < deferred_count; i++) {
             { char rb[256]; transform_var_register_projected(ctx->var_ctx, deferred_aliases[i], sql_ident(rb, sizeof(rb), deferred_aliases[i])); }
         }
@@ -677,6 +858,7 @@ return_star_done:
             }
 
             /* Add SELECT columns to unified builder */
+            char **item_tags2 = ret->items->count > 0 ? calloc(ret->items->count, sizeof(char *)) : NULL;
             for (int i = 0; i < ret->items->count; i++) {
                 cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
 
@@ -739,6 +921,12 @@ return_star_done:
                     if (func->function_name) {
                         size_t pos = 0;
                         pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "\"%s(", func->function_name);
+                        /* count(*) carries one NULL argument (or none). */
+                        if (strcasecmp(func->function_name, "count") == 0 &&
+                            (!func->args || func->args->count == 0 ||
+                             (func->args->count == 1 && !func->args->items[0]))) {
+                            pos += snprintf(auto_alias + pos, sizeof(auto_alias) - pos, "*");
+                        }
                         if (func->args) {
                             for (int j = 0; j < func->args->count && pos < sizeof(auto_alias) - 10; j++) {
                                 if (j > 0) {
@@ -768,7 +956,10 @@ return_star_done:
                  * (GQLITE-T-0396), an auto alias is quoted already. */
                 char alias_buf[256];
                 if (alias && alias == item->alias) alias = sql_ident(alias_buf, sizeof(alias_buf), alias);
+                if (!alias && item->expr->type == AST_NODE_IDENTIFIER)
+                    alias = sql_ident(alias_buf, sizeof(alias_buf), ((cypher_identifier *)item->expr)->name);
                 sql_select(ctx->unified_builder, expr_str, alias);
+                if (item_tags2) item_tags2[i] = return_item_tag_sql(ctx, item->expr, expr_str);
                 free(expr_str);
 
                 /* Register alias for ORDER BY reference */
@@ -778,6 +969,7 @@ return_star_done:
                         sql_ident(ref_buf, sizeof(ref_buf), item->alias));
                 }
             }
+            return_append_tags(ctx, item_tags2, ret->items->count);
 
             /* Add ORDER BY */
             if (ret->order_by && ret->order_by->count > 0) {
@@ -1096,8 +1288,17 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
                     if (alias) {
                         if (transform_var_is_projected(ctx->var_ctx, id->name)) {
-                            /* This is a projected variable from WITH - alias is the full column reference */
-                            append_sql(ctx, "%s", alias);
+                            /* This is a projected variable from WITH - alias is the full column reference.
+                             * GQLITE-A-0007: in a value position, put back the
+                             * boolean / JSON subtype from the tag column that
+                             * crossed the CTE with it. Comparisons read the raw
+                             * value. */
+                            const char *tag = transform_var_get_tag(ctx->var_ctx, id->name);
+                            if (tag && !ctx->in_comparison) {
+                                append_sql(ctx, "_gql_retag(%s, %s)", alias, tag);
+                            } else {
+                                append_sql(ctx, "%s", alias);
+                            }
                         } else if (transform_var_alias_is_id(ctx->var_ctx, id->name)) {
                             /* Post-WITH node/edge - alias IS the id value */
                             if (transform_var_is_edge(ctx->var_ctx, id->name)) {
@@ -1602,7 +1803,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                        base_alias, is_projected ? "" : ".id");
                             append_string_literal(ctx, item->property);
                             append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
+                            append_sql(ctx, "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
                                        base_alias, is_projected ? "" : ".id");
                             append_string_literal(ctx, item->property);
                             append_sql(ctx, "), ");
@@ -1611,10 +1812,13 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             append_string_literal(ctx, item->property);
                             append_sql(ctx, ")))");
                         } else if (item->expr) {
-                            /* Computed expression */
+                            /* Computed expression; a boolean stays a JSON
+                             * boolean (GQLITE-T-0404). */
+                            append_sql(ctx, "_gql_json_elem(");
                             if (transform_expression(ctx, item->expr) < 0) {
                                 return -1;
                             }
+                            append_sql(ctx, ")");
                         }
                     }
                     }

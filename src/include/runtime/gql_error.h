@@ -41,6 +41,10 @@
 #endif
 #define GQL_COL_TYPE_JSON     101
 
+/* A TEXT cell known to be a string (its tag said so): rendered quoted even
+ * when it looks like JSON (GQLITE-A-0007). */
+#define GQL_COL_TYPE_STRING   102
+
 /* NaN sentinel. SQLite collapses float NaN to NULL and drops subtypes across
  * CTE boundaries, so a runtime NaN value (e.g. produced by `0.0/0.0` inside an
  * UNWIND list) is carried as a private TEXT string recognized by content. The

@@ -1054,9 +1054,12 @@ void gql_to_string_strict_func(
  * with the rest of the system, where booleans flow as 'true'/'false'
  * text — so downstream `= true` comparisons work. */
 /* _gql_typetag(x): the Cypher type of a value while its subtype is still
- * attached: 'null', 'bool' (boolean subtype), 'json' (JSON subtype),
- * 'int', 'real' or 'text'. A SET stores the value in the table of this
- * type (GQLITE-T-0406); a CTE carries it in a tag column (GQLITE-A-0007). */
+ * attached: 'null', 'bool' (boolean subtype), 'json' (JSON subtype), 'int'
+ * or 'real'. Text without a subtype gives NULL (unknown): some functions
+ * return JSON text without the subtype, so only a source that knows it has
+ * a string (a literal, a text property, a parameter) tags 'text'. A SET
+ * stores the value in the table of this type (GQLITE-T-0406); a CTE carries
+ * it in a tag column (GQLITE-A-0007). */
 void gql_typetag_func(sqlite3_context *context, int argc, sqlite3_value **argv)
 {
     if (argc != 1) { sqlite3_result_null(context); return; }
@@ -1068,8 +1071,26 @@ void gql_typetag_func(sqlite3_context *context, int argc, sqlite3_value **argv)
     else if (sub == GQL_SUBTYPE_JSON && t == SQLITE_TEXT) tag = "json";
     else if (t == SQLITE_INTEGER) tag = "int";
     else if (t == SQLITE_FLOAT) tag = "real";
-    else tag = "text";
+    else { sqlite3_result_null(context); return; }
     sqlite3_result_text(context, tag, -1, SQLITE_STATIC);
+}
+
+/* _gql_json_elem(x): x as an element for json_group_array / json_object:
+ * a boolean (boolean subtype) becomes JSON true/false; anything else is
+ * returned with its subtype, so JSON stays JSON (GQLITE-T-0404). */
+void gql_json_elem_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    if (argc != 1) { sqlite3_result_null(context); return; }
+    unsigned int sub = sqlite3_value_subtype(argv[0]);
+    if (sub == GQL_SUBTYPE_BOOLEAN && sqlite3_value_type(argv[0]) != SQLITE_NULL) {
+        const char *s = (const char *)sqlite3_value_text(argv[0]);
+        bool b = s && (strcmp(s, "true") == 0 || strcmp(s, "1") == 0);
+        sqlite3_result_text(context, b ? "true" : "false", -1, SQLITE_STATIC);
+        sqlite3_result_subtype(context, GQL_SUBTYPE_JSON);
+        return;
+    }
+    sqlite3_result_value(context, argv[0]);
+    if (sub == GQL_SUBTYPE_JSON) sqlite3_result_subtype(context, GQL_SUBTYPE_JSON);
 }
 
 /* _gql_retag(x, tag): x with the subtype its tag names put back: 'bool'

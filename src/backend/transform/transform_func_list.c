@@ -227,7 +227,10 @@ int transform_collect_function(cypher_transform_context *ctx, cypher_function_ca
         /* collect(*) - not really valid but handle gracefully */
         append_sql(ctx, "*");
     } else {
+        /* _gql_json_elem keeps a boolean a JSON boolean (GQLITE-T-0404). */
+        append_sql(ctx, "_gql_json_elem(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        append_sql(ctx, ")");
     }
     append_sql(ctx, ") FILTER (WHERE ");
     if (func_call->args->items[0] != NULL) {

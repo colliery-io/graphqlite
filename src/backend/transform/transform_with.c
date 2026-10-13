@@ -333,6 +333,31 @@ static char *transform_expression_to_string(cypher_transform_context *ctx, ast_n
  * WITH acts like an intermediate RETURN, projecting columns and optionally filtering
  * with a WHERE clause. The result becomes a CTE that subsequent clauses query from.
  */
+/* GQLITE-A-0007: the SQL of the type tag column of a WITH item, or NULL. */
+static char *with_item_tag_sql(cypher_transform_context *ctx, ast_node *expr,
+                               const char *value_sql)
+{
+    return cypher_expr_tag_sql(ctx, expr, value_sql);
+}
+
+/* The tag column name of projected column `col` ("x" -> x__gqlt), as SQL. */
+static const char *with_tag_col(char *buf, size_t buflen, const char *col)
+{
+    char nm[256];
+    snprintf(nm, sizeof(nm), "%s__gqlt", col);
+    return sql_ident(buf, buflen, nm);
+}
+
+/* Append ", <tag> AS <col__gqlt>" when there is a tag; returns whether. */
+static bool with_append_tag(dynamic_buffer *col_buf, char *tag_sql, const char *col)
+{
+    if (!tag_sql) return false;
+    char tb[320];
+    dbuf_appendf(col_buf, ", %s AS %s", tag_sql, with_tag_col(tb, sizeof(tb), col));
+    free(tag_sql);
+    return true;
+}
+
 int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
 {
     CYPHER_DEBUG("Transforming WITH clause");
@@ -458,6 +483,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     dynamic_buffer col_buf;
     dbuf_init(&col_buf);
 
+    /* GQLITE-A-0007: which items (or, for WITH *, which variables) carry a
+     * type tag column, for the registration after the CTE. */
+    bool item_tagged[256] = {0};
+    char *star_tagged[256];
+    int star_tagged_n = 0;
+
     /* Track GROUP BY columns for aggregate handling */
     dynamic_buffer group_buf;
     dbuf_init(&group_buf);
@@ -487,6 +518,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             { char idbuf[128];
               dbuf_appendf(&col_buf, "%s%s AS %s", var->table_alias, id_suffix,
                            sql_ident(idbuf, sizeof(idbuf), var->name)); }
+            if (is_projected && var->tag_expr && star_tagged_n < 256) {
+                char tb[320];
+                dbuf_appendf(&col_buf, ", %s AS %s", var->tag_expr,
+                             with_tag_col(tb, sizeof(tb), var->name));
+                star_tagged[star_tagged_n++] = strdup(var->name);
+            }
             dbuf_appendf(&group_buf, "%s%s", var->table_alias, id_suffix);
             group_count++;
             added++;
@@ -538,6 +575,10 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 { char idbuf[128];
                   dbuf_appendf(&col_buf, "%s%s AS %s", alias, id_suffix,
                                sql_ident(idbuf, sizeof(idbuf), col_name)); }
+                if (is_projected && i < 256) {
+                    item_tagged[i] = with_append_tag(&col_buf,
+                        with_item_tag_sql(ctx, item->expr, NULL), col_name);
+                }
                 /* Add to GROUP BY. Inside EXISTS { ... }, a variable of the
                  * outer query is one value per outer row, so it is not a
                  * key: SQLite 3.45 rejects GROUP BY on an outer column
@@ -576,40 +617,31 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
                     bool alias_is_id = transform_var_alias_is_id(ctx->var_ctx, id->name);
                     const char *id_suffix = (is_projected || alias_is_id) ? "" : ".id";
-                    /* T-0313: edge-aware property lookup. Pre-fix this
-                     * branch always used node_props_* / node_id, breaking
-                     * WITH r.<prop> AS x for edge variables. Unlocks
-                     * Delete6 [12]/[13]/[14] and Remove3 [19]/[21]
-                     * family.
-                     *
-                     * Use COALESCE with all property tables - order
-                     * int/real first to preserve type. */
-                    bool is_edge_var = transform_var_is_edge(ctx->var_ctx, id->name);
-                    const char *p_int = is_edge_var ? "edge_props_int" : "node_props_int";
-                    const char *p_real = is_edge_var ? "edge_props_real" : "node_props_real";
-                    const char *p_text = is_edge_var ? "edge_props_text" : "node_props_text";
-                    const char *p_bool = is_edge_var ? "edge_props_bool" : "node_props_bool";
-                    const char *p_json = is_edge_var ? "edge_props_json" : "node_props_json";
-                    const char *entity_col = is_edge_var ? "edge_id" : "node_id";
-                    dbuf_appendf(&col_buf,
-                        "(SELECT COALESCE("
-                        "(SELECT npi.value FROM %s npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.%s = %s%s AND pk.key = '%s'), "
-                        "(SELECT npr.value FROM %s npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.%s = %s%s AND pk.key = '%s'), "
-                        "(SELECT npt.value FROM %s npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.%s = %s%s AND pk.key = '%s'), "
-                        "(SELECT CASE WHEN npb.value THEN 'true' ELSE 'false' END FROM %s npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.%s = %s%s AND pk.key = '%s'), "
-                        "(SELECT npj.value FROM %s npj JOIN property_keys pk ON npj.key_id = pk.id WHERE npj.%s = %s%s AND pk.key = '%s')"
-                        ")) AS %s",
-                        p_int, entity_col, alias, id_suffix, prop->property_name,
-                        p_real, entity_col, alias, id_suffix, prop->property_name,
-                        p_text, entity_col, alias, id_suffix, prop->property_name,
-                        p_bool, entity_col, alias, id_suffix, prop->property_name,
-                        p_json, entity_col, alias, id_suffix, prop->property_name,
-                        ({ static char _idbuf[128]; sql_ident(_idbuf, sizeof(_idbuf), col_name); }));
-                    /* Add the projected column name to GROUP BY (not node id) */
+                    /* T-0313: edge-aware, typed property read: the same SQL
+                     * as anywhere else (transform_property_access), so a
+                     * boolean or list keeps its subtype for the tag column
+                     * (GQLITE-A-0007) and the key is escaped. */
+                    (void)id_suffix;
+                    char *psql = transform_expression_to_string(ctx, item->expr);
+                    if (!psql) {
+                        dbuf_free(&col_buf);
+                        dbuf_free(&group_buf);
+                        free(saved_cte);
+                        return -1;
+                    }
+                    { char _idbuf[128];
+                      dbuf_appendf(&col_buf, "%s AS %s", psql,
+                                   sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
+                    if (i < 256) {
+                        item_tagged[i] = with_append_tag(&col_buf,
+                            with_item_tag_sql(ctx, item->expr, psql), col_name);
+                    }
+                    /* Group by the property value (not the node id) */
                     if (group_count > 0) {
                         dbuf_append(&group_buf, ", ");
                     }
-                    dbuf_append(&group_buf, col_name);
+                    dbuf_append(&group_buf, psql);
+                    free(psql);
                     group_count++;
                 }
             }
@@ -645,6 +677,10 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             { char _idbuf[128];
               dbuf_appendf(&col_buf, "%s AS %s", ctx->sql_buffer,
                            sql_ident(_idbuf, sizeof(_idbuf), col_name)); }
+            if (i < 256) {
+                item_tagged[i] = with_append_tag(&col_buf,
+                    with_item_tag_sql(ctx, item->expr, ctx->sql_buffer), col_name);
+            }
 
             /* Restore sql_buffer */
             ctx->sql_size = saved_size;
@@ -719,6 +755,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
               } else {
                   dbuf_appendf(&col_buf, "(%s) AS %s", expr_sql,
                                sql_ident(_idbuf, sizeof(_idbuf), col_name));
+              }
+              if (i < 256) {
+                  item_tagged[i] = with_append_tag(&col_buf,
+                      ast_yields_boolean(item->expr) ? strdup("'bool'")
+                                                     : with_item_tag_sql(ctx, item->expr, expr_sql),
+                      col_name);
               }
             }
 
@@ -1041,11 +1083,19 @@ with_star_columns_done:
                 transform_var_set_alias_is_id(ctx->var_ctx, saved_var_names[i], true);
             } else {
                 transform_var_register_projected(ctx->var_ctx, saved_var_names[i], select_expr);
+                for (int t = 0; t < star_tagged_n; t++) {
+                    if (strcmp(star_tagged[t], saved_var_names[i]) != 0) continue;
+                    char tag_ref[400], tb[320];
+                    snprintf(tag_ref, sizeof(tag_ref), "%s.%s", cte_name,
+                             with_tag_col(tb, sizeof(tb), saved_var_names[i]));
+                    transform_var_set_tag(ctx->var_ctx, saved_var_names[i], tag_ref);
+                }
             }
             free(saved_var_names[i]);
         }
         free(saved_var_names);
         free(saved_var_kinds);
+        for (int t = 0; t < star_tagged_n; t++) free(star_tagged[t]);
     } else {
         /* Register new variables from WITH projections and build SELECT list */
         for (int i = 0; i < with->items->count; i++) {
@@ -1090,6 +1140,12 @@ with_star_columns_done:
                     CYPHER_DEBUG("WITH: Registered edge variable '%s' -> %s (alias_is_id)", col_name, select_expr);
                 } else {
                     transform_var_register_projected(ctx->var_ctx, col_name, select_expr);
+                    if (i < 256 && item_tagged[i]) {
+                        char tag_ref[400], tb[320];
+                        snprintf(tag_ref, sizeof(tag_ref), "%s.%s", cte_name,
+                                 with_tag_col(tb, sizeof(tb), col_name));
+                        transform_var_set_tag(ctx->var_ctx, col_name, tag_ref);
+                    }
                     /* T-0333 (Unwind1 [12]): when this WITH item is
                      * `collect(<node|edge_var>)`, tag the projected var so a
                      * downstream UNWIND can rebind elements as nodes/edges.

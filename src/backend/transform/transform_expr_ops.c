@@ -866,9 +866,31 @@ static void append_prop_branch(cypher_transform_context *ctx, const char *gprefi
     }
 }
 
+char *transform_property_tag_sql(cypher_transform_context *ctx, cypher_property *prop)
+{
+    if (!ctx || !prop) return NULL;
+    bool saved_mode = ctx->prop_tag_mode;
+    ctx->prop_tag_mode = true;
+    ctx->prop_tag_unknown = false;
+    char *sql = cypher_transform_capture_expression(ctx, (ast_node *)prop);
+    bool unknown = ctx->prop_tag_unknown;
+    ctx->prop_tag_mode = saved_mode;
+    ctx->prop_tag_unknown = false;
+    if (unknown) { free(sql); return NULL; }
+    return sql;
+}
+
 int transform_property_access(cypher_transform_context *ctx, cypher_property *prop)
 {
     CYPHER_DEBUG("Transforming property access");
+
+    /* GQLITE-A-0007: tag mode handles a node/relationship property and an
+     * UNWIND map member; any other base has no cheap tag. */
+    if (ctx->prop_tag_mode && prop->expr->type != AST_NODE_IDENTIFIER) {
+        ctx->prop_tag_unknown = true;
+        append_sql(ctx, "NULL");
+        return 0;
+    }
 
     /* Handle nested property access: n.metadata.name → json_extract(n.metadata_sql, '$.name') */
     if (prop->expr->type == AST_NODE_PROPERTY) {
@@ -967,7 +989,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     if (is_projected && alias && strstr(alias, "_unwind_") && strstr(alias, ".value")) {
         { char *esc_prop = escape_sql_string(prop->property_name);
           const char *k = esc_prop ? esc_prop : prop->property_name;
-          if (ctx->in_comparison) {
+          if (ctx->prop_tag_mode) {
+              append_sql(ctx,
+                  "(CASE json_type(%s, '$.%s') WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' "
+                  "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END)", alias, k);
+          } else if (ctx->in_comparison) {
               append_sql(ctx, "json_extract(%s, '$.%s')", alias, k);
           } else {
               /* GQLITE-T-0395: json_extract gives a JSON boolean as 1/0;
@@ -987,6 +1013,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
      * JSON objects like durations); fall back to _gql_temporal_field which
      * parses temporal strings for `.year`/`.hour`/etc. */
     if (is_projected && !is_edge && !alias_is_id) {
+        if (ctx->prop_tag_mode) {
+            ctx->prop_tag_unknown = true;
+            append_sql(ctx, "NULL");
+            return 0;
+        }
         /* json_extract raises 'malformed JSON' on non-JSON inputs (e.g. a
          * temporal string like '1984-10-11'), so guard with json_valid. */
         { char *esc_prop = escape_sql_string(prop->property_name);
@@ -1024,6 +1055,19 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     snprintf(id_expr, sizeof(id_expr), "%s%s", alias, skip_id_suffix ? "" : ".id");
     int key_id = cypher_transform_property_key_id(ctx, gprefix, prop->property_name);
     const char *key = prop->property_name;
+
+    if (ctx->prop_tag_mode) {
+        /* Booleans and lists need a tag (two key probes); 'text' tells a
+         * TEXT value from text that looks like JSON. */
+        append_sql(ctx, "(SELECT COALESCE(");
+        append_prop_branch(ctx, gprefix, is_edge ? "edge_props_bool" : "node_props_bool",
+                           "tb", is_edge ? "edge_id" : "node_id", id_expr, "'bool'", key, key_id);
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, is_edge ? "edge_props_json" : "node_props_json",
+                           "tj", is_edge ? "edge_id" : "node_id", id_expr, "'json'", key, key_id);
+        append_sql(ctx, ", 'text'))");
+        return 0;
+    }
 
     append_sql(ctx, "(SELECT COALESCE(");
     if (is_edge) {

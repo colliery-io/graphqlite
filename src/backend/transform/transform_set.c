@@ -95,6 +95,7 @@ static int set_snapshot_pipeline(cypher_transform_context *ctx)
         if (!v) continue;
         replace_all_in(&v->table_alias, from_dot, snap_dot);
         replace_all_in(&v->source_expr, from_dot, snap_dot);
+        replace_all_in(&v->tag_expr, from_dot, snap_dot);
     }
 
     dbuf_clear(&b->where);
@@ -311,7 +312,7 @@ static int generate_property_update(cypher_transform_context *ctx,
             id_expr, value_sql, static_tag);
     } else {
         sql_raw(ctx->unified_builder,
-            "INSERT INTO temp._gql_set_stage (eid, v, t) SELECT %s, %s, _gql_typetag(%s)",
+            "INSERT INTO temp._gql_set_stage (eid, v, t) SELECT %s, %s, COALESCE(_gql_typetag(%s), 'text')",
             id_expr, value_sql, value_sql);
     }
     free(value_sql);

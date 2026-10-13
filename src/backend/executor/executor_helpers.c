@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 #include "executor/executor_internal.h"
+#include "runtime/gql_error.h"
 #include "executor/json_builder.h"
 #include "transform/transform_helpers.h"
 #include "parser/cypher_ast.h"
@@ -528,4 +529,40 @@ char* serialize_ast_to_json(ast_node *expr)
     serialize_ast_node(&jb, expr);
 
     return jbuf_take(&jb);
+}
+
+/* GQLITE-A-0007: the number of visible columns of a RETURN statement. RETURN
+ * appends one hidden tag column __gqlt_<i> per item after them. */
+int gql_visible_column_count(sqlite3_stmt *stmt)
+{
+    int total = sqlite3_column_count(stmt);
+    int tags = 0;
+    for (int c = total - 1; c >= 0; c--) {
+        const char *nm = sqlite3_column_name(stmt, c);
+        if (!nm || strncmp(nm, "__gqlt_", 7) != 0) break;
+        tags++;
+    }
+    return (tags > 0 && tags * 2 == total) ? total - tags : total;
+}
+
+/* GQLITE-A-0007: the type of a result cell for the JSON renderer and the
+ * agtype builder: its SQLite type, the boolean / JSON subtype when it is
+ * still attached, and the hidden tag column when there is one (a tag
+ * survives ORDER BY, DISTINCT and GROUP BY; a subtype does not). */
+int gql_result_cell_type(sqlite3_stmt *stmt, int col, int visible)
+{
+    int ct = sqlite3_column_type(stmt, col);
+    sqlite3_value *cv = sqlite3_column_value(stmt, col);
+    unsigned int sub = cv ? sqlite3_value_subtype(cv) : 0;
+    if (sub == GQL_SUBTYPE_BOOLEAN) ct = GQL_COL_TYPE_BOOLEAN;
+    else if (sub == GQL_SUBTYPE_JSON && ct == SQLITE_TEXT) ct = GQL_COL_TYPE_JSON;
+
+    int total = sqlite3_column_count(stmt);
+    if (ct == SQLITE_NULL || visible + col >= total || visible == total) return ct;
+    const char *tag = (const char *)sqlite3_column_text(stmt, visible + col);
+    if (!tag) return ct;
+    if (strcmp(tag, "bool") == 0 && ct != SQLITE_FLOAT) return GQL_COL_TYPE_BOOLEAN;
+    if (strcmp(tag, "json") == 0 && (ct == SQLITE_TEXT || ct == GQL_COL_TYPE_JSON)) return GQL_COL_TYPE_JSON;
+    if (strcmp(tag, "text") == 0 && ct == SQLITE_TEXT) return GQL_COL_TYPE_STRING;
+    return ct;
 }

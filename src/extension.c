@@ -370,8 +370,21 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             col_type = result->data_types[row][col];
                         }
 
+                        /* GQLITE-A-0007: a cell known to be a string is
+                         * quoted even when it looks like JSON; a JSON cell
+                         * is raw. Untagged text keeps the old rule. */
+                        if (col_type == GQL_COL_TYPE_STRING) {
+                            col_type = SQLITE_TEXT;
+                            goto render_string;
+                        }
+                        if (col_type == GQL_COL_TYPE_BOOLEAN) {
+                            const char *b = (strcmp(val, "1") == 0) ? "true"
+                                          : (strcmp(val, "0") == 0) ? "false" : val;
+                            size_t slen = strlen(b);
+                            if (offset + slen < buffer_size) { memcpy(json_result + offset, b, slen); offset += slen; }
+                        } else
                         /* Check if value is already JSON (starts with [, { or "). */
-                        if (val[0] == '[' || val[0] == '{' || val[0] == '"') {
+                        if (col_type == GQL_COL_TYPE_JSON || val[0] == '[' || val[0] == '{' || val[0] == '"') {
                             size_t slen = strlen(val);
                             if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
                         } else if (col_type == SQLITE_INTEGER) {
@@ -408,6 +421,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             /* NaN sentinel (GQLITE-T-0340) — emit unquoted NaN. */
                             offset += snprintf(json_result + offset, buffer_size - offset, "NaN");
                         } else {
+                            render_string:
                             /* String value - quote and escape. Control
                              * characters must be escaped too or the output is
                              * not valid JSON (perf review C1: RETURN 'a\\nb' and

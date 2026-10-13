@@ -747,7 +747,7 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
             /* No return clause - manually collect results from SQL columns */
             result->data = NULL;
             result->row_count = 0;
-            result->column_count = sqlite3_column_count(transform_result->stmt);
+            result->column_count = gql_visible_column_count(transform_result->stmt);
 
             /* Get column names from the SQL result */
             if (result->column_count > 0) {
@@ -3929,6 +3929,9 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 for (int c = 0; c < n_scope && c < pr->column_count; c++) {
                     const char *cell = pr->data[r][c];
                     int ty = pr->data_types ? pr->data_types[r][c] : SQLITE_TEXT;
+                    /* JSON and string cells are TEXT to the row-wise
+                     * evaluator (GQLITE-A-0007 result types). */
+                    if (ty == GQL_COL_TYPE_JSON || ty == GQL_COL_TYPE_STRING) ty = SQLITE_TEXT;
                     bool is_edge = false;
                     long long id = rw_entity_id(cell, &is_edge);
                     if (id >= 0) {

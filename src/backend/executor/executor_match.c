@@ -302,7 +302,12 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                 char func_name[256];
                 size_t pos = 0;
                 pos += snprintf(func_name + pos, sizeof(func_name) - pos, "%s(", func->function_name);
-                if (func->args) {
+                /* count(*) carries one NULL argument (or none). */
+                if (strcasecmp(func->function_name, "count") == 0 &&
+                    (!func->args || func->args->count == 0 ||
+                     (func->args->count == 1 && !func->args->items[0]))) {
+                    pos += snprintf(func_name + pos, sizeof(func_name) - pos, "*");
+                } else if (func->args) {
                     for (int j = 0; j < func->args->count && pos < sizeof(func_name) - 10; j++) {
                         if (j > 0) {
                             pos += snprintf(func_name + pos, sizeof(func_name) - pos, ", ");
@@ -416,13 +421,9 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
              * If the UDF that produced this cell tagged it with the
              * boolean subtype, override with GQL_COL_TYPE_BOOLEAN so
              * the renderer emits unquoted JSON booleans (I-0040 M13). */
-            int ct = sqlite3_column_type(stmt, col);
-            sqlite3_value *cv = sqlite3_column_value(stmt, col);
-            if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) {
-                ct = GQL_COL_TYPE_BOOLEAN;
-            } else if (cv && ct == SQLITE_TEXT && sqlite3_value_subtype(cv) == GQL_SUBTYPE_JSON) {
-                ct = GQL_COL_TYPE_JSON;
-            }
+            /* SQLite type, subtype, and the hidden RETURN tag column
+             * (GQLITE-A-0007). */
+            int ct = gql_result_cell_type(stmt, col, column_count);
             result->data_types[current_row][col] = ct;
             const char *value = (const char*)sqlite3_column_text(stmt, col);
             char float_buf[40];
@@ -531,12 +532,12 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                                 free(label);
                             }
                         } else {
-                            /* Not a graph entity - treat as scalar value.
-                             * A projected value may have crossed a CTE, which
-                             * drops the boolean and JSON subtypes: text is
-                             * still typed by its content. */
+                            /* Not a graph entity - treat as scalar value. A
+                             * projected value that crossed a CTE has its
+                             * boolean / JSON subtype put back from its tag
+                             * column (GQLITE-A-0007): text is a string. */
                             result->agtype_data[current_row][col] =
-                                create_property_agtype_value(value, ct == SQLITE_TEXT ? -1 : ct);
+                                create_property_agtype_value(value, ct);
                         }
                     } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
                         /* Property access reads the typed property tables
@@ -549,7 +550,7 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                          * value so booleans, integers, and floats get the
                          * right agtype rather than being stringified. */
                         result->agtype_data[current_row][col] =
-                            create_property_agtype_value(value, ct == SQLITE_TEXT ? -1 : ct);
+                            create_property_agtype_value(value, ct);
                     }
                 }
             } else {
@@ -596,11 +597,11 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
 }
 
 /* Create agtype value for a scalar cell. `col_type` is the SQLite type of the
- * cell (or GQL_COL_TYPE_BOOLEAN / GQL_COL_TYPE_JSON from its subtype): an
- * INTEGER, FLOAT, boolean or JSON cell keeps that type, and TEXT is a string.
- * Text that only looks like a number or a boolean ('123', 'true') stays a
- * string (GQLITE-T-0394). With col_type < 0 (unknown) the type is guessed
- * from the text as before. */
+ * cell, or GQL_COL_TYPE_BOOLEAN / _JSON / _STRING from its subtype or its
+ * RETURN tag column (GQLITE-A-0007): those keep their type, so the string
+ * '123' stays a string (GQLITE-T-0394). Plain TEXT (type unknown: some
+ * functions return JSON text without the subtype) and col_type < 0 are
+ * typed from the text as before. */
 agtype_value* create_property_agtype_value(const char* value, int col_type)
 {
     if (!value) {
@@ -617,7 +618,7 @@ agtype_value* create_property_agtype_value(const char* value, int col_type)
                 return agtype_value_create_bool(strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
             case GQL_COL_TYPE_JSON:
                 return agtype_value_create_json(value);
-            case SQLITE_TEXT:
+            case GQL_COL_TYPE_STRING:
                 return agtype_value_create_string(value);
             default:
                 break;
