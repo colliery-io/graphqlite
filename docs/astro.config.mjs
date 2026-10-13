@@ -109,9 +109,6 @@ export default defineConfig({
 			description: 'GraphQLite: a SQLite extension for graph queries in Cypher.',
 			social: [{ icon: 'github', label: 'GitHub', href: REPO }],
 			editLink: { baseUrl: `${REPO}/edit/main/docs/` },
-			// mdBook showed a comment line such as "# /path/to/file" as code.
-			// Keep it in the code, not as the title of the block.
-			expressiveCode: { frames: { extractFileNameFromCode: false } },
 			plugins: [
 				starlightAurora({ hyper: true }),
 				// Latest is the docs of main. The docs of each earlier release stay
