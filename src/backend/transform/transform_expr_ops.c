@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
 #include "transform/transform_func_entity.h"
@@ -695,9 +696,16 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         }
         if (!both_int_lit) {
             append_sql(ctx, binary_op->op_type == BINARY_OP_ADD ? "_gql_dyn_add(" : "_gql_dyn_sub(");
-            if (transform_expression(ctx, binary_op->left) < 0) return -1;
-            append_sql(ctx, ", ");
-            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            /* A boolean operand carries its subtype, so list + false appends
+             * false, not 0. */
+            for (int side = 0; side < 2; side++) {
+                ast_node *opnd = side ? binary_op->right : binary_op->left;
+                if (side) append_sql(ctx, ", ");
+                bool b = ast_is_boolean_expr(opnd);
+                if (b) append_sql(ctx, "_gql_bool_str(");
+                if (transform_expression(ctx, opnd) < 0) return -1;
+                if (b) append_sql(ctx, ")");
+            }
             append_sql(ctx, "))");  /* closes the helper + the outer paren */
             ctx->in_comparison = was_in_comparison;
             return 0;

@@ -16,6 +16,7 @@
 #include "graphqlite_version.h"
 #include "graphqlite_sqlite.h"
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <regex.h>
@@ -943,8 +944,12 @@ void gql_to_bool_strict_func(
     if (t == SQLITE_TEXT) {
         const char *s = (const char*)sqlite3_value_text(argv[0]);
         if (!s) { sqlite3_result_null(context); return; }
-        if (strcmp(s, "true") == 0)  { sqlite3_result_int(context, 1); return; }
-        if (strcmp(s, "false") == 0) { sqlite3_result_int(context, 0); return; }
+        /* Case-insensitive, surrounding spaces ignored ('TRUE', ' false '). */
+        while (*s == ' ' || *s == '\t') s++;
+        size_t n = strlen(s);
+        while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) n--;
+        if (n == 4 && strncasecmp(s, "true", 4) == 0)  { sqlite3_result_int(context, 1); return; }
+        if (n == 5 && strncasecmp(s, "false", 5) == 0) { sqlite3_result_int(context, 0); return; }
         sqlite3_result_null(context);
         return;
     }
@@ -2617,6 +2622,10 @@ static void gql_dyn_addsub_func(sqlite3_context *ctx, int argc, sqlite3_value **
              * container. T-0304 / I-0042-followup. */
             bool l_is_json_container = l_text && (l_text[0] == '[' || l_text[0] == '{');
             bool r_is_json_container = r_text && (r_text[0] == '[' || r_text[0] == '{');
+            /* A boolean ('true'/'false' with the boolean subtype) is JSON
+             * true/false in the list, not 1 or "true" (TCK List4 [2]). */
+            if (sqlite3_value_subtype(argv[0]) == GQL_SUBTYPE_BOOLEAN) l_is_json_container = true;
+            if (sqlite3_value_subtype(argv[1]) == GQL_SUBTYPE_BOOLEAN) r_is_json_container = true;
             if (l_is_arr && r_is_arr) {
                 /* list + list: splice the two JSON arrays at the text
                  * level. UNION ALL strips JSON subtype, which causes
@@ -2656,8 +2665,12 @@ static void gql_dyn_addsub_func(sqlite3_context *ctx, int argc, sqlite3_value **
                 sqlite3_bind_value(stmt, 2, argv[1]);
                 if (sqlite3_step(stmt) == SQLITE_ROW) {
                     const char *out = (const char*)sqlite3_column_text(stmt, 0);
-                    if (out) sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
-                    else sqlite3_result_null(ctx);
+                    if (out) {
+                        sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+                        sqlite3_result_subtype(ctx, GQL_SUBTYPE_JSON);  /* a list */
+                    } else {
+                        sqlite3_result_null(ctx);
+                    }
                 } else {
                     sqlite3_result_null(ctx);
                 }

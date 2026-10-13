@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
@@ -140,6 +141,11 @@ bool ast_is_boolean_expr(const ast_node *expr)
             return true;
         case AST_NODE_LITERAL:
             return ((const cypher_literal *)expr)->literal_type == LITERAL_BOOLEAN;
+        case AST_NODE_FUNCTION_CALL: {
+            const char *fn = ((const cypher_function_call *)expr)->function_name;
+            return fn && (strcasecmp(fn, "toBoolean") == 0 || strcasecmp(fn, "toBooleanOrNull") == 0 ||
+                          strcasecmp(fn, "isEmpty") == 0 || strcasecmp(fn, "exists") == 0);
+        }
         case AST_NODE_BINARY_OP:
             switch (((const cypher_binary_op *)expr)->op_type) {
                 case BINARY_OP_AND: case BINARY_OP_OR: case BINARY_OP_XOR:

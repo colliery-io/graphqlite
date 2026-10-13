@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "executor/executor_internal.h"
+#include "transform/transform_helpers.h"
 #include "gql_thread_local.h"
 #include "executor/cypher_executor.h"
 #include "transform/cypher_transform.h"
@@ -272,26 +273,31 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         int entity_id = is_edge ? base_edge_id : base_node_id;
                                         if (entity_id >= 0) {
                                             const char *id_col = is_edge ? "edge_id" : "node_id";
+                                            /* GQLITE-T-0407: lists too (the JSON
+                                             * tables were not probed). */
                                             const char *node_t[] = {"node_props_int",
                                                 "node_props_real", "node_props_text",
-                                                "node_props_bool", NULL};
+                                                "node_props_bool", "node_props_json", NULL};
                                             const char *edge_t[] = {"edge_props_int",
                                                 "edge_props_real", "edge_props_text",
-                                                "edge_props_bool", NULL};
+                                                "edge_props_bool", "edge_props_json", NULL};
                                             const char **tables = is_edge ? edge_t : node_t;
                                             static int64_t int_buf;
                                             static double real_buf;
                                             static int bool_buf;
-                                            static GQL_THREAD_LOCAL char text_buf[256];
+                                            /* Text of any length (a 256-byte buffer
+                                             * cut longer strings). */
+                                            static GQL_THREAD_LOCAL char *text_buf = NULL;
                                             bool found = false;
                                             for (int t = 0; tables[t] && !found; t++) {
                                                 char sql[512];
                                                 snprintf(sql, sizeof(sql),
                                                     "SELECT value FROM %s WHERE %s = %d AND "
-                                                    "key_id = (SELECT id FROM property_keys WHERE key = '%s')",
-                                                    tables[t], id_col, entity_id, prop_ref->property_name);
+                                                    "key_id = (SELECT id FROM property_keys WHERE key = ?)",
+                                                    tables[t], id_col, entity_id);
                                                 sqlite3_stmt *stmt;
                                                 if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                                                    sqlite3_bind_text(stmt, 1, prop_ref->property_name, -1, SQLITE_STATIC);
                                                     if (sqlite3_step(stmt) == SQLITE_ROW) {
                                                         int st = sqlite3_column_type(stmt, 0);
                                                         if (st == SQLITE_INTEGER) {
@@ -313,10 +319,12 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                                         } else if (st == SQLITE_TEXT) {
                                                             const unsigned char *v = sqlite3_column_text(stmt, 0);
                                                             if (v) {
-                                                                snprintf(text_buf, sizeof(text_buf), "%s", (const char *)v);
-                                                                prop_type = PROP_TYPE_TEXT;
+                                                                free(text_buf);
+                                                                text_buf = strdup((const char *)v);
+                                                                prop_type = strstr(tables[t], "_json")
+                                                                            ? PROP_TYPE_JSON : PROP_TYPE_TEXT;
                                                                 prop_value = text_buf;
-                                                                found = true;
+                                                                found = text_buf != NULL;
                                                             }
                                                         }
                                                     }
@@ -330,6 +338,13 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value func_pv;
                                     property_value_init(&func_pv);
                                     int rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
+                                    /* toBoolean() and other boolean functions give 1/0 (GQLITE-T-0408). */
+                                    if (rc == 0 && prop_type == PROP_TYPE_INTEGER && ast_is_boolean_expr((ast_node *)func) &&
+                                        (func_pv.as_int == 0 || func_pv.as_int == 1)) {
+                                        int b = (int)func_pv.as_int;
+                                        prop_type = PROP_TYPE_BOOLEAN;
+                                        func_pv.as_bool = b;
+                                    }
                                     if (rc == -2) {
                                         property_value_free(&func_pv);
                                         continue;
@@ -754,6 +769,13 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 static double rel_func_real_buf;
                                 static int rel_func_bool_buf;
                                 int rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
+                                /* toBoolean() and other boolean functions give 1/0 (GQLITE-T-0408). */
+                                if (rc == 0 && prop_type == PROP_TYPE_INTEGER && ast_is_boolean_expr((ast_node *)func) &&
+                                    (func_pv.as_int == 0 || func_pv.as_int == 1)) {
+                                    int b = (int)func_pv.as_int;
+                                    prop_type = PROP_TYPE_BOOLEAN;
+                                    func_pv.as_bool = b;
+                                }
                                 if (rc == -2) {
                                     property_value_free(&func_pv);
                                     continue; /* NULL result: no property */

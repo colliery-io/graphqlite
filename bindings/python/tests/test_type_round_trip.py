@@ -348,3 +348,42 @@ def test_values_are_json_round_trippable():
     """Guard for the table itself: every expected value is plain JSON."""
     for _, val in {**VALUES, **EXPR_ONLY_VALUES}.values():
         assert same(json.loads(json.dumps(val)), val)
+
+
+# --- functions that return booleans or lists ---------------------------------
+
+FUNCTION_CASES = [
+    ("RETURN toBoolean('true') AS v", True),
+    ("RETURN toBoolean('TRUE') AS v", True),
+    ("RETURN toBoolean(' false ') AS v", False),
+    ("RETURN toBoolean(false) AS v", False),
+    ("RETURN isEmpty([]) AS v", True),
+    ("RETURN isEmpty([1]) AS v", False),
+    ("RETURN isEmpty({}) AS v", True),
+    ("RETURN isEmpty('') AS v", True),
+    ("RETURN isEmpty(null) AS v", None),
+    ("RETURN [false, true] + false AS v", [False, True, False]),
+    ("RETURN [1] + [2.0] AS v", [1, 2.0]),
+    ("RETURN ['[1]'][0] AS v", "[1]"),
+    ("RETURN {k: '[1]'}.k AS v", "[1]"),
+    ("RETURN {k: true}.k AS v", True),
+    ("WITH toBoolean('true') AS b RETURN b AS v", True),
+]
+
+
+@pytest.mark.parametrize("query,want", FUNCTION_CASES, ids=[c[0] for c in FUNCTION_CASES])
+def test_function_result_types(g, query, want):
+    assert same(one(g.query(query)), want)
+
+
+def test_stored_function_results_keep_type(g):
+    g.query("CREATE (:T {b: toBoolean('true'), e: isEmpty([]), s: 'x' + 'y'})")
+    row = g.query("MATCH (n:T) RETURN n.b AS b, n.e AS e, n.s AS s")[0]
+    assert same(row, {"b": True, "e": True, "s": "xy"})
+
+
+def test_create_copies_lists_and_long_text(g):
+    long_text = "x" * 300
+    g.query(f"CREATE (a:A {{l: [1, 2], s: '{long_text}'}}), (:B {{l: a.l, s: a.s}})")
+    row = g.query("MATCH (b:B) RETURN b.l AS l, b.s AS s")[0]
+    assert same(row, {"l": [1, 2], "s": long_text})

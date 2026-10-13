@@ -240,7 +240,8 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_tz_offset_for_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
-  rc = sqlite3_create_function(db, "_gql_dyn_add", 2, SQLITE_UTF8, 0,
+  rc = sqlite3_create_function(db, "_gql_dyn_add", 2,
+                         SQLITE_UTF8 | SQLITE_SUBTYPE | SQLITE_RESULT_SUBTYPE, 0,
                          gql_dyn_add_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_dyn_sub", 2, SQLITE_UTF8, 0,

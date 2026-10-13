@@ -113,9 +113,17 @@ int transform_isempty_function(cypher_transform_context *ctx, cypher_function_ca
      * and json_array_length for arrays. Use a simple approach:
      * (expr IS NULL OR LENGTH(CAST(expr AS TEXT)) = 0 OR expr = '[]' OR expr = '{}')
      */
-    append_sql(ctx, "(COALESCE(LENGTH(");
-    if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-    append_sql(ctx, "), 0) = 0)");
+    /* A list or map is empty by its JSON length (LENGTH('[]') is 2, so
+     * isEmpty([]) was false); null gives null (GQLITE-T-0408). */
+    ast_node *arg = func_call->args->items[0];
+    char *x = cypher_transform_capture_expression(ctx, arg);
+    if (!x) return -1;
+    append_sql(ctx,
+        "(CASE WHEN (%s) IS NULL THEN NULL "
+        "WHEN json_valid(%s) AND json_type(%s) = 'array' THEN json_array_length(%s) = 0 "
+        "WHEN json_valid(%s) AND json_type(%s) = 'object' THEN (SELECT count(*) FROM json_each(%s)) = 0 "
+        "ELSE LENGTH(%s) = 0 END)", x, x, x, x, x, x, x, x);
+    free(x);
 
     return 0;
 }
