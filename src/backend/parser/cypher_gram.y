@@ -38,7 +38,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
  * parser can't immediately distinguish a node pattern from a parenthesized
  * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 15
+%expect 13
 %expect-rr 3  /* IDENTIFIER, BQIDENT, END_P in variable_opt */
 
 %union {
@@ -129,7 +129,7 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %type <varlen_range> varlen_range_opt
 %type <return_item> return_item
 
-%type <node> expr primary_expr literal_expr function_call list_predicate reduce_expr
+%type <node> expr primary_expr literal_expr function_call list_predicate reduce_expr set_target
 %type <list> argument_list
 %type <literal> literal
 %type <identifier> identifier
@@ -562,12 +562,35 @@ set_item_list:
         }
     ;
 
+/* The target of SET x = ... / SET x += ...: a variable or a property of
+ * one. Not a full expression, so `SET n.b = n.num > 2` reads the
+ * comparison as the value (GQLITE-T-0407). */
+set_target:
+    identifier                     { $$ = (ast_node*)$1; }
+    | '(' expr ')'                 { $$ = $2; }
+    | set_target '.' IDENTIFIER
+        {
+            $$ = (ast_node*)make_property($1, $3, @3.first_line);
+            free($3);
+        }
+    | set_target '.' BQIDENT
+        {
+            $$ = (ast_node*)make_property($1, $3, @3.first_line);
+            free($3);
+        }
+    | set_target '.' non_reserved_kw
+        {
+            $$ = (ast_node*)make_property($1, $3, @3.first_line);
+            free($3);
+        }
+    ;
+
 set_item:
-    expr '=' expr
+    set_target '=' expr
         {
             $$ = make_cypher_set_item($1, $3, false);
         }
-    | expr PLUS_EQ expr
+    | set_target PLUS_EQ expr
         {
             /* SET n += {map} — merge properties */
             $$ = make_cypher_set_item($1, $3, true);

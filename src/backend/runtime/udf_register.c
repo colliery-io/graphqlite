@@ -162,7 +162,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          SQLITE_UTF8, 0, gql_edge_prop_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_dyn_prop", 2,
-                         SQLITE_UTF8, 0, gql_dyn_prop_func, 0, 0);
+                         SQLITE_UTF8 | SQLITE_RESULT_SUBTYPE, 0, gql_dyn_prop_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  /* Same lookup, returning the value's type tag (GQLITE-A-0007). */
+  rc = sqlite3_create_function(db, "_gql_dyn_prop_tag", 2,
+                         SQLITE_UTF8, (void *)1, gql_dyn_prop_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   /* Cypher-orderability min()/max() aggregates (step + final, no scalar fn). */
@@ -174,6 +178,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   rc = sqlite3_create_function(db, "_gql_max", 1,
                          SQLITE_UTF8, 0,
                          0, gql_max_step, gql_max_final);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_subscript_tag", 2,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_subscript_tag_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_subscript", 2,

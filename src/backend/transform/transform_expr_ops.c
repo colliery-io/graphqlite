@@ -884,11 +884,24 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
 {
     CYPHER_DEBUG("Transforming property access");
 
-    /* GQLITE-A-0007: tag mode handles a node/relationship property and an
-     * UNWIND map member; any other base has no cheap tag. */
+    /* GQLITE-A-0007: tag mode handles a node/relationship property, an
+     * UNWIND map member, and a key of any other value (_gql_dyn_prop_tag);
+     * startNode()/endNode() bases have no cheap tag. */
     if (ctx->prop_tag_mode && prop->expr->type != AST_NODE_IDENTIFIER) {
-        ctx->prop_tag_unknown = true;
-        append_sql(ctx, "NULL");
+        if (prop->expr->type == AST_NODE_FUNCTION_CALL || prop->expr->type == AST_NODE_PROPERTY) {
+            ctx->prop_tag_unknown = true;
+            append_sql(ctx, "NULL");
+            return 0;
+        }
+        bool saved = ctx->prop_tag_mode;
+        ctx->prop_tag_mode = false;
+        append_sql(ctx, "_gql_dyn_prop_tag(");
+        int rc = transform_expression(ctx, prop->expr);
+        ctx->prop_tag_mode = saved;
+        if (rc < 0) return -1;
+        { char *esc_prop = escape_sql_string(prop->property_name);
+          append_sql(ctx, ", '%s')", esc_prop ? esc_prop : prop->property_name);
+          free(esc_prop); }
         return 0;
     }
 
@@ -960,11 +973,16 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return -1;
     }
 
-    /* Get the base expression (should be an identifier) */
+    /* Any other base (a map literal, CASE, a parameter...): read the key
+     * from the value, as for a subscript base (GQLITE-T-0397: `{k: 1}.k`
+     * was "Complex property access not yet supported"). */
     if (prop->expr->type != AST_NODE_IDENTIFIER) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("Complex property access not yet supported");
-        return -1;
+        append_sql(ctx, "_gql_dyn_prop(");
+        if (transform_expression(ctx, prop->expr) < 0) return -1;
+        { char *esc_prop = escape_sql_string(prop->property_name);
+          append_sql(ctx, ", '%s')", esc_prop ? esc_prop : prop->property_name);
+          free(esc_prop); }
+        return 0;
     }
 
     cypher_identifier *id = (cypher_identifier*)prop->expr;

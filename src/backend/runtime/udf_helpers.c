@@ -792,19 +792,39 @@ void gql_dyn_prop_func(sqlite3_context *context, int argc, sqlite3_value **argv)
     if (*vw != '{') { sqlite3_result_null(context); return; }  /* not a map/entity */
     sqlite3 *db = sqlite3_context_db_handle(context);
     sqlite3_stmt *st = NULL;
+    /* The JSON path of the key, then its value and JSON type: a boolean comes
+     * back as 'true'/'false' with the boolean subtype and a list or map with
+     * the JSON subtype, not as 1/0 and plain text (GQLITE-T-0397). */
     const char *sql =
-        "SELECT CASE WHEN json_type(?1, '$.properties') IS NOT NULL THEN "
-        "  CASE WHEN ?2 IN ('id','labels','type','startNode','endNode','start','end') "
-        "       THEN json_extract(?1, '$.' || ?2) "
-        "       ELSE json_extract(?1, '$.properties.' || ?2) END "
-        "ELSE json_extract(?1, '$.' || ?2) END";
+        "SELECT json_extract(?1, p), json_type(?1, p) FROM (SELECT "
+        "CASE WHEN json_type(?1, '$.properties') IS NOT NULL "
+        "      AND ?2 NOT IN ('id','labels','type','startNode','endNode','start','end') "
+        "THEN '$.properties.' || json_quote(?2) ELSE '$.' || json_quote(?2) END AS p)";
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK) {
         sqlite3_bind_value(st, 1, argv[0]);
         sqlite3_bind_value(st, 2, argv[1]);
-        if (sqlite3_step(st) == SQLITE_ROW)
-            sqlite3_result_value(context, sqlite3_column_value(st, 0));
-        else
+        if (sqlite3_step(st) == SQLITE_ROW) {
+            const char *jt = (const char *)sqlite3_column_text(st, 1);
+            if (sqlite3_user_data(context)) {
+                /* _gql_dyn_prop_tag: the type tag of the value (GQLITE-A-0007). */
+                const char *tag = !jt ? NULL
+                    : (strcmp(jt, "true") == 0 || strcmp(jt, "false") == 0) ? "bool"
+                    : (strcmp(jt, "array") == 0 || strcmp(jt, "object") == 0) ? "json"
+                    : strcmp(jt, "text") == 0 ? "text" : NULL;
+                if (tag) sqlite3_result_text(context, tag, -1, SQLITE_STATIC);
+                else sqlite3_result_null(context);
+            } else if (jt && (strcmp(jt, "true") == 0 || strcmp(jt, "false") == 0)) {
+                sqlite3_result_text(context, jt[0] == 't' ? "true" : "false", -1, SQLITE_STATIC);
+                sqlite3_result_subtype(context, GQL_SUBTYPE_BOOLEAN);
+            } else if (jt && (strcmp(jt, "array") == 0 || strcmp(jt, "object") == 0)) {
+                sqlite3_result_text(context, (const char *)sqlite3_column_text(st, 0), -1, SQLITE_TRANSIENT);
+                sqlite3_result_subtype(context, GQL_SUBTYPE_JSON);
+            } else {
+                sqlite3_result_value(context, sqlite3_column_value(st, 0));
+            }
+        } else {
             sqlite3_result_null(context);
+        }
         sqlite3_finalize(st);
     } else {
         sqlite3_result_null(context);
@@ -1091,6 +1111,35 @@ void gql_json_elem_func(sqlite3_context *context, int argc, sqlite3_value **argv
     }
     sqlite3_result_value(context, argv[0]);
     if (sub == GQL_SUBTYPE_JSON) sqlite3_result_subtype(context, GQL_SUBTYPE_JSON);
+}
+
+/* _gql_subscript_tag(list, index): the type tag of list[index] ('bool',
+ * 'json' or 'text' for a JSON list element; NULL otherwise), so a string
+ * element that looks like JSON stays a string (GQLITE-A-0007). */
+void gql_subscript_tag_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    sqlite3_result_null(context);
+    if (argc != 2 || sqlite3_value_type(argv[0]) != SQLITE_TEXT ||
+        (sqlite3_value_type(argv[1]) != SQLITE_INTEGER)) return;
+    const char *v = (const char *)sqlite3_value_text(argv[0]);
+    while (v && (*v == ' ' || *v == '\t' || *v == '\n')) v++;
+    if (!v || *v != '[') return;
+    sqlite3 *db = sqlite3_context_db_handle(context);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db,
+            "SELECT json_type(?1, '$[' || CAST(CASE WHEN ?2 < 0 THEN json_array_length(?1) + ?2 "
+            "ELSE ?2 END AS INTEGER) || ']')", -1, &st, NULL) != SQLITE_OK) return;
+    sqlite3_bind_value(st, 1, argv[0]);
+    sqlite3_bind_value(st, 2, argv[1]);
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const char *jt = (const char *)sqlite3_column_text(st, 0);
+        const char *tag = !jt ? NULL
+            : (strcmp(jt, "true") == 0 || strcmp(jt, "false") == 0) ? "bool"
+            : (strcmp(jt, "array") == 0 || strcmp(jt, "object") == 0) ? "json"
+            : strcmp(jt, "text") == 0 ? "text" : NULL;
+        if (tag) sqlite3_result_text(context, tag, -1, SQLITE_STATIC);
+    }
+    sqlite3_finalize(st);
 }
 
 /* _gql_retag(x, tag): x with the subtype its tag names put back: 'bool'

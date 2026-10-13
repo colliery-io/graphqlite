@@ -323,8 +323,9 @@ EXPRESSIONS = {
         g.query("UNWIND $rows AS r RETURN r.p AS v", {"rows": [{"p": val}]})),
     "list_index": lambda g, lit, val: one(g.query(f"RETURN [{lit}][0] AS v")),
     "map_key": lambda g, lit, val: one(g.query(f"RETURN {{k: {lit}}}.k AS v")),
-    "collect_unwind": lambda g, lit, val: one(
-        g.query(f"UNWIND [{lit}] AS x RETURN collect(x) AS v"))[0],
+    # collect() drops nulls, so collect of [null] is [].
+    "collect_unwind": lambda g, lit, val: (one(
+        g.query(f"UNWIND [{lit}] AS x RETURN collect(x) AS v")) or [None])[0],
 }
 
 

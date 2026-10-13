@@ -218,6 +218,18 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
         case AST_NODE_LIST:
         case AST_NODE_MAP:
             return strdup("'json'");
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *sub = (cypher_subscript *)expr;
+            if (sub->is_slice || !sub->index) return strdup("'json'");
+            char *l = transform_expression_to_string(ctx, sub->expr);
+            char *ix = transform_expression_to_string(ctx, sub->index);
+            size_t n = (l && ix) ? 2 * (strlen(l) + strlen(ix)) + 96 : 0;
+            char *out = n ? malloc(n) : NULL;
+            if (out) snprintf(out, n, "COALESCE(_gql_subscript_tag(%s, %s), _gql_typetag(_gql_subscript(%s, %s)))", l, ix, l, ix);
+            free(l);
+            free(ix);
+            return out;
+        }
         case AST_NODE_CASE_EXPR: {
             /* The tag of the branch the CASE takes. */
             cypher_case_expr *ce = (cypher_case_expr *)expr;

@@ -256,7 +256,7 @@ static void test_boolean_list_types(void)
 static void test_edge_property_types_in_expressions(void)
 {
     ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN r.w + 1", "2");
-    ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN r.f * 2", "5");
+    ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN r.f * 2", "5.0");
     ASSERT_COLUMN0("MATCH ()-[r:ER]->() RETURN [r.w, r.f]", "[1,2.5]");
 }
 

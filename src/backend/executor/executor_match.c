@@ -428,10 +428,10 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
             const char *value = (const char*)sqlite3_column_text(stmt, col);
             char float_buf[40];
             if (ct == SQLITE_FLOAT && value) {
-                /* Override SQLite's default text formatting to preserve
-                 * full double precision (matches Cypher TCK expectations). */
-                snprintf(float_buf, sizeof(float_buf), "%.17g",
-                         sqlite3_column_double(stmt, col));
+                /* Full double precision (TCK), and a whole float keeps
+                 * ".0" (GQLITE-T-0403). */
+                gql_format_double(float_buf, sizeof(float_buf),
+                                  sqlite3_column_double(stmt, col));
                 value = float_buf;
             }
             if (value) {

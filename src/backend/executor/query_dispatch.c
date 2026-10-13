@@ -263,6 +263,17 @@ static const query_pattern patterns[] = {
         .priority = 96
     },
     {
+        /* GQLITE-T-0401: `WITH 42 AS x CREATE (:V {p: x})` — the CREATE
+         * handler skipped the WITH, so x was unbound (and a WITH ... WHERE
+         * did not filter). The WITH is a read prefix of the pipeline. */
+        .name = "ROWWISE_WRITE (WITH+CREATE)",
+        .required = CLAUSE_WITH | CLAUSE_CREATE,
+        .forbidden = CLAUSE_MATCH | CLAUSE_UNWIND | CLAUSE_MERGE | CLAUSE_CALL |
+                     CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
+        .handler = handle_rowwise_write,
+        .priority = 95
+    },
+    {
         .name = "ROWWISE_WRITE (MATCH+WITH+MERGE)",
         .required = CLAUSE_MATCH | CLAUSE_WITH | CLAUSE_MERGE,
         .forbidden = CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV,
@@ -3585,6 +3596,11 @@ static char *rw_scalar_sql(const rw_scalar *sc)
 {
     if (!sc || !sc->text) return sqlite3_mprintf("NULL");
     if (sc->type == SQLITE_INTEGER || sc->type == SQLITE_FLOAT) return sqlite3_mprintf("%s", sc->text);
+    /* GQLITE-A-0007: a boolean keeps its subtype; a known string is never
+     * read as JSON. */
+    if (sc->type == GQL_COL_TYPE_BOOLEAN)
+        return sqlite3_mprintf("_gql_bool_str(%d)", strcmp(sc->text, "true") == 0 || strcmp(sc->text, "1") == 0);
+    if (sc->type == GQL_COL_TYPE_STRING) return sqlite3_mprintf("%Q", sc->text);
     const char *t = sc->text;
     if ((t[0] == '[' || t[0] == '{')) return sqlite3_mprintf("json(%Q)", t);
     return sqlite3_mprintf("%Q", t);
@@ -3646,6 +3662,8 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
         if (executor->params_json) bind_params_from_json(st, executor->params_json);
         if (sqlite3_step(st) == SQLITE_ROW) {
             type = sqlite3_column_type(st, 0);
+            sqlite3_value *cv = sqlite3_column_value(st, 0);
+            if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) type = GQL_COL_TYPE_BOOLEAN;
             const char *v = (const char*)sqlite3_column_text(st, 0);
             *out_text = v ? strdup(v) : NULL;
         }
@@ -3659,8 +3677,12 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
 static ast_node *rw_make_literal(cypher_executor *executor, const char *text, int type)
 {
     if (!text || type == SQLITE_NULL) return (ast_node*)make_null_literal(0);
+    /* A boolean cell stays a boolean (it was stored as the text 'true'). */
+    if (type == GQL_COL_TYPE_BOOLEAN)
+        return (ast_node*)make_boolean_literal(strcmp(text, "true") == 0 || strcmp(text, "1") == 0, 0);
     if (type == SQLITE_INTEGER) return (ast_node*)make_integer_literal(strtoll(text, NULL, 10), 0);
     if (type == SQLITE_FLOAT) return (ast_node*)make_decimal_literal(strtod(text, NULL), 0);
+    if (type == GQL_COL_TYPE_STRING) return (ast_node*)make_string_literal((char*)text, 0);
     if (text[0] == '[') {
         ast_list *items = ast_list_create();
         sqlite3_stmt *st = NULL;
@@ -3737,6 +3759,12 @@ static void rw_literalize_props(cypher_executor *executor, ast_node *props, cons
         if (pair->value->type == AST_NODE_LITERAL || pair->value->type == AST_NODE_PARAMETER) continue;
         if (!rw_expr_scalar_only(pair->value, row)) continue;
         ast_node *lit = rw_map_property_literal(executor, pair->value, row);
+        if (!lit && pair->value->type == AST_NODE_IDENTIFIER) {
+            /* A bound value: its own text and type, so a string that looks
+             * like JSON stays a string (GQLITE-A-0007). */
+            const rw_scalar *sc = rw_row_scalar(row, ((cypher_identifier *)pair->value)->name);
+            if (sc) lit = rw_make_literal(executor, sc->text, sc->text ? sc->type : SQLITE_NULL);
+        }
         if (!lit) {
             char *text = NULL;
             int type = rw_eval_scalar(executor, pair->value, row, &text);
@@ -3841,11 +3869,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     ast_list *clauses = query->clauses;
     if (!clauses || clauses->count == 0) return -1;
 
-    /* Shape check: the first clause must be MATCH, UNWIND or CREATE. Anything
-     * else goes to the handlers that owned these flag sets before. */
+    /* Shape check: the first clause must be MATCH, UNWIND, CREATE or WITH
+     * (a WITH is a read prefix, GQLITE-T-0401). Anything else goes to the
+     * handlers that owned these flag sets before. */
     ast_node *first = clauses->items[0];
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
-                    first->type == AST_NODE_CREATE)) {
+                    first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH)) {
         if (flags & CLAUSE_WITH) return handle_merge_with_pipeline(executor, query, result, flags);
         return handle_merge_return(executor, query, result, flags);
     }
@@ -3931,7 +3960,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     int ty = pr->data_types ? pr->data_types[r][c] : SQLITE_TEXT;
                     /* JSON and string cells are TEXT to the row-wise
                      * evaluator (GQLITE-A-0007 result types). */
-                    if (ty == GQL_COL_TYPE_JSON || ty == GQL_COL_TYPE_STRING) ty = SQLITE_TEXT;
+                    if (ty == GQL_COL_TYPE_JSON) ty = SQLITE_TEXT;
                     bool is_edge = false;
                     long long id = rw_entity_id(cell, &is_edge);
                     if (id >= 0) {
