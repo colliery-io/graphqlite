@@ -180,6 +180,12 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          0, gql_max_step, gql_max_final);
   if (rc != SQLITE_OK) return rc;
 
+  /* GQLITE-T-0414: a map key read with json_each (any key text). */
+  rc = sqlite3_create_function(db, "_gql_map_get", 3,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_RESULT_SUBTYPE, 0,
+                         gql_map_get_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_subscript_tag", 2,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_subscript_tag_func, 0, 0);

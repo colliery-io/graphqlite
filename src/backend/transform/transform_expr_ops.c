@@ -916,12 +916,13 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     /* Handle nested property access: n.metadata.name → json_extract(n.metadata_sql, '$.name') */
     if (prop->expr->type == AST_NODE_PROPERTY) {
         /* A value position keeps a boolean or a list typed
-         * (_gql_dyn_prop); a comparison reads json_extract (true is 1).
-         * The key is a quoted JSON path (GQLITE-T-0414). */
+         * (_gql_dyn_prop); a comparison reads the raw value (true is 1).
+         * Both look the key up with json_each, so any key text works,
+         * also on SQLite before 3.47 (GQLITE-T-0414). */
         if (ctx->in_comparison) {
-            append_sql(ctx, "json_extract(");
+            append_sql(ctx, "_gql_map_get(");
             if (transform_property_access(ctx, (cypher_property*)prop->expr) < 0) return -1;
-            append_sql(ctx, ", '%s')", json_path_tmp(prop->property_name));
+            append_sql(ctx, ", '%s', 0)", sql_esc_tmp(prop->property_name));
         } else {
             append_sql(ctx, "_gql_dyn_prop(");
             if (transform_property_access(ctx, (cypher_property*)prop->expr) < 0) return -1;
@@ -1020,19 +1021,13 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     if (is_projected && alias && strstr(alias, "_unwind_") && strstr(alias, ".value")) {
         {
           if (ctx->prop_tag_mode) {
-              append_sql(ctx,
-                  "(CASE json_type(%s, '%s') WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' "
-                  "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END)",
-                  alias, json_path_tmp(prop->property_name));
+              append_sql(ctx, "_gql_map_get(%s, '%s', 3)", alias, sql_esc_tmp(prop->property_name));
           } else if (ctx->in_comparison) {
-              append_sql(ctx, "json_extract(%s, '%s')", alias, json_path_tmp(prop->property_name));
+              append_sql(ctx, "_gql_map_get(%s, '%s', 0)", alias, sql_esc_tmp(prop->property_name));
           } else {
               /* GQLITE-T-0395: json_extract gives a JSON boolean as 1/0;
                * in a value position keep it a boolean. */
-              append_sql(ctx,
-                  "(CASE json_type(%s, '%s') WHEN 'true' THEN _gql_bool_str(1) "
-                  "WHEN 'false' THEN _gql_bool_str(0) ELSE json_extract(%s, '%s') END)",
-                  alias, json_path_tmp(prop->property_name), alias, json_path_tmp(prop->property_name));
+              append_sql(ctx, "_gql_map_get(%s, '%s', 2)", alias, sql_esc_tmp(prop->property_name));
           }
         }
         return 0;

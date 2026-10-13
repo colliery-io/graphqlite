@@ -413,24 +413,24 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                             "EXISTS(SELECT 1 FROM node_props_text npt "
                                             "JOIN property_keys pk ON npt.key_id = pk.id "
                                             "WHERE npt.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npt.value = json_extract(%s, '%s')) OR "
+                                            "AND npt.value = _gql_map_get(%s, '%s', 0)) OR "
                                             "EXISTS(SELECT 1 FROM node_props_int npi "
                                             "JOIN property_keys pk ON npi.key_id = pk.id "
                                             "WHERE npi.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npi.value = json_extract(%s, '%s')) OR "
+                                            "AND npi.value = _gql_map_get(%s, '%s', 0)) OR "
                                             "EXISTS(SELECT 1 FROM node_props_real npr "
                                             "JOIN property_keys pk ON npr.key_id = pk.id "
                                             "WHERE npr.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npr.value = json_extract(%s, '%s')) OR "
+                                            "AND npr.value = _gql_map_get(%s, '%s', 0)) OR "
                                             "EXISTS(SELECT 1 FROM node_props_bool npb "
                                             "JOIN property_keys pk ON npb.key_id = pk.id "
                                             "WHERE npb.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npb.value = json_extract(%s, '%s'))"
+                                            "AND npb.value = _gql_map_get(%s, '%s', 0))"
                                             ")",
-                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name),
-                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name),
-                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name),
-                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name));
+                                            alias, sql_esc_tmp(pair->key), base_alias, sql_esc_tmp(prop->property_name),
+                                            alias, sql_esc_tmp(pair->key), base_alias, sql_esc_tmp(prop->property_name),
+                                            alias, sql_esc_tmp(pair->key), base_alias, sql_esc_tmp(prop->property_name),
+                                            alias, sql_esc_tmp(pair->key), base_alias, sql_esc_tmp(prop->property_name));
                                         sql_where(ctx->unified_builder, dbuf_get(&cond));
                                         dbuf_free(&cond);
                                     }
