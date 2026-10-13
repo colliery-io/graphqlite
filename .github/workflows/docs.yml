@@ -66,9 +66,13 @@ jobs:
             src="$RUNNER_TEMP/book-$tag"
             mkdir -p "$src"
             git -C "$GITHUB_WORKSPACE" archive "$tag" docs | tar -x -C "$src"
-            "$RUNNER_TEMP/bin/mdbook" build "$src/docs" -d "$PWD/dist/$tag"
+            # The 404 page links from the site URL, "/" by default.
+            MDBOOK_OUTPUT__HTML__SITE_URL="$DOCS_BASE/$tag/" \
+              "$RUNNER_TEMP/bin/mdbook" build "$src/docs" -d "$PWD/dist/$tag"
           done
           ls dist
+        env:
+          DOCS_BASE: ${{ steps.pages.outputs.base_path }}
       # After the mdBook copies: the earlier-versions pages link to them.
       - name: Check the links
         run: npx starlight-aurora-check-links dist --base="$DOCS_BASE"
