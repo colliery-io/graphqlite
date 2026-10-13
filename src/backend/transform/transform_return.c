@@ -379,18 +379,18 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                     if (!node_json) return -1;
                     snprintf(expr_buf, sizeof(expr_buf), "(SELECT %s)", node_json);
                     free(node_json);
-                    sql_select(ctx->unified_builder, expr_buf, var->name);
+                    { char vb[256]; sql_select(ctx->unified_builder, expr_buf, sql_ident(vb, sizeof(vb), var->name)); }
                 } else if (var->kind == VAR_KIND_EDGE) {
                     /* Return edge as its type */
                     char expr_buf[256];
                     snprintf(expr_buf, sizeof(expr_buf), "%s.type", var->table_alias);
-                    sql_select(ctx->unified_builder, expr_buf, var->name);
+                    { char vb[256]; sql_select(ctx->unified_builder, expr_buf, sql_ident(vb, sizeof(vb), var->name)); }
                 } else if (var->kind == VAR_KIND_PROJECTED) {
                     /* Projected variable — the source expression (e.g. CTE
                      * column ref) lives on source_expr; table_alias is NULL.
                      * T-0333: use get_alias to pick the right one. */
                     const char *src = transform_var_get_alias(ctx->var_ctx, var->name);
-                    if (src) sql_select(ctx->unified_builder, src, var->name);
+                    if (src) { char vb[256]; sql_select(ctx->unified_builder, src, sql_ident(vb, sizeof(vb), var->name)); }
                 }
                 added++;
             }
@@ -521,7 +521,10 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 }
             }
 
-            /* Add to unified builder */
+            /* Add to unified builder; a user alias is quoted as needed
+             * (GQLITE-T-0396), an auto alias is quoted already. */
+            char alias_buf[256];
+            if (alias && alias == item->alias) alias = sql_ident(alias_buf, sizeof(alias_buf), alias);
             sql_select(ctx->unified_builder, expr_str, alias);
             free(expr_str);
 
@@ -532,7 +535,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             }
         }
         for (int i = 0; i < deferred_count; i++) {
-            transform_var_register_projected(ctx->var_ctx, deferred_aliases[i], deferred_aliases[i]);
+            { char rb[256]; transform_var_register_projected(ctx->var_ctx, deferred_aliases[i], sql_ident(rb, sizeof(rb), deferred_aliases[i])); }
         }
         free(deferred_aliases);
 
@@ -761,13 +764,18 @@ return_star_done:
                     }
                 }
 
-                /* Add to unified builder */
+                /* Add to unified builder; a user alias is quoted as needed
+                 * (GQLITE-T-0396), an auto alias is quoted already. */
+                char alias_buf[256];
+                if (alias && alias == item->alias) alias = sql_ident(alias_buf, sizeof(alias_buf), alias);
                 sql_select(ctx->unified_builder, expr_str, alias);
                 free(expr_str);
 
                 /* Register alias for ORDER BY reference */
                 if (item->alias) {
-                    transform_var_register_projected(ctx->var_ctx, item->alias, item->alias);
+                    char ref_buf[256];
+                    transform_var_register_projected(ctx->var_ctx, item->alias,
+                        sql_ident(ref_buf, sizeof(ref_buf), item->alias));
                 }
             }
 
@@ -1502,7 +1510,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             append_sql(ctx, ", ");
                         }
                         cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[i];
-                        append_sql(ctx, "'%s', ", pair->key);
+                        { char *ek = escape_sql_string(pair->key);
+                          append_sql(ctx, "'%s', ", ek ? ek : pair->key);
+                          free(ek); }
                         if (transform_list_item_value(ctx, pair->value) < 0) {
                             return -1;
                         }
@@ -1565,7 +1575,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                         /* Output key name */
                         const char *key = item->key ? item->key : item->property;
-                        append_sql(ctx, "'%s', ", key);
+                        { char *ek = escape_sql_string(key);
+                          append_sql(ctx, "'%s', ", ek ? ek : key);
+                          free(ek); }
 
                         /* Output value */
                         if (item->property && base_alias) {

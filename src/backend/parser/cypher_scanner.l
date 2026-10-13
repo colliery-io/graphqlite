@@ -224,18 +224,23 @@ operator    [+*/%^=!&|~]+
                     return CYPHER_TOKEN_PARAMETER;
                 }
 
-`[^`]*`         {
-                    /* Backtick-quoted identifiers */
+`([^`]|``)*`    {
+                    /* Backtick-quoted identifiers; `` inside is one
+                     * backtick (GQLITE-T-0396). */
                     int len = yyleng - 2;
                     char *value = malloc(len + 1);
                     if (!value) {
                         scanner_error(yyextra, "Out of memory", yyleng);
                         return CYPHER_TOKEN_EOF;
                     }
-                    
-                    strncpy(value, yytext + 1, len);
-                    value[len] = '\0';
-                    
+
+                    int o = 0;
+                    for (int i = 1; i <= len; i++) {
+                        value[o++] = yytext[i];
+                        if (yytext[i] == '`') i++;
+                    }
+                    value[o] = '\0';
+
                     prepare_string_token(yyextra, CYPHER_TOKEN_BQIDENT, yytext, value);
                     free(value);
                     return CYPHER_TOKEN_BQIDENT;

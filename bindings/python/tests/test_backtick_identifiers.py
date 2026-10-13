@@ -60,6 +60,8 @@ SLOTS = {
         g.query("CREATE (:L)") and None or
         g.query(f"MATCH (m:L) SET m.{q} = 1") and None or
         g.query(f"MATCH (m:L) RETURN m.{q} AS v"), [{"v": 1}]),
+    "iter_query_alias": lambda g, q, n: (
+        list(g.iter_query(f"RETURN 1 AS {q}")), [{n: 1}]),
     "map_key": lambda g, q, n: (
         g.query(f"RETURN {{{q}: 1}} AS m"), [{"m": {n: 1}}]),
 }

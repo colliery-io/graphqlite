@@ -160,11 +160,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         for (int i = 0; i < carry_count; i++) {
             /* Projected variables' table_alias is typically `<cte>.<col>`;
              * we just need the column name when sourcing from _prev. */
-            const char *col = strrchr(carry_aliases[i], '.');
-            col = col ? col + 1 : carry_aliases[i];
-            { char _ib1[128], _ib2[128];
-              dbuf_appendf(&carry_cols, ", _prev.%s AS %s",
-                           sql_ident(_ib1, sizeof(_ib1), col),
+            const char *col = sql_ref_column(carry_aliases[i]);
+            { char _ib2[128];
+              dbuf_appendf(&carry_cols, ", _prev.%s AS %s", col,
                            sql_ident(_ib2, sizeof(_ib2), carry_names[i])); }
             { char _ib2[128];
               dbuf_appendf(&carry_cols_orig, ", %s AS %s",
@@ -346,11 +344,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         const char *json_each_arg = alias ? alias : id->name;
         char prev_arg[128];
         if (has_carry && alias) {
-            const char *col = strrchr(alias, '.');
-            if (col) {
-                char _ib[128];
-                snprintf(prev_arg, sizeof(prev_arg), "_prev.%s",
-                         sql_ident(_ib, sizeof(_ib), col + 1));
+            const char *col = sql_ref_column(alias);
+            if (col != alias) {
+                snprintf(prev_arg, sizeof(prev_arg), "_prev.%s", col);
                 json_each_arg = prev_arg;
             }
         }
