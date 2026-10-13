@@ -244,23 +244,23 @@ for row in results:
 The Rust `Graph` API exposes equivalent batch methods:
 
 ```rust
-use graphqlite::Graph;
+use graphqlite::{Graph, PropertyValue as P};
 
 fn main() -> graphqlite::Result<()> {
     let g = Graph::open("company.db")?;
 
-    // Bulk insert nodes
+    // Bulk insert nodes. A string is stored as text; pass numbers as numbers.
     let nodes = vec![
-        ("emp_1", vec![("name", "Alice"), ("role", "engineer"), ("age", "30")], "Employee"),
-        ("emp_2", vec![("name", "Bob"),   ("role", "manager"),  ("age", "40")], "Employee"),
-        ("emp_3", vec![("name", "Carol"), ("role", "engineer"), ("age", "28")], "Employee"),
+        ("emp_1", vec![("name", P::from("Alice")), ("role", P::from("engineer")), ("age", P::from(30))], "Employee"),
+        ("emp_2", vec![("name", P::from("Bob")),   ("role", P::from("manager")),  ("age", P::from(40))], "Employee"),
+        ("emp_3", vec![("name", P::from("Carol")), ("role", P::from("engineer")), ("age", P::from(28))], "Employee"),
     ];
     g.upsert_nodes_batch(nodes)?;
 
     // Bulk insert edges
     let edges = vec![
-        ("emp_2", "emp_1", vec![("since", "2020")], "MANAGES"),
-        ("emp_2", "emp_3", vec![("since", "2021")], "MANAGES"),
+        ("emp_2", "emp_1", vec![("since", 2020)], "MANAGES"),
+        ("emp_2", "emp_3", vec![("since", 2021)], "MANAGES"),
     ];
     g.upsert_edges_batch(edges)?;
 

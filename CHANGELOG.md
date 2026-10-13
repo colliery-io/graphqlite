@@ -18,6 +18,10 @@ data. The openCypher TCK now compares booleans, integers and floats by type
   typed by their text. `RETURN true`, `toBoolean()`, `isEmpty()` and label
   predicates return booleans, not `1` / `0`. A float keeps its `.0` (`2.0`).
 - **Column name of `count(*)`** without an alias is `count(*)`, not `count()`.
+- **Rust:** a string property (`("age", "30")`, `PropertyValue::from("30")`) is
+  stored as text. Before, the Rust binding typed a string by its text, so
+  `"123"` became an integer and `"true"` a boolean. Pass `30`, `1.5`, `true` or
+  a `PropertyValue` variant for other types.
 - **Data written by earlier versions:** a `SET` after `WITH` (for example
   `MATCH (n) SET n.x = n.x + 1 WITH n ...`) stored numbers and booleans as text.
   Those values now read back as strings. Run the `SET` again to store them with
