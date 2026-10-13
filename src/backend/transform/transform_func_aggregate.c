@@ -212,7 +212,7 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
     /* Build property key subquery once */
     char pk_subquery[256];
     snprintf(pk_subquery, sizeof(pk_subquery),
-             "(SELECT id FROM property_keys WHERE key = '%s')", prop->property_name);
+             "(SELECT id FROM property_keys WHERE key = '%s')", sql_esc_tmp(prop->property_name));
 
     /*
      * When using unified_builder, park the property JOINs in the builder's

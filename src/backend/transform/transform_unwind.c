@@ -69,6 +69,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     char *carry_aliases[64];
     var_kind carry_kinds[64];
     char *carry_tags[64];    /* GQLITE-A-0007: tag column of a carried value */
+    bool carry_splice_only[64]; /* a MATCH-bound entity: carried by id only
+                                 * where the MATCH tables are spliced in */
+    bool used_splice = false;
     int carry_count = 0;
     {
         int n = transform_var_count(ctx->var_ctx);
@@ -90,7 +93,19 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
              * vars (just-emitted MATCH), table_alias is the SQL table
              * alias and we can't carry those through an UNWIND CTE —
              * skip them. */
-            if ((v->kind == VAR_KIND_NODE || v->kind == VAR_KIND_EDGE) && !v->alias_is_id) continue;
+            bool splice_only = false;
+            char id_ref[300];
+            if ((v->kind == VAR_KIND_NODE || v->kind == VAR_KIND_EDGE) && !v->alias_is_id) {
+                /* GQLITE-T-0416: a named MATCH entity is carried by its id
+                 * when the MATCH tables are spliced into the UNWIND CTE
+                 * (MATCH (n) UNWIND n.l AS x RETURN n.id, x). */
+                if (strncmp(v->name, "_gql_default_alias_", 19) == 0 ||
+                    strncmp(v->name, "__unnamed", 9) == 0 || v->cte_name) continue;
+                snprintf(id_ref, sizeof(id_ref), "%s.id", alias);
+                alias = id_ref;
+                splice_only = true;
+            }
+            carry_splice_only[carry_count] = splice_only;
             carry_names[carry_count]   = strdup(v->name);
             carry_aliases[carry_count] = strdup(alias);
             carry_kinds[carry_count]   = v->kind;
@@ -172,7 +187,8 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             /* Projected variables' table_alias is typically `<cte>.<col>`;
              * we just need the column name when sourcing from _prev. */
             const char *col = sql_ref_column(carry_aliases[i]);
-            { char _ib2[128];
+            if (!carry_splice_only[i]) {
+              char _ib2[128];
               dbuf_appendf(&carry_cols, ", _prev.%s AS %s", col,
                            sql_ident(_ib2, sizeof(_ib2), carry_names[i])); }
             { char _ib2[128];
@@ -331,6 +347,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     free(dyn_tag);
                 }
                 if (list_splicable) {
+                    used_splice = true;
                     /* Element exprs reference the original MATCH aliases, so
                      * splice the FROM tables directly (not wrapped as _prev). */
                     if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols_orig));
@@ -347,38 +364,6 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     dbuf_appendf(&cte_query, " FROM (%s) AS _prev", inner_sql);
                 }
             }
-        }
-    } else if (unwind->expr->type == AST_NODE_PROPERTY) {
-        /* Property access: assume JSON array, use json_each */
-        cypher_property *prop = (cypher_property*)unwind->expr;
-
-        if (prop->expr->type == AST_NODE_IDENTIFIER) {
-            cypher_identifier *id = (cypher_identifier*)prop->expr;
-            const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
-            bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
-
-            /* Build json_each on the property value */
-            dbuf_append(&cte_query, "SELECT json_each.value AS value" UNWIND_JSON_EACH_TAG);
-            if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
-            dbuf_append(&cte_query, " FROM ");
-
-            if (inner_sql && strlen(inner_sql) > 0) {
-                dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
-            }
-
-            /* Get property from appropriate property table */
-            dbuf_appendf(&cte_query, "json_each(COALESCE("
-                "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id "
-                "WHERE npt.node_id = %s%s AND pk.key = '%s'), '[]'))",
-                alias ? alias : id->name,
-                is_projected ? "" : ".id",
-                prop->property_name);
-        } else {
-            ctx->has_error = true;
-            ctx->error_message = strdup("UNWIND property access requires identifier base");
-            dbuf_free(&cte_query);
-            free(inner_sql);
-            return -1;
         }
     } else if (unwind->expr->type == AST_NODE_IDENTIFIER) {
         /* Variable reference - assume it's a list variable from previous clause */
@@ -409,9 +394,12 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         dbuf_appendf(&cte_query, "json_each(%s)", json_each_arg);
     } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL ||
                unwind->expr->type == AST_NODE_SUBSCRIPT ||
-               unwind->expr->type == AST_NODE_BINARY_OP) {
+               unwind->expr->type == AST_NODE_BINARY_OP ||
+               unwind->expr->type == AST_NODE_PROPERTY) {
         /* Function call that returns a list (e.g., range(), keys(), etc.),
-         * subscript expression (qrows[p]), or binary op (list concat). */
+         * subscript expression (qrows[p]), binary op (list concat), or a
+         * property (GQLITE-T-0416: its own branch read only the text table
+         * through an alias out of scope, so `MATCH (n) UNWIND n.l` failed). */
         /* Transform the function expression to SQL, then use json_each on the result */
 
         /* Save current SQL buffer state */
@@ -473,6 +461,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             where_in_inner = strstr(inner_sql, " WHERE ");
         }
         dbuf_append(&cte_query, "SELECT json_each.value AS value" UNWIND_JSON_EACH_TAG);
+        if (splicable) used_splice = true;
         if (has_carry) {
             dbuf_append(&cte_query,
                 splicable ? dbuf_get(&carry_cols_orig) : dbuf_get(&carry_cols));
@@ -550,7 +539,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             char src[256], _ib[128];
             snprintf(src, sizeof(src), "%s.%s", cte_name,
                      sql_ident(_ib, sizeof(_ib), carry_names[i]));
-            if (carry_kinds[i] == VAR_KIND_NODE) {
+            if (carry_splice_only[i] && !used_splice) {
+                /* Not carried by this branch: out of scope, as before. */
+            } else if (carry_kinds[i] == VAR_KIND_NODE) {
                 transform_var_register_node(ctx->var_ctx, carry_names[i], src, NULL);
                 transform_var_set_alias_is_id(ctx->var_ctx, carry_names[i], true);
             } else if (carry_kinds[i] == VAR_KIND_EDGE) {

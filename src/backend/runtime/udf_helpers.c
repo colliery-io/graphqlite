@@ -663,8 +663,16 @@ void gql_subscript_func(
         }
         const char *key = (const char*)sqlite3_value_text(argv[1]);
         if (!key) { sqlite3_result_null(context); return; }
-        char path[512];
-        snprintf(path, sizeof(path), "$.%s", key);
+        /* A quoted path, so a key with a dot or a quote reads that key. */
+        char path[1100];
+        size_t o = 0;
+        path[o++] = '$'; path[o++] = '.'; path[o++] = '"';
+        for (const char *c = key; *c && o < sizeof(path) - 4; c++) {
+            if (*c == '"' || *c == '\\') path[o++] = '\\';
+            path[o++] = *c;
+        }
+        path[o++] = '"';
+        path[o] = '\0';
         sqlite3 *db = sqlite3_context_db_handle(context);
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(db, "SELECT json_extract(?1, ?2)", -1, &stmt, NULL) == SQLITE_OK) {

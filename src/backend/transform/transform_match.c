@@ -35,6 +35,32 @@ static void transform_ctx_append_pending_optional_on(cypher_transform_context *c
 }
 
 static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional);
+
+/* GQLITE-T-0411: an inline property whose value is a list or map literal
+ * (`(n {l: [3]})`) filters by JSON value; it was ignored, so the pattern
+ * matched every node. `id_ref` is the entity id SQL. Returns 0, or -1. */
+static int append_json_prop_filter(cypher_transform_context *ctx, bool is_edge,
+                                   const char *id_ref, const char *key, ast_node *value)
+{
+    bool saved_cmp = ctx->in_comparison;
+    ctx->in_comparison = false;
+    char *v = cypher_transform_capture_expression(ctx, value);
+    ctx->in_comparison = saved_cmp;
+    if (!v) return -1;
+    char *esc_key = escape_sql_string(key);
+    dynamic_buffer cond;
+    dbuf_init(&cond);
+    dbuf_appendf(&cond,
+        "%s IN (SELECT pj.%s FROM %s pj JOIN property_keys pk ON pj.key_id = pk.id "
+        "WHERE pk.key = '%s' AND json(pj.value) = json(%s))",
+        id_ref, is_edge ? "edge_id" : "node_id", is_edge ? "edge_props_json" : "node_props_json",
+        esc_key ? esc_key : key, v);
+    sql_where(ctx->unified_builder, dbuf_get(&cond));
+    dbuf_free(&cond);
+    free(esc_key);
+    free(v);
+    return 0;
+}
 static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias, bool optional);
 /* Perf review F2 (defined further down, used by generate_node_match) */
 static void stash_consumed_anchor(cypher_transform_context *ctx, const char *alias,
@@ -271,8 +297,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                         "NOT EXISTS(SELECT 1 FROM node_props_bool npb "
                                         "JOIN property_keys pk ON npb.key_id = pk.id "
                                         "WHERE npb.node_id = %s AND pk.key = '%s')",
-                                        node_id_ref, pair->key, node_id_ref, pair->key,
-                                        node_id_ref, pair->key, node_id_ref, pair->key);
+                                        node_id_ref, sql_esc_tmp(pair->key), node_id_ref, sql_esc_tmp(pair->key),
+                                        node_id_ref, sql_esc_tmp(pair->key), node_id_ref, sql_esc_tmp(pair->key));
                                 } else {
                                     const char *prop_table = "node_props_text";
                                     char value_sql[128];
@@ -307,7 +333,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                         "EXISTS(SELECT 1 FROM %s t "
                                         "JOIN property_keys pk ON pk.id = t.key_id "
                                         "WHERE t.node_id = %s AND pk.key = '%s' AND t.value = %s)",
-                                        prop_table, node_id_ref, pair->key, value_sql);
+                                        prop_table, node_id_ref, sql_esc_tmp(pair->key), value_sql);
                                 }
 
                                 if (!dbuf_is_empty(&cond)) {
@@ -347,17 +373,28 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     "WHERE pk.key = '%s' AND npr.value = :%s "
                                     "UNION ALL SELECT npb.node_id FROM node_props_bool npb "
                                     "JOIN property_keys pk ON npb.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND npb.value = :%s"
+                                    "WHERE pk.key = '%s' AND npb.value = :%s "
+                                    /* GQLITE-T-0411: a list or map parameter */
+                                    "UNION ALL SELECT npj.node_id FROM node_props_json npj "
+                                    "JOIN property_keys pk ON npj.key_id = pk.id "
+                                    "WHERE pk.key = '%s' AND json(npj.value) = "
+                                    "(CASE WHEN json_valid(:%s) THEN json(:%s) END)"
                                     ")",
                                     node_id_ref,
                                     key_sql, param->name,
                                     key_sql, param->name,
                                     key_sql, param->name,
-                                    key_sql, param->name);
+                                    key_sql, param->name,
+                                    key_sql, param->name, param->name);
                                 free(esc_key);
 
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
+                            } else if (pair->value && (pair->value->type == AST_NODE_LIST ||
+                                                       pair->value->type == AST_NODE_MAP)) {
+                                if (append_json_prop_filter(ctx, false,
+                                        get_node_id_ref(ctx, alias, node->variable),
+                                        pair->key, pair->value) < 0) return -1;
                             } else if (pair->value && pair->value->type == AST_NODE_PROPERTY) {
                                 /* Handle property access RHS like `item.id` where
                                  * `item` is an UNWIND-projected variable (GQLITE-T-0185).
@@ -376,24 +413,24 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                             "EXISTS(SELECT 1 FROM node_props_text npt "
                                             "JOIN property_keys pk ON npt.key_id = pk.id "
                                             "WHERE npt.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npt.value = json_extract(%s, '$.%s')) OR "
+                                            "AND npt.value = json_extract(%s, '%s')) OR "
                                             "EXISTS(SELECT 1 FROM node_props_int npi "
                                             "JOIN property_keys pk ON npi.key_id = pk.id "
                                             "WHERE npi.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npi.value = json_extract(%s, '$.%s')) OR "
+                                            "AND npi.value = json_extract(%s, '%s')) OR "
                                             "EXISTS(SELECT 1 FROM node_props_real npr "
                                             "JOIN property_keys pk ON npr.key_id = pk.id "
                                             "WHERE npr.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npr.value = json_extract(%s, '$.%s')) OR "
+                                            "AND npr.value = json_extract(%s, '%s')) OR "
                                             "EXISTS(SELECT 1 FROM node_props_bool npb "
                                             "JOIN property_keys pk ON npb.key_id = pk.id "
                                             "WHERE npb.node_id = %s.id AND pk.key = '%s' "
-                                            "AND npb.value = json_extract(%s, '$.%s'))"
+                                            "AND npb.value = json_extract(%s, '%s'))"
                                             ")",
-                                            alias, pair->key, base_alias, prop->property_name,
-                                            alias, pair->key, base_alias, prop->property_name,
-                                            alias, pair->key, base_alias, prop->property_name,
-                                            alias, pair->key, base_alias, prop->property_name);
+                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name),
+                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name),
+                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name),
+                                            alias, sql_esc_tmp(pair->key), base_alias, json_path_tmp(prop->property_name));
                                         sql_where(ctx->unified_builder, dbuf_get(&cond));
                                         dbuf_free(&cond);
                                     }
@@ -588,16 +625,29 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     "WHERE pk.key = '%s' AND epr.value = :%s "
                                     "UNION ALL SELECT epb.edge_id FROM edge_props_bool epb "
                                     "JOIN property_keys pk ON epb.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND epb.value = :%s"
+                                    "WHERE pk.key = '%s' AND epb.value = :%s "
+                                    /* GQLITE-T-0411: a list or map parameter */
+                                    "UNION ALL SELECT epj.edge_id FROM edge_props_json epj "
+                                    "JOIN property_keys pk ON epj.key_id = pk.id "
+                                    "WHERE pk.key = '%s' AND json(epj.value) = "
+                                    "(CASE WHEN json_valid(:%s) THEN json(:%s) END)"
                                     ")",
                                     edge_alias,
                                     key_sql, param->name,
                                     key_sql, param->name,
                                     key_sql, param->name,
-                                    key_sql, param->name);
+                                    key_sql, param->name,
+                                    key_sql, param->name, param->name);
                                 free(esc_key);
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
+                                continue;
+                            }
+                            if (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP) {
+                                char ref[300];
+                                snprintf(ref, sizeof(ref), "+%s.id", edge_alias);
+                                if (append_json_prop_filter(ctx, true, ref, pair->key, pair->value) < 0)
+                                    return -1;
                                 continue;
                             }
                             if (pair->value->type != AST_NODE_LITERAL) continue;
@@ -1825,16 +1875,16 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", alias);
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.id = %s.key_id AND %s.key = '%s'",
-                                 pk_alias, prop_alias, pk_alias, first_pair->key);
+                                 pk_alias, prop_alias, pk_alias, sql_esc_tmp(first_pair->key));
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
                             dbuf_appendf(&on_cond, " AND %s.value = %lld", prop_alias, (long long)lit->value.integer);
                             break;
                         case LITERAL_STRING:
-                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
+                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, sql_esc_tmp(lit->value.string));
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&on_cond, " AND %s.value = %f", prop_alias, lit->value.decimal);
+                            dbuf_appendf(&on_cond, " AND %s.value = %.17g", prop_alias, lit->value.decimal);
                             break;
                         case LITERAL_BOOLEAN:
                             dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
@@ -1925,16 +1975,16 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", alias);
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.id = %s.key_id AND %s.key = '%s'",
-                                 pk_alias, prop_alias, pk_alias, first_pair->key);
+                                 pk_alias, prop_alias, pk_alias, sql_esc_tmp(first_pair->key));
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
                             dbuf_appendf(&on_cond, " AND %s.value = %lld", prop_alias, (long long)lit->value.integer);
                             break;
                         case LITERAL_STRING:
-                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
+                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, sql_esc_tmp(lit->value.string));
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&on_cond, " AND %s.value = %f", prop_alias, lit->value.decimal);
+                            dbuf_appendf(&on_cond, " AND %s.value = %.17g", prop_alias, lit->value.decimal);
                             break;
                         case LITERAL_BOOLEAN:
                             dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
@@ -2422,16 +2472,16 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                     snprintf(pk_alias, sizeof(pk_alias), "_pk_%s", target_alias);
                     dbuf_init(&on_cond);
                     dbuf_appendf(&on_cond, "%s.id = %s.key_id AND %s.key = '%s'",
-                                 pk_alias, prop_alias, pk_alias, first_pair->key);
+                                 pk_alias, prop_alias, pk_alias, sql_esc_tmp(first_pair->key));
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER:
                             dbuf_appendf(&on_cond, " AND %s.value = %lld", prop_alias, (long long)lit->value.integer);
                             break;
                         case LITERAL_STRING:
-                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, lit->value.string);
+                            dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, sql_esc_tmp(lit->value.string));
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&on_cond, " AND %s.value = %f", prop_alias, lit->value.decimal);
+                            dbuf_appendf(&on_cond, " AND %s.value = %.17g", prop_alias, lit->value.decimal);
                             break;
                         case LITERAL_BOOLEAN:
                             dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);

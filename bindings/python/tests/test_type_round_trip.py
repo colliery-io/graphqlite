@@ -38,6 +38,8 @@ VALUES = {
     "text_map": ("'{\"a\":1}'", '{"a":1}'),
     "text_quote": ("'say \"hi\"'", 'say "hi"'),
     "text_apostrophe": ('"it\'s"', "it's"),
+    "text_newline": ("'a\\nb\\tc\\rd'", "a\nb\tc\rd"),
+    "text_control": ("'a\\u0001b'", "a\x01b"),
     "float_precise": ("3.14159265358979", 3.14159265358979),
     "list_int": ("[1, 2]", [1, 2]),
     "list_float": ("[1.5, 2.0]", [1.5, 2.0]),
@@ -281,6 +283,7 @@ EDGE_WRITES = {
 
 EDGE_READS = {
     "return_prop": lambda g: one(g.query("MATCH ()-[r:R]->() RETURN r.p AS v")),
+    "map_projection": lambda g: one(g.query("MATCH ()-[r:R]->() RETURN r {.p} AS v"))["p"],
     "return_rel": lambda g: one(g.query("MATCH ()-[r:R]->() RETURN r AS v"))["properties"]["p"],
     "properties": lambda g: one(g.query("MATCH ()-[r:R]->() RETURN properties(r) AS v"))["p"],
     "in_list": lambda g: one(g.query("MATCH ()-[r:R]->() RETURN [r.p] AS v"))[0],
@@ -368,6 +371,13 @@ FUNCTION_CASES = [
     ("RETURN {k: '[1]'}.k AS v", "[1]"),
     ("RETURN {k: true}.k AS v", True),
     ("WITH toBoolean('true') AS b RETURN b AS v", True),
+    ("RETURN toString(123) AS v", "123"),
+    ("RETURN left('[1]', 3) AS v", "[1]"),
+    ("RETURN toUpper('true') AS v", "TRUE"),
+    ("RETURN '1' + '2' AS v", "12"),
+    ("RETURN replace('x1', 'x', '') AS v", "1"),
+    ("WITH toString(5) AS s RETURN s AS v ORDER BY v", "5"),
+    ("WITH substring('12345', 0, 2) AS s RETURN s AS v", "12"),
 ]
 
 
@@ -387,3 +397,28 @@ def test_create_copies_lists_and_long_text(g):
     g.query(f"CREATE (a:A {{l: [1, 2], s: '{long_text}'}}), (:B {{l: a.l, s: a.s}})")
     row = g.query("MATCH (b:B) RETURN b.l AS l, b.s AS s")[0]
     assert same(row, {"l": [1, 2], "s": long_text})
+
+
+# --- MATCH by an inline property of each type (GQLITE-T-0411) ---------------
+
+@pytest.mark.parametrize("value", [v for v in VALUES if v != "list_empty"] + ["list_empty"])
+def test_match_by_inline_value(g, value):
+    lit, val = VALUES[value]
+    g.query(f"CREATE (:V {{p: {lit}, k: 1}}), (:V {{p: 'decoy', k: 2}})")
+    assert g.query(f"MATCH (n:V {{p: {lit}}}) RETURN n.k AS k") == [{"k": 1}]
+    assert g.query("MATCH (n:V {p: $v}) RETURN n.k AS k", {"v": val}) == [{"k": 1}]
+    g.query(f"MATCH (a:V {{k: 1}}), (b:V {{k: 2}}) CREATE (a)-[:R {{p: {lit}}}]->(b), (b)-[:R {{p: 'decoy'}}]->(a)")
+    assert g.query(f"MATCH (a)-[r:R {{p: {lit}}}]->() RETURN a.k AS k") == [{"k": 1}]
+
+
+# --- UNWIND of a property after MATCH (GQLITE-T-0416) ------------------------
+
+def test_unwind_property_after_match(g):
+    g.query("CREATE (:K {l: [1, true, 'x'], id: 1}), (:K {l: [2.0], id: 2})")
+    rows = g.query("MATCH (n:K) UNWIND n.l AS x RETURN n.id AS id, x ORDER BY id")
+    assert [(r["id"], r["x"]) for r in rows] == [(1, 1), (1, True), (1, "x"), (2, 2.0)]
+    assert all(same(r["x"], w) for r, w in zip(rows, [1, True, "x", 2.0]))
+    rows = g.query("MATCH (n:K) WITH n UNWIND n.l AS x RETURN count(x) AS c")
+    assert rows == [{"c": 4}]
+    rows = g.query("MATCH (n:K) UNWIND range(1, 2) AS i RETURN n.id AS id, i ORDER BY id, i")
+    assert [(r["id"], r["i"]) for r in rows] == [(1, 1), (1, 2), (2, 1), (2, 2)]

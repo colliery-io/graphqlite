@@ -60,6 +60,20 @@ SLOTS = {
         g.query("CREATE (:L)") and None or
         g.query(f"MATCH (m:L) SET m.{q} = 1") and None or
         g.query(f"MATCH (m:L) RETURN m.{q} AS v"), [{"v": 1}]),
+    "match_inline_key": lambda g, q, n: (
+        g.query(f"CREATE (:L {{{q}: 1}}), (:L {{{q}: 2}})") and None or
+        g.query(f"MATCH (m:L {{{q}: 1}}) RETURN count(m) AS c"), [{"c": 1}]),
+    "unwind_property_key": lambda g, q, n: (
+        g.query(f"CREATE (:L {{{q}: [1, 2]}})") and None or
+        g.query(f"MATCH (m:L) UNWIND m.{q} AS x RETURN x"), [{"x": 1}, {"x": 2}]),
+    "nested_map_key": lambda g, q, n: (
+        g.query(f"CREATE (:L {{m: {{{q}: true}}}})") and None or
+        g.query(f"MATCH (m:L) RETURN m.m.{q} AS v"), [{"v": True}]),
+    "unwind_map_key": lambda g, q, n: (
+        g.query(f"UNWIND [{{{q}: false}}] AS r RETURN r.{q} AS v"), [{"v": False}]),
+    "aggregate_property_key": lambda g, q, n: (
+        g.query(f"CREATE (:L {{{q}: 2}}), (:L {{{q}: 3}})") and None or
+        g.query(f"MATCH (m:L) RETURN sum(m.{q}) AS v"), [{"v": 5}]),
     "iter_query_alias": lambda g, q, n: (
         list(g.iter_query(f"RETURN 1 AS {q}")), [{n: 1}]),
     "map_key": lambda g, q, n: (

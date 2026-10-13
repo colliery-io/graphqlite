@@ -1066,7 +1066,8 @@ fn test_utility_functions() {
     // escape_string
     assert_eq!(escape_string("hello"), "hello");
     assert_eq!(escape_string("it's"), "it\\'s");
-    assert_eq!(escape_string("line\nbreak"), "line break");
+    assert_eq!(escape_string("line\nbreak"), "line\\nbreak");
+    assert_eq!(escape_string("a\tb\u{1}"), "a\\tb\\u0001");
 
     // sanitize_rel_type
     assert_eq!(sanitize_rel_type("KNOWS"), "KNOWS");

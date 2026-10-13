@@ -18,6 +18,7 @@ data. The openCypher TCK now compares booleans, integers and floats by type
   typed by their text. `RETURN true`, `toBoolean()`, `isEmpty()` and label
   predicates return booleans, not `1` / `0`. A float keeps its `.0` (`2.0`).
 - **Column name of `count(*)`** without an alias is `count(*)`, not `count()`.
+- **Rust:** `format_value("123")` gives the string literal `'123'` (it gave `123`).
 - **Rust:** a string property (`("age", "30")`, `PropertyValue::from("30")`) is
   stored as text. Before, the Rust binding typed a string by its text, so
   `"123"` became an integer and `"true"` a boolean. Pass `30`, `1.5`, `true` or
@@ -50,6 +51,18 @@ data. The openCypher TCK now compares booleans, integers and floats by type
 - `UNWIND` of a list literal with an apostrophe in a string failed.
 - `{k: 1}.k` was "not yet supported"; `isEmpty([])` was false; `toBoolean('TRUE')`
   was null; `[false] + true` appended `1`.
+- **Data loss:** the Python and Rust bindings stored a newline, carriage return
+  or tab in a string property as a space. They are escaped now.
+- `MATCH (n {p: 3.14159265})` never matched (the value was cut to 6 decimals);
+  `MATCH (n {s: "it's"})` failed with an SQL error; `MATCH (n {l: [3]})`
+  ignored the list and matched every node.
+- `MATCH (n) UNWIND n.list AS x` failed with "no such column", and a MATCH
+  variable was not in scope after `UNWIND` unless passed through `WITH`.
+- `r {.w}` on a relationship gave nulls.
+- `toString(5)`, `left('[1]', 3)` and other string results that look like a
+  number or JSON came back typed.
+- Property keys with an apostrophe, a dot or a quote broke `UNWIND n.key`,
+  nested map keys and aggregates; integer coordinates were ignored by `astar`.
 
 ### Tests
 

@@ -53,7 +53,7 @@ def escape_string(s: str) -> str:
     """
     Escape a string for use in Cypher queries.
 
-    Handles backslashes, quotes, and whitespace characters.
+    Handles backslashes, quotes, and control characters (escaped, kept).
 
     Args:
         s: String to escape
@@ -61,12 +61,27 @@ def escape_string(s: str) -> str:
     Returns:
         Escaped string safe for Cypher queries
     """
-    return (s.replace("\\", "\\\\")
-             .replace("'", "\\'")
-             .replace('"', '\\"')
-             .replace("\n", " ")
-             .replace("\r", " ")
-             .replace("\t", " "))
+    # Control characters are escaped, not replaced: a newline or tab was
+    # stored as a space (GQLITE-T-0417).
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "'":
+            out.append("\\'")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch < " ":
+            out.append("\\u%04x" % ord(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def sanitize_rel_type(rel_type: str) -> str:

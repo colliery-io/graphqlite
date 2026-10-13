@@ -12,6 +12,7 @@
 #include <stdarg.h>
 
 #include "transform/sql_builder.h"
+#include "gql_thread_local.h"
 
 /*
  * Ensure buffer has at least 'needed' bytes of additional capacity.
@@ -151,6 +152,46 @@ char *escape_sql_string(const char *str)
     *out = '\0';
 
     return result;
+}
+
+/* escape_sql_string into one of 16 per-thread buffers, for a key used inline
+ * in a printf-style SQL build (GQLITE-T-0414: some property keys reached SQL
+ * unescaped, so a key with an apostrophe broke the query). The result is
+ * valid until 16 later calls on the same thread. */
+const char *sql_esc_tmp(const char *s)
+{
+    static GQL_THREAD_LOCAL char *ring[16];
+    static GQL_THREAD_LOCAL int pos;
+    pos = (pos + 1) % 16;
+    free(ring[pos]);
+    ring[pos] = escape_sql_string(s ? s : "");
+    return ring[pos] ? ring[pos] : "";
+}
+
+/* A JSON path to one object key, `$."key"`, with `"` and `\` escaped for
+ * the path and `'` for SQL; in a per-thread ring of 16 buffers. A key with a
+ * dot or a quote gave a wrong path or broke the query (GQLITE-T-0414). */
+const char *json_path_tmp(const char *key)
+{
+    static GQL_THREAD_LOCAL char *ring[16];
+    static GQL_THREAD_LOCAL int pos;
+    if (!key) key = "";
+    size_t n = strlen(key);
+    char *p = malloc(n * 3 + 8);
+    if (!p) return "$";
+    size_t o = 0;
+    p[o++] = '$'; p[o++] = '.'; p[o++] = '"';
+    for (const char *c = key; *c; c++) {
+        if (*c == '"' || *c == '\\') p[o++] = '\\';
+        if (*c == '\'') p[o++] = '\'';
+        p[o++] = *c;
+    }
+    p[o++] = '"';
+    p[o] = '\0';
+    pos = (pos + 1) % 16;
+    free(ring[pos]);
+    ring[pos] = p;
+    return p;
 }
 
 /*

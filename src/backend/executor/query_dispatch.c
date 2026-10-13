@@ -11,6 +11,7 @@
 #include "executor/query_patterns.h"
 #include "gql_thread_local.h"
 #include "executor/executor_internal.h"
+#include "transform/sql_builder.h"
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
 #include "runtime/gql_error.h"
@@ -2783,7 +2784,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                             "SELECT value FROM %s "
                             "WHERE %s = %d AND key_id = "
                             "(SELECT id FROM property_keys WHERE key = '%s')",
-                            type_tables[t], id_col, entity_id, prop_name);
+                            type_tables[t], id_col, entity_id, sql_esc_tmp(prop_name));
 
                         sqlite3_stmt *stmt;
                         if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {

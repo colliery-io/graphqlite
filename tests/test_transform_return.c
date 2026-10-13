@@ -822,8 +822,9 @@ static void test_return_nested_property(void)
     char *sql = transform_to_sql("MATCH (n) RETURN n.meta.role");
     CU_ASSERT_PTR_NOT_NULL(sql);
     if (sql) {
-        /* Should use json_extract for nested access */
-        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "json_extract"));
+        /* A value position reads the key with _gql_dyn_prop, which keeps
+         * a boolean or a list typed (GQLITE-T-0414). */
+        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "_gql_dyn_prop"));
         free(sql);
     }
 }

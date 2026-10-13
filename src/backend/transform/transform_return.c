@@ -269,6 +269,22 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
              * numbers. No second evaluation of the aggregate. */
             if (fc->function_name) {
                 const char *n = fc->function_name;
+                /* GQLITE-T-0413: functions that return a string; their text
+                 * is a string even when it looks like a number or JSON. */
+                static const char *const string_fns[] = {
+                    "toString", "toStringOrNull", "substring", "left", "right",
+                    "trim", "ltrim", "rtrim", "btrim", "toUpper", "toLower",
+                    "upper", "lower", "replace", "type", "valueType", NULL
+                };
+                for (int k = 0; string_fns[k]; k++) {
+                    if (!strcasecmp(n, string_fns[k])) {
+                        char *v = value_sql ? NULL : transform_expression_to_string(ctx, expr);
+                        const char *vs = value_sql ? value_sql : v;
+                        char *out = vs ? str_printf("(CASE WHEN (%s) IS NOT NULL THEN 'text' END)", vs, NULL) : NULL;
+                        free(v);
+                        return out;
+                    }
+                }
                 if (!strcasecmp(n, "collect")) return strdup("'json'");
                 if (!strcasecmp(n, "count") || !strcasecmp(n, "sum") || !strcasecmp(n, "avg") ||
                     !strncasecmp(n, "stDev", 5) || !strncasecmp(n, "percentile", 10)) return NULL;
@@ -295,6 +311,23 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
             break;
     }
     if (ast_is_boolean_expr(expr)) return strdup("'bool'");
+    if (expr->type == AST_NODE_BINARY_OP && ((cypher_binary_op *)expr)->op_type == BINARY_OP_ADD) {
+        /* GQLITE-T-0413: string + string is a string (a list from + carries
+         * the JSON subtype; a duration is JSON text, so text starting with
+         * [ or { is left untagged). */
+        char *own2 = NULL;
+        const char *vs = value_sql ? value_sql : (own2 = transform_expression_to_string(ctx, expr));
+        char *out = NULL;
+        if (vs) {
+            size_t n = 4 * strlen(vs) + 200;
+            out = malloc(n);
+            if (out) snprintf(out, n,
+                "COALESCE(_gql_typetag(%s), CASE WHEN typeof(%s) = 'text' AND "
+                "substr(%s, 1, 1) NOT IN ('[', '{') THEN 'text' END)", vs, vs, vs);
+        }
+        free(own2);
+        return out;
+    }
     char *own = NULL;
     if (!value_sql) value_sql = own = transform_expression_to_string(ctx, expr);
     char *out = (value_sql && value_sql[0]) ? str_printf("_gql_typetag(%s)", value_sql, NULL) : NULL;
@@ -1825,7 +1858,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     {
                         char id_e[300];
                         snprintf(id_e, sizeof(id_e), "%s%s", base_alias, is_projected ? "" : ".id");
-                        char *pe = gql_sql_props_expr("node", "node_id", "", id_e);
+                        bool proj_edge = base_name && transform_var_is_edge(ctx->var_ctx, base_name);
+                        char *pe = proj_edge ? gql_sql_props_expr("edge", "edge_id", "", id_e)
+                                             : gql_sql_props_expr("node", "node_id", "", id_e);
                         if (!pe) return -1;
                         append_sql(ctx, "%s", pe);
                         free(pe);
@@ -1847,28 +1882,21 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                         /* Output value */
                         if (item->property && base_alias) {
-                            /* Property access using same logic as transform_property_access */
-                            append_sql(ctx, "(SELECT COALESCE(");
-                            append_sql(ctx, "(SELECT npt.value FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id WHERE npt.node_id = %s%s AND pk.key = ",
-                                       base_alias, is_projected ? "" : ".id");
-                            append_string_literal(ctx, item->property);
-                            append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT npi.value FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id WHERE npi.node_id = %s%s AND pk.key = ",
-                                       base_alias, is_projected ? "" : ".id");
-                            append_string_literal(ctx, item->property);
-                            append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT npr.value FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id WHERE npr.node_id = %s%s AND pk.key = ",
-                                       base_alias, is_projected ? "" : ".id");
-                            append_string_literal(ctx, item->property);
-                            append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT json(CASE WHEN npb.value THEN 'true' ELSE 'false' END) FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id WHERE npb.node_id = %s%s AND pk.key = ",
-                                       base_alias, is_projected ? "" : ".id");
-                            append_string_literal(ctx, item->property);
-                            append_sql(ctx, "), ");
-                            append_sql(ctx, "(SELECT json(npj.value) FROM node_props_json npj JOIN property_keys pk ON npj.key_id = pk.id WHERE npj.node_id = %s%s AND pk.key = ",
-                                       base_alias, is_projected ? "" : ".id");
-                            append_string_literal(ctx, item->property);
-                            append_sql(ctx, ")))");
+                            /* The normal property read: nodes and relationships
+                             * (GQLITE-T-0412: a relationship base read the node
+                             * tables and gave null), typed; a boolean stays a
+                             * JSON boolean in the object. */
+                            ast_node *pa = (ast_node *)make_property(
+                                (ast_node *)make_identifier((char *)base_name, 0),
+                                item->property, 0);
+                            append_sql(ctx, "_gql_json_elem(");
+                            bool saved_cmp = ctx->in_comparison;
+                            ctx->in_comparison = false;
+                            int prc = transform_expression(ctx, pa);
+                            ctx->in_comparison = saved_cmp;
+                            ast_node_free(pa);
+                            if (prc < 0) return -1;
+                            append_sql(ctx, ")");
                         } else if (item->expr) {
                             /* Computed expression; a boolean stays a JSON
                              * boolean (GQLITE-T-0404). */

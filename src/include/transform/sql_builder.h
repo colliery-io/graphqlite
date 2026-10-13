@@ -72,6 +72,10 @@ void dbuf_append_char(dynamic_buffer *buf, char c);
  * Returns NULL on allocation failure or if input is NULL.
  */
 char *escape_sql_string(const char *str);
+/* Escaped copy in a per-thread ring of 16 buffers, for inline use. */
+const char *sql_esc_tmp(const char *s);
+/* `$."key"` as an SQL string body (escaped), per-thread ring of 16. */
+const char *json_path_tmp(const char *key);
 
 /*
  * Append formatted string to the buffer (printf-style).

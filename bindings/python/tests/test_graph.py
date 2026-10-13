@@ -52,11 +52,13 @@ def test_escape_string_backslash():
 
 
 def test_escape_string_newlines():
-    assert escape_string("line1\nline2") == "line1 line2"
+    # Escaped, not replaced by a space (GQLITE-T-0417)
+    assert escape_string("line1\nline2") == "line1\\nline2"
 
 
 def test_escape_string_tabs():
-    assert escape_string("col1\tcol2") == "col1 col2"
+    assert escape_string("col1\tcol2") == "col1\\tcol2"
+    assert escape_string("a\x01b") == "a\\u0001b"
 
 
 def test_sanitize_rel_type_passthrough():
