@@ -57,6 +57,8 @@ def with_node(nodes, id, label="Item", **changes):
 
 
 def sort_state(rows):
+    """Labels have no order in Cypher: compare them sorted."""
+    rows = [{**r, "l": sorted(r["l"])} for r in rows]
     return sorted(rows, key=lambda r: (str(r.get("id")), str(r.get("l"))))
 
 
@@ -91,6 +93,18 @@ CASES = [
     ("set_label",
      "MATCH (n:Item {id: 'a'}) SET n:Hot RETURN n.id AS id",
      None, [{"id": "a"}], with_node(BASE, "a", l=["Item", "Hot"]), None),
+    ("set_and_remove",
+     "MATCH (n:Item {id: 'a'}) SET n.x = 1 REMOVE n.v RETURN n.id AS id, n.x AS x, n.v AS v",
+     None, [{"id": "a", "x": 1, "v": None}], with_node(BASE, "a", x=1, v=None), None),
+    ("remove_and_set",
+     "MATCH (n:Item) WHERE n.v = 1 REMOVE n.v SET n.x = 1 RETURN n.id AS id",
+     None, [{"id": "a"}], with_node(BASE, "a", x=1, v=None), None),
+    ("set_label_remove_label",
+     "MATCH (n:Item {id: 'a'}) SET n:Hot REMOVE n:Item RETURN n.id AS id, labels(n) AS l",
+     None, [{"id": "a", "l": ["Hot"]}], with_node(BASE, "a", l=["Hot"]), None),
+    ("two_sets",
+     "MATCH (n:Item) WHERE n.v = 1 SET n.v = 5 SET n.x = n.v RETURN n.id AS id, n.x AS x",
+     None, [{"id": "a", "x": 5}], with_node(BASE, "a", v=5, x=5), None),
     ("set_return_node",
      "MATCH (n:Item {id: 'a'}) SET n.v = 7 RETURN n.id AS id, n.v AS v, labels(n) AS l",
      None, [{"id": "a", "v": 7, "l": ["Item"]}], with_node(BASE, "a", v=7), None),

@@ -95,13 +95,19 @@ struct cypher_transform_context {
     sql_builder *unified_builder;
 
     /* Perf review F2: when generate_node_match consumes a node's first inline
-     * literal pair into the driving JOIN it nulls the pair's key. The pair's
-     * `SELECT node_id ...` fragment is remembered here, keyed by node alias,
-     * so a later variable-length CTE can still anchor at that node. */
+     * literal pair into the driving JOIN, the pair goes in consumed_pairs so
+     * the per-property filters skip it. The AST is not changed: a MATCH is
+     * transformed again for RETURN after SET/REMOVE/DELETE (GQLITE-T-0393,
+     * GQLITE-T-0400). The pair's `SELECT node_id ...` fragment is remembered
+     * here, keyed by node alias, so a later variable-length CTE can still
+     * anchor at that node. */
     char **anchor_aliases;
     char **anchor_sqls;
     int anchor_count;
     int anchor_cap;
+    const void **consumed_pairs;
+    int consumed_count;
+    int consumed_cap;
 
     /* Perf review F6: per-statement cache of property key name -> id (per
      * graph prefix), so property access filters on key_id directly instead

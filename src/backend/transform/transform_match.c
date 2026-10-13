@@ -40,6 +40,32 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 static void stash_consumed_anchor(cypher_transform_context *ctx, const char *alias,
                                   const char *key, cypher_literal *lit);
 
+/* An inline property pair that generate_node_match used as the driving JOIN.
+ * The pair is recorded in the context, not removed from the AST: the same
+ * MATCH is transformed again for RETURN after SET, REMOVE and DELETE, and
+ * that transform must still filter on it (GQLITE-T-0393, GQLITE-T-0400). */
+static void mark_pair_consumed(cypher_transform_context *ctx, const cypher_map_pair *pair)
+{
+    if (!ctx || !pair) return;
+    if (ctx->consumed_count == ctx->consumed_cap) {
+        int cap = ctx->consumed_cap ? ctx->consumed_cap * 2 : 4;
+        const void **grown = realloc(ctx->consumed_pairs, (size_t)cap * sizeof(*grown));
+        if (!grown) return;
+        ctx->consumed_pairs = grown;
+        ctx->consumed_cap = cap;
+    }
+    ctx->consumed_pairs[ctx->consumed_count++] = pair;
+}
+
+static bool pair_consumed(cypher_transform_context *ctx, const cypher_map_pair *pair)
+{
+    if (!ctx) return false;
+    for (int i = 0; i < ctx->consumed_count; i++) {
+        if (ctx->consumed_pairs[i] == pair) return true;
+    }
+    return false;
+}
+
 static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                                      cypher_node_pattern *source_node, cypher_node_pattern *target_node,
                                      int rel_index, bool optional, path_type ptype,
@@ -210,8 +236,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     if (map->pairs) {
                         for (int k = 0; k < map->pairs->count; k++) {
                             cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[k];
-                            /* Skip if key is NULL (already handled in JOIN) */
-                            if (!pair->key) continue;
+                            /* Skip the pair used as the driving JOIN */
+                            if (!pair->key || pair_consumed(ctx, pair)) continue;
                             if (pair->value && pair->value->type == AST_NODE_LITERAL) {
                                 /* Emit a per-property EXISTS subquery keyed by the pair's key
                                  * instead of reusing the first-pair join's _prop_<alias>.value.
@@ -1827,7 +1853,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 
                     /* Mark first property as handled */
                     stash_consumed_anchor(ctx, alias, first_pair->key, lit);
-                    first_pair->key = NULL;
+                    mark_pair_consumed(ctx, first_pair);
                 } else {
                     sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
                 }
@@ -1927,7 +1953,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
 
                     stash_consumed_anchor(ctx, alias, first_pair->key, lit);
 
-                    first_pair->key = NULL;
+                    mark_pair_consumed(ctx, first_pair);
                 } else {
                     sql_join(ctx->unified_builder, jtype, get_graph_table(ctx, "nodes"), alias, "1=1");
                 }
@@ -2040,7 +2066,7 @@ static bool literal_anchor_fragment(const char *key, cypher_literal *lit, dynami
 }
 
 /* Remember the anchor fragment for a literal pair that generate_node_match
- * is about to consume (it nulls the pair's key), keyed by the node alias. */
+ * is about to consume (mark_pair_consumed), keyed by the node alias. */
 static void stash_consumed_anchor(cypher_transform_context *ctx, const char *alias,
                                   const char *key, cypher_literal *lit)
 {
@@ -2074,7 +2100,7 @@ static bool build_anchor_ids_sql(cypher_transform_context *ctx, const char *alia
     int emitted = 0;
 
     /* Pairs already consumed into the node's driving JOIN (see
-     * stash_consumed_anchor) — the AST no longer carries their key. */
+     * stash_consumed_anchor); the pair loop below skips them. */
     if (ctx && alias) {
         for (int i = 0; i < ctx->anchor_count; i++) {
             if (strcmp(ctx->anchor_aliases[i], alias) != 0) continue;
@@ -2090,7 +2116,7 @@ static bool build_anchor_ids_sql(cypher_transform_context *ctx, const char *alia
 
     for (int k = 0; k < map->pairs->count; k++) {
         cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[k];
-        if (!pair || !pair->key || !pair->value) continue;
+        if (!pair || !pair->key || !pair->value || pair_consumed(ctx, pair)) continue;
 
         dynamic_buffer one;
         dbuf_init(&one);
@@ -2424,7 +2450,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
 
                     stash_consumed_anchor(ctx, target_alias, first_pair->key, lit);
 
-                    first_pair->key = NULL;
+                    mark_pair_consumed(ctx, first_pair);
                 } else {
                     sql_join(ctx->unified_builder, SQL_JOIN_CROSS, get_graph_table(ctx, "nodes"), target_alias, NULL);
                 }

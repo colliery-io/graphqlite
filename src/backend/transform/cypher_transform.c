@@ -153,6 +153,9 @@ void cypher_transform_free_context(cypher_transform_context *ctx)
         ctx->anchor_aliases = NULL;
         ctx->anchor_sqls = NULL;
         ctx->anchor_count = ctx->anchor_cap = 0;
+        free(ctx->consumed_pairs);
+        ctx->consumed_pairs = NULL;
+        ctx->consumed_count = ctx->consumed_cap = 0;
         for (int i = 0; i < ctx->pk_count; i++) {
             free(ctx->pk_graphs[i]);
             free(ctx->pk_names[i]);
