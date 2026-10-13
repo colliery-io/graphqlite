@@ -798,3 +798,35 @@ the TCK harness (3788 -> 3794, full pass-set diff: zero regressions; unit
 - Known gap (unchanged): `nodes(q)` / `relationships(q)` on a pattern
   comprehension's own path variable (`[q = (a)-->() | nodes(q)]`) still
   return raw ids.
+
+## Coverage update (2026-10-13) — value types, write + RETURN scope, unusual names (0.10.0)
+
+GitHub #128; GQLITE-T-0393 .. GQLITE-T-0410, GQLITE-A-0007. Three tests now
+cover cells that were checked by value only, so a wrong type passed:
+
+- **`bindings/python/tests/test_type_round_trip.py`** — the scalar type axis
+  in full. 26 values (int, float, whole float, bool, text that looks like a
+  number / boolean / JSON / null, apostrophe, lists of each type, empty list)
+  × 17 node write shapes (CREATE inline / `$param`, SET literal / `$param` /
+  `+=`, SET after WITH, SET copy of a property with and without WITH, MERGE
+  inline / ON CREATE, WITH → CREATE, UNWIND literal / `$param` / map rows /
+  map rows → MERGE, `upsert_node`) × 14 read-back shapes (`n.k`, `n`,
+  `properties(n)`, map projection, in a list, in a map, WITH, WITH of the
+  node, `collect`, UNWIND, CASE, `coalesce`, `iter_query`, `get_node`); 7
+  relationship write shapes × 8 read-backs; 29 values × 11 expression paths;
+  function result types. The comparison is strict: `True` is not `1`.
+- **`bindings/python/tests/test_write_return_scope.py`** — write + RETURN
+  with decoy nodes and relationships that must not be returned or changed:
+  SET, REMOVE, DELETE, DETACH DELETE, MERGE ON MATCH / ON CREATE,
+  MATCH+MERGE, MATCH+CREATE, SET+REMOVE, two SETs; stored state checked.
+- **`bindings/python/tests/test_backtick_identifiers.py`** — 13 names
+  (space, dash, dot, `` ` ``, quotes, SQL / Cypher keywords, leading digit,
+  unicode, brackets, semicolon) × 15 slots.
+- The TCK comparator compares booleans, integers and floats by type.
+
+Cells closed (were wrong, no error): DELETE + RETURN with an inline property
+deleted every node of the label; SET/REMOVE + RETURN returned unmatched rows;
+SET + REMOVE skipped the REMOVE; WITH → CREATE dropped the value; MERGE
+dropped lists; SET / CREATE copy of a list property; text read back as a
+number, boolean or JSON on every path (now carried by type tag columns,
+GQLITE-A-0007).
