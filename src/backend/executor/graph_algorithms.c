@@ -6,6 +6,7 @@
  * - graph_algo_pagerank.c
  * - graph_algo_community.c
  * - graph_algo_paths.c
+ * - graph_algo_yen.c
  * - graph_algo_centrality.c
  */
 
@@ -556,6 +557,44 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         }
         if (func->args && func->args->count >= 3) {
             params.weight_prop = resolve_string_arg((ast_node *)func->args->items[2], params_json);
+        }
+        return params;
+    }
+
+    /* Yen's k-shortest loopless paths */
+    if (strcasecmp(func->function_name, "yen") == 0 ||
+        strcasecmp(func->function_name, "kShortestPaths") == 0) {
+        params.type = GRAPH_ALGO_YEN;
+        params.max_hops = 0;    /* Unbounded unless a hop cap is given */
+
+        /* yen(source, target, k[, max_hops][, weight_property]).
+         * The two optional arguments are told apart by type - an integer
+         * is the hop cap, a string is the edge weight property - and may
+         * appear in either order; null skips one. */
+        if (func->args && func->args->count >= 2) {
+            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
+            params.target_id = resolve_string_arg((ast_node *)func->args->items[1], params_json);
+        }
+        if (func->args && func->args->count >= 3) {
+            params.k = resolve_int_arg((ast_node *)func->args->items[2], params_json, 0);
+        }
+        for (int i = 3; func->args && i < func->args->count; i++) {
+            ast_node *arg = (ast_node *)func->args->items[i];
+
+            char *weight_prop = resolve_string_arg(arg, params_json);
+            if (weight_prop) {
+                if (!params.weight_prop) {
+                    params.weight_prop = weight_prop;
+                } else {
+                    free(weight_prop);
+                }
+                continue;
+            }
+
+            int max_hops = resolve_int_arg(arg, params_json, INT_MIN);
+            if (max_hops != INT_MIN && params.max_hops == 0) {
+                params.max_hops = max_hops;
+            }
         }
         return params;
     }

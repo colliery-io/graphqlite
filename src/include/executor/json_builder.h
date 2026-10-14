@@ -39,6 +39,9 @@ void jbuf_append(json_builder *jb, const char *str);
 /* Add formatted content */
 void jbuf_appendf(json_builder *jb, const char *fmt, ...);
 
+/* Append a JSON-escaped string value (with quotes) to the builder */
+void jbuf_add_json_string(json_builder *jb, const char *str);
+
 /* Add array/object item with automatic comma handling */
 void jbuf_add_item(json_builder *jb, const char *fmt, ...);
 

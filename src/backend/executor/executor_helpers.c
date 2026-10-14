@@ -432,25 +432,6 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
     return 0;
 }
 
-/* Append a JSON-escaped string value (with quotes) to a json_builder */
-static void jbuf_add_json_string(json_builder *jb, const char *str)
-{
-    jbuf_append(jb, "\"");
-    if (str) {
-        for (const char *p = str; *p; p++) {
-            switch (*p) {
-                case '"':  jbuf_append(jb, "\\\""); break;
-                case '\\': jbuf_append(jb, "\\\\"); break;
-                case '\n': jbuf_append(jb, "\\n"); break;
-                case '\r': jbuf_append(jb, "\\r"); break;
-                case '\t': jbuf_append(jb, "\\t"); break;
-                default:   jbuf_appendf(jb, "%c", *p); break;
-            }
-        }
-    }
-    jbuf_append(jb, "\"");
-}
-
 /* Recursively serialize an AST expression node to JSON in a json_builder */
 static void serialize_ast_node(json_builder *jb, ast_node *expr)
 {

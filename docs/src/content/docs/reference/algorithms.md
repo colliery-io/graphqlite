@@ -2,11 +2,11 @@
 title: Graph Algorithms Reference
 ---
 
-GraphQLite provides 18 built-in graph algorithms accessible via Cypher functions, the Python `Graph` API, and the Rust `Graph` API.
+GraphQLite provides 19 built-in graph algorithms accessible via Cypher functions, the Python `Graph` API, and the Rust `Graph` API.
 
 > For guidance on choosing the right algorithm for your use case, see [Using Graph Algorithms](../../how-to/graph-algorithms/).
 
-In Cypher, call an algorithm as a function in a `RETURN` clause with no other clause. The query gives one row. The value is a JSON array of result objects, or one JSON object for `dijkstra` and `astar`. The comment under each signature shows the keys. To get one row for each result in SQL, use `json_each`:
+In Cypher, call an algorithm as a function in a `RETURN` clause with no other clause. The query gives one row. The value is a JSON array of result objects, or one JSON object for `dijkstra`, `astar` and `yen`. The comment under each signature shows the keys. To get one row for each result in SQL, use `json_each`:
 
 ```sql
 SELECT json_extract(value, '$.user_id') AS user_id,
@@ -428,6 +428,73 @@ Rust: `ShortestPathResult` — fields: `path: Vec<String>`, `distance: f64`, `fo
 result = graph.shortest_path('alice', 'bob', weight_property='cost')
 if result['found']:
     print(result['path'], result['distance'])
+```
+
+---
+
+## Yen's k-Shortest Paths
+
+**Cypher**
+
+```cypher
+RETURN yen(source, target, k[, max_hops][, weight_property])
+// {paths: [{path, edges, distance}, ...], found}
+```
+
+There is no Python/Rust binding wrapper yet; call it through the SQL
+`cypher()` interface.
+
+**Parameters**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | String | required | Source node user ID |
+| `target` | String | required | Target node user ID |
+| `k` | Integer | `1` | Number of routes to return; clamped to `[1, 1000]` |
+| `max_hops` | Integer \| None | unbounded | Maximum number of edges per route; clamped to `[1, 1000]` |
+| `weight_property` | String \| None | `None` | Edge property to use as weight; hop count if `None` |
+
+The two optional arguments are told apart by type (an integer is the hop
+cap, a string is the weight property), so they may be given in either
+order and `null` skips one:
+
+```cypher
+RETURN yen('alice', 'frank', 3);            // 3 routes, unweighted, unbounded
+RETURN yen('alice', 'frank', 3, 7);         // at most 7 edges, unweighted
+RETURN yen('alice', 'frank', 3, 'cost');    // weighted, unbounded
+RETURN yen('alice', 'frank', 3, 7, 'cost'); // both
+RETURN yen('alice', 'frank', 3, null, 7);   // cap only, via null skip
+```
+
+**Return shape**: one JSON object. `paths` holds up to `k` loopless routes in
+non-decreasing total cost; each route has `path` (node user IDs), `edges`
+(rowids from the `edges` table, one per traversal) and `distance`. `found` is
+false when no route exists within the hop cap.
+
+- The hop cap bounds every search of the algorithm (the first route and each
+  spur), so on large graphs it shrinks the explored region from the whole
+  cost-ball around the endpoints to the within-`max_hops` neighbourhoods.  A
+  cap that cannot exclude anything (`>= node count - 1`) falls back to the
+  unbounded search, and `0` or a negative value means unbounded.
+- Hop-capped searches are exact: the search state is (node, hops), not a
+  single pruned distance, so a cheaper longer prefix cannot hide a
+  within-cap route through a costlier shorter one.
+- Parallel edges are distinct routes: two routes that share a node sequence
+  but use different parallel edges are returned separately, told apart by
+  `edges`.
+- Ties are ordered by discovery, so the result is deterministic; unbounded
+  `k = 1` returns the same route as `dijkstra`.
+- Edges are directed and weights must be non-negative, as in `dijkstra`.
+
+**Complexity**: unbounded worst case O(K × L × (E log V)), where L is the
+number of nodes in the longest returned route.  Hop-capped searches are
+O(H × E) worst case (H = the cap) and in practice touch only the
+within-cap neighbourhoods.
+
+**Example**
+
+```sql
+SELECT cypher('RETURN yen(''alice'', ''frank'', 3, 7, ''cost'')');
 ```
 
 ---

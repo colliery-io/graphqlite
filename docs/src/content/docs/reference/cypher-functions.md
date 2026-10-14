@@ -333,6 +333,7 @@ Called inside Cypher queries using `CALL` syntax or inline. See [Graph Algorithm
 | `labelPropagation([iterations])` | Label propagation community detection |
 | `louvain([resolution])` | Louvain modularity community detection |
 | `dijkstra(source, target[, weight_property])` | Weighted shortest path |
+| `yen(source, target, k[, max_hops][, weight_property])` | k shortest loopless paths, optionally hop-capped (alias `kShortestPaths`) |
 | `astar(source, target[, lat_prop, lon_prop])` | A* heuristic shortest path |
 | `degreeCentrality()` | In/out/total degree per node |
 | `betweennessCentrality()` | Betweenness centrality per node |

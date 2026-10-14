@@ -27,6 +27,7 @@ int init_executor_merge_suite(void);
 int init_executor_pagerank_suite(void);
 int init_executor_label_propagation_suite(void);
 int init_executor_dijkstra_suite(void);
+int init_executor_yen_suite(void);
 int init_executor_degree_centrality_suite(void);
 int init_executor_components_suite(void);
 int init_executor_betweenness_suite(void);
@@ -190,6 +191,12 @@ int main(void)
 
     if (init_executor_dijkstra_suite() != CUE_SUCCESS) {
         fprintf(stderr, "Failed to add executor Dijkstra suite\n");
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+
+    if (init_executor_yen_suite() != CUE_SUCCESS) {
+        fprintf(stderr, "Failed to add executor Yen suite\n");
         CU_cleanup_registry();
         return CU_get_error();
     }

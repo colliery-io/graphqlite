@@ -33,6 +33,49 @@ static inline int find_node_by_user_id(csr_graph *graph, const char *user_id)
 }
 
 /*
+ * Shared Dijkstra search over the CSR adjacency from source_idx to
+ * target_idx.
+ *
+ * weights, when non-NULL, holds one weight per col_idx slot; NULL weighs
+ * every edge 1.0.  banned_nodes / banned_edges, when non-NULL, are boolean
+ * arrays sized node_count / edge_count: a banned node is never settled and
+ * a banned edge slot is never relaxed.  Callers must not ban the source or
+ * the target.
+ *
+ * The caller owns dist, prev and prev_edge, each node_count entries.
+ * prev_edge records the col_idx slot used to reach each node and may be
+ * NULL when the caller does not need slot tracking.
+ *
+ * Returns 1 when a path exists (dist[target_idx] holds its cost), 0 when
+ * it does not, and -1 on allocation failure.
+ */
+int algo_dijkstra_search(const csr_graph *graph, const double *weights,
+                         int source_idx, int target_idx,
+                         const char *banned_nodes, const char *banned_edges,
+                         double *dist, int *prev, int *prev_edge);
+
+/*
+ * Hop-bounded variant of algo_dijkstra_search: the minimum-cost path from
+ * source_idx to target_idx using at most max_hops edges.
+ *
+ * The search state is (node, hops), one round per hop, so a plain
+ * Dijkstra pruned at the cap would not be exact - see the implementation
+ * for the counterexample shape.  Bans and weights work exactly as in
+ * algo_dijkstra_search; callers must not ban the source or the target.
+ *
+ * The caller owns path_nodes (max_hops + 1 entries) and path_slots
+ * (max_hops entries).  Returns 1 when a path exists (path_len and
+ * path_distance filled), 0 when none fits the budget, -1 on allocation
+ * failure.
+ */
+int algo_dijkstra_search_bounded(const csr_graph *graph, const double *weights,
+                                 int source_idx, int target_idx,
+                                 const char *banned_nodes, const char *banned_edges,
+                                 int max_hops,
+                                 int *path_nodes, int *path_slots, int *path_len,
+                                 double *path_distance);
+
+/*
  * Min-heap for priority queue algorithms (Dijkstra, A*, etc.)
  */
 typedef struct {

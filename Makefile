@@ -175,6 +175,7 @@ EXECUTOR_SRCS = \
 	$(EXECUTOR_DIR)/graph_algo_pagerank.c \
 	$(EXECUTOR_DIR)/graph_algo_community.c \
 	$(EXECUTOR_DIR)/graph_algo_paths.c \
+	$(EXECUTOR_DIR)/graph_algo_yen.c \
 	$(EXECUTOR_DIR)/graph_algo_centrality.c \
 	$(EXECUTOR_DIR)/graph_algo_components.c \
 	$(EXECUTOR_DIR)/graph_algo_betweenness.c \
@@ -232,6 +233,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_executor_pagerank.c \
 	$(TEST_DIR)/test_executor_label_propagation.c \
 	$(TEST_DIR)/test_executor_dijkstra.c \
+	$(TEST_DIR)/test_executor_yen.c \
 	$(TEST_DIR)/test_executor_degree_centrality.c \
 	$(TEST_DIR)/test_executor_components.c \
 	$(TEST_DIR)/test_executor_betweenness.c \

@@ -118,6 +118,7 @@ typedef enum {
     GRAPH_ALGO_PAGERANK,
     GRAPH_ALGO_LABEL_PROPAGATION,
     GRAPH_ALGO_DIJKSTRA,
+    GRAPH_ALGO_YEN,
     GRAPH_ALGO_DEGREE_CENTRALITY,
     GRAPH_ALGO_WCC,
     GRAPH_ALGO_SCC,
@@ -147,7 +148,8 @@ typedef struct {
     char *lon_prop;       /* For A* - longitude/x property name */
     int max_depth;        /* For BFS/DFS - max traversal depth (-1 = unlimited) */
     double threshold;     /* For Node Similarity - minimum similarity threshold (default 0.0) */
-    int k;                /* For KNN - number of neighbors to return */
+    int k;                /* For KNN (neighbours) and Yen (paths) */
+    int max_hops;         /* For Yen - hop cap on returned paths (0 = unbounded) */
 } graph_algo_params;
 
 /* Check if RETURN clause contains a graph algorithm call and extract parameters */
@@ -161,6 +163,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
 graph_algo_result* execute_pagerank(sqlite3 *db, csr_graph *cached, double damping, int iterations, int top_k);
 graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int iterations);
 graph_algo_result* execute_dijkstra(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id, const char *weight_prop);
+graph_algo_result* execute_yen(sqlite3 *db, csr_graph *cached, const char *source_id, const char *target_id, int k, const char *weight_prop, int max_hops);
 graph_algo_result* execute_degree_centrality(sqlite3 *db, csr_graph *cached);
 graph_algo_result* execute_wcc(sqlite3 *db, csr_graph *cached);
 graph_algo_result* execute_scc(sqlite3 *db, csr_graph *cached);

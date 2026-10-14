@@ -121,6 +121,33 @@ void jbuf_appendf(json_builder *jb, const char *fmt, ...)
     va_end(args_copy);
 }
 
+/* Append a JSON-escaped string value (with quotes) to a json_builder */
+void jbuf_add_json_string(json_builder *jb, const char *str)
+{
+    jbuf_append(jb, "\"");
+    if (str) {
+        for (const unsigned char *p = (const unsigned char *)str; *p; p++) {
+            switch (*p) {
+                case '"':  jbuf_append(jb, "\\\""); break;
+                case '\\': jbuf_append(jb, "\\\\"); break;
+                case '\b': jbuf_append(jb, "\\b"); break;
+                case '\f': jbuf_append(jb, "\\f"); break;
+                case '\n': jbuf_append(jb, "\\n"); break;
+                case '\r': jbuf_append(jb, "\\r"); break;
+                case '\t': jbuf_append(jb, "\\t"); break;
+                default:
+                    if (*p < 0x20) {
+                        jbuf_appendf(jb, "\\u%04x", (unsigned int)*p);
+                    } else {
+                        jbuf_appendf(jb, "%c", *p);
+                    }
+                    break;
+            }
+        }
+    }
+    jbuf_append(jb, "\"");
+}
+
 void jbuf_add_item(json_builder *jb, const char *fmt, ...)
 {
     if (!jb || !fmt) return;

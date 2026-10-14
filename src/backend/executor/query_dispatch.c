@@ -2416,6 +2416,18 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
                 free(algo_params.target_id);
                 free(algo_params.weight_prop);
                 break;
+            case GRAPH_ALGO_YEN:
+                CYPHER_DEBUG("Executing C-based Yen k-shortest paths");
+                algo_result = execute_yen(executor->db, executor->cached_graph,
+                                          algo_params.source_id,
+                                          algo_params.target_id,
+                                          algo_params.k,
+                                          algo_params.weight_prop,
+                                          algo_params.max_hops);
+                free(algo_params.source_id);
+                free(algo_params.target_id);
+                free(algo_params.weight_prop);
+                break;
             case GRAPH_ALGO_DEGREE_CENTRALITY:
                 CYPHER_DEBUG("Executing C-based Degree Centrality");
                 algo_result = execute_degree_centrality(executor->db, executor->cached_graph);
