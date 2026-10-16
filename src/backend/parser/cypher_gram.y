@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "parser/cypher_ast.h"
 #include "parser/cypher_parser.h"
@@ -20,6 +21,26 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %code requires {
 #include <stdint.h>
 #include <stdbool.h>
+}
+
+%code {
+/* The spelling of a keyword as written, at `line` / `col` (1-based) of the
+ * input, for a keyword used as a map key: `{NULL: 1}` keeps the key "NULL"
+ * (the scanner upper-cases keywords; Map1 [5], Map2 [5]). `fallback` when
+ * the input cannot be read. Owned by the caller. */
+static char *keyword_text_at(cypher_parser_context *context, int line, int col,
+                             const char *fallback)
+{
+    const char *in = (context && context->scanner) ? context->scanner->input_string : NULL;
+    if (!in || line < 1 || col < 1) return strdup(fallback);
+    for (int l = 1; l < line && *in; in++) if (*in == '\n') l++;
+    for (int c = 1; c < col && *in && *in != '\n'; c++) in++;
+    size_t n = 0;
+    while (in[n] && ((in[n] >= 'A' && in[n] <= 'Z') || (in[n] >= 'a' && in[n] <= 'z') ||
+                     in[n] == '_' || (in[n] >= '0' && in[n] <= '9'))) n++;
+    if (n == 0 || strncasecmp(in, fallback, n) != 0 || strlen(fallback) != n) return strdup(fallback);
+    return strndup(in, n);
+}
 }
 
 %locations
@@ -1985,18 +2006,24 @@ map_pair:
         }
     | ORDER ':' expr
         {
-            $$ = make_map_pair("order", $3, @1.first_line);
+            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "order");
+            $$ = make_map_pair(k, $3, @1.first_line);
+            free(k);
         }
     | BY ':' expr
         {
-            $$ = make_map_pair("by", $3, @1.first_line);
+            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "by");
+            $$ = make_map_pair(k, $3, @1.first_line);
+            free(k);
         }
     | NULL_P ':' expr
         {
             /* `null` and `NULL` are legal map keys per the openCypher
              * spec (Map2 [5]). The scanner up-cases the keyword, so
              * preserve the textual form here as `null`. */
-            $$ = make_map_pair(strdup("null"), $3, @1.first_line);
+            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "null");
+            $$ = make_map_pair(k, $3, @1.first_line);
+            free(k);
         }
     ;
 

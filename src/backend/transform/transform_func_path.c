@@ -89,15 +89,20 @@ static int emit_registered_path_members(cypher_transform_context *ctx, transform
 {
     dynamic_buffer u;
     dbuf_init(&u);
-    /* An OPTIONAL path matches all or nothing: test its first relationship
-     * (an end node can be bound before the OPTIONAL MATCH). */
-    char null_guard[300] = "";
-    for (int i = 0; i < path_var->path_elements->count && !null_guard[0]; i++) {
+    /* An OPTIONAL path matches all or nothing: it is null when any of its
+     * relationships is (an end node can be bound before the OPTIONAL MATCH,
+     * and a fixed part can match while a variable-length part does not,
+     * Match7 [19]). */
+    char null_guard[1024] = "";
+    for (int i = 0; i < path_var->path_elements->count; i++) {
         ast_node *el = path_var->path_elements->items[i];
         if (el->type != AST_NODE_REL_PATTERN) continue;
         cypher_rel_pattern *rp = (cypher_rel_pattern*)el;
         const char *a = rp->variable ? transform_var_get_alias(ctx->var_ctx, rp->variable) : NULL;
-        if (a) snprintf(null_guard, sizeof(null_guard), "%s.%s", a, rp->varlen ? "elem_ids" : "id");
+        if (!a) continue;
+        size_t len = strlen(null_guard);
+        snprintf(null_guard + len, sizeof(null_guard) - len, "%s%s.%s IS NULL",
+                 len ? " OR " : "", a, rp->varlen ? "elem_ids" : "id");
     }
     int seg = 0;
     const char *prev_varlen = NULL;   /* alias of a varlen segment just before */
@@ -109,7 +114,7 @@ static int emit_registered_path_members(cypher_transform_context *ctx, transform
             /* A node from WITH: its alias is the id column itself (Path1 [1]). */
             bool a_is_id = a && np->variable &&
                 (transform_var_alias_is_id(ctx->var_ctx, np->variable) || strchr(a, '.'));
-            if (!null_guard[0] && a) snprintf(null_guard, sizeof(null_guard), a_is_id ? "%s" : "%s.id", a);
+            if (!null_guard[0] && a) snprintf(null_guard, sizeof(null_guard), a_is_id ? "%s IS NULL" : "%s.id IS NULL", a);
             const char *after_varlen = prev_varlen;
             prev_varlen = NULL;
             if (!want_nodes) continue;
@@ -157,7 +162,7 @@ static int emit_registered_path_members(cypher_transform_context *ctx, transform
                           : gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
     if (!ej) { dbuf_free(&u); return -1; }
     /* A null path (OPTIONAL pattern that did not match) gives null. */
-    if (null_guard[0]) append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE ", null_guard);
+    if (null_guard[0]) append_sql(ctx, "(CASE WHEN %s THEN NULL ELSE ", null_guard);
     append_sql(ctx,
         "(SELECT json_group_array(json(%s) ORDER BY _pm.seg, _pm.k) FROM (%s) _pm%s)",
         ej, dbuf_get(&u), want_nodes ? "" : " JOIN edges e ON e.id = _pm.v");
@@ -215,11 +220,13 @@ int transform_path_object(cypher_transform_context *ctx, const char *name)
     transform_var *pv = transform_var_lookup_path(ctx->var_ctx, name);
     if (!pv || !pv->path_elements) return 1;
     if (pv->table_alias && strchr(pv->table_alias, '.')) return 1;  /* forwarded */
-    append_sql(ctx, "json_object('nodes', json(");
+    /* null when the path is null (OPTIONAL MATCH miss, Match7 [19]) */
+    append_sql(ctx, "(SELECT CASE WHEN _po.n IS NULL THEN NULL ELSE "
+                    "json_object('nodes', json(_po.n), 'rels', json(_po.r)) END FROM (SELECT ");
     if (emit_registered_path_members(ctx, pv, true) < 0) return -1;
-    append_sql(ctx, "), 'rels', json(");
+    append_sql(ctx, " AS n, ");
     if (emit_registered_path_members(ctx, pv, false) < 0) return -1;
-    append_sql(ctx, "))");
+    append_sql(ctx, " AS r) _po)");
     return 0;
 }
 

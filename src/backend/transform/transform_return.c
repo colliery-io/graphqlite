@@ -1281,7 +1281,15 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                              * path_ids projection (Match7 [19]). */
                             bool single_varlen = has_varlen && rel_count == 1;
 
-                            if (path_var->path_type == VAR_PATH_COMPREHENSION ||
+                            if (has_varlen && !single_varlen &&
+                                path_var->path_type != VAR_PATH_COMPREHENSION) {
+                                /* A path mixing fixed and variable-length
+                                 * parts, or with more than one variable-length
+                                 * part: the hydrated {nodes, rels} object, with
+                                 * the inner entities of each segment (the node
+                                 * ids text dropped them; Match6 [14]/[17]). */
+                                if (transform_path_object(ctx, id->name) < 0) return -1;
+                            } else if (path_var->path_type == VAR_PATH_COMPREHENSION ||
                                 (ctx->emit_hydrated_path && !single_varlen)) {
                                 /* T-0332: pattern comprehension path — emit fully hydrated
                                  * path JSON ({nodes:[...], rels:[...]}) so it survives nested
@@ -1771,16 +1779,20 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     append_sql(ctx, " WHEN ");
 
                     if (case_expr->operand) {
-                        /* Simple CASE: generate "operand = when_value" */
+                        /* Simple CASE: "operand = when_value" with Cypher
+                         * equality, so `CASE true WHEN 1` does not match
+                         * (Conditional2 [1]). The node borrows both sides. */
+                        cypher_binary_op *eq = make_binary_op(BINARY_OP_EQ,
+                            case_expr->operand, when->condition, 0);
+                        if (!eq) return -1;
+                        bool saved_cmp = ctx->in_comparison;
+                        ctx->in_comparison = true;
                         append_sql(ctx, "(");
-                        if (transform_expression(ctx, case_expr->operand) < 0) {
-                            return -1;
-                        }
-                        append_sql(ctx, ") = (");
-                        if (transform_expression(ctx, when->condition) < 0) {
-                            return -1;
-                        }
+                        int erc = transform_expression(ctx, (ast_node *)eq);
                         append_sql(ctx, ")");
+                        ctx->in_comparison = saved_cmp;
+                        free(eq);
+                        if (erc < 0) return -1;
                     } else {
                         /* Searched CASE: the condition is a boolean position */
                         if (transform_condition(ctx, when->condition) < 0) {
