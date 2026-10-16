@@ -201,7 +201,9 @@ RUNTIME_DIR = $(SRC_DIR)/backend/runtime
 RUNTIME_SRCS = \
 	$(RUNTIME_DIR)/udf_helpers.c \
 	$(RUNTIME_DIR)/udf_register.c \
-	$(RUNTIME_DIR)/cypher_rows_vtab.c
+	$(RUNTIME_DIR)/cypher_rows_vtab.c \
+	$(RUNTIME_DIR)/gql_tz.c \
+	$(RUNTIME_DIR)/gql_tzdata.c
 
 RUNTIME_OBJS = $(RUNTIME_SRCS:$(RUNTIME_DIR)/%.c=$(BUILD_RUNTIME_DIR)/%.o)
 RUNTIME_OBJS_COV = $(RUNTIME_SRCS:$(RUNTIME_DIR)/%.c=$(BUILD_RUNTIME_DIR)/%.cov.o)
