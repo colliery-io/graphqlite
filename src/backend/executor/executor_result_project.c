@@ -14,6 +14,7 @@
 #include "executor/query_patterns.h"
 #include "gql_thread_local.h"
 #include "executor/executor_internal.h"
+#include "runtime/gql_error.h"
 #include "transform/sql_builder.h"
 #include "entity_json_sql.h"
 #include "parser/cypher_debug.h"
@@ -432,8 +433,12 @@ void project_return_row_from_var_map(cypher_executor *executor,
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
                                 if (val) {
                                     if (strstr(type_tables[t], "_props_bool")) {
+                                        /* a boolean, not the string 'true' */
                                         result->data[row_idx][i] = strdup(atoi(val) ? "true" : "false");
-                                        result->data_types[row_idx][i] = SQLITE_TEXT;
+                                        result->data_types[row_idx][i] = GQL_COL_TYPE_BOOLEAN;
+                                    } else if (strstr(type_tables[t], "_props_json")) {
+                                        result->data[row_idx][i] = strdup(val);
+                                        result->data_types[row_idx][i] = GQL_COL_TYPE_JSON;
                                     } else {
                                         result->data[row_idx][i] = strdup(val);
                                         result->data_types[row_idx][i] = sql_type;

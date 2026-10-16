@@ -10,6 +10,7 @@
 
 #include "executor/query_patterns.h"
 #include "gql_thread_local.h"
+#include "entity_json_sql.h"
 #include "executor/executor_internal.h"
 #include "transform/sql_builder.h"
 #include "executor/graph_algorithms.h"
@@ -915,6 +916,15 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
      * `row` as unbound) or the UNWIND itself (every node was updated). */
     if (unwind_feeds_write(query, flags)) {
         CYPHER_DEBUG("Matched shape: UNWIND feeding a write (row-wise)");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
+    /* A leading MERGE with a RETURN: every match of the pattern is a row
+     * (`MERGE (b) RETURN count(*)` counted one row for two nodes). */
+    if (query->clauses && query->clauses->count >= 2 && query->clauses->items[0] &&
+        query->clauses->items[0]->type == AST_NODE_MERGE && (flags & CLAUSE_RETURN) &&
+        !(flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))) {
         executor->stmt_capture = false;
         return handle_rowwise_write(executor, query, result, flags);
     }
@@ -4279,6 +4289,133 @@ static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
     return keep ? 0 : 1;   /* 1 = row filtered out */
 }
 
+static bool is_path_name(ast_list *pattern, const char *name)
+{
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *it = pattern->items[i];
+        if (it && it->type == AST_NODE_PATH && ((cypher_path *)it)->var_name &&
+            strcmp(((cypher_path *)it)->var_name, name) == 0) return true;
+    }
+    return false;
+}
+
+/* An interleaved path id array ([n, e, n, ...]) as the hydrated
+ * {nodes, rels} object (owned), or NULL. */
+static char *rw_hydrate_path(cypher_executor *executor, const char *ids)
+{
+    if (!ids || ids[0] != '[') return NULL;
+    char *nj = gql_sql_node_json_expr("", "je.value");
+    char *ej = gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
+    char *sql = (nj && ej) ? sqlite3_mprintf(
+        "SELECT json_object('nodes', (SELECT json_group_array(json(%s)) FROM "
+        "(SELECT value FROM json_each(?1) WHERE key %% 2 = 0 ORDER BY key) je), "
+        "'rels', (SELECT json_group_array(json(%s)) FROM "
+        "(SELECT value FROM json_each(?1) WHERE key %% 2 = 1 ORDER BY key) je2 "
+        "JOIN edges e ON e.id = je2.value))", nj, ej) : NULL;
+    free(nj); free(ej);
+    char *out = NULL;
+    sqlite3_stmt *st = NULL;
+    if (sql && sqlite3_prepare_v2(executor->db, sql, -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, ids, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_text(st, 0))
+            out = strdup((const char *)sqlite3_column_text(st, 0));
+        sqlite3_finalize(st);
+    }
+    sqlite3_free(sql);
+    return out;
+}
+
+/* The matches of a pattern for one row of a write pipeline: a read query
+ * `MATCH <pattern> WHERE id(v) = <id> AND ... AND <where> RETURN <vars>`,
+ * with each entity the row binds pinned to its id. *out gets one variable
+ * map per match (the row's entities plus the pattern's), owned by the
+ * caller. Returns the number of matches, or -1. */
+static int rw_match_maps(cypher_executor *executor, ast_list *pattern, ast_node *where,
+                         rw_row *row, rw_row **out, cypher_result *result)
+{
+    *out = NULL;
+    char **names = NULL; int n = 0;
+    rw_collect_pattern_vars(pattern, &names, &n);
+    ast_node *cond = NULL;
+    for (int i = 0; i < n; i++) {
+        int id = -1;
+        if (is_variable_edge(row->vm, names[i])) id = get_variable_edge_id(row->vm, names[i]);
+        else id = get_variable_node_id(row->vm, names[i]);
+        if (id < 0) continue;
+        ast_list *args = ast_list_create();
+        ast_list_append(args, (ast_node*)make_identifier(names[i], 0));
+        ast_node *fn = (ast_node*)make_function_call("id", args, false, 0);
+        ast_node *eq = (ast_node*)make_binary_op(BINARY_OP_EQ, fn, (ast_node*)make_integer_literal(id, 0), 0);
+        cond = cond ? (ast_node*)make_binary_op(BINARY_OP_AND, cond, eq, 0) : eq;
+    }
+    /* the original WHERE is shared: AND it in without owning it */
+    cypher_binary_op *and_where = NULL;
+    ast_node *full = cond;
+    if (where) {
+        if (cond) { and_where = make_binary_op(BINARY_OP_AND, cond, where, 0); full = (ast_node*)and_where; }
+        else full = where;
+    }
+    cypher_match *m = make_cypher_match(pattern, full, false, NULL);
+    ast_list *items = ast_list_create();
+    for (int i = 0; i < n; i++)
+        ast_list_append(items, (ast_node*)make_return_item((ast_node*)make_identifier(names[i], 0), names[i]));
+    if (n == 0) ast_list_append(items, (ast_node*)make_return_item((ast_node*)make_integer_literal(1, 0), "_one"));
+    cypher_return *ret = make_cypher_return(false, items, NULL, NULL, NULL);
+    ast_list *cl = ast_list_create();
+    ast_list_append(cl, (ast_node*)m);
+    ast_list_append(cl, (ast_node*)ret);
+    cypher_query *q = make_cypher_query(cl, false);
+
+    /* the row's values (UNWIND / WITH) as bindings for the pattern's maps */
+    foreach_context *fctx = rw_row_foreach_ctx(executor, row);
+    foreach_context *prev = g_foreach_ctx;
+    if (fctx) g_foreach_ctx = fctx;
+    cypher_result *pr = cypher_executor_execute_ast(executor, (ast_node*)q);
+    g_foreach_ctx = prev;
+    if (fctx) free_foreach_context(fctx);
+
+    int count = -1;
+    if (!pr || !pr->success) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Failed to match a pattern in a write pipeline: %s",
+                 pr && pr->error_message ? pr->error_message : "no result");
+        set_result_error(result, msg);
+    } else {
+        count = pr->row_count;
+        *out = calloc((size_t)(count > 0 ? count : 1), sizeof(rw_row));
+        for (int r = 0; r < count && *out; r++) {
+            rw_row *o = &(*out)[r];
+            o->vm = create_variable_map();
+            rw_fold_map(o->vm, row->vm);
+            for (int c = 0; c < n && c < pr->column_count; c++) {
+                bool is_edge = false;
+                long long id = rw_entity_id(pr->data[r][c], &is_edge);
+                if (id >= 0) {
+                    if (is_edge) set_variable_edge_id(o->vm, names[c], (int)id);
+                    else set_variable_node_id(o->vm, names[c], (int)id);
+                } else {
+                    /* a value, e.g. a path variable (hydrated from its ids) */
+                    int ty = pr->data_types ? pr->data_types[r][c] : SQLITE_TEXT;
+                    if (ty == GQL_COL_TYPE_JSON) ty = SQLITE_TEXT;
+                    char *hp = is_path_name(pattern, names[c]) ? rw_hydrate_path(executor, pr->data[r][c]) : NULL;
+                    rw_row_add_scalar(o, names[c], hp ? hp : pr->data[r][c],
+                                      (hp || pr->data[r][c]) ? (hp ? SQLITE_TEXT : ty) : SQLITE_NULL);
+                    free(hp);
+                }
+            }
+        }
+    }
+    if (pr) cypher_result_free(pr);
+    /* free what was made here; the pattern and the WHERE belong to the query */
+    ast_node_free((ast_node*)ret);
+    free(m);
+    if (and_where) free(and_where);
+    if (cond) ast_node_free(cond);
+    free(cl->items); free(cl); free(q);
+    rw_free_names(names, n);
+    return count;
+}
+
 /* The list of an UNWIND in a write pipeline's tail, as JSON text (owned;
  * NULL for a null list), evaluated with the row's values and entities. */
 static int rw_eval_list(cypher_executor *executor, ast_node *expr, rw_row *row, char **out)
@@ -4628,7 +4765,8 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
      * handlers that owned these flag sets before. */
     ast_node *first = clauses->items[0];
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
-                    first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH)) {
+                    first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH ||
+                    first->type == AST_NODE_MERGE)) {
         if (flags & CLAUSE_WITH) return handle_merge_with_pipeline(executor, query, result, flags);
         return handle_merge_return(executor, query, result, flags);
     }
@@ -4740,6 +4878,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
             return -1;
         }
     }
+    /* No read prefix (the query starts with a write such as MERGE): one
+     * empty row runs the clauses. */
+    if (!rows && !(n_scope > 0 || prefix_end > start || synth_create_match)) {
+        rows = calloc(1, sizeof(rw_row));
+        if (rows) { rows[0].vm = create_variable_map(); n_rows = 1; }
+    }
     if (synth_create_match) { ast_node_free(synth_where); free(synth_create_match); }
     if (created) free_variable_map(created);
     rw_free_names(scope, n_scope);
@@ -4833,14 +4977,77 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     if (eager_done && eager_done[i]) break;
                     rc = execute_delete_operations(executor, (cypher_delete*)c, rows[r].vm, result);
                     break;
+                case AST_NODE_MATCH:
                 case AST_NODE_MERGE: {
-                    cypher_merge *mg = (cypher_merge*)c;
+                    /* MATCH / OPTIONAL MATCH after a write, and MERGE: every
+                     * match of the pattern is a row (Match8 [2]; MERGE (b)
+                     * with two nodes gave one row). The first match continues
+                     * this row; the others are new rows from the next clause. */
+                    bool is_merge = c->type == AST_NODE_MERGE;
+                    cypher_merge *mg = is_merge ? (cypher_merge*)c : NULL;
+                    cypher_match *mt = is_merge ? NULL : (cypher_match*)c;
+                    ast_list *pat = is_merge ? mg->pattern : mt->pattern;
                     rw_subst *subs = NULL; int n_subs = 0;
-                    rw_literalize_pattern(executor, mg->pattern, &rows[r], &subs, &n_subs);
-                    variable_map *out = NULL;
-                    rc = execute_merge_clause(executor, mg, result, rows[r].vm, &out);
+                    rw_literalize_pattern(executor, pat, &rows[r], &subs, &n_subs);
+                    rw_row *maps = NULL;
+                    int nm = rw_match_maps(executor, pat, is_merge ? NULL : mt->where, &rows[r], &maps, result);
+                    bool matched_existing = nm > 0;
+                    if (nm < 0) { rw_restore_subs(subs, n_subs); rc = -1; free(maps); break; }
+                    if (nm == 0) {
+                        free(maps); maps = NULL;
+                        if (is_merge) {
+                            variable_map *out = NULL;
+                            rc = execute_merge_clause(executor, mg, result, rows[r].vm, &out);
+                            if (out) { rw_fold_map(rows[r].vm, out); free_variable_map(out); }
+                            /* bind the rest of the created pattern (a path
+                             * variable): match it, pinned to what was made */
+                            if (rc >= 0) {
+                                nm = rw_match_maps(executor, pat, NULL, &rows[r], &maps, result);
+                                if (nm > 1) nm = 1;
+                            }
+                        } else if (!mt->optional) {
+                            row_alive[r] = false;
+                        }
+                        if (nm <= 0) {
+                            rw_restore_subs(subs, n_subs);
+                            if (nm < 0) rc = -1;
+                            free(maps);
+                            break;
+                        }
+                    }
                     rw_restore_subs(subs, n_subs);
-                    if (out) { rw_fold_map(rows[r].vm, out); free_variable_map(out); }
+                    for (int k = 0; k < nm; k++) {
+                        int target = r;
+                        if (k > 0) {
+                            if (n_rows == rows_cap) {
+                                int nc = rows_cap * 2;
+                                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                                if (gr) rows = gr;
+                                if (ga) row_alive = ga;
+                                if (gs) row_start = gs;
+                                if (!gr || !ga || !gs) { rc = -1; break; }
+                                rows_cap = nc;
+                            }
+                            target = n_rows++;
+                            memset(&rows[target], 0, sizeof(rw_row));
+                            rows[target].vm = create_variable_map();
+                            for (int q = 0; q < rows[r].n_scalars; q++)
+                                rw_row_add_scalar(&rows[target], rows[r].scalars[q].name,
+                                                  rows[r].scalars[q].text, rows[r].scalars[q].type);
+                            row_alive[target] = false;
+                            row_start[target] = i + 1;
+                        }
+                        rw_fold_map(rows[target].vm, maps[k].vm);
+                        for (int q = 0; q < maps[k].n_scalars; q++)
+                            rw_row_add_scalar(&rows[target], maps[k].scalars[q].name,
+                                              maps[k].scalars[q].text, maps[k].scalars[q].type);
+                        if (is_merge && matched_existing && mg->on_match && mg->on_match->count > 0 && rc >= 0)
+                            rc = execute_set_items(executor, mg->on_match, rows[target].vm, result);
+                    }
+                    for (int k = 0; k < nm; k++) rw_row_free(&maps[k]);
+                    free(maps);
                     break;
                 }
                 case AST_NODE_SET: {
