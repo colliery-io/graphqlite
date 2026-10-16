@@ -711,8 +711,10 @@ static bool foreach_after_read(cypher_query *query, clause_flags flags)
     if (flags & (CLAUSE_CALL | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN)) return false;
     if (!query->clauses || query->clauses->count < 2) return false;
     ast_node *first = query->clauses->items[0];
+    /* GQLITE-T-0423: a leading CREATE too (`CREATE (a) FOREACH (... |
+     * CREATE (a)-[:R]->(:B))` ran the FOREACH without `a`). */
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
-                    first->type == AST_NODE_WITH)) {
+                    first->type == AST_NODE_WITH || first->type == AST_NODE_CREATE)) {
         return false;
     }
     bool write_seen = false;
@@ -2192,16 +2194,37 @@ static bool unwind_before_create(cypher_query *query)
     return false;
 }
 
+/* GQLITE-T-0424: the fast paths run one UNWIND, then one CREATE (and a
+ * SET, and a WITH after it). Any other shape goes row by row: a clause
+ * before the UNWIND (`CREATE (n) WITH n UNWIND ... CREATE ...` ran only
+ * the first CREATE), a second CREATE, or a MERGE / DELETE / REMOVE. */
 static bool unwind_create_needs_pipeline(cypher_query *query)
 {
-    int n_unwind = 0;
+    int n_unwind = 0, n_create = 0;
     for (int i = 0; query->clauses && i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
-        if (c->type == AST_NODE_CREATE) break;
-        if (c->type == AST_NODE_UNWIND) n_unwind++;
+        switch (c->type) {
+            case AST_NODE_UNWIND:
+                if (i != 0 || n_create > 0) return true;
+                n_unwind++;
+                break;
+            case AST_NODE_CREATE:
+                n_create++;
+                break;
+            case AST_NODE_SET:
+            case AST_NODE_RETURN:
+                break;
+            case AST_NODE_WITH:
+                /* WITH ... WHERE / aggregation after the CREATE stays on the
+                 * fast path (Create6); a WITH before it does not. */
+                if (n_create == 0) return true;
+                break;
+            default:
+                return true;
+        }
     }
-    return n_unwind >= 2;
+    return n_unwind >= 2 || n_create >= 2;
 }
 
 static int handle_unwind_create(cypher_executor *executor, cypher_query *query,

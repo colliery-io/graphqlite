@@ -61,6 +61,51 @@ static int append_json_prop_filter(cypher_transform_context *ctx, bool is_edge,
     free(v);
     return 0;
 }
+
+/* GQLITE-T-0421: an inline property whose value is any other expression
+ * (`(n {id: i})` with i from UNWIND or WITH, `{k: x + 1}`, `{k: toUpper(s)}`)
+ * filters by the value. It was dropped, so the pattern matched every node.
+ * The value is compared with the property table of its own type
+ * (_gql_typetag; text has no tag); a null value matches nothing. */
+static int append_expr_prop_filter(cypher_transform_context *ctx, bool is_edge,
+                                   const char *id_ref, const char *key, ast_node *value)
+{
+    bool saved_cmp = ctx->in_comparison;
+    ctx->in_comparison = false;
+    char *v = cypher_transform_capture_expression(ctx, value);
+    ctx->in_comparison = saved_cmp;
+    if (!v) return -1;
+    char *esc_key = escape_sql_string(key);
+    const char *k = esc_key ? esc_key : key;
+    const char *col = is_edge ? "edge_id" : "node_id";
+    const char *pfx = is_edge ? "edge_props" : "node_props";
+    dynamic_buffer cond;
+    dbuf_init(&cond);
+    dbuf_appendf(&cond,
+        "%s IN ("
+        "SELECT t.%s FROM %s_text t JOIN property_keys pk ON t.key_id = pk.id "
+        "WHERE pk.key = '%s' AND t.value = (%s) AND typeof(%s) = 'text' AND _gql_typetag(%s) IS NULL "
+        "UNION ALL SELECT t.%s FROM %s_int t JOIN property_keys pk ON t.key_id = pk.id "
+        "WHERE pk.key = '%s' AND t.value = (%s) AND _gql_typetag(%s) IN ('int', 'real') "
+        "UNION ALL SELECT t.%s FROM %s_real t JOIN property_keys pk ON t.key_id = pk.id "
+        "WHERE pk.key = '%s' AND t.value = (%s) AND _gql_typetag(%s) IN ('int', 'real') "
+        "UNION ALL SELECT t.%s FROM %s_bool t JOIN property_keys pk ON t.key_id = pk.id "
+        "WHERE pk.key = '%s' AND _gql_typetag(%s) = 'bool' "
+        "AND t.value = (CASE WHEN (%s) IN ('true', '1', 1) THEN 1 ELSE 0 END) "
+        "UNION ALL SELECT t.%s FROM %s_json t JOIN property_keys pk ON t.key_id = pk.id "
+        "WHERE pk.key = '%s' AND _gql_typetag(%s) = 'json' AND json(t.value) = json(%s))",
+        id_ref,
+        col, pfx, k, v, v, v,
+        col, pfx, k, v, v,
+        col, pfx, k, v, v,
+        col, pfx, k, v, v,
+        col, pfx, k, v, v);
+    sql_where(ctx->unified_builder, dbuf_get(&cond));
+    dbuf_free(&cond);
+    free(esc_key);
+    free(v);
+    return 0;
+}
 static int generate_node_match(cypher_transform_context *ctx, cypher_node_pattern *node, const char *alias, bool optional);
 /* Perf review F2 (defined further down, used by generate_node_match) */
 static void stash_consumed_anchor(cypher_transform_context *ctx, const char *alias,
@@ -433,8 +478,16 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                             alias, sql_esc_tmp(pair->key), base_alias, sql_esc_tmp(prop->property_name));
                                         sql_where(ctx->unified_builder, dbuf_get(&cond));
                                         dbuf_free(&cond);
+                                        continue;
                                     }
                                 }
+                                if (append_expr_prop_filter(ctx, false,
+                                        get_node_id_ref(ctx, alias, node->variable),
+                                        pair->key, pair->value) < 0) return -1;
+                            } else if (pair->value) {
+                                if (append_expr_prop_filter(ctx, false,
+                                        get_node_id_ref(ctx, alias, node->variable),
+                                        pair->key, pair->value) < 0) return -1;
                             }
                         }
                     }
@@ -650,7 +703,13 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     return -1;
                                 continue;
                             }
-                            if (pair->value->type != AST_NODE_LITERAL) continue;
+                            if (pair->value->type != AST_NODE_LITERAL) {
+                                char ref[300];
+                                snprintf(ref, sizeof(ref), "+%s.id", edge_alias);
+                                if (append_expr_prop_filter(ctx, true, ref, pair->key, pair->value) < 0)
+                                    return -1;
+                                continue;
+                            }
                             cypher_literal *lit = (cypher_literal*)pair->value;
                             const char *tbl = NULL;
                             char val_buf[256] = "";

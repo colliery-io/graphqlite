@@ -318,8 +318,18 @@ static int emit_index_comparison(cypher_transform_context *ctx, cypher_binary_op
 }
 
 /* An IN operand: a boolean expression becomes a JSON boolean (#135). */
-static int emit_in_operand(cypher_transform_context *ctx, ast_node *expr)
+static int emit_in_operand(cypher_transform_context *ctx, ast_node *expr, bool lhs)
 {
+    if (lhs && !ast_is_boolean_expr(expr) && !ast_is_numeric_expr(expr) &&
+        expr->type != AST_NODE_LITERAL) {
+        /* GQLITE-T-0422: the left side in value form, so a stored boolean
+         * keeps its tag and _gql_in can tell it from a number. */
+        bool saved = ctx->in_comparison;
+        ctx->in_comparison = false;
+        int rc = transform_expression(ctx, expr);
+        ctx->in_comparison = saved;
+        return rc;
+    }
     if (!ast_is_boolean_expr(expr)) return transform_expression(ctx, expr);
     /* In a comparison a boolean is 1 / 0 / NULL; a NULL matches no WHEN. */
     append_sql(ctx, "(CASE (");
@@ -466,6 +476,62 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
+    /* GQLITE-T-0422: one side is a number or a boolean by its shape, the
+     * other is not known until run time (a property, a variable). In a
+     * comparison a stored boolean is 1 / 0, so `n.flag = 1` was true. Check
+     * the run-time type of the other side (its value keeps the boolean tag):
+     * a boolean against a number, or a number against a boolean, is not
+     * equal. */
+    if (binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ) {
+        ast_node *l = binary_op->left, *r = binary_op->right;
+        ast_node *other = NULL, *known = NULL;
+        bool known_is_bool = false;
+        if (ast_is_numeric_expr(r) && !ast_is_boolean_expr(l) && !ast_is_numeric_expr(l)) {
+            other = l; known = r;
+        } else if (ast_is_numeric_expr(l) && !ast_is_boolean_expr(r) && !ast_is_numeric_expr(r)) {
+            other = r; known = l;
+        } else if (ast_is_boolean_expr(r) && !ast_is_boolean_expr(l) && !ast_is_numeric_expr(l)) {
+            other = l; known = r; known_is_bool = true;
+        } else if (ast_is_boolean_expr(l) && !ast_is_boolean_expr(r) && !ast_is_numeric_expr(r)) {
+            other = r; known = l; known_is_bool = true;
+        }
+        if (other && other->type != AST_NODE_LITERAL && other->type != AST_NODE_LIST &&
+            other->type != AST_NODE_MAP) {
+            const char *op_sql = binary_op->op_type == BINARY_OP_EQ ? "=" : "<>";
+            int mismatch = binary_op->op_type == BINARY_OP_EQ ? 0 : 1;
+            bool saved = ctx->in_comparison;
+            ctx->in_comparison = false;
+            append_sql(ctx, "(CASE _gql_typetag(");
+            if (transform_expression(ctx, other) < 0) return -1;
+            ctx->in_comparison = saved;
+            append_sql(ctx, ")");
+            /* A boolean against a number: not equal (null when null). */
+            const char *num_arms[2] = { "'int'", "'real'" };
+            int n_arms = known_is_bool ? 2 : 1;
+            for (int a = 0; a < n_arms; a++) {
+                append_sql(ctx, " WHEN %s THEN (CASE WHEN (", known_is_bool ? num_arms[a] : "'bool'");
+                if (transform_expression(ctx, known) < 0) return -1;
+                append_sql(ctx, ") IS NULL THEN NULL ELSE %d END)", mismatch);
+            }
+            if (known_is_bool) {
+                /* Both booleans, compared as 1 / 0: an UNWIND or stored
+                 * boolean can be the text 'true' here. */
+                append_sql(ctx, " WHEN 'bool' THEN (_gql_bool(");
+                if (transform_expression(ctx, binary_op->left) < 0) return -1;
+                append_sql(ctx, ") %s _gql_bool(", op_sql);
+                if (transform_expression(ctx, binary_op->right) < 0) return -1;
+                append_sql(ctx, "))");
+            }
+            append_sql(ctx, " ELSE (");
+            if (transform_expression(ctx, binary_op->left) < 0) return -1;
+            append_sql(ctx, " %s ", op_sql);
+            if (transform_expression(ctx, binary_op->right) < 0) return -1;
+            append_sql(ctx, ") END)");
+            ctx->in_comparison = was_in_comparison;
+            return 0;
+        }
+    }
+
     /* Handle list/map equality with Cypher three-valued semantics via the
      * _gql_eq() UDF. Triggered only when at least one operand is a literal
      * list/map (which is when the existing JSON-string equality breaks down
@@ -578,7 +644,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         /* #135: a boolean side is passed as a JSON boolean, so _gql_in
          * does not take `true` for the number 1. */
         append_sql(ctx, "_gql_in(");
-        if (emit_in_operand(ctx, binary_op->left) < 0) return -1;
+        if (emit_in_operand(ctx, binary_op->left, true) < 0) return -1;
         append_sql(ctx, ", ");
         if (binary_op->right->type == AST_NODE_LIST) {
             /* Literal list: wrap with json_array() */
@@ -587,7 +653,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             if (list->items) {
                 for (int i = 0; i < list->items->count; i++) {
                     if (i > 0) append_sql(ctx, ", ");
-                    if (emit_in_operand(ctx, list->items->items[i]) < 0) return -1;
+                    if (emit_in_operand(ctx, list->items->items[i], false) < 0) return -1;
                 }
             }
             append_sql(ctx, ")");
