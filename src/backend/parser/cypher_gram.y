@@ -1250,7 +1250,13 @@ expr:
         if ($2->type == AST_NODE_LITERAL) {
             cypher_literal *lit = (cypher_literal*)$2;
             if (lit->literal_type == LITERAL_INTEGER) {
-                lit->value.integer = -lit->value.integer;
+                if (lit->value.integer == INT64_MIN) {
+                    /* -2^63: the scanner's pending INT64_MIN */
+                    if (context && context->scanner && context->scanner->int_min_pending > 0)
+                        context->scanner->int_min_pending--;
+                } else {
+                    lit->value.integer = -lit->value.integer;
+                }
                 $$ = $2;
             } else if (lit->literal_type == LITERAL_DECIMAL) {
                 lit->value.decimal = -lit->value.decimal;

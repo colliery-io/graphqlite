@@ -70,6 +70,14 @@ typedef struct CypherScannerState {
     int current_line;
     int current_column;
     CypherToken current_token;
+    /* 2^63 is in range only as the operand of a unary minus
+     * (`-9223372036854775808`, Literals2-4 [8]). The scanner gives it as
+     * INT64_MIN and counts it here; the unary-minus rule takes one off. One
+     * left at the end of the parse is an IntegerOverflow. */
+    int int_min_pending;
+    int int_min_line;
+    int int_min_column;
+    char int_min_text[64];
 } CypherScannerState;
 
 /* Function prototypes */

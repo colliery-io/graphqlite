@@ -211,14 +211,32 @@ def _substitute_step(s: Step, subs: dict[str, str]) -> Step:
 
 
 def _parse_table_row(raw: str) -> list[str]:
-    # Drop leading/trailing pipes, split on un-escaped pipes, strip each cell.
+    """Split a table row on un-escaped pipes. In a Gherkin cell, ``\\|`` is a
+    pipe and ``\\\\`` is one backslash (Literals6 [5]: the expected
+    ``'a\\\\bcn5t...'`` is the literal ``'a\\bcn5t...'``). Any other
+    backslash stays as it is."""
     s = raw.strip()
+    cells: list[str] = []
+    cur: list[str] = []
+    i = 0
     if s.startswith("|"):
-        s = s[1:]
-    if s.endswith("|"):
-        s = s[:-1]
-    # Cells in TCK do not embed escaped pipes in practice. Simple split.
-    return [cell.strip() for cell in s.split("|")]
+        i = 1
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and i + 1 < len(s) and s[i + 1] in "|\\":
+            cur.append(s[i + 1])
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    rest = "".join(cur).strip()
+    if rest or not s.endswith("|"):
+        cells.append(rest)
+    return cells
 
 
 def _inline_background(feature: Feature) -> None:

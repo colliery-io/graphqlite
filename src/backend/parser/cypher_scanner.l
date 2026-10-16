@@ -10,6 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 
 #include "parser/cypher_scanner.h"
@@ -323,6 +324,24 @@ static void prepare_integer_token(CypherScannerState *state, const char *text)
         parsed = strtoll(text, NULL, 8);
     } else {
         parsed = strtoll(text, NULL, 10);
+    }
+    if (errno == ERANGE) {
+        /* Magnitude 2^63: INT64_MIN when a unary minus takes it. */
+        errno = 0;
+        unsigned long long mag;
+        if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) mag = strtoull(text, NULL, 16);
+        else if (text[0] == '0' && (text[1] == 'o' || text[1] == 'O')) mag = strtoull(text + 2, NULL, 8);
+        else if (text[0] == '0' && strlen(text) > 1) mag = strtoull(text, NULL, 8);
+        else mag = strtoull(text, NULL, 10);
+        if (errno == 0 && mag == 9223372036854775808ULL) {
+            state->int_min_pending++;
+            state->int_min_line = state->current_line;
+            state->int_min_column = state->current_column - (int)strlen(text);
+            snprintf(state->int_min_text, sizeof(state->int_min_text), "%s", text);
+            state->current_token.value.integer = LLONG_MIN;
+            return;
+        }
+        errno = ERANGE;
     }
     if (errno == ERANGE) {
         char buf[160];
