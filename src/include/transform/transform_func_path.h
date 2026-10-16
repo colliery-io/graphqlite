@@ -19,4 +19,6 @@ int transform_endnode_function(cypher_transform_context *ctx, cypher_function_ca
  * (for property access and id()); the functions above emit the node object. */
 int transform_endpoint_node_id(cypher_transform_context *ctx, cypher_function_call *func);
 
+int transform_path_object(cypher_transform_context *ctx, const char *name);
+
 #endif /* TRANSFORM_FUNC_PATH_H */

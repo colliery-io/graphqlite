@@ -114,6 +114,8 @@ typedef struct ast_node {
     ast_node_type type;
     void *data;
     int location;  /* Character location in original query for error reporting */
+    bool parenthesized;  /* written in parentheses: `(a < b) = c` is not a
+                          * comparison chain (Comparison4 [1]) */
 } ast_node;
 
 /* Generic list structure for AST nodes */

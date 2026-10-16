@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 #include "transform/transform_func_list.h"
 #include "transform/transform_func_path.h"
 #include "transform/transform_func_string.h"
@@ -228,9 +229,21 @@ int transform_collect_function(cypher_transform_context *ctx, cypher_function_ca
         /* collect(*) - not really valid but handle gracefully */
         append_sql(ctx, "*");
     } else {
-        /* _gql_json_elem keeps a boolean a JSON boolean (GQLITE-T-0404). */
+        /* _gql_json_elem keeps a boolean a JSON boolean (GQLITE-T-0404). A
+         * comparison or other boolean expression is 1 / 0 in SQL, with no
+         * boolean tag: give it one, so `collect(x = 1)` is [true, false],
+         * not [1, 0]. */
+        ast_node *arg = func_call->args->items[0];
         append_sql(ctx, "_gql_json_elem(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
+        if (ast_is_boolean_expr(arg) && !(arg->type == AST_NODE_LITERAL)) {
+            append_sql(ctx, "_gql_bool_str(CASE WHEN (");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, ") IS NULL THEN NULL WHEN (");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, ") THEN 1 ELSE 0 END)");
+        } else {
+            if (transform_expression(ctx, arg) < 0) return -1;
+        }
         append_sql(ctx, ")");
     }
     append_sql(ctx, ") FILTER (WHERE ");

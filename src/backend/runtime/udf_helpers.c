@@ -15,6 +15,7 @@
 
 #include "graphqlite_version.h"
 #include "graphqlite_sqlite.h"
+#include "transform/transform_helpers.h"
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -476,7 +477,7 @@ static bool looks_temporal(const char *s) {
 
 void gql_order_cmp_func(
     sqlite3_context *context, int argc, sqlite3_value **argv) {
-    if (argc != 3) { sqlite3_result_null(context); return; }
+    if (argc != 3 && argc != 5) { sqlite3_result_null(context); return; }
     int lt = sqlite3_value_type(argv[0]);
     int rt = sqlite3_value_type(argv[1]);
     if (lt == SQLITE_NULL || rt == SQLITE_NULL) {
@@ -487,6 +488,30 @@ void gql_order_cmp_func(
      * [23]/[26]) rely on boolean values surviving the < / > paths
      * with stable (if not strictly type-checked) results. The strict
      * cross-type rule below is what T-0308 is really after. */
+
+    /* A boolean (by its type tag) orders only against a boolean, false <
+     * true; against anything else it is null (Comparison2 [3]). */
+    const char *ltag = argc == 5 ? (const char *)sqlite3_value_text(argv[3]) : NULL;
+    const char *rtag = argc == 5 ? (const char *)sqlite3_value_text(argv[4]) : NULL;
+    bool l_bool = ltag && strcmp(ltag, "bool") == 0;
+    bool r_bool = rtag && strcmp(rtag, "bool") == 0;
+    if (l_bool || r_bool) {
+        if (!(l_bool && r_bool)) { sqlite3_result_null(context); return; }
+        const char *a = (const char *)sqlite3_value_text(argv[0]);
+        const char *b = (const char *)sqlite3_value_text(argv[1]);
+        int av = a && (strcmp(a, "true") == 0 || strcmp(a, "1") == 0);
+        int bv = b && (strcmp(b, "true") == 0 || strcmp(b, "1") == 0);
+        const char *bop = (const char *)sqlite3_value_text(argv[2]);
+        if (!bop) { sqlite3_result_null(context); return; }
+        bool r;
+        if      (strcmp(bop, "<")  == 0) r = av < bv;
+        else if (strcmp(bop, ">")  == 0) r = av > bv;
+        else if (strcmp(bop, "<=") == 0) r = av <= bv;
+        else if (strcmp(bop, ">=") == 0) r = av >= bv;
+        else { sqlite3_result_null(context); return; }
+        sqlite3_result_int(context, r ? 1 : 0);
+        return;
+    }
 
     bool l_num = (lt == SQLITE_INTEGER || lt == SQLITE_FLOAT);
     bool r_num = (rt == SQLITE_INTEGER || rt == SQLITE_FLOAT);
@@ -1053,7 +1078,11 @@ void gql_to_string_strict_func(
         sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT); return;
     }
     if (t == SQLITE_FLOAT) {
-        char buf[40]; snprintf(buf, sizeof(buf), "%.17g", sqlite3_value_double(argv[0]));
+        /* The shortest text that reads back as the same value, with ".0"
+         * on a whole number: toString(2.3) is '2.3', not
+         * '2.2999999999999998' (TypeConversion4 [5]). */
+        char buf[40];
+        gql_format_double(buf, sizeof(buf), sqlite3_value_double(argv[0]));
         sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT); return;
     }
     sqlite3_result_null(context);

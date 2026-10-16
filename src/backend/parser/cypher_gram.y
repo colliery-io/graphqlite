@@ -150,11 +150,14 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left XOR
 %left AND
 %right NOT
-%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH STARTS ENDS CONTAINS
+%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH
+/* openCypher: string, list and null predicates bind tighter than comparison
+ * and looser than arithmetic: `[1]+2 IN [3]+4` is `([1]+2) IN ([3]+4)`
+ * (Precedence3 [4]/[5]). */
+%left IN IS STARTS ENDS CONTAINS
 %left '+' '-'
 %left '*' '/' '%'
 %left '^'
-%left IN IS
 %left '.' '['
 /* Unary -/+ bind tightest among arithmetic: `-3^2` = (-3)^2 = 9
  * (Precedence2 [4]). Negation of a non-literal is materialized as 0 - expr
@@ -567,7 +570,7 @@ set_item_list:
  * comparison as the value (GQLITE-T-0407). */
 set_target:
     identifier                     { $$ = (ast_node*)$1; }
-    | '(' expr ')'                 { $$ = $2; }
+    | '(' expr ')'                 { $$ = $2; if ($$) $$->parenthesized = true; }
     | set_target '.' IDENTIFIER
         {
             $$ = (ast_node*)make_property($1, $3, @3.first_line);
@@ -1297,7 +1300,7 @@ expr:
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
-    | '(' expr ')'      { $$ = $2; }
+    | '(' expr ')'      { $$ = $2; if ($$) $$->parenthesized = true; }
     /* Pattern predicate: bare relationship pattern as boolean expression.
      * Per openCypher 9 spec, a RelationshipsPattern in boolean context
      * is an implicit existence check: (n)-[:REL]->() ≡ EXISTS((n)-[:REL]->())

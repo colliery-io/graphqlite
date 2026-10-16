@@ -206,6 +206,23 @@ static bool arg_is_json_path_value(cypher_transform_context *ctx, ast_node *arg)
     return transform_var_is_projected(ctx->var_ctx, id->name);
 }
 
+/* A registered path as the hydrated {nodes, rels} object, null for a null
+ * path. Used where a path is a value inside a list: the interleaved id
+ * text read as a list of numbers there (`[p]`, Comparison2 [3]). Returns 0
+ * when emitted, 1 when `name` is not such a path, -1 on error. */
+int transform_path_object(cypher_transform_context *ctx, const char *name)
+{
+    transform_var *pv = transform_var_lookup_path(ctx->var_ctx, name);
+    if (!pv || !pv->path_elements) return 1;
+    if (pv->table_alias && strchr(pv->table_alias, '.')) return 1;  /* forwarded */
+    append_sql(ctx, "json_object('nodes', json(");
+    if (emit_registered_path_members(ctx, pv, true) < 0) return -1;
+    append_sql(ctx, "), 'rels', json(");
+    if (emit_registered_path_members(ctx, pv, false) < 0) return -1;
+    append_sql(ctx, "))");
+    return 0;
+}
+
 /* Transform nodes() function - returns list of nodes in a path */
 int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {

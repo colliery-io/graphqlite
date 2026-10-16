@@ -188,6 +188,10 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
+    /* Joins before this clause: only a MATCH that starts the query groups its
+     * leading-OPTIONAL joins (Graph6 [6], not Aggregation5 [2]). */
+    size_t joins_at_start = sql_builder_joins_len(ctx->unified_builder);
+
     CYPHER_DEBUG("Transforming %s MATCH clause", match->optional ? "OPTIONAL" : "regular");
 
     if (!ctx || !match) {
@@ -904,6 +908,11 @@ handle_where_clause:
         sql_join_append_on(ctx->unified_builder, ctx->pending_optional_on);
         free(ctx->pending_optional_on);
         ctx->pending_optional_on = NULL;
+    }
+
+    /* A leading OPTIONAL MATCH matches as one unit (Graph6 [6]). */
+    if (match->optional && joins_at_start == 0) {
+        sql_builder_group_anchor_joins(ctx->unified_builder);
     }
 
     /* Clear current graph after MATCH processing */

@@ -357,6 +357,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_order_cmp_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
+  /* With the type tags of the two operands (Comparison2 [3]). */
+  rc = sqlite3_create_function(db, "_gql_order_cmp", 5,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_order_cmp_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
                          gql_extract_tz_func, 0, 0);

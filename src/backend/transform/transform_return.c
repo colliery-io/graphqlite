@@ -130,6 +130,12 @@ static int transform_list_item_value(cypher_transform_context *ctx, ast_node *ex
         append_sql(ctx, "_gql_bool_str(%d)", lit->value.boolean ? 1 : 0);
         return 0;
     }
+    if (expr && expr->type == AST_NODE_IDENTIFIER &&
+        transform_var_is_path(ctx->var_ctx, ((cypher_identifier*)expr)->name)) {
+        /* A path in a list is a path object, not its id text. */
+        int prc = transform_path_object(ctx, ((cypher_identifier*)expr)->name);
+        if (prc <= 0) return prc;
+    }
     if (ast_yields_boolean(expr)) {
         append_sql(ctx, "_gql_bool_str(CASE WHEN (");
         if (transform_expression(ctx, expr) < 0) return -1;
@@ -1937,8 +1943,15 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 const char *old_alias = transform_var_get_alias(ctx->var_ctx, comp_var);
                 char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
-                /* Register the comprehension variable to map to json_each.value */
+                /* Register the comprehension variable to map to json_each.value,
+                 * with the element's type tag, so a boolean stays a boolean
+                 * (`x < value` with booleans, toString(true) gave '1'). */
                 transform_var_register_projected(ctx->var_ctx, comp_var, "json_each.value");
+                const char *old_tag = transform_var_get_tag(ctx->var_ctx, comp_var);
+                char *saved_tag = old_tag ? strdup(old_tag) : NULL;
+                transform_var_set_tag(ctx->var_ctx, comp_var,
+                    "(CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' "
+                    "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END)");
 
                 /* Build the subquery */
                 append_sql(ctx, "(SELECT json_group_array(");
@@ -1985,6 +1998,8 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 append_sql(ctx, ")");
 
                 /* Restore the old alias if there was one, otherwise remove the variable */
+                transform_var_set_tag(ctx->var_ctx, comp_var, saved_tag);
+                free(saved_tag);
                 if (saved_alias) {
                     transform_var_register_projected(ctx->var_ctx, comp_var, saved_alias);
                     free(saved_alias);
