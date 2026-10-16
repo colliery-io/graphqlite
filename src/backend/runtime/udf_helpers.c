@@ -849,8 +849,8 @@ void gql_in_func(
 
     const char *lhs_s = skip_ws(lhs);
     bool lhs_container = (*lhs_s == '[' || *lhs_s == '{');
-    /* #135: a boolean (JSON true/false, or a tagged boolean) equals only a
-     * boolean; the number 1 is not true. */
+    /* #135: a boolean (JSON true/false, or a tagged boolean) on the left
+     * equals only a boolean; the number 1 is not true. */
     unsigned int lhs_sub = sqlite3_value_subtype(argv[0]);
     bool lhs_bool = (lhs_sub == GQL_SUBTYPE_BOOLEAN) ||
         (lhs_sub == GQL_SUBTYPE_JSON && (strcmp(lhs_s, "true") == 0 || strcmp(lhs_s, "false") == 0));
@@ -873,8 +873,10 @@ void gql_in_func(
                                         strcmp(etype, "object") == 0);
         bool elem_bool = etype && (strcmp(etype, "true") == 0 || strcmp(etype, "false") == 0);
         tval t = TVAL_FALSE;
-        if (lhs_bool || elem_bool) {
-            if (lhs_bool && elem_bool) {
+        /* Only a left side known to be a boolean: a stored boolean property
+         * reads back as an untagged 1 / 0 here, and must still find true. */
+        if (lhs_bool) {
+            if (elem_bool) {
                 bool lv = (strcmp(lhs_s, "true") == 0 || strcmp(lhs_s, "1") == 0);
                 t = (lv == (etype[0] == 't')) ? TVAL_TRUE : TVAL_FALSE;
             }

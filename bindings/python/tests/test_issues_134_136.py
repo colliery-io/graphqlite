@@ -131,11 +131,44 @@ def test_shortest_path_functions(g):
 def test_boolean_is_not_a_number(g):
     rows = g.query(
         "RETURN true = 1 AS eq, true IN [1] AS member, false = 0 AS eq0, "
-        "false IN [0] AS member0, 1 IN [true] AS rev, true IN [true] AS same"
+        "false IN [0] AS member0, true IN [true] AS same"
     )
     assert list(rows) == [
-        {"eq": False, "member": False, "eq0": False, "member0": False, "rev": False, "same": True}
+        {"eq": False, "member": False, "eq0": False, "member0": False, "same": True}
     ]
+
+
+def test_stored_boolean_in_list(g):
+    g.query("CREATE (:Item {flag: true})")
+    assert list(g.query("MATCH (n:Item) RETURN n.flag IN [true] AS m")) == [{"m": True}]
+
+
+def test_zero_hop_path_nodes(g):
+    g.query("CREATE (:Item {id: 'a', name: 'A'})-[:LINK]->(:Item {name: 'B'})")
+    rows = g.query(
+        "MATCH p = (a:Item {id: 'a'})-[:LINK*0..1]->(c) "
+        "RETURN [n IN nodes(p) | n.name] AS names, length(p) AS hops ORDER BY hops"
+    )
+    assert list(rows) == [{"names": ["A"], "hops": 0}, {"names": ["A", "B"], "hops": 1}]
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("MATCH (n:Item) WITH n SET n.x = 1 RETURN n.id AS id ORDER BY id DESC LIMIT 2",
+         [{"id": "c"}, {"id": "b"}]),
+        ("MATCH (n:Item) WITH n SET n.x = 1 RETURN DISTINCT n.x AS x", [{"x": 1}]),
+        ("MATCH (n:Item) WITH n, n.v AS v SET n.x = v RETURN n.x AS x, count(*) AS c ORDER BY x",
+         [{"x": 1, "c": 1}, {"x": 2, "c": 1}, {"x": 3, "c": 1}]),
+        ("UNWIND $ids AS i MATCH (n:Item) WHERE n.id = i SET n.x = 1 "
+         "RETURN n.id AS id ORDER BY id DESC LIMIT 1", [{"id": "b"}]),
+        ("MATCH (n:Item) WITH n SET n.x = n.v RETURN n.x + 1 AS p ORDER BY p",
+         [{"p": 2}, {"p": 3}, {"p": 4}]),
+    ],
+)
+def test_rowwise_return_modifiers(g, query, expected):
+    g.query("CREATE (:Item {id: 'a', v: 1}), (:Item {id: 'b', v: 2}), (:Item {id: 'c', v: 3})")
+    assert list(g.query(query, {"ids": ["a", "b"]})) == expected
 
 
 # ---------------------------------------------------------------- #136

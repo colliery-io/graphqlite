@@ -957,7 +957,10 @@ int execute_create_clause_with_varmap(cypher_executor *executor, cypher_create *
         ast_node *pattern = create->pattern->items[i];
         if (pattern->type == AST_NODE_PATH) {
             if (execute_path_pattern_with_variables(executor, (cypher_path*)pattern, result, var_map) < 0) {
-                free_variable_map(var_map);
+                /* A map the caller passed in stays the caller's to free;
+                 * freeing it here gave a use-after-free and a double free
+                 * in the callers that fold it back. */
+                if (var_map != *out_var_map) free_variable_map(var_map);
                 return -1;
             }
         }

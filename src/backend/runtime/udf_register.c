@@ -149,8 +149,9 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_type_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* _gql_in reads the boolean subtype of its left side (#135). */
   rc = sqlite3_create_function(db, "_gql_in", 2,
-                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_SUBTYPE, 0,
                          gql_in_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 

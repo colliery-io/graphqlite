@@ -321,11 +321,10 @@ static int emit_index_comparison(cypher_transform_context *ctx, cypher_binary_op
 static int emit_in_operand(cypher_transform_context *ctx, ast_node *expr)
 {
     if (!ast_is_boolean_expr(expr)) return transform_expression(ctx, expr);
-    append_sql(ctx, "(CASE WHEN (");
+    /* In a comparison a boolean is 1 / 0 / NULL; a NULL matches no WHEN. */
+    append_sql(ctx, "(CASE (");
     if (transform_expression(ctx, expr) < 0) return -1;
-    append_sql(ctx, ") IS NULL THEN NULL WHEN (");
-    if (transform_expression(ctx, expr) < 0) return -1;
-    append_sql(ctx, ") THEN json('true') ELSE json('false') END)");
+    append_sql(ctx, ") WHEN 1 THEN json('true') WHEN 0 THEN json('false') END)");
     return 0;
 }
 

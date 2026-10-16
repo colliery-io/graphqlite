@@ -827,12 +827,16 @@ static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *a
                 result->properties_set = 0;
             }
         }
-        if (sqlite3_exec(executor->db, "RELEASE graphqlite_query", NULL, NULL, NULL) != SQLITE_OK &&
-            result && result->success) {
-            /* Outside a transaction the RELEASE is the commit. */
+        if (sqlite3_exec(executor->db, "RELEASE graphqlite_query", NULL, NULL, NULL) != SQLITE_OK) {
+            /* Outside a transaction the RELEASE is the commit. When it
+             * fails (SQLITE_BUSY), undo the query and close the savepoint,
+             * so no later query runs inside it. */
             char msg[512];
             snprintf(msg, sizeof(msg), "Failed to commit the query: %s", sqlite3_errmsg(executor->db));
-            set_result_error(result, msg);
+            sqlite3_exec(executor->db, "ROLLBACK TO graphqlite_query", NULL, NULL, NULL);
+            sqlite3_exec(executor->db, "RELEASE graphqlite_query", NULL, NULL, NULL);
+            cypher_schema_clear_property_key_cache(executor->schema_mgr);
+            if (result && result->success) set_result_error(result, msg);
         }
     }
     if (kc) kc->bypass = saved_bypass;

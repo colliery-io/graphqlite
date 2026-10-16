@@ -87,21 +87,28 @@ static int emit_registered_path_members(cypher_transform_context *ctx, transform
         if (a) snprintf(null_guard, sizeof(null_guard), "%s.%s", a, rp->varlen ? "elem_ids" : "id");
     }
     int seg = 0;
+    const char *prev_varlen = NULL;   /* alias of a varlen segment just before */
     for (int i = 0; i < path_var->path_elements->count; i++) {
         ast_node *el = path_var->path_elements->items[i];
         if (el->type == AST_NODE_NODE_PATTERN) {
             cypher_node_pattern *np = (cypher_node_pattern*)el;
             const char *a = np->variable ? transform_var_get_alias(ctx->var_ctx, np->variable) : NULL;
             if (!null_guard[0] && a) snprintf(null_guard, sizeof(null_guard), "%s.id", a);
+            const char *after_varlen = prev_varlen;
+            prev_varlen = NULL;
             if (!want_nodes) continue;
             if (dbuf_len(&u) > 0) dbuf_append(&u, " UNION ALL ");
             if (a) dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, %s.id AS v", seg, a);
             else dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, NULL AS v", seg);
+            /* After a zero-hop segment this node is the node before it. */
+            if (after_varlen)
+                dbuf_appendf(&u, " WHERE json_array_length('[' || %s.elem_ids || ']') > 1", after_varlen);
             seg++;
         } else if (el->type == AST_NODE_REL_PATTERN) {
             cypher_rel_pattern *rp = (cypher_rel_pattern*)el;
             const char *a = rp->variable ? transform_var_get_alias(ctx->var_ctx, rp->variable) : NULL;
             if (rp->varlen && a) {
+                prev_varlen = a;
                 if (dbuf_len(&u) > 0) dbuf_append(&u, " UNION ALL ");
                 if (want_nodes) {
                     dbuf_appendf(&u,

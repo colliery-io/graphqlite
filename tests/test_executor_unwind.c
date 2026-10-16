@@ -788,9 +788,40 @@ static void test_boolean_number_equality(void)
 {
     const char *w[] = {"CREATE (:Seed)", NULL};
     ASSERT_UNWIND(w, NULL,
-        "RETURN [true = 1, false = 0, true <> 1, true IN [1], false IN [0], 1 IN [true],"
+        "RETURN [true = 1, false = 0, true <> 1, true IN [1], false IN [0],"
         " true IN [true], 1 IN [1], 1 = 1.0]",
-        "[false,false,true,false,false,false,true,true,true]");
+        "[false,false,true,false,false,true,true,true]");
+    /* A stored boolean still finds true in a list. */
+    const char *w2[] = {"CREATE (:Item {flag: true})", NULL};
+    ASSERT_UNWIND(w2, NULL, "MATCH (n:Item) RETURN n.flag IN [true]", "true");
+}
+
+/* #136 review: a write that runs row by row keeps RETURN ORDER BY, SKIP,
+ * LIMIT, DISTINCT and grouped aggregation, and projects expressions. */
+static void test_rowwise_return_modifiers(void)
+{
+    const char *w[] = {"CREATE (:Item {id: 'a', v: 1}), (:Item {id: 'b', v: 2}), (:Item {id: 'c', v: 3})", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (n:Item) WITH n SET n.x = 1 RETURN n.id AS id ORDER BY id DESC LIMIT 2", "c,b");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (n:Item) WITH n SET n.x = 1 RETURN n.id AS id ORDER BY n.v DESC SKIP 1", "b,a");
+    ASSERT_UNWIND(w, NULL, "MATCH (n:Item) WITH n SET n.x = 1 RETURN DISTINCT n.x", "1");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (n:Item) WITH n SET n.x = n.v % 2 RETURN n.x AS x, count(*) AS c ORDER BY c DESC", "1,0");
+    ASSERT_UNWIND(w, NULL,
+        "UNWIND ['a', 'b'] AS i MATCH (n:Item) WHERE n.id = i SET n.x = 1 "
+        "RETURN toUpper(n.id) + n.v AS u ORDER BY u DESC LIMIT 1", "B2");
+    ASSERT_UNWIND(w, NULL, "UNWIND [] AS i MATCH (n:Item) SET n.x = i RETURN count(*)", "0");
+}
+
+/* #135 review: a zero-hop segment adds its node once. */
+static void test_path_zero_hop(void)
+{
+    const char *w[] = {"CREATE (:Item {id: 'a', name: 'A'})-[:LINK]->(:Item {name: 'B'})", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "MATCH p = (a:Item {id: 'a'})-[:LINK*0..1]->(c) "
+        "RETURN [[n IN nodes(p) | n.name], length(p)] AS r ORDER BY r[1]",
+        "[[\"A\"],0],[[\"A\",\"B\"],1]");
 }
 
 int init_executor_unwind_suite(void)
@@ -834,7 +865,9 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "#136: UNWIND $param CREATE RETURN", test_unwind_param_create_return) ||
         !CU_add_test(suite, "#135: FOREACH bodies", test_foreach_bodies) ||
         !CU_add_test(suite, "#135: path functions", test_path_functions) ||
-        !CU_add_test(suite, "#135: boolean vs number equality", test_boolean_number_equality)) {
+        !CU_add_test(suite, "#135: boolean vs number equality", test_boolean_number_equality) ||
+        !CU_add_test(suite, "#136: row-wise RETURN modifiers", test_rowwise_return_modifiers) ||
+        !CU_add_test(suite, "#135: zero-hop path", test_path_zero_hop)) {
         return CU_get_error();
     }
 
