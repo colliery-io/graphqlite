@@ -451,7 +451,11 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
                         cypher_identifier *ident = (cypher_identifier*)item->expr;
                         
                         /* Check if this is a path variable */
-                        if (ctx && transform_var_is_path(ctx->var_ctx, ident->name)) {
+                        if (ctx && transform_var_is_path(ctx->var_ctx, ident->name) && value[0] == '{') {
+                            /* Already the hydrated {nodes, rels} object (a path
+                             * with inner variable-length entities): kept as
+                             * JSON, as for a pattern comprehension's path. */
+                        } else if (ctx && transform_var_is_path(ctx->var_ctx, ident->name)) {
                             CYPHER_DEBUG("Executor: Processing path variable '%s' with value: %s", ident->name, value);
                             /* Parse the JSON array of element IDs and build path object */
                             result->agtype_data[current_row][col] = build_path_from_ids(executor, ctx, ident->name, value);

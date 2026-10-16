@@ -388,7 +388,9 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
             /* Map carries projection from another temporal — combine via
              * date+time composers. The C helpers handle inherited components. */
             if (has_date_key || has_time_key || has_dt_key || has_ldt_key) {
-                append_sql(ctx, "(_gql_date_compose(");
+                append_sql(ctx, "(");
+                size_t date_sql_start = ctx->sql_size;
+                append_sql(ctx, "_gql_date_compose(");
                 const char *dkeys[] = {"year","month","day","week","dayOfWeek",
                                        "ordinalDay","quarter","dayOfQuarter"};
                 for (int i = 0; i < 8; i++) {
@@ -408,13 +410,16 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                 append_sql(ctx, ", json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.datetime'))");
+                /* The date SQL again, for the composer's named-zone lookup. */
+                char *date_sql = strndup(ctx->sql_buffer + date_sql_start,
+                                         ctx->sql_size - date_sql_start);
                 /* Date emitted. Now emit 'T' separator and time portion via composer. */
                 append_sql(ctx, " || 'T' || _gql_time_compose(");
                 const char *tkeys[] = {"hour","minute","second","millisecond","microsecond","nanosecond","timezone"};
                 for (int i = 0; i < 7; i++) {
                     if (i > 0) append_sql(ctx, ", ");
                     append_sql(ctx, "json_extract(json(");
-                    if (transform_expression(ctx, arg) < 0) return -1;
+                    if (transform_expression(ctx, arg) < 0) { free(date_sql); return -1; }
                     append_sql(ctx, "), '$.%s')", tkeys[i]);
                 }
                 append_sql(ctx, ", %d", is_local ? 0 : 1);
@@ -422,11 +427,13 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                 const char *base_keys[] = {"time","datetime","localdatetime","localtime"};
                 for (int i = 0; i < 4; i++) {
                     append_sql(ctx, ", json_extract(json(");
-                    if (transform_expression(ctx, arg) < 0) return -1;
+                    if (transform_expression(ctx, arg) < 0) { free(date_sql); return -1; }
                     append_sql(ctx, "), '$.%s')", base_keys[i]);
                 }
-                /* drop_region=0: datetime keeps the named-zone suffix. */
-                append_sql(ctx, ", 0))");
+                /* drop_region=0: datetime keeps the named-zone suffix; then
+                 * the date, so a named zone resolves at it. */
+                append_sql(ctx, ", 0, %s))", (date_sql && !is_local) ? date_sql : "NULL");
+                free(date_sql);
                 return 0;
             }
 
@@ -549,8 +556,16 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                     if (transform_expression(ctx, arg) < 0) return -1;
                     append_sql(ctx, "), '$.%s')", dkeys2[i]);
                 }
-                /* base_date / base_datetime — null here for the legacy path. */
-                append_sql(ctx, ", NULL, NULL)) || '[' || json_extract(json(");
+                /* base_date / base_datetime — null here for the legacy path.
+                 * Then the wall-clock time: the offset on a daylight-saving
+                 * day depends on the hour (Temporal10 [8]). */
+                append_sql(ctx, ", NULL, NULL), COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.hour'), 0), COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.minute'), 0), COALESCE(json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                append_sql(ctx, "), '$.second'), 0)) || '[' || json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') || ']' END)");
             }

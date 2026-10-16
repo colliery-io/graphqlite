@@ -15,6 +15,9 @@
 
 #include "graphqlite_version.h"
 #include "graphqlite_sqlite.h"
+#include "runtime/gql_tz.h"
+#include "gql_thread_local.h"
+#include "transform/transform_helpers.h"
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -476,7 +479,7 @@ static bool looks_temporal(const char *s) {
 
 void gql_order_cmp_func(
     sqlite3_context *context, int argc, sqlite3_value **argv) {
-    if (argc != 3) { sqlite3_result_null(context); return; }
+    if (argc != 3 && argc != 5) { sqlite3_result_null(context); return; }
     int lt = sqlite3_value_type(argv[0]);
     int rt = sqlite3_value_type(argv[1]);
     if (lt == SQLITE_NULL || rt == SQLITE_NULL) {
@@ -487,6 +490,30 @@ void gql_order_cmp_func(
      * [23]/[26]) rely on boolean values surviving the < / > paths
      * with stable (if not strictly type-checked) results. The strict
      * cross-type rule below is what T-0308 is really after. */
+
+    /* A boolean (by its type tag) orders only against a boolean, false <
+     * true; against anything else it is null (Comparison2 [3]). */
+    const char *ltag = argc == 5 ? (const char *)sqlite3_value_text(argv[3]) : NULL;
+    const char *rtag = argc == 5 ? (const char *)sqlite3_value_text(argv[4]) : NULL;
+    bool l_bool = ltag && strcmp(ltag, "bool") == 0;
+    bool r_bool = rtag && strcmp(rtag, "bool") == 0;
+    if (l_bool || r_bool) {
+        if (!(l_bool && r_bool)) { sqlite3_result_null(context); return; }
+        const char *a = (const char *)sqlite3_value_text(argv[0]);
+        const char *b = (const char *)sqlite3_value_text(argv[1]);
+        int av = a && (strcmp(a, "true") == 0 || strcmp(a, "1") == 0);
+        int bv = b && (strcmp(b, "true") == 0 || strcmp(b, "1") == 0);
+        const char *bop = (const char *)sqlite3_value_text(argv[2]);
+        if (!bop) { sqlite3_result_null(context); return; }
+        bool r;
+        if      (strcmp(bop, "<")  == 0) r = av < bv;
+        else if (strcmp(bop, ">")  == 0) r = av > bv;
+        else if (strcmp(bop, "<=") == 0) r = av <= bv;
+        else if (strcmp(bop, ">=") == 0) r = av >= bv;
+        else { sqlite3_result_null(context); return; }
+        sqlite3_result_int(context, r ? 1 : 0);
+        return;
+    }
 
     bool l_num = (lt == SQLITE_INTEGER || lt == SQLITE_FLOAT);
     bool r_num = (rt == SQLITE_INTEGER || rt == SQLITE_FLOAT);
@@ -1053,7 +1080,11 @@ void gql_to_string_strict_func(
         sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT); return;
     }
     if (t == SQLITE_FLOAT) {
-        char buf[40]; snprintf(buf, sizeof(buf), "%.17g", sqlite3_value_double(argv[0]));
+        /* The shortest text that reads back as the same value, with ".0"
+         * on a whole number: toString(2.3) is '2.3', not
+         * '2.2999999999999998' (TypeConversion4 [5]). */
+        char buf[40];
+        gql_format_double(buf, sizeof(buf), sqlite3_value_double(argv[0]));
         sqlite3_result_text(context, buf, -1, SQLITE_TRANSIENT); return;
     }
     sqlite3_result_null(context);
@@ -2307,6 +2338,43 @@ void gql_duration_in_seconds_func(sqlite3_context *ctx, int argc, sqlite3_value 
     tparts a, b;
     if (!parse_temporal_parts(sa, &a) || !parse_temporal_parts(sb, &b)) { sqlite3_result_null(ctx); return; }
 
+    /* One side in a named zone, the other local: the local side is a wall
+     * clock in that zone (its date from the zoned side when it has none),
+     * and the elapsed time counts a daylight-saving change between them:
+     * 00:00 to 04:00 Stockholm on 2017-10-29 is PT5H (Temporal10 [8]). */
+    {
+        const char *ra = strchr(sa, '['), *rb = strchr(sb, '[');
+        const char *zs = (ra && !b.has_tz) ? ra : (rb && !a.has_tz) ? rb : NULL;
+        const gql_tz_zone *zone = NULL;
+        if (zs) {
+            char zname[64];
+            const char *ze = strchr(zs + 1, ']');
+            int zl = ze ? (int)(ze - zs - 1) : (int)strlen(zs + 1);
+            if (zl > 0 && zl < (int)sizeof(zname)) {
+                memcpy(zname, zs + 1, (size_t)zl); zname[zl] = 0;
+                zone = gql_tz_find(zname);
+            }
+        }
+        if (zone) {
+            tparts *zoned = (zs == ra) ? &a : &b, *local = (zs == ra) ? &b : &a;
+            if (zoned->has_date) {
+                if (!local->has_date) {
+                    local->y = zoned->y; local->mo = zoned->mo; local->d = zoned->d;
+                    local->has_date = true;
+                }
+                int64_t lz = (int64_t)days_from_civil(zoned->y, zoned->mo, zoned->d) * 86400
+                           + zoned->h * 3600 + zoned->mi * 60 + zoned->sec;
+                int64_t ll = (int64_t)days_from_civil(local->y, local->mo, local->d) * 86400
+                           + local->h * 3600 + local->mi * 60 + local->sec;
+                int64_t uz = lz - (int64_t)zoned->tz_offset_min * 60;
+                int64_t ul = ll - gql_tz_offset_at_local(zone, ll);
+                int64_t ua = (zs == ra) ? uz : ul, ub = (zs == ra) ? ul : uz;
+                emit_duration_json_split(ctx, 0, 0, ub - ua, b.ns - a.ns);
+                return;
+            }
+        }
+    }
+
     /* Calendar day diff (when both have a date) + time-of-day diff.
      * Time-of-day uses local clock unless BOTH inputs are full datetimes
      * (date+time), in which case tz offsets are applied for true UTC diff.
@@ -2351,31 +2419,24 @@ void gql_duration_calendar_func(
     emit_duration_json(ctx, total_months, days, time_ns);
 }
 
-/* Return the representative offset for a named tz at a given calendar date.
- * Approximates DST by month for the common European/American zones found in
- * the TCK suite. Defaults to '+00:00' for unknown names. */
+static long long days_from_civil(int y, int m, int d);
+
+/* The offset of a named zone at a local wall-clock time, from the IANA time
+ * zone table (gql_tz.c): daylight saving and historical offsets, e.g.
+ * Europe/Stockholm +02:00 on 1984-03-28 and +00:53:28 in 1818. "+00:00"
+ * for an unknown name. The text is thread-local storage. */
+static const char *named_tz_offset_at(const char *tz, int y, int mo, int d, int h, int mi, int s) {
+    static GQL_THREAD_LOCAL char buf[16];
+    const gql_tz_zone *z = gql_tz_find(tz);
+    if (!z) return "+00:00";
+    int64_t local = (int64_t)days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s;
+    gql_tz_format_offset(gql_tz_offset_at_local(z, local), buf, (int)sizeof(buf));
+    return buf;
+}
+
+/* The offset of a named zone on a calendar date (at noon). */
 static const char *named_tz_offset(const char *tz, int y, int mo, int d) {
-    if (!tz) return "+00:00";
-    /* Approximate DST as April–September. The TCK expects winter offset for
-     * October dates (DST rules pre-1996 ended late September; the modern
-     * end-of-October rule is post-1996). April–September covers both eras
-     * for the test dates encountered in T1/T3/T6. */
-    (void)d;
-    bool eu_summer = (mo >= 4 && mo <= 9);
-    bool us_summer = (mo >= 4 && mo <= 9);
-    if (strstr(tz, "Stockholm") || strstr(tz, "Berlin") || strstr(tz, "Paris"))
-        return eu_summer ? "+02:00" : "+01:00";
-    if (strstr(tz, "London")) return eu_summer ? "+01:00" : "+00:00";
-    if (strstr(tz, "New_York")) return us_summer ? "-04:00" : "-05:00";
-    if (strstr(tz, "Los_Angeles")) return us_summer ? "-07:00" : "-08:00";
-    if (strstr(tz, "Honolulu")) return "-10:00";
-    if (strstr(tz, "Anchorage")) return us_summer ? "-08:00" : "-09:00";
-    if (strstr(tz, "Tokyo")) return "+09:00";
-    if (strstr(tz, "Shanghai")) return "+08:00";
-    if (strstr(tz, "Sydney")) return mo > 3 && mo < 10 ? "+10:00" : "+11:00"; /* AU summer ~ Oct–Apr */
-    if (strstr(tz, "Auckland")) return mo > 3 && mo < 10 ? "+12:00" : "+13:00";
-    if (strstr(tz, "Eucla")) return "+08:45";
-    return "+00:00";
+    return named_tz_offset_at(tz, y, mo, d, 12, 0, 0);
 }
 
 /* SQLite UDF: offset string for a named tz on a given date (handles DST). */
@@ -2388,6 +2449,15 @@ void gql_tz_offset_for_func(sqlite3_context *ctx, int argc, sqlite3_value **argv
         if (ds && strlen(ds) >= 10) {
             sscanf(ds, "%d-%d-%d", &y, &m, &d);
         }
+    }
+    /* Optional hour, minute, second: the offset at that wall-clock time,
+     * which matters on a daylight-saving day (Temporal10 [8]). */
+    if (argc >= 3) {
+        int h = (sqlite3_value_type(argv[2]) != SQLITE_NULL) ? sqlite3_value_int(argv[2]) : 0;
+        int mi = (argc >= 4 && sqlite3_value_type(argv[3]) != SQLITE_NULL) ? sqlite3_value_int(argv[3]) : 0;
+        int sec = (argc >= 5 && sqlite3_value_type(argv[4]) != SQLITE_NULL) ? sqlite3_value_int(argv[4]) : 0;
+        sqlite3_result_text(ctx, named_tz_offset_at(tz, y, m, d, h, mi, sec), -1, SQLITE_TRANSIENT);
+        return;
     }
     sqlite3_result_text(ctx, named_tz_offset(tz, y, m, d), -1, SQLITE_TRANSIENT);
 }
@@ -2979,7 +3049,15 @@ void gql_date_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
  *   8 base_time, 9 base_datetime, 10 base_localdatetime, 11 base_localtime
  */
 void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    if (argc != 13) { sqlite3_result_null(ctx); return; }
+    if (argc != 13 && argc != 14) { sqlite3_result_null(ctx); return; }
+    /* argv[13] (datetime only): the composed date 'YYYY-MM-DD', so a named
+     * zone is resolved at that date, not a fixed summer date (Temporal3 [10]). */
+    int cy = 0, cmo = 0, cd = 0;
+    bool have_date = false;
+    if (argc == 14 && sqlite3_value_type(argv[13]) != SQLITE_NULL) {
+        const char *ds = (const char*)sqlite3_value_text(argv[13]);
+        if (ds && sscanf(ds, "%d-%d-%d", &cy, &cmo, &cd) == 3) have_date = true;
+    }
     /* drop_region: a Cypher time/localtime value never carries a named zone —
      * keep only the numeric offset. datetime() passes 0 to retain it. */
     int drop_region = (sqlite3_value_type(argv[12]) != SQLITE_NULL)
@@ -2990,6 +3068,8 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     int64_t inherited_ns = 0;
     const char *base_tz = NULL;
     int base_tz_offset_min = 0;
+    const gql_tz_zone *base_region_zone = NULL;  /* base's zone, resolved at the date */
+    char base_region_name[64] = "";
     bool base_has_tz = false;
     /* Inherit from base time/datetime if present. */
     for (int b = 8; b <= 11; b++) {
@@ -3014,6 +3094,25 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
             }
             if (base_tz) {
                 base_has_tz = true;
+                const char *base_region = strchr(base_tz, '[');
+                if (have_date && base_region) {
+                    /* The base's named zone at the composed date: its own
+                     * offset was for its own date. */
+                    char zname[64];
+                    const char *zb = base_region + 1, *ze = strchr(zb, ']');
+                    int zl = ze ? (int)(ze - zb) : (int)strlen(zb);
+                    if (zl > 0 && zl < (int)sizeof(zname)) {
+                        memcpy(zname, zb, (size_t)zl); zname[zl] = 0;
+                        const gql_tz_zone *z = gql_tz_find(zname);
+                        if (z) {
+                            int64_t local = (int64_t)days_from_civil(cy, cmo, cd) * 86400 + h * 3600 + mi * 60 + sec;
+                            base_tz_offset_min = gql_tz_offset_at_local(z, local) / 60;
+                            base_region_zone = z;
+                            snprintf(base_region_name, sizeof(base_region_name), "%s", zname);
+                            goto base_tz_done;
+                        }
+                    }
+                }
                 if (*base_tz == 'Z') base_tz_offset_min = 0;
                 else if (*base_tz == '+' || *base_tz == '-') {
                     int sign = (*base_tz == '+') ? 1 : -1;
@@ -3024,6 +3123,7 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
                     base_tz_offset_min = sign * (oh * 60 + om);
                 }
             }
+        base_tz_done:
             break;
         }
     }
@@ -3050,13 +3150,21 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
                 else sscanf(new_tz + 1, "%d", &oh);
                 new_offset_min = sign * (oh * 60 + om);
             } else if (strchr(new_tz, '/')) {
-                /* Named tz — pull representative offset (DST default summer). */
-                const char *off = named_tz_offset(new_tz, 2000, 7, 15);
-                if (*off == '+' || *off == '-') {
-                    int sign = (*off == '+') ? 1 : -1;
-                    int oh, om;
-                    sscanf(off + 1, "%d:%d", &oh, &om);
-                    new_offset_min = sign * (oh * 60 + om);
+                /* Named tz: its offset at the same instant (the composed date
+                 * and the base clock), else a summer date. */
+                const gql_tz_zone *nz = gql_tz_find(new_tz);
+                if (nz && have_date) {
+                    int64_t utc = (int64_t)days_from_civil(cy, cmo, cd) * 86400 + h * 3600 + mi * 60 + sec
+                                - (int64_t)base_tz_offset_min * 60;
+                    new_offset_min = gql_tz_offset_at_utc(nz, utc) / 60;
+                } else {
+                    const char *off = named_tz_offset(new_tz, 2000, 7, 15);
+                    if (*off == '+' || *off == '-') {
+                        int sign = (*off == '+') ? 1 : -1;
+                        int oh, om;
+                        sscanf(off + 1, "%d:%d", &oh, &om);
+                        new_offset_min = sign * (oh * 60 + om);
+                    }
                 }
             }
             int shift_min = new_offset_min - base_tz_offset_min;
@@ -3101,7 +3209,8 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
                  * composer lacks the date directly, so we approximate with
                  * a summer date (most TCK tests with named zones use one).
                  * For datetime() the outer SQL replaces this when needed. */
-                const char *off = named_tz_offset(tz, 2000, 7, 15);
+                const char *off = have_date ? named_tz_offset_at(tz, cy, cmo, cd, h, mi, sec)
+                                            : named_tz_offset(tz, 2000, 7, 15);
                 if (drop_region)
                     p += snprintf(p, sizeof(buf) - (p - buf), "%s", off);
                 else
@@ -3112,7 +3221,12 @@ void gql_time_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         } else if (base_tz) {
             /* Inherited from a base value. A time value drops any [Region]
              * suffix, keeping only the offset (Temporal3 [3]). */
-            if (drop_region) {
+            if (base_region_zone && !drop_region) {
+                /* The base's zone at the composed date (Temporal3 [10]). */
+                char ob[16];
+                gql_tz_format_offset(base_tz_offset_min * 60, ob, (int)sizeof(ob));
+                p += snprintf(p, sizeof(buf) - (p - buf), "%s[%s]", ob, base_region_name);
+            } else if (drop_region) {
                 const char *br = strchr(base_tz, '[');
                 if (br) p += snprintf(p, sizeof(buf) - (p - buf), "%.*s", (int)(br - base_tz), base_tz);
                 else    p += snprintf(p, sizeof(buf) - (p - buf), "%s", base_tz);
@@ -3810,7 +3924,28 @@ void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value *
                     snprintf(tz_out, sizeof(tz_out), "Z");
                 else
                     snprintf(tz_out, sizeof(tz_out), "%c%02d:%02d%s", tz_main[0], oh, om, bracket ? bracket : "");
-            } else if (*tz_start == '[') snprintf(tz_out, sizeof(tz_out), "%s", tz_start);
+            } else if (*tz_start == '[') {
+                /* A named zone with no offset: insert the zone's offset at
+                 * this local time, e.g. +01:00 for London in July, +00:53:28
+                 * (local mean time) for Stockholm in 1818 (Temporal2 [6]). */
+                char zname[64] = "";
+                const char *ze = strchr(tz_start + 1, ']');
+                int zl = ze ? (int)(ze - tz_start - 1) : (int)strlen(tz_start + 1);
+                int zy = 0, zmo = 0, zd = 0;
+                const gql_tz_zone *z = NULL;
+                if (zl > 0 && zl < (int)sizeof(zname)) {
+                    memcpy(zname, tz_start + 1, (size_t)zl);
+                    z = gql_tz_find(zname);
+                }
+                if (z && sscanf(normalized_date, "%d-%d-%d", &zy, &zmo, &zd) == 3) {
+                    int64_t local = (int64_t)days_from_civil(zy, zmo, zd) * 86400 + h * 3600 + mi * 60 + sec;
+                    char ob[16];
+                    gql_tz_format_offset(gql_tz_offset_at_local(z, local), ob, (int)sizeof(ob));
+                    snprintf(tz_out, sizeof(tz_out), "%s%s", ob, tz_start);
+                } else {
+                    snprintf(tz_out, sizeof(tz_out), "%s", tz_start);
+                }
+            }
         }
 
         char out[96];
@@ -4314,8 +4449,8 @@ static const gql_capability_flag gql_capability_flags[] = {
     {"variable_length_paths",         1},
     {"named_paths",                   1},
     {"temporal_types",                1},  /* date/time/datetime/duration */
-    {"named_timezones",               1},  /* fixed offsets; coarse DST rules */
-    {"timezone_historical_dst",       0},  /* needs IANA tzdata (T-0342..0344) */
+    {"named_timezones",               1},  /* IANA tzdata for 13 zones (gql_tzdata.c) */
+    {"timezone_historical_dst",       1},  /* DST and local mean time, 1800-2100 */
     {"graph_algorithms",              1},  /* pagerank, louvain, ... */
     {"multi_graph",                   1},  /* gql_load_graph / graph-scoped tables */
     {"cypher_rows_vtab",              1},  /* cypher_rows() table-valued function */

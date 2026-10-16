@@ -184,6 +184,58 @@ bool ast_is_numeric_expr(const ast_node *expr)
     return false;
 }
 
+/* Two expressions written the same way: identifiers, properties, literals,
+ * parameters, binary operators and function calls (name, DISTINCT,
+ * arguments). Any other node type compares unequal. */
+bool ast_expr_equal(const ast_node *a, const ast_node *b)
+{
+    if (a == b) return true;
+    if (!a || !b || a->type != b->type) return false;
+    switch (a->type) {
+        case AST_NODE_IDENTIFIER:
+            return strcmp(((const cypher_identifier *)a)->name, ((const cypher_identifier *)b)->name) == 0;
+        case AST_NODE_PARAMETER: {
+            const char *x = ((const cypher_parameter *)a)->name, *y = ((const cypher_parameter *)b)->name;
+            return x && y && strcmp(x, y) == 0;
+        }
+        case AST_NODE_PROPERTY: {
+            const cypher_property *x = (const cypher_property *)a, *y = (const cypher_property *)b;
+            return x->property_name && y->property_name &&
+                   strcmp(x->property_name, y->property_name) == 0 && ast_expr_equal(x->expr, y->expr);
+        }
+        case AST_NODE_LITERAL: {
+            const cypher_literal *x = (const cypher_literal *)a, *y = (const cypher_literal *)b;
+            if (x->literal_type != y->literal_type) return false;
+            switch (x->literal_type) {
+                case LITERAL_INTEGER: return x->value.integer == y->value.integer;
+                case LITERAL_DECIMAL: return x->value.decimal == y->value.decimal;
+                case LITERAL_BOOLEAN: return x->value.boolean == y->value.boolean;
+                case LITERAL_STRING:  return x->value.string && y->value.string &&
+                                             strcmp(x->value.string, y->value.string) == 0;
+                default: return true;
+            }
+        }
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *x = (const cypher_binary_op *)a, *y = (const cypher_binary_op *)b;
+            return x->op_type == y->op_type && ast_expr_equal(x->left, y->left) &&
+                   ast_expr_equal(x->right, y->right);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *x = (const cypher_function_call *)a, *y = (const cypher_function_call *)b;
+            if (!x->function_name || !y->function_name ||
+                strcasecmp(x->function_name, y->function_name) != 0 || x->distinct != y->distinct)
+                return false;
+            int nx = x->args ? x->args->count : 0, ny = y->args ? y->args->count : 0;
+            if (nx != ny) return false;
+            for (int i = 0; i < nx; i++)
+                if (!ast_expr_equal(x->args->items[i], y->args->items[i])) return false;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 /* Render a double as the shortest text that reads back as the same value,
  * keeping ".0" on a whole number so a float never reads back as an integer
  * (GQLITE-T-0403). "%g" kept 6 digits and dropped the ".0". */

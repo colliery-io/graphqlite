@@ -357,6 +357,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_order_cmp_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
+  /* With the type tags of the two operands (Comparison2 [3]). */
+  rc = sqlite3_create_function(db, "_gql_order_cmp", 5,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_order_cmp_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_extract_tz", 1, SQLITE_UTF8, 0,
                          gql_extract_tz_func, 0, 0);
@@ -394,6 +399,10 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_tz_offset_for", 2, SQLITE_UTF8, 0,
+                         gql_tz_offset_for_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  /* With hour, minute, second of the wall-clock time. */
+  rc = sqlite3_create_function(db, "_gql_tz_offset_for", 5, SQLITE_UTF8, 0,
                          gql_tz_offset_for_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
@@ -437,6 +446,10 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_date_compose_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "_gql_time_compose", 13, SQLITE_UTF8, 0,
+                         gql_time_compose_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+  /* With the composed date (datetime with a named zone). */
+  rc = sqlite3_create_function(db, "_gql_time_compose", 14, SQLITE_UTF8, 0,
                          gql_time_compose_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 

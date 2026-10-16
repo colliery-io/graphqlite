@@ -130,6 +130,12 @@ static int transform_list_item_value(cypher_transform_context *ctx, ast_node *ex
         append_sql(ctx, "_gql_bool_str(%d)", lit->value.boolean ? 1 : 0);
         return 0;
     }
+    if (expr && expr->type == AST_NODE_IDENTIFIER &&
+        transform_var_is_path(ctx->var_ctx, ((cypher_identifier*)expr)->name)) {
+        /* A path in a list is a path object, not its id text. */
+        int prc = transform_path_object(ctx, ((cypher_identifier*)expr)->name);
+        if (prc <= 0) return prc;
+    }
     if (ast_yields_boolean(expr)) {
         append_sql(ctx, "_gql_bool_str(CASE WHEN (");
         if (transform_expression(ctx, expr) < 0) return -1;
@@ -1275,7 +1281,15 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                              * path_ids projection (Match7 [19]). */
                             bool single_varlen = has_varlen && rel_count == 1;
 
-                            if (path_var->path_type == VAR_PATH_COMPREHENSION ||
+                            if (has_varlen && !single_varlen &&
+                                path_var->path_type != VAR_PATH_COMPREHENSION) {
+                                /* A path mixing fixed and variable-length
+                                 * parts, or with more than one variable-length
+                                 * part: the hydrated {nodes, rels} object, with
+                                 * the inner entities of each segment (the node
+                                 * ids text dropped them; Match6 [14]/[17]). */
+                                if (transform_path_object(ctx, id->name) < 0) return -1;
+                            } else if (path_var->path_type == VAR_PATH_COMPREHENSION ||
                                 (ctx->emit_hydrated_path && !single_varlen)) {
                                 /* T-0332: pattern comprehension path — emit fully hydrated
                                  * path JSON ({nodes:[...], rels:[...]}) so it survives nested
@@ -1347,7 +1361,11 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                         cypher_node_pattern *node = (cypher_node_pattern*)element;
                                         if (node->variable) {
                                             const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
-                                            if (node_alias) {
+                                            if (node_alias && (strchr(node_alias, '.') ||
+                                                    transform_var_alias_is_id(ctx->var_ctx, node->variable))) {
+                                                /* A node from WITH: the alias is its id column. */
+                                                append_sql(ctx, "' || %s || '", node_alias);
+                                            } else if (node_alias) {
                                                 append_sql(ctx, "' || %s.id || '", node_alias);
                                             } else {
                                                 append_sql(ctx, "null");
@@ -1761,16 +1779,20 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     append_sql(ctx, " WHEN ");
 
                     if (case_expr->operand) {
-                        /* Simple CASE: generate "operand = when_value" */
+                        /* Simple CASE: "operand = when_value" with Cypher
+                         * equality, so `CASE true WHEN 1` does not match
+                         * (Conditional2 [1]). The node borrows both sides. */
+                        cypher_binary_op *eq = make_binary_op(BINARY_OP_EQ,
+                            case_expr->operand, when->condition, 0);
+                        if (!eq) return -1;
+                        bool saved_cmp = ctx->in_comparison;
+                        ctx->in_comparison = true;
                         append_sql(ctx, "(");
-                        if (transform_expression(ctx, case_expr->operand) < 0) {
-                            return -1;
-                        }
-                        append_sql(ctx, ") = (");
-                        if (transform_expression(ctx, when->condition) < 0) {
-                            return -1;
-                        }
+                        int erc = transform_expression(ctx, (ast_node *)eq);
                         append_sql(ctx, ")");
+                        ctx->in_comparison = saved_cmp;
+                        free(eq);
+                        if (erc < 0) return -1;
                     } else {
                         /* Searched CASE: the condition is a boolean position */
                         if (transform_condition(ctx, when->condition) < 0) {
@@ -1933,8 +1955,15 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 const char *old_alias = transform_var_get_alias(ctx->var_ctx, comp_var);
                 char *saved_alias = old_alias ? strdup(old_alias) : NULL;
 
-                /* Register the comprehension variable to map to json_each.value */
+                /* Register the comprehension variable to map to json_each.value,
+                 * with the element's type tag, so a boolean stays a boolean
+                 * (`x < value` with booleans, toString(true) gave '1'). */
                 transform_var_register_projected(ctx->var_ctx, comp_var, "json_each.value");
+                const char *old_tag = transform_var_get_tag(ctx->var_ctx, comp_var);
+                char *saved_tag = old_tag ? strdup(old_tag) : NULL;
+                transform_var_set_tag(ctx->var_ctx, comp_var,
+                    "(CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' "
+                    "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END)");
 
                 /* Build the subquery */
                 append_sql(ctx, "(SELECT json_group_array(");
@@ -1981,6 +2010,8 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 append_sql(ctx, ")");
 
                 /* Restore the old alias if there was one, otherwise remove the variable */
+                transform_var_set_tag(ctx->var_ctx, comp_var, saved_tag);
+                free(saved_tag);
                 if (saved_alias) {
                     transform_var_register_projected(ctx->var_ctx, comp_var, saved_alias);
                     free(saved_alias);

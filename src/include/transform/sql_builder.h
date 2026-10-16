@@ -281,6 +281,8 @@ void sql_group_by(sql_builder *b, const char *expr);
  * desc: true for DESC, false for ASC
  */
 void sql_order_by(sql_builder *b, const char *expr, bool desc);
+void sql_builder_group_anchor_joins(sql_builder *b);
+size_t sql_builder_joins_len(sql_builder *b);
 
 /*
  * Set LIMIT and OFFSET.

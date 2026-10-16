@@ -188,6 +188,10 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
+    /* Joins before this clause: only a MATCH that starts the query groups its
+     * leading-OPTIONAL joins (Graph6 [6], not Aggregation5 [2]). */
+    size_t joins_at_start = sql_builder_joins_len(ctx->unified_builder);
+
     CYPHER_DEBUG("Transforming %s MATCH clause", match->optional ? "OPTIONAL" : "regular");
 
     if (!ctx || !match) {
@@ -906,6 +910,11 @@ handle_where_clause:
         ctx->pending_optional_on = NULL;
     }
 
+    /* A leading OPTIONAL MATCH matches as one unit (Graph6 [6]). */
+    if (match->optional && joins_at_start == 0) {
+        sql_builder_group_anchor_joins(ctx->unified_builder);
+    }
+
     /* Clear current graph after MATCH processing */
     ctx->current_graph = NULL;
 
@@ -1072,7 +1081,12 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
 
     bool *defer_to_rel = NULL;
     if (optional && path->elements && path->elements->count > 0) {
-        defer_to_rel = calloc(path->elements->count, sizeof(bool));
+        /* [0, n): the node at i is deferred to a rel next to it; [n, 2n):
+         * rel i emits its deferred source; [2n, 3n): rel i emits its
+         * deferred target. A node deferred to the previous rel is in scope
+         * for the next one, which must not emit it again (Match7 [19]:
+         * `(a)-->(b)-[*]->(c)` lost the varlen start = b condition). */
+        defer_to_rel = calloc((size_t)path->elements->count * 3, sizeof(bool));
         if (!defer_to_rel) {
             ctx->has_error = true;
             ctx->error_message = strdup("Out of memory in path emission analysis");
@@ -1119,11 +1133,14 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
 
             /* Defer the unavailable endpoint when the OTHER endpoint
              * is available (so this rel's ON can anchor to it). */
+            int n_el = path->elements->count;
             if (!src_avail && tgt_avail) {
                 defer_to_rel[j - 1] = true;
+                defer_to_rel[n_el + j] = true;
             }
             if (src_avail && !tgt_avail) {
                 defer_to_rel[j + 1] = true;
+                defer_to_rel[2 * n_el + j] = true;
             }
         }
     }
@@ -1708,8 +1725,8 @@ skip_combined_exists:
              * T-0320: pass the defer flags so the rel handler knows
              * to emit deferred-source/target node LEFT JOINs after
              * the edge LEFT JOIN. */
-            bool src_deferred = defer_to_rel ? defer_to_rel[i - 1] : false;
-            bool tgt_deferred = defer_to_rel ? defer_to_rel[i + 1] : false;
+            bool src_deferred = defer_to_rel ? defer_to_rel[path->elements->count + i] : false;
+            bool tgt_deferred = defer_to_rel ? defer_to_rel[2 * path->elements->count + i] : false;
             if (generate_relationship_match_with_defer(ctx, rel, source_node, target_node, i, optional,
                                                        path->type, src_deferred, tgt_deferred) < 0) {
                 free(defer_to_rel);

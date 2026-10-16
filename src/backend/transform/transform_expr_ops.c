@@ -382,13 +382,20 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
                          binary_op->op_type == BINARY_OP_GT ||
                          binary_op->op_type == BINARY_OP_LTE ||
                          binary_op->op_type == BINARY_OP_GTE);
-    if (is_order_cmp && binary_op->left &&
-        binary_op->left->type == AST_NODE_BINARY_OP) {
+    /* Any pair of comparisons chains (`a < b = c <> d` is (a < b) AND
+     * (b = c) AND (c <> d), Comparison4 [1]), unless the left one was
+     * written in parentheses: `(a < b) = true` compares a boolean. */
+    bool is_chain_op = is_order_cmp || binary_op->op_type == BINARY_OP_EQ ||
+                       binary_op->op_type == BINARY_OP_NEQ;
+    if (is_chain_op && binary_op->left &&
+        binary_op->left->type == AST_NODE_BINARY_OP && !binary_op->left->parenthesized) {
         cypher_binary_op *lop = (cypher_binary_op *)binary_op->left;
         bool lhs_is_order_cmp = (lop->op_type == BINARY_OP_LT ||
                                   lop->op_type == BINARY_OP_GT ||
                                   lop->op_type == BINARY_OP_LTE ||
-                                  lop->op_type == BINARY_OP_GTE);
+                                  lop->op_type == BINARY_OP_GTE ||
+                                  lop->op_type == BINARY_OP_EQ ||
+                                  lop->op_type == BINARY_OP_NEQ);
         if (lhs_is_order_cmp) {
             /* Build SQL: (<lhs>) AND (<lop.right> <cur op> <rhs>) */
             append_sql(ctx, "((");
@@ -754,11 +761,18 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             case BINARY_OP_GTE: op_sql = ">="; break;
             default: break;
         }
-        append_sql(ctx, "_gql_order_cmp(");
-        if (transform_expression(ctx, binary_op->left) < 0) return -1;
-        append_sql(ctx, ", ");
-        if (transform_expression(ctx, binary_op->right) < 0) return -1;
-        append_sql(ctx, ", '%s')", op_sql);
+        /* The type tags of the operands go along, so the UDF can tell a
+         * boolean (1 / 0 here) from a number (Comparison2 [3]). */
+        char *lv = cypher_transform_capture_expression(ctx, binary_op->left);
+        char *rv = lv ? cypher_transform_capture_expression(ctx, binary_op->right) : NULL;
+        if (!lv || !rv) { free(lv); free(rv); return -1; }
+        char *ltag = ast_yields_boolean(binary_op->left) ? strdup("'bool'")
+                                                         : cypher_expr_tag_sql(ctx, binary_op->left, lv);
+        char *rtag = ast_yields_boolean(binary_op->right) ? strdup("'bool'")
+                                                          : cypher_expr_tag_sql(ctx, binary_op->right, rv);
+        append_sql(ctx, "_gql_order_cmp(%s, %s, '%s', %s, %s)", lv, rv, op_sql,
+                   ltag ? ltag : "NULL", rtag ? rtag : "NULL");
+        free(lv); free(rv); free(ltag); free(rtag);
         ctx->in_comparison = was_in_comparison;
         return 0;
     }

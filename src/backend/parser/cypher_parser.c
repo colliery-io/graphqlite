@@ -115,7 +115,21 @@ cypher_parse_result* parse_cypher_query_ext(const char *query)
     
     /* Parse the query */
     int parse_result = cypher_yyparse(context);
-    
+
+    /* 2^63 not under a unary minus is out of range. */
+    if (parse_result == 0 && !context->has_error && context->scanner &&
+        context->scanner->int_min_pending > 0) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "SyntaxError: IntegerOverflow: integer literal '%s' is out of range",
+                 context->scanner->int_min_text);
+        context->has_error = true;
+        free(context->error_message);
+        context->error_message = strdup(buf);
+        context->error_location = context->scanner->int_min_line;
+        context->error_column = context->scanner->int_min_column;
+    }
+
     if (parse_result == 0 && !context->has_error) {
         /* Parsing succeeded */
         result->ast = context->result;

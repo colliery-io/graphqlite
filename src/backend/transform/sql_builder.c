@@ -404,6 +404,72 @@ void sql_from(sql_builder *b, const char *table, const char *alias)
     }
 }
 
+
+/* Graph6 [6]: a leading OPTIONAL MATCH is one optional unit. It was built as
+ * `(SELECT 1) AS _gql_anchor LEFT JOIN nodes n ON .. LEFT JOIN edges e ON ..
+ * LEFT JOIN nodes m ON ..`, so a node with no matching edge made a row of its
+ * own. Regroup the joins as `LEFT JOIN (nodes n JOIN edges e ON .. JOIN nodes
+ * m ON ..) ON <first condition>`: a full match, or the one row of nulls.
+ * Only when the FROM is the anchor and there is more than one join. */
+static const char *scan_next_join(const char *p, const char *end, size_t *kwlen, bool *is_left)
+{
+    int depth = 0;
+    char quote = 0;
+    for (; p < end; p++) {
+        char c = *p;
+        if (quote) { if (c == quote) quote = 0; continue; }
+        if (c == '\'' || c == '"') { quote = c; continue; }
+        if (c == '(') { depth++; continue; }
+        if (c == ')') { depth--; continue; }
+        if (depth != 0 || c != ' ') continue;
+        if (strncmp(p, " LEFT JOIN ", 11) == 0) { *kwlen = 11; *is_left = true; return p; }
+        if (strncmp(p, " JOIN ", 6) == 0) { *kwlen = 6; *is_left = false; return p; }
+        if (strncmp(p, " CROSS JOIN ", 12) == 0) { *kwlen = 12; *is_left = false; return p; }
+    }
+    return NULL;
+}
+
+size_t sql_builder_joins_len(sql_builder *b)
+{
+    return b ? dbuf_len(&b->joins) : 0;
+}
+
+void sql_builder_group_anchor_joins(sql_builder *b)
+{
+    if (!b) return;
+    const char *from = dbuf_get(&b->from);
+    if (!from || strcmp(from, "(SELECT 1) AS _gql_anchor") != 0) return;
+    const char *j = dbuf_get(&b->joins);
+    if (!j || strncmp(j, " LEFT JOIN ", 11) != 0) return;
+    const char *end = j + strlen(j);
+    const char *tbl = j + 11;
+    const char *on = strstr(tbl, " ON ");
+    if (!on) return;
+    size_t kw = 0; bool left = false;
+    const char *next = scan_next_join(on + 4, end, &kw, &left);
+    if (!next) return;   /* one join: already a unit */
+
+    dynamic_buffer out;
+    dbuf_init(&out);
+    dbuf_append(&out, " LEFT JOIN (");
+    dbuf_appendf(&out, "%.*s", (int)(on - tbl), tbl);
+    const char *cur = next;
+    while (cur) {
+        const char *after = cur + kw;
+        size_t kw2 = 0; bool left2 = false;
+        const char *nxt = scan_next_join(after, end, &kw2, &left2);
+        const char *seg_end = nxt ? nxt : end;
+        /* inside the group every join is an inner join */
+        dbuf_append(&out, (kw == 12) ? " CROSS JOIN " : " JOIN ");
+        dbuf_appendf(&out, "%.*s", (int)(seg_end - after), after);
+        cur = nxt; kw = kw2;
+    }
+    dbuf_appendf(&out, ") ON %.*s", (int)(next - (on + 4)), on + 4);
+    dbuf_clear(&b->joins);
+    dbuf_append(&b->joins, dbuf_get(&out));
+    dbuf_free(&out);
+}
+
 /*
  * Add raw JOIN SQL (appended verbatim to the JOIN section).
  */

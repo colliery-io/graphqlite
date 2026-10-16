@@ -608,8 +608,19 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     snprintf(je_alias, sizeof(je_alias), "_je_%d", ctx->quantifier_counter++);
     snprintf(je_value, sizeof(je_value), "%s.value", je_alias);
 
-    /* Register the predicate variable to map to <alias>.value */
+    /* Register the predicate variable to map to <alias>.value, with the
+     * element's type tag (a boolean stays a boolean). */
     transform_var_register_projected(ctx->var_ctx, pred->variable, je_value);
+    const char *old_tag = transform_var_get_tag(ctx->var_ctx, pred->variable);
+    char *saved_tag = old_tag ? strdup(old_tag) : NULL;
+    {
+        char tag[256];
+        snprintf(tag, sizeof(tag),
+                 "(CASE %s.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' "
+                 "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END)",
+                 je_alias);
+        transform_var_set_tag(ctx->var_ctx, pred->variable, tag);
+    }
 
     /* all/any/none/single all use strict openCypher 3VL via the SUM-over-
      * json_each CASE below. (An earlier note claimed `all` had to keep a
@@ -655,17 +666,21 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
         append_sql(ctx, "END FROM (SELECT (");
         if (transform_condition(ctx, pred->predicate) < 0) {
             if (saved_alias) free(saved_alias);
+            free(saved_tag);
             return -1;
         }
         append_sql(ctx, ") AS p FROM json_each(");
         if (transform_expression(ctx, pred->list_expr) < 0) {
             if (saved_alias) free(saved_alias);
+            free(saved_tag);
             return -1;
         }
         append_sql(ctx, ") AS %s))", je_alias);
     }
 
-    /* Restore the old alias if we saved one */
+    /* Restore the old alias and tag if we saved them */
+    transform_var_set_tag(ctx->var_ctx, pred->variable, saved_tag);
+    free(saved_tag);
     if (saved_alias) {
         transform_var_register_projected(ctx->var_ctx, pred->variable, saved_alias);
         free(saved_alias);

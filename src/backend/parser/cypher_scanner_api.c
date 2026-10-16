@@ -83,6 +83,7 @@ int cypher_scanner_set_input_string(CypherScannerState *state, const char *input
     }
 
     state->input_string = input;
+    state->int_min_pending = 0;
     state->current_line = 1;
     state->current_column = 1;
 

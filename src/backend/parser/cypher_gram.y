@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "parser/cypher_ast.h"
 #include "parser/cypher_parser.h"
@@ -20,6 +21,26 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %code requires {
 #include <stdint.h>
 #include <stdbool.h>
+}
+
+%code {
+/* The spelling of a keyword as written, at `line` / `col` (1-based) of the
+ * input, for a keyword used as a map key: `{NULL: 1}` keeps the key "NULL"
+ * (the scanner upper-cases keywords; Map1 [5], Map2 [5]). `fallback` when
+ * the input cannot be read. Owned by the caller. */
+static char *keyword_text_at(cypher_parser_context *context, int line, int col,
+                             const char *fallback)
+{
+    const char *in = (context && context->scanner) ? context->scanner->input_string : NULL;
+    if (!in || line < 1 || col < 1) return strdup(fallback);
+    for (int l = 1; l < line && *in; in++) if (*in == '\n') l++;
+    for (int c = 1; c < col && *in && *in != '\n'; c++) in++;
+    size_t n = 0;
+    while (in[n] && ((in[n] >= 'A' && in[n] <= 'Z') || (in[n] >= 'a' && in[n] <= 'z') ||
+                     in[n] == '_' || (in[n] >= '0' && in[n] <= '9'))) n++;
+    if (n == 0 || strncasecmp(in, fallback, n) != 0 || strlen(fallback) != n) return strdup(fallback);
+    return strndup(in, n);
+}
 }
 
 %locations
@@ -150,11 +171,14 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 %left XOR
 %left AND
 %right NOT
-%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH STARTS ENDS CONTAINS
+%left '=' NOT_EQ '<' LT_EQ '>' GT_EQ REGEX_MATCH
+/* openCypher: string, list and null predicates bind tighter than comparison
+ * and looser than arithmetic: `[1]+2 IN [3]+4` is `([1]+2) IN ([3]+4)`
+ * (Precedence3 [4]/[5]). */
+%left IN IS STARTS ENDS CONTAINS
 %left '+' '-'
 %left '*' '/' '%'
 %left '^'
-%left IN IS
 %left '.' '['
 /* Unary -/+ bind tightest among arithmetic: `-3^2` = (-3)^2 = 9
  * (Precedence2 [4]). Negation of a non-literal is materialized as 0 - expr
@@ -567,7 +591,7 @@ set_item_list:
  * comparison as the value (GQLITE-T-0407). */
 set_target:
     identifier                     { $$ = (ast_node*)$1; }
-    | '(' expr ')'                 { $$ = $2; }
+    | '(' expr ')'                 { $$ = $2; if ($$) $$->parenthesized = true; }
     | set_target '.' IDENTIFIER
         {
             $$ = (ast_node*)make_property($1, $3, @3.first_line);
@@ -1250,7 +1274,13 @@ expr:
         if ($2->type == AST_NODE_LITERAL) {
             cypher_literal *lit = (cypher_literal*)$2;
             if (lit->literal_type == LITERAL_INTEGER) {
-                lit->value.integer = -lit->value.integer;
+                if (lit->value.integer == INT64_MIN) {
+                    /* -2^63: the scanner's pending INT64_MIN */
+                    if (context && context->scanner && context->scanner->int_min_pending > 0)
+                        context->scanner->int_min_pending--;
+                } else {
+                    lit->value.integer = -lit->value.integer;
+                }
                 $$ = $2;
             } else if (lit->literal_type == LITERAL_DECIMAL) {
                 lit->value.decimal = -lit->value.decimal;
@@ -1291,7 +1321,7 @@ expr:
     | NOT expr          { $$ = (ast_node*)make_not_expr($2, @1.first_line); }
     | expr IS NULL_P      { $$ = (ast_node*)make_null_check($1, false, @2.first_line); }
     | expr IS NOT NULL_P  { $$ = (ast_node*)make_null_check($1, true, @2.first_line); }
-    | '(' expr ')'      { $$ = $2; }
+    | '(' expr ')'      { $$ = $2; if ($$) $$->parenthesized = true; }
     /* Pattern predicate: bare relationship pattern as boolean expression.
      * Per openCypher 9 spec, a RelationshipsPattern in boolean context
      * is an implicit existence check: (n)-[:REL]->() ≡ EXISTS((n)-[:REL]->())
@@ -1896,20 +1926,56 @@ identifier:
 /* Keywords that may serve as identifiers/labels/property-keys outside their
  * reserved contexts. Returns the string form (caller frees). */
 non_reserved_kw:
-      SINGLE        { $$ = strdup("Single"); }
-    | ANY           { $$ = strdup("Any"); }
-    | NONE          { $$ = strdup("None"); }
-    | ALL           { $$ = strdup("All"); }
-    | EXISTS        { $$ = strdup("exists"); }
-    | CONTAINS      { $$ = strdup("contains"); }
-    | STARTS        { $$ = strdup("starts"); }
-    | ENDS          { $$ = strdup("ends"); }
-    | REDUCE        { $$ = strdup("reduce"); }
-    | END_P         { $$ = strdup("End"); }
-    | ON            { $$ = strdup("On"); }
-    | PATTERN       { $$ = strdup("Pattern"); }
-    | CSV           { $$ = strdup("Csv"); }
-    | LOAD          { $$ = strdup("Load"); }
+    /* A keyword used as a name (label, relationship type, property, map
+     * key) keeps its spelling as written (Unwind1 [6]: `[:IN]`; Map1 [5]). */
+      SINGLE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SINGLE"); }
+    | ANY           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ANY"); }
+    | NONE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NONE"); }
+    | ALL           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ALL"); }
+    | EXISTS        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "EXISTS"); }
+    | CONTAINS      { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CONTAINS"); }
+    | STARTS        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "STARTS"); }
+    | ENDS          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ENDS"); }
+    | REDUCE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "REDUCE"); }
+    | END_P         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "END"); }
+    | ON            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ON"); }
+    | PATTERN       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "PATTERN"); }
+    | CSV           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CSV"); }
+    | LOAD          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "LOAD"); }
+    | IN            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "IN"); }
+    | IS            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "IS"); }
+    | AS            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "AS"); }
+    | OR            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "OR"); }
+    | AND           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "AND"); }
+    | XOR           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "XOR"); }
+    | NOT           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NOT"); }
+    | ORDER         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ORDER"); }
+    | BY            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "BY"); }
+    | NULL_P        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NULL"); }
+    | CASE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CASE"); }
+    | WHEN          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "WHEN"); }
+    | THEN          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "THEN"); }
+    | ELSE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ELSE"); }
+    | MATCH         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "MATCH"); }
+    | RETURN        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "RETURN"); }
+    | CREATE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CREATE"); }
+    | WHERE         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "WHERE"); }
+    | WITH          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "WITH"); }
+    | SET           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SET"); }
+    | DELETE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "DELETE"); }
+    | REMOVE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "REMOVE"); }
+    | MERGE         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "MERGE"); }
+    | UNWIND        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "UNWIND"); }
+    | DETACH        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "DETACH"); }
+    | FOREACH       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FOREACH"); }
+    | CALL          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CALL"); }
+    | OPTIONAL      { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "OPTIONAL"); }
+    | DISTINCT      { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "DISTINCT"); }
+    | SKIP          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SKIP"); }
+    | LIMIT         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "LIMIT"); }
+    | UNION         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "UNION"); }
+    | FROM          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FROM"); }
+    | HEADERS       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "HEADERS"); }
     ;
 
 parameter:
@@ -1973,21 +2039,6 @@ map_pair:
     | DESC ':' expr
         {
             $$ = make_map_pair("desc", $3, @1.first_line);
-        }
-    | ORDER ':' expr
-        {
-            $$ = make_map_pair("order", $3, @1.first_line);
-        }
-    | BY ':' expr
-        {
-            $$ = make_map_pair("by", $3, @1.first_line);
-        }
-    | NULL_P ':' expr
-        {
-            /* `null` and `NULL` are legal map keys per the openCypher
-             * spec (Map2 [5]). The scanner up-cases the keyword, so
-             * preserve the textual form here as `null`. */
-            $$ = make_map_pair(strdup("null"), $3, @1.first_line);
         }
     ;
 
