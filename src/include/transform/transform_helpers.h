@@ -36,6 +36,7 @@ const char *sql_ref_column(const char *ref);
 /* True when the expression is boolean by its shape (comparison, logic,
  * predicate, boolean literal). */
 bool ast_is_boolean_expr(const ast_node *expr);
+bool ast_is_numeric_expr(const ast_node *expr);
 
 /* Shortest round-trip text of a double; a whole number keeps ".0". */
 const char *gql_format_double(char *buf, size_t buflen, double v);

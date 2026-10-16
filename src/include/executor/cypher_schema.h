@@ -93,7 +93,13 @@ struct property_key_cache {
     int total_entries;              /* Total cached entries */
     sqlite3_stmt *lookup_stmt;      /* Prepared statement for key lookup */
     sqlite3_stmt *insert_stmt;      /* Prepared statement for key insertion */
-    
+
+    /* #134: true while the query runs inside an open transaction. A
+     * ROLLBACK can undo a key row and SQLite then reuses its id, so keys
+     * read or made in a transaction are not added to the cache. Entries
+     * added outside a transaction are committed and stay valid. */
+    bool bypass;
+
     /* Statistics */
     long cache_hits;
     long cache_misses;
@@ -162,6 +168,7 @@ const char* cypher_schema_property_type_name(property_type type);
 
 /* Cache management */
 property_key_cache* create_property_key_cache(sqlite3 *db, int slot_count);
+void cypher_schema_clear_property_key_cache(cypher_schema_manager *manager);
 void free_property_key_cache(property_key_cache *cache);
 int prepare_property_key_cache_statements(property_key_cache *cache, sqlite3 *db);
 void property_key_cache_stats(property_key_cache *cache, 

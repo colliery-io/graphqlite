@@ -317,6 +317,18 @@ static int emit_index_comparison(cypher_transform_context *ctx, cypher_binary_op
     return 1;
 }
 
+/* An IN operand: a boolean expression becomes a JSON boolean (#135). */
+static int emit_in_operand(cypher_transform_context *ctx, ast_node *expr)
+{
+    if (!ast_is_boolean_expr(expr)) return transform_expression(ctx, expr);
+    append_sql(ctx, "(CASE WHEN (");
+    if (transform_expression(ctx, expr) < 0) return -1;
+    append_sql(ctx, ") IS NULL THEN NULL WHEN (");
+    if (transform_expression(ctx, expr) < 0) return -1;
+    append_sql(ctx, ") THEN json('true') ELSE json('false') END)");
+    return 0;
+}
+
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op)
 {
     CYPHER_DEBUG("Transforming binary operation: op_type=%d", binary_op->op_type);
@@ -438,6 +450,23 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         }
     }
 
+    /* #135: a boolean is never equal to a number. In SQL a boolean is 1/0,
+     * so `true = 1` was true. When one side is a boolean expression and the
+     * other is a number by its shape, = is false and <> is true (null when
+     * a side is null), as for other values of different types. */
+    if ((binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ) &&
+        ((ast_is_boolean_expr(binary_op->left) && ast_is_numeric_expr(binary_op->right)) ||
+         (ast_is_numeric_expr(binary_op->left) && ast_is_boolean_expr(binary_op->right)))) {
+        append_sql(ctx, "(CASE WHEN (");
+        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        append_sql(ctx, ") IS NULL OR (");
+        if (transform_expression(ctx, binary_op->right) < 0) return -1;
+        append_sql(ctx, ") IS NULL THEN NULL ELSE %d END)",
+                   binary_op->op_type == BINARY_OP_EQ ? 0 : 1);
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
     /* Handle list/map equality with Cypher three-valued semantics via the
      * _gql_eq() UDF. Triggered only when at least one operand is a literal
      * list/map (which is when the existing JSON-string equality breaks down
@@ -547,8 +576,10 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
          *   null IN []         -> false
          *   null IN <nonempty> -> null
          *   x    IN coll       -> true / null (if coll has null) / false */
+        /* #135: a boolean side is passed as a JSON boolean, so _gql_in
+         * does not take `true` for the number 1. */
         append_sql(ctx, "_gql_in(");
-        if (transform_expression(ctx, binary_op->left) < 0) return -1;
+        if (emit_in_operand(ctx, binary_op->left) < 0) return -1;
         append_sql(ctx, ", ");
         if (binary_op->right->type == AST_NODE_LIST) {
             /* Literal list: wrap with json_array() */
@@ -557,7 +588,7 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             if (list->items) {
                 for (int i = 0; i < list->items->count; i++) {
                     if (i > 0) append_sql(ctx, ", ");
-                    if (transform_expression(ctx, list->items->items[i]) < 0) return -1;
+                    if (emit_in_operand(ctx, list->items->items[i]) < 0) return -1;
                 }
             }
             append_sql(ctx, ")");

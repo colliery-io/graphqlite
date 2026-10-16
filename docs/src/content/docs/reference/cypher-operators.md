@@ -57,7 +57,8 @@ Use parentheses to override precedence.
 **Type behavior**
 
 - Comparing `null` with any operator returns `null` (not `true` or `false`).
-- Comparisons between incompatible types return `null`.
+- `=` between values of different types returns `false`, and `<>` returns `true`. A boolean is not a number: `true = 1` is `false`, and `true IN [1]` is `false`.
+- `<`, `>`, `<=` and `>=` between incompatible types return `null`.
 - Strings compare lexicographically.
 
 **Examples**

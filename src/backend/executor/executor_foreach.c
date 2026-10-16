@@ -14,53 +14,84 @@
 
 /* Forward declaration for evaluating list expressions */
 static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
-                                   char ***values, int *count);
+                                   char **json_out);
 
-/* Helper to execute body clauses for one iteration */
-static int execute_foreach_body(cypher_executor *executor, cypher_foreach *foreach,
-                               cypher_result *result, foreach_context *ctx,
-                               foreach_context *prev_ctx)
+static void fold_var_map(variable_map *into, variable_map *from)
 {
-    for (int j = 0; j < foreach->body->count; j++) {
+    if (!into || !from) return;
+    for (int i = 0; i < from->count; i++) {
+        variable_mapping *m = &from->mappings[i];
+        if (m->type == VAR_MAP_TYPE_NODE) set_variable_node_id(into, m->variable, m->entity_id);
+        else set_variable_edge_id(into, m->variable, m->entity_id);
+    }
+}
+
+/* Run the body clauses for one iteration. `outer` holds the variables bound
+ * before the FOREACH (NULL for none). Each iteration starts from a copy of
+ * it, so a CREATE in the body is visible to a SET after it, and the outer
+ * variables are visible to every clause (#135: SET rejected an outer MATCH
+ * variable; MERGE, REMOVE and DELETE bodies were skipped). */
+static int execute_foreach_body(cypher_executor *executor, cypher_foreach *foreach,
+                               cypher_result *result, variable_map *outer)
+{
+    variable_map *vm = create_variable_map();
+    if (!vm) {
+        set_result_error(result, "Failed to create variable map for FOREACH");
+        return -1;
+    }
+    fold_var_map(vm, outer);
+
+    int rc = 0;
+    for (int j = 0; j < foreach->body->count && rc >= 0; j++) {
         ast_node *clause = foreach->body->items[j];
         if (!clause) continue;
 
         switch (clause->type) {
-            case AST_NODE_CREATE:
-                if (execute_create_clause(executor, (cypher_create*)clause, result) < 0) {
-                    g_foreach_ctx = prev_ctx;
-                    free_foreach_context(ctx);
-                    return -1;
-                }
+            case AST_NODE_CREATE: {
+                variable_map *cm = create_variable_map();
+                if (cm) fold_var_map(cm, vm);
+                rc = execute_create_clause_with_varmap(executor, (cypher_create*)clause, result, &cm);
+                if (cm) { fold_var_map(vm, cm); free_variable_map(cm); }
                 break;
-
+            }
+            case AST_NODE_MERGE: {
+                variable_map *out = NULL;
+                rc = execute_merge_clause(executor, (cypher_merge*)clause, result, vm, &out);
+                if (out) { fold_var_map(vm, out); free_variable_map(out); }
+                break;
+            }
             case AST_NODE_SET:
-                if (execute_set_clause(executor, (cypher_set*)clause, result) < 0) {
-                    g_foreach_ctx = prev_ctx;
-                    free_foreach_context(ctx);
-                    return -1;
-                }
+                rc = execute_set_operations(executor, (cypher_set*)clause, vm, result);
                 break;
-
+            case AST_NODE_REMOVE:
+                rc = execute_remove_operations(executor, (cypher_remove*)clause, vm, result);
+                break;
+            case AST_NODE_DELETE:
+                rc = execute_delete_operations(executor, (cypher_delete*)clause, vm, result);
+                break;
             case AST_NODE_FOREACH:
-                /* Nested FOREACH - recursive call */
-                if (execute_foreach_clause(executor, (cypher_foreach*)clause, result) < 0) {
-                    g_foreach_ctx = prev_ctx;
-                    free_foreach_context(ctx);
-                    return -1;
-                }
+                /* Nested FOREACH sees this iteration's variables */
+                rc = execute_foreach_clause_vm(executor, (cypher_foreach*)clause, vm, result);
                 break;
-
             default:
-                CYPHER_DEBUG("Unsupported clause type in FOREACH body: %d", clause->type);
+                set_result_error(result, "Unsupported clause in FOREACH body");
+                rc = -1;
                 break;
         }
     }
-    return 0;
+    free_variable_map(vm);
+    return rc;
 }
 
 /* Execute FOREACH clause - iterate over list and execute body clauses */
 int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, cypher_result *result)
+{
+    return execute_foreach_clause_vm(executor, foreach, NULL, result);
+}
+
+/* FOREACH with the variables bound before it (`outer`, may be NULL). */
+int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach,
+                              variable_map *outer, cypher_result *result)
 {
     if (!executor || !foreach || !result) {
         return -1;
@@ -73,256 +104,137 @@ int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, c
         return -1;
     }
 
-    /* Create foreach context for variable binding */
+    /* The loop variable is added to the bindings of an enclosing FOREACH
+     * or UNWIND, so they stay visible in the body. */
     foreach_context *ctx = create_foreach_context();
     if (!ctx) {
         set_result_error(result, "Failed to create foreach context");
         return -1;
     }
-
-    /* Save previous context and set ours */
     foreach_context *prev_ctx = g_foreach_ctx;
+    if (prev_ctx) {
+        for (int i = 0; i < prev_ctx->count; i++) {
+            foreach_binding *b = &prev_ctx->bindings[i];
+            switch (b->literal_type) {
+                case LITERAL_INTEGER: set_foreach_binding_int(ctx, b->variable, b->value.integer); break;
+                case LITERAL_DECIMAL: set_foreach_binding_real(ctx, b->variable, b->value.decimal); break;
+                case LITERAL_BOOLEAN: set_foreach_binding_bool(ctx, b->variable, b->value.boolean); break;
+                case LITERAL_STRING:
+                    if (b->is_json) set_foreach_binding_json(ctx, b->variable, b->value.string);
+                    else set_foreach_binding_string(ctx, b->variable, b->value.string);
+                    break;
+                default: set_foreach_binding_null(ctx, b->variable); break;
+            }
+        }
+    }
     g_foreach_ctx = ctx;
 
-    /* Handle list literals directly */
+    int rc = 0;
     if (foreach->list_expr->type == AST_NODE_LIST) {
+        /* List literal: bind each item with its own type */
         cypher_list *list = (cypher_list*)foreach->list_expr;
-        if (!list->items || list->items->count == 0) {
-            /* Empty list - nothing to do */
-            g_foreach_ctx = prev_ctx;
-            free_foreach_context(ctx);
-            return 0;
-        }
-
-        /* Iterate over list literal items */
-        for (int i = 0; i < list->items->count; i++) {
+        for (int i = 0; list->items && i < list->items->count && rc >= 0; i++) {
             ast_node *item = list->items->items[i];
-
-            /* Unwrap return_item if present */
             if (item->type == AST_NODE_RETURN_ITEM) {
                 item = ((cypher_return_item*)item)->expr;
             }
-
-            /* Bind the loop variable based on item type */
             if (bind_foreach_item_ast(ctx, foreach->variable, item) < 0) {
-                CYPHER_DEBUG("Unsupported item type in FOREACH list: %d", item->type);
-                continue;
+                /* An expression item: evaluate it as a one-item list */
+                char *json = NULL;
+                ast_list *one = ast_list_create();
+                ast_list_append(one, item);
+                cypher_list *wrap = make_list(one, 0);
+                int erc = evaluate_list_expression(executor, (ast_node*)wrap, &json);
+                one->count = 0;   /* the item belongs to the query */
+                ast_node_free((ast_node*)wrap);
+                sqlite3_stmt *st = NULL;
+                if (erc < 0 || !json ||
+                    sqlite3_prepare_v2(executor->db, "SELECT value, type FROM json_each(?)", -1, &st, NULL) != SQLITE_OK) {
+                    free(json);
+                    set_result_error(result, "Failed to evaluate FOREACH list item");
+                    rc = -1;
+                    break;
+                }
+                sqlite3_bind_text(st, 1, json, -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(st) == SQLITE_ROW) bind_foreach_item_json_each(ctx, foreach->variable, st, 0, 1);
+                else set_foreach_binding_null(ctx, foreach->variable);
+                sqlite3_finalize(st);
+                free(json);
             }
-
-            CYPHER_DEBUG("FOREACH iteration %d, variable=%s", i, foreach->variable);
-
-            if (execute_foreach_body(executor, foreach, result, ctx, prev_ctx) < 0) {
-                return -1;
-            }
+            rc = execute_foreach_body(executor, foreach, result, outer);
         }
     } else {
-        /* Evaluate the list expression (e.g., range(), collect(), variable) */
-        char **values = NULL;
-        int count = 0;
-
-        if (evaluate_list_expression(executor, foreach->list_expr, &values, &count) < 0) {
+        /* Evaluate the list expression (range(), $param, a variable ...) and
+         * iterate its JSON with each value's type (#135: a $param list was
+         * evaluated without its parameters and created nothing). */
+        char *json = NULL;
+        if (evaluate_list_expression(executor, foreach->list_expr, &json) < 0) {
             set_result_error(result, "Failed to evaluate FOREACH list expression");
-            g_foreach_ctx = prev_ctx;
-            free_foreach_context(ctx);
-            return -1;
-        }
-
-        if (count == 0 || !values) {
-            /* Empty list - nothing to do */
-            g_foreach_ctx = prev_ctx;
-            free_foreach_context(ctx);
-            return 0;
-        }
-
-        /* Iterate over evaluated values */
-        for (int i = 0; i < count; i++) {
-            if (!values[i]) continue;
-
-            /* Try to parse as integer first */
-            char *endptr;
-            long long int_val = strtoll(values[i], &endptr, 10);
-            if (*endptr == '\0') {
-                set_foreach_binding_int(ctx, foreach->variable, int_val);
+            rc = -1;
+        } else if (json) {
+            sqlite3_stmt *st = NULL;
+            if (sqlite3_prepare_v2(executor->db,
+                    "SELECT value, type FROM json_each(?1) WHERE json_valid(?1) AND json_type(?1) = 'array'",
+                    -1, &st, NULL) != SQLITE_OK) {
+                set_result_error(result, "Failed to iterate FOREACH list");
+                rc = -1;
             } else {
-                set_foreach_binding_string(ctx, foreach->variable, values[i]);
-            }
-
-            CYPHER_DEBUG("FOREACH iteration %d, variable=%s, value=%s", i, foreach->variable, values[i]);
-
-            if (execute_foreach_body(executor, foreach, result, ctx, prev_ctx) < 0) {
-                /* Free values array */
-                for (int k = 0; k < count; k++) {
-                    free(values[k]);
+                sqlite3_bind_text(st, 1, json, -1, SQLITE_TRANSIENT);
+                while (rc >= 0 && sqlite3_step(st) == SQLITE_ROW) {
+                    bind_foreach_item_json_each(ctx, foreach->variable, st, 0, 1);
+                    rc = execute_foreach_body(executor, foreach, result, outer);
                 }
-                free(values);
-                return -1;
+                sqlite3_finalize(st);
             }
+            free(json);
         }
-
-        /* Free values array */
-        for (int i = 0; i < count; i++) {
-            free(values[i]);
-        }
-        free(values);
     }
 
-    /* Restore previous context */
     g_foreach_ctx = prev_ctx;
     free_foreach_context(ctx);
-
-    return 0;
+    return rc < 0 ? -1 : 0;
 }
 
-/* Evaluate a list expression by transforming to SQL and executing */
+/* Evaluate a list expression to JSON text. *json_out is owned; NULL for
+ * a null list. The bindings of an enclosing FOREACH/UNWIND and the query
+ * parameters are visible. */
 static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
-                                   char ***values, int *count)
+                                   char **json_out)
 {
-    if (!executor || !expr || !values || !count) {
+    if (!executor || !expr || !json_out) {
         return -1;
     }
+    *json_out = NULL;
 
-    *values = NULL;
-    *count = 0;
-
-    /* Create a transform context to generate SQL for the expression */
     cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {
         return -1;
     }
-
-    /* Transform the expression to SQL */
-    append_sql(ctx, "SELECT ");
-    if (transform_expression(ctx, expr) < 0) {
-        cypher_transform_free_context(ctx);
+    executor_register_foreach_values(ctx);
+    char *sql_expr = cypher_transform_capture_expression(ctx, expr);
+    cypher_transform_free_context(ctx);
+    if (!sql_expr) {
         return -1;
     }
-
-    /* Get the generated SQL */
-    const char *sql = ctx->sql_buffer;
-    if (!sql || strlen(sql) == 0) {
-        cypher_transform_free_context(ctx);
-        return -1;
-    }
+    char *sql = sqlite3_mprintf("SELECT %s", sql_expr);
+    free(sql_expr);
+    if (!sql) return -1;
 
     CYPHER_DEBUG("FOREACH evaluating expression: %s", sql);
 
-    /* Execute the SQL */
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
     if (rc != SQLITE_OK) {
         CYPHER_DEBUG("Failed to prepare FOREACH expression: %s", sqlite3_errmsg(executor->db));
-        cypher_transform_free_context(ctx);
         return -1;
     }
+    if (executor->params_json) bind_params_from_json(stmt, executor->params_json);
 
-    /* Get the result (should be a single JSON array) */
-    char *json_result = NULL;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         const char *text = (const char *)sqlite3_column_text(stmt, 0);
-        if (text) {
-            json_result = strdup(text);
-        }
+        if (text) *json_out = strdup(text);
     }
     sqlite3_finalize(stmt);
-    cypher_transform_free_context(ctx);
-
-    if (!json_result) {
-        return 0;  /* Empty result, not an error */
-    }
-
-    CYPHER_DEBUG("FOREACH expression result: %s", json_result);
-
-    /* Parse the JSON array into values */
-    /* Expected format: [val1, val2, ...] or just a single value */
-    char *p = json_result;
-
-    /* Skip leading whitespace */
-    while (*p && (*p == ' ' || *p == '\t' || *p == '\n')) p++;
-
-    if (*p != '[') {
-        /* Not an array - treat as single value */
-        *values = malloc(sizeof(char*));
-        if (*values) {
-            (*values)[0] = json_result;
-            *count = 1;
-        }
-        return 0;
-    }
-
-    /* Count elements first */
-    int elem_count = 0;
-    int depth = 0;
-    bool in_string = false;
-    for (char *c = p; *c; c++) {
-        if (*c == '"' && (c == p || *(c-1) != '\\')) {
-            in_string = !in_string;
-        } else if (!in_string) {
-            if (*c == '[' || *c == '{') depth++;
-            else if (*c == ']' || *c == '}') depth--;
-            else if (*c == ',' && depth == 1) elem_count++;
-        }
-    }
-    if (depth == 0 && p[1] != ']') elem_count++;  /* Account for last element */
-
-    if (elem_count == 0) {
-        free(json_result);
-        return 0;  /* Empty array */
-    }
-
-    /* Allocate values array */
-    *values = calloc(elem_count, sizeof(char*));
-    if (!*values) {
-        free(json_result);
-        return -1;
-    }
-
-    /* Parse elements */
-    int idx = 0;
-    p++;  /* Skip '[' */
-    while (*p && *p != ']' && idx < elem_count) {
-        /* Skip whitespace */
-        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == ',')) p++;
-        if (*p == ']') break;
-
-        char *start = p;
-        depth = 0;
-        in_string = false;
-
-        /* Find end of element */
-        while (*p) {
-            if (*p == '"' && (p == start || *(p-1) != '\\')) {
-                in_string = !in_string;
-            } else if (!in_string) {
-                if (*p == '[' || *p == '{') depth++;
-                else if (*p == ']' || *p == '}') {
-                    if (depth == 0) break;
-                    depth--;
-                }
-                else if (*p == ',' && depth == 0) break;
-            }
-            p++;
-        }
-
-        /* Extract element */
-        int len = p - start;
-        if (len > 0) {
-            char *elem = malloc(len + 1);
-            if (elem) {
-                strncpy(elem, start, len);
-                elem[len] = '\0';
-
-                /* Remove quotes from strings */
-                if (elem[0] == '"' && len >= 2 && elem[len-1] == '"') {
-                    memmove(elem, elem + 1, len - 2);
-                    elem[len - 2] = '\0';
-                }
-
-                (*values)[idx++] = elem;
-            }
-        }
-    }
-
-    *count = idx;
-    free(json_result);
     return 0;
 }

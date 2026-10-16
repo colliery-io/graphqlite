@@ -547,6 +547,252 @@ static void test_foreach_map_create_inline(void)
     ASSERT_UNWIND(w, NULL, "MATCH (n:F) RETURN [n.id, n.n]", "[\"f1\",1]");
 }
 
+/* ============================================================
+ * #134 / #135 / #136: rollback, failed writes, UNWIND and FOREACH
+ * write pipelines, path functions, boolean comparisons
+ * ============================================================ */
+
+static void exec_ok(cypher_executor *ex, const char *q, const char *params)
+{
+    cypher_result *r = params ? cypher_executor_execute_params(ex, q, params)
+                              : cypher_executor_execute(ex, q);
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r && !r->success) printf("\n%s\n  error: %s\n", q, r->error_message);
+    if (r) { CU_ASSERT_TRUE(r->success); cypher_result_free(r); }
+}
+
+static char *first_cell(cypher_executor *ex, const char *q)
+{
+    cypher_result *r = cypher_executor_execute(ex, q);
+    char *out = NULL;
+    if (r && r->success && r->row_count > 0 && r->data[0][0]) out = strdup(r->data[0][0]);
+    if (r && !r->success) printf("\n%s\n  error: %s\n", q, r->error_message);
+    if (r) cypher_result_free(r);
+    return out;
+}
+
+/* #134: a property key made inside a rolled-back transaction must not stay
+ * in the key cache; the next key gets the same id. */
+static void test_rollback_property_keys(void)
+{
+    sqlite3 *db = NULL;
+    CU_ASSERT_EQUAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+    cypher_executor *ex = cypher_executor_create(db);
+    CU_ASSERT_PTR_NOT_NULL(ex);
+    if (ex) {
+        exec_ok(ex, "CREATE (:Item {id: 'safe'})", NULL);
+        sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
+        exec_ok(ex, "CREATE (:Item {id: 'discard', flag: true})", NULL);
+        sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+        exec_ok(ex, "CREATE (:Item {id: 'b', other: 123})", NULL);
+        exec_ok(ex, "CREATE (:Item {id: 'a', flag: false})", NULL);
+        char *v = first_cell(ex, "MATCH (n:Item {id: 'a'}) RETURN [n.flag, n.other]");
+        CU_ASSERT_PTR_NOT_NULL(v);
+        if (v) { CU_ASSERT_STRING_EQUAL(v, "[false,null]"); free(v); }
+        v = first_cell(ex, "MATCH (n:Item {id: 'b'}) RETURN [n.flag, n.other]");
+        CU_ASSERT_PTR_NOT_NULL(v);
+        if (v) { CU_ASSERT_STRING_EQUAL(v, "[null,123]"); free(v); }
+        cypher_executor_free(ex);
+    }
+    sqlite3_close(db);
+}
+
+/* #134: a write query that fails leaves no writes, also inside an open
+ * transaction, which stays open. */
+static void test_failed_write_is_rolled_back(void)
+{
+    /* The DELETE fails (the node has a relationship) after the CREATE ran. */
+    const char *bad = "CREATE (n:Item {id: 'a'})-[:R]->(:B) WITH n DELETE n";
+    for (int in_txn = 0; in_txn < 2; in_txn++) {
+        sqlite3 *db = NULL;
+        CU_ASSERT_EQUAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+        cypher_executor *ex = cypher_executor_create(db);
+        CU_ASSERT_PTR_NOT_NULL(ex);
+        if (ex) {
+            exec_ok(ex, "CREATE (:Keep)", NULL);
+            if (in_txn) sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
+            cypher_result *r = cypher_executor_execute(ex, bad);
+            CU_ASSERT_PTR_NOT_NULL(r);
+            if (r) { CU_ASSERT_FALSE(r->success); cypher_result_free(r); }
+            if (in_txn) {
+                CU_ASSERT_EQUAL(sqlite3_get_autocommit(db), 0);
+                sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+            }
+            char *v = first_cell(ex, "MATCH (n) RETURN count(n)");
+            CU_ASSERT_PTR_NOT_NULL(v);
+            if (v) { CU_ASSERT_STRING_EQUAL(v, "1"); free(v); }
+            cypher_executor_free(ex);
+        }
+        sqlite3_close(db);
+    }
+}
+
+static const char *ROWS_A7 = "{\"rows\": [{\"id\": \"a\", \"value\": 7}], \"value\": 7}";
+
+/* #136: UNWIND ... MATCH ... SET changes only the matched nodes, and SET
+ * reads UNWIND / WITH values. */
+static void test_unwind_match_set(void)
+{
+    const char *w[] = {
+        "CREATE (:Item {id: 'a', value: 1}), (:Item {id: 'b', value: 2})",
+        "UNWIND $rows AS row MATCH (n:Item {id: row.id}) SET n.value = $value",
+        NULL
+    };
+    ASSERT_UNWIND(w, ROWS_A7, "MATCH (n:Item) RETURN [n.id, n.value] ORDER BY n.id",
+                  "[\"a\",7],[\"b\",2]");
+    const char *w2[] = {
+        "CREATE (:Item {id: 'a', value: 1}), (:Item {id: 'b', value: 2})",
+        "UNWIND $rows AS row MATCH (n:Item {id: row.id}) SET n.value = row.value",
+        NULL
+    };
+    ASSERT_UNWIND(w2, ROWS_A7, "MATCH (n:Item) RETURN [n.id, n.value] ORDER BY n.id",
+                  "[\"a\",7],[\"b\",2]");
+    const char *w3[] = {
+        "CREATE (:Item {id: 'a', value: 10})",
+        "MATCH (n:Item) UNWIND $rows AS row WITH n, row WHERE n.id = row.id SET n.value = row.value",
+        NULL
+    };
+    ASSERT_UNWIND(w3, ROWS_A7, "MATCH (n:Item) RETURN n.value", "7");
+    const char *w4[] = {
+        "CREATE (:Item {id: 'a', value: 10})",
+        "UNWIND $rows AS row MATCH (n:Item {id: row.id}) WITH n, row SET n.value = $value",
+        NULL
+    };
+    ASSERT_UNWIND(w4, ROWS_A7, "MATCH (n:Item) RETURN n.value", "7");
+    const char *w5[] = {"WITH $row AS row CREATE (n:Item {id: 'a'}) SET n.value = row.value", NULL};
+    ASSERT_UNWIND(w5, "{\"row\": {\"value\": 1}}", "MATCH (n:Item) RETURN n.value", "1");
+    const char *w6[] = {"WITH 42 AS x CREATE (n:Item {id: 'a'}) SET n.value = x", NULL};
+    ASSERT_UNWIND(w6, NULL, "MATCH (n:Item) RETURN n.value", "42");
+}
+
+/* #136: SET on a relationship made by CREATE / MERGE reads the row. */
+static void test_unwind_match_rel_set(void)
+{
+    const char *verbs[] = {"CREATE", "MERGE"};
+    for (int v = 0; v < 2; v++) {
+        char q[256];
+        snprintf(q, sizeof(q),
+                 "UNWIND $rows AS row MATCH (a:A), (b:B) %s (a)-[r:LINK]->(b) SET r.value = row.value",
+                 verbs[v]);
+        const char *w[] = {"CREATE (:A), (:B)", q, NULL};
+        ASSERT_UNWIND(w, "{\"rows\": [{\"value\": 1}]}", "MATCH ()-[r:LINK]->() RETURN r.value", "1");
+    }
+}
+
+/* #136: UNWIND ... MERGE ... SET without RETURN runs the SET; values keep
+ * their types; null removes the property. */
+static void test_unwind_merge_set_types(void)
+{
+    const char *w[] = {
+        "CREATE (:Item {id: 'b', value: 5})",
+        "UNWIND $rows AS row MERGE (n:Item {id: row.id}) SET n.value = row.value",
+        NULL
+    };
+    ASSERT_UNWIND(w,
+        "{\"rows\": [{\"id\": \"a\", \"value\": [false, true]}, {\"id\": \"b\", \"value\": {\"k\": 1}},"
+        " {\"id\": \"c\", \"value\": true}]}",
+        "MATCH (n:Item) RETURN n.value ORDER BY n.id", "[false,true],{\"k\":1},true");
+    const char *w2[] = {
+        "CREATE (:Item {id: 'a', value: 10})",
+        "UNWIND $rows AS row MERGE (n:Item {id: row.id}) SET n.value = row.value",
+        NULL
+    };
+    ASSERT_UNWIND(w2, "{\"rows\": [{\"id\": \"a\", \"value\": null}]}",
+                  "MATCH (n:Item) RETURN n.value IS NULL", "true");
+    const char *w3[] = {"CREATE (:Item {id: 'a', value: 10})", "MATCH (n:Item) SET n.value = $value", NULL};
+    ASSERT_UNWIND(w3, "{\"value\": null}", "MATCH (n:Item) RETURN n.value IS NULL", "true");
+    const char *w4[] = {"UNWIND $rows AS row CREATE (n:Item) SET n.id = row.id, n.value = row.value", NULL};
+    ASSERT_UNWIND(w4, "{\"rows\": [{\"id\": \"a\", \"value\": [1, 2]}]}",
+                  "MATCH (n:Item) RETURN n.value", "[1,2]");
+    const char *w5[] = {"WITH $value AS value CREATE (:Item {id: 'a', value: value})", NULL};
+    ASSERT_UNWIND(w5, "{\"value\": {\"k\": 1}}", "MATCH (n:Item) RETURN n.value.k", "1");
+}
+
+/* #136: UNWIND $param CREATE ... RETURN */
+static void test_unwind_param_create_return(void)
+{
+    const char *w[] = {"CREATE (:Seed)", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:Seed) RETURN count(n)", "1");
+    sqlite3 *db = NULL;
+    CU_ASSERT_EQUAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+    cypher_executor *ex = cypher_executor_create(db);
+    if (ex) {
+        cypher_result *r = cypher_executor_execute_params(ex,
+            "UNWIND $rows AS row CREATE (n:Item {id: row.id, value: row.value}) RETURN n.value AS v",
+            "{\"rows\": [{\"id\": \"a\", \"value\": 1}, {\"id\": \"b\", \"value\": 2}]}");
+        CU_ASSERT_PTR_NOT_NULL(r);
+        if (r) {
+            if (!r->success) printf("\n  error: %s\n", r->error_message);
+            CU_ASSERT_TRUE(r->success);
+            CU_ASSERT_EQUAL(r->row_count, 2);
+            cypher_result_free(r);
+        }
+        cypher_executor_free(ex);
+    }
+    sqlite3_close(db);
+}
+
+/* #135: FOREACH runs MERGE / REMOVE / DELETE / SET bodies, sees an outer
+ * MATCH variable, and iterates a $param list. */
+static void test_foreach_bodies(void)
+{
+    const char *w[] = {"FOREACH (x IN [1, 2] | MERGE (:Item {value: x}))", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:Item) RETURN count(n)", "2");
+    const char *w2[] = {"FOREACH (x IN $xs | CREATE (:Item {value: x}))", NULL};
+    ASSERT_UNWIND(w2, "{\"xs\": [1, 2]}", "MATCH (n:Item) RETURN n.value ORDER BY n.value", "1,2");
+    const char *w3[] = {"CREATE (:Item {id: 'a', value: 10})",
+                        "MATCH (n:Item {id: 'a'}) FOREACH (x IN [1] | REMOVE n.value)", NULL};
+    ASSERT_UNWIND(w3, NULL, "MATCH (n:Item) RETURN n.value IS NULL", "true");
+    const char *w4[] = {"CREATE (:Item {id: 'a', value: 10})",
+                        "MATCH (n:Item {id: 'a'}) FOREACH (x IN [1] | DELETE n)", NULL};
+    ASSERT_UNWIND(w4, NULL, "MATCH (n) RETURN count(n)", "0");
+    const char *w5[] = {"CREATE (:Item {id: 'a', value: 10})",
+                        "MATCH (n:Item {id: 'a'}) FOREACH (x IN [1] | SET n.value = x)", NULL};
+    ASSERT_UNWIND(w5, NULL, "MATCH (n:Item) RETURN n.value", "1");
+    const char *w6[] = {"CREATE (:A)",
+                        "MATCH (a:A) FOREACH (x IN ['p', 'q'] | CREATE (a)-[:R]->(:B {name: x}))", NULL};
+    ASSERT_UNWIND(w6, NULL, "MATCH (:A)-[:R]->(b:B) RETURN b.name ORDER BY b.name", "p,q");
+}
+
+static const char *PATH_SETUP =
+    "CREATE (a:Item {id: 'a', name: 'A'}), (b:Item {name: 'B'}), (c:Item {id: 'c', name: 'C'}),"
+    " (a)-[:LINK {cost: 1.0}]->(b), (b)-[:LINK {cost: 2.0}]->(c)";
+
+/* #135: length / nodes / relationships of variable-length and fixed paths. */
+static void test_path_functions(void)
+{
+    const char *w[] = {PATH_SETUP, NULL};
+    ASSERT_UNWIND(w, NULL,
+        "MATCH p = (a:Item {id: 'a'})-[:LINK*1..2]->(c:Item {id: 'c'}) "
+        "RETURN [length(p), size(nodes(p))]", "[2,3]");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH p = (a:Item {id: 'a'})-[:LINK*1..2]->(c:Item {id: 'c'}) "
+        "RETURN [n IN nodes(p) | n.name]", "[\"A\",\"B\",\"C\"]");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH p = (a:Item {id: 'a'})-[:LINK*1..2]->(c:Item {id: 'c'}) "
+        "RETURN [r IN relationships(p) | r.cost]", "[1.0,2.0]");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH p = (a:Item {id: 'a'})-[:LINK]->(b)-[:LINK]->(c) "
+        "RETURN [n IN nodes(p) | n.name] + [r IN relationships(p) | r.cost]",
+        "[\"A\",\"B\",\"C\",1.0,2.0]");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH p = shortestPath((a:Item {id: 'a'})-[:LINK*]->(c:Item {id: 'c'})) "
+        "RETURN [length(p), size(nodes(p))]", "[2,3]");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (x:Item {id: 'c'}) OPTIONAL MATCH p = (x)-[:LINK]->(y) "
+        "RETURN [nodes(p), relationships(p)]", "[null,null]");
+}
+
+/* #135: a boolean is not equal to a number. */
+static void test_boolean_number_equality(void)
+{
+    const char *w[] = {"CREATE (:Seed)", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "RETURN [true = 1, false = 0, true <> 1, true IN [1], false IN [0], 1 IN [true],"
+        " true IN [true], 1 IN [1], 1 = 1.0]",
+        "[false,false,true,false,false,false,true,true,true]");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -579,7 +825,16 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "#124: FOREACH map CREATE inline", test_foreach_map_create_inline) ||
         !CU_add_test(suite, "#124: UNWIND expression CREATE inline", test_unwind_expression_create_inline) ||
         !CU_add_test(suite, "GQLITE-T-0387: CREATE boolean expression", test_create_boolean_expression) ||
-        !CU_add_test(suite, "GQLITE-T-0388: UNWIND + MATCH + CREATE", test_unwind_match_create)) {
+        !CU_add_test(suite, "GQLITE-T-0388: UNWIND + MATCH + CREATE", test_unwind_match_create) ||
+        !CU_add_test(suite, "#134: rollback keeps property keys right", test_rollback_property_keys) ||
+        !CU_add_test(suite, "#134: failed write query is rolled back", test_failed_write_is_rolled_back) ||
+        !CU_add_test(suite, "#136: UNWIND MATCH SET", test_unwind_match_set) ||
+        !CU_add_test(suite, "#136: UNWIND MATCH relationship SET", test_unwind_match_rel_set) ||
+        !CU_add_test(suite, "#136: UNWIND MERGE SET types and null", test_unwind_merge_set_types) ||
+        !CU_add_test(suite, "#136: UNWIND $param CREATE RETURN", test_unwind_param_create_return) ||
+        !CU_add_test(suite, "#135: FOREACH bodies", test_foreach_bodies) ||
+        !CU_add_test(suite, "#135: path functions", test_path_functions) ||
+        !CU_add_test(suite, "#135: boolean vs number equality", test_boolean_number_equality)) {
         return CU_get_error();
     }
 

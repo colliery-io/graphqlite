@@ -247,6 +247,25 @@ void free_property_key_cache(property_key_cache *cache)
     CYPHER_DEBUG("Freed property key cache");
 }
 
+/* #134: drop every cached key. Called when a query rolls back its own
+ * writes, so no entry keeps an id that the rollback gave back. */
+void cypher_schema_clear_property_key_cache(cypher_schema_manager *manager)
+{
+    if (!manager || !manager->key_cache) return;
+    property_key_cache *cache = manager->key_cache;
+    for (int i = 0; i < cache->slot_count; i++) {
+        property_key_entry *entry = cache->slots[i];
+        while (entry) {
+            property_key_entry *next = entry->next;
+            free(entry->key_string);
+            free(entry);
+            entry = next;
+        }
+        cache->slots[i] = NULL;
+    }
+    cache->total_entries = 0;
+}
+
 /* Schema manager implementation */
 
 cypher_schema_manager* cypher_schema_create_manager(sqlite3 *db)
@@ -576,6 +595,7 @@ const char* cypher_schema_property_type_name(property_type type)
  * hot keys sharing a slot missed alternately). */
 static void key_cache_insert(property_key_cache *cache, const char *key, int key_id)
 {
+    if (cache->bypass) return;
     property_key_entry *entry = malloc(sizeof(property_key_entry));
     if (!entry) return;
     entry->key_id = key_id;

@@ -395,7 +395,13 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
     } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL ||
                unwind->expr->type == AST_NODE_SUBSCRIPT ||
                unwind->expr->type == AST_NODE_BINARY_OP ||
-               unwind->expr->type == AST_NODE_PROPERTY) {
+               unwind->expr->type == AST_NODE_PROPERTY ||
+               (unwind->expr->type == AST_NODE_PARAMETER &&
+                ((cypher_parameter *)unwind->expr)->name)) {
+        /* #136: a parameter takes this branch too. Its own branch wrapped a
+         * MATCH prefix as _prev without the spliced variables, so
+         * `MATCH (n) UNWIND $rows AS row ... n` failed with
+         * "no such column: n". */
         /* Function call that returns a list (e.g., range(), keys(), etc.),
          * subscript expression (qrows[p]), binary op (list concat), or a
          * property (GQLITE-T-0416: its own branch read only the text table
