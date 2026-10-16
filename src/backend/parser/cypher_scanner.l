@@ -104,11 +104,14 @@ operator    [+*/%^=!&|~]+
 %%
 
 {whitespace}    {
-                    /* Count newlines for line tracking */
+                    /* Count newlines for line tracking. After the last
+                     * newline the column is 1 plus the characters that
+                     * follow it in this match (they were dropped, so a
+                     * token on an indented line had a wrong column). */
                     for (int i = 0; i < (int)yyleng; i++) {
                         if (yytext[i] == '\n') {
                             yyextra->current_line++;
-                            yyextra->current_column = 1;
+                            yyextra->current_column = 1 + ((int)yyleng - i - 1);
                         }
                     }
                     /* Skip whitespace - return next token */

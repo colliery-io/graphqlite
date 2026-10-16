@@ -1926,20 +1926,56 @@ identifier:
 /* Keywords that may serve as identifiers/labels/property-keys outside their
  * reserved contexts. Returns the string form (caller frees). */
 non_reserved_kw:
-      SINGLE        { $$ = strdup("Single"); }
-    | ANY           { $$ = strdup("Any"); }
-    | NONE          { $$ = strdup("None"); }
-    | ALL           { $$ = strdup("All"); }
-    | EXISTS        { $$ = strdup("exists"); }
-    | CONTAINS      { $$ = strdup("contains"); }
-    | STARTS        { $$ = strdup("starts"); }
-    | ENDS          { $$ = strdup("ends"); }
-    | REDUCE        { $$ = strdup("reduce"); }
-    | END_P         { $$ = strdup("End"); }
-    | ON            { $$ = strdup("On"); }
-    | PATTERN       { $$ = strdup("Pattern"); }
-    | CSV           { $$ = strdup("Csv"); }
-    | LOAD          { $$ = strdup("Load"); }
+    /* A keyword used as a name (label, relationship type, property, map
+     * key) keeps its spelling as written (Unwind1 [6]: `[:IN]`; Map1 [5]). */
+      SINGLE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SINGLE"); }
+    | ANY           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ANY"); }
+    | NONE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NONE"); }
+    | ALL           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ALL"); }
+    | EXISTS        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "EXISTS"); }
+    | CONTAINS      { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CONTAINS"); }
+    | STARTS        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "STARTS"); }
+    | ENDS          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ENDS"); }
+    | REDUCE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "REDUCE"); }
+    | END_P         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "END"); }
+    | ON            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ON"); }
+    | PATTERN       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "PATTERN"); }
+    | CSV           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CSV"); }
+    | LOAD          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "LOAD"); }
+    | IN            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "IN"); }
+    | IS            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "IS"); }
+    | AS            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "AS"); }
+    | OR            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "OR"); }
+    | AND           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "AND"); }
+    | XOR           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "XOR"); }
+    | NOT           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NOT"); }
+    | ORDER         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ORDER"); }
+    | BY            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "BY"); }
+    | NULL_P        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NULL"); }
+    | CASE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CASE"); }
+    | WHEN          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "WHEN"); }
+    | THEN          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "THEN"); }
+    | ELSE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ELSE"); }
+    | MATCH         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "MATCH"); }
+    | RETURN        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "RETURN"); }
+    | CREATE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CREATE"); }
+    | WHERE         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "WHERE"); }
+    | WITH          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "WITH"); }
+    | SET           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SET"); }
+    | DELETE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "DELETE"); }
+    | REMOVE        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "REMOVE"); }
+    | MERGE         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "MERGE"); }
+    | UNWIND        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "UNWIND"); }
+    | DETACH        { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "DETACH"); }
+    | FOREACH       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FOREACH"); }
+    | CALL          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CALL"); }
+    | OPTIONAL      { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "OPTIONAL"); }
+    | DISTINCT      { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "DISTINCT"); }
+    | SKIP          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SKIP"); }
+    | LIMIT         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "LIMIT"); }
+    | UNION         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "UNION"); }
+    | FROM          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FROM"); }
+    | HEADERS       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "HEADERS"); }
     ;
 
 parameter:
@@ -2003,27 +2039,6 @@ map_pair:
     | DESC ':' expr
         {
             $$ = make_map_pair("desc", $3, @1.first_line);
-        }
-    | ORDER ':' expr
-        {
-            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "order");
-            $$ = make_map_pair(k, $3, @1.first_line);
-            free(k);
-        }
-    | BY ':' expr
-        {
-            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "by");
-            $$ = make_map_pair(k, $3, @1.first_line);
-            free(k);
-        }
-    | NULL_P ':' expr
-        {
-            /* `null` and `NULL` are legal map keys per the openCypher
-             * spec (Map2 [5]). The scanner up-cases the keyword, so
-             * preserve the textual form here as `null`. */
-            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "null");
-            $$ = make_map_pair(k, $3, @1.first_line);
-            free(k);
         }
     ;
 

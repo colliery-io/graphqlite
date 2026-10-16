@@ -1271,7 +1271,21 @@ with_star_columns_done:
             dbuf_init(&ord);
             for (int i = 0; i < with->order_by->count; i++) {
                 cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
-                char *order_expr = transform_expression_to_string(ctx, order_item->expr);
+                /* An ORDER BY written as a projected expression is that
+                 * projection: `WITH sum(x) AS s ORDER BY sum(x)` sorts by s
+                 * (its inputs are out of scope here; WithOrderBy4 [11]). */
+                ast_node *oexpr_node = order_item->expr;
+                cypher_identifier *alias_id = NULL;
+                for (int wi = 0; with->items && wi < with->items->count; wi++) {
+                    cypher_return_item *it = (cypher_return_item*)with->items->items[wi];
+                    if (it && it->alias && ast_expr_equal(it->expr, order_item->expr)) {
+                        alias_id = make_identifier(it->alias, 0);
+                        oexpr_node = (ast_node *)alias_id;
+                        break;
+                    }
+                }
+                char *order_expr = transform_expression_to_string(ctx, oexpr_node);
+                if (alias_id) ast_node_free((ast_node *)alias_id);
                 if (order_expr) {
                     sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
                     const char *dir = order_item->descending ? " DESC" : "";
