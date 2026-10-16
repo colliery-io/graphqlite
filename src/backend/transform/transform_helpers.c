@@ -162,6 +162,28 @@ bool ast_is_boolean_expr(const ast_node *expr)
     }
 }
 
+/* An expression whose value is a number, by its shape: a number literal,
+ * or arithmetic on such expressions (#135). */
+bool ast_is_numeric_expr(const ast_node *expr)
+{
+    if (!expr) return false;
+    if (expr->type == AST_NODE_LITERAL) {
+        int t = ((const cypher_literal *)expr)->literal_type;
+        return t == LITERAL_INTEGER || t == LITERAL_DECIMAL;
+    }
+    if (expr->type == AST_NODE_BINARY_OP) {
+        const cypher_binary_op *b = (const cypher_binary_op *)expr;
+        switch (b->op_type) {
+            case BINARY_OP_ADD: case BINARY_OP_SUB: case BINARY_OP_MUL:
+            case BINARY_OP_DIV: case BINARY_OP_MOD: case BINARY_OP_POW:
+                return ast_is_numeric_expr(b->left) && ast_is_numeric_expr(b->right);
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
 /* Render a double as the shortest text that reads back as the same value,
  * keeping ".0" on a whole number so a float never reads back as an integer
  * (GQLITE-T-0403). "%g" kept 6 digits and dropped the ".0". */

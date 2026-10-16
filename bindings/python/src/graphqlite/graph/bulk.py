@@ -20,6 +20,7 @@ Example:
     ... ], id_map)
 """
 
+import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -359,6 +360,16 @@ class BulkMixin(BaseMixin):
         table_prefix = "node_props" if entity_type == "node" else "edge_props"
         id_column = "node_id" if entity_type == "node" else "edge_id"
 
+        if value is None:
+            # A null property is not stored (Cypher semantics).
+            return
+        if isinstance(value, (list, tuple, dict)):
+            # Lists and maps are stored as JSON, as Cypher CREATE stores them.
+            conn.execute(
+                f"INSERT OR REPLACE INTO {table_prefix}_json ({id_column}, key_id, value) VALUES (?, ?, ?)",
+                (entity_id, key_id, json.dumps(value)),
+            )
+            return
         if isinstance(value, bool):
             conn.execute(
                 f"INSERT OR REPLACE INTO {table_prefix}_bool ({id_column}, key_id, value) VALUES (?, ?, ?)",

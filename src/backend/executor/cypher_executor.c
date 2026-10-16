@@ -350,6 +350,7 @@ void cypher_executor_free(cypher_executor *executor)
 
 /* Execute AST node */
 static void note_write(cypher_executor *executor, const cypher_result *result);
+static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *ast);
 
 cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *ast)
 {
@@ -730,7 +731,7 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
     executor->captured_ctx = NULL;
     executor->captured_stmt = NULL;
     executor->captured_ret = NULL;
-    cypher_result *result = cypher_executor_execute_ast(executor, ast);
+    cypher_result *result = execute_ast_guarded(executor, ast);
     executor->stmt_capture = false;
 
 #ifdef GRAPHQLITE_PERF_TIMING
@@ -780,6 +781,68 @@ static void note_write(cypher_executor *executor, const cypher_result *result)
     }
 }
 
+/* #134: true when the query can write. Reads skip the savepoint. */
+static bool ast_may_write(ast_node *ast)
+{
+    if (!ast) return false;
+    if (ast->type == AST_NODE_QUERY || ast->type == AST_NODE_SINGLE_QUERY) {
+        cypher_query *q = (cypher_query *)ast;
+        if (q->explain) return false;
+        clause_flags f = analyze_query_clauses(q);
+        return (f & (CLAUSE_CREATE | CLAUSE_MERGE | CLAUSE_SET | CLAUSE_DELETE |
+                     CLAUSE_REMOVE | CLAUSE_FOREACH | CLAUSE_CALL)) != 0;
+    }
+    return ast->type != AST_NODE_MATCH;
+}
+
+/* #134: run one top-level query as a unit. A write query runs inside a
+ * savepoint; when it fails, its writes are rolled back, so a failed query
+ * leaves no node or property behind. Inside an open transaction, new
+ * property keys are not cached, because a ROLLBACK can give their ids back. */
+static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *ast)
+{
+    if (!executor || !executor->db) return cypher_executor_execute_ast(executor, ast);
+
+    property_key_cache *kc = executor->schema_mgr ? executor->schema_mgr->key_cache : NULL;
+    bool saved_bypass = kc ? kc->bypass : false;
+    if (kc) kc->bypass = !sqlite3_get_autocommit(executor->db);
+
+    bool guarded = ast_may_write(ast) &&
+        sqlite3_exec(executor->db, "SAVEPOINT graphqlite_query", NULL, NULL, NULL) == SQLITE_OK;
+    long keys_before = kc ? kc->key_insertions : 0;
+
+    cypher_result *result = cypher_executor_execute_ast(executor, ast);
+
+    if (guarded) {
+        if (!result || !result->success) {
+            sqlite3_exec(executor->db, "ROLLBACK TO graphqlite_query", NULL, NULL, NULL);
+            if (kc && kc->key_insertions != keys_before) {
+                cypher_schema_clear_property_key_cache(executor->schema_mgr);
+            }
+            if (result) {
+                result->nodes_created = 0;
+                result->nodes_deleted = 0;
+                result->relationships_created = 0;
+                result->relationships_deleted = 0;
+                result->properties_set = 0;
+            }
+        }
+        if (sqlite3_exec(executor->db, "RELEASE graphqlite_query", NULL, NULL, NULL) != SQLITE_OK) {
+            /* Outside a transaction the RELEASE is the commit. When it
+             * fails (SQLITE_BUSY), undo the query and close the savepoint,
+             * so no later query runs inside it. */
+            char msg[512];
+            snprintf(msg, sizeof(msg), "Failed to commit the query: %s", sqlite3_errmsg(executor->db));
+            sqlite3_exec(executor->db, "ROLLBACK TO graphqlite_query", NULL, NULL, NULL);
+            sqlite3_exec(executor->db, "RELEASE graphqlite_query", NULL, NULL, NULL);
+            cypher_schema_clear_property_key_cache(executor->schema_mgr);
+            if (result && result->success) set_result_error(result, msg);
+        }
+    }
+    if (kc) kc->bypass = saved_bypass;
+    return result;
+}
+
 /* Execute Cypher query with parameters */
 cypher_result* cypher_executor_execute_params(cypher_executor *executor, const char *query, const char *params_json)
 {
@@ -818,7 +881,7 @@ cypher_result* cypher_executor_execute_ast_params(cypher_executor *executor, ast
     executor->params_json = params_json;
 
     /* Execute the AST */
-    cypher_result *result = cypher_executor_execute_ast(executor, ast);
+    cypher_result *result = execute_ast_guarded(executor, ast);
     note_write(executor, result);
 
     /* Clear params */

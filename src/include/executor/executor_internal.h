@@ -144,6 +144,12 @@ int execute_create_clause(cypher_executor *executor, cypher_create *create, cyph
 int execute_create_clause_with_varmap(cypher_executor *executor, cypher_create *create,
                                       cypher_result *result, variable_map **out_var_map);
 int execute_foreach_clause(cypher_executor *executor, cypher_foreach *foreach, cypher_result *result);
+/* Register the current FOREACH/UNWIND bindings as scalar values of a
+ * transform context, so an expression can read them. */
+struct cypher_transform_context;
+void executor_register_foreach_values(struct cypher_transform_context *ctx);
+int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach,
+                              variable_map *outer, cypher_result *result);
 /* Canonical MERGE entry point (I-0041 C8). Pass NULL for external_vars
  * if no inbound scope; pass NULL for out_var_map if you don't want the
  * resulting bindings. The four pre-collapse variants (no-arg,

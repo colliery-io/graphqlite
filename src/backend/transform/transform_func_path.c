@@ -38,16 +38,115 @@ int transform_path_length_function(cypher_transform_context *ctx, cypher_functio
         return -1;
     }
 
-    /* Count relationships in the path */
-    /* Path length = number of relationships = (number of elements - 1) / 2 for node-rel-node pattern */
+    /* Path length = number of relationships. A variable-length segment
+     * counts the edges in its elem_ids (node,edge,...,node), not 1 (#135). */
     int rel_count = 0;
+    dynamic_buffer varlen_terms;
+    dbuf_init(&varlen_terms);
     for (int i = 0; i < path_var->path_elements->count; i++) {
-        if (path_var->path_elements->items[i]->type == AST_NODE_REL_PATTERN) {
+        ast_node *el = path_var->path_elements->items[i];
+        if (el->type != AST_NODE_REL_PATTERN) continue;
+        cypher_rel_pattern *rel = (cypher_rel_pattern*)el;
+        const char *alias = (rel->varlen && rel->variable) ?
+            transform_var_get_alias(ctx->var_ctx, rel->variable) : NULL;
+        if (alias) {
+            dbuf_appendf(&varlen_terms,
+                " + (json_array_length('[' || %s.elem_ids || ']') - 1) / 2", alias);
+        } else {
             rel_count++;
         }
     }
 
-    append_sql(ctx, "%d", rel_count);
+    if (dbuf_len(&varlen_terms) > 0) {
+        append_sql(ctx, "(%d%s)", rel_count, dbuf_get(&varlen_terms));
+    } else {
+        append_sql(ctx, "%d", rel_count);
+    }
+    dbuf_free(&varlen_terms);
+    return 0;
+}
+
+/* #135: the nodes (want_nodes) or relationships of a registered path, in
+ * path order, as hydrated entity JSON. A variable-length segment adds the
+ * entities inside its elem_ids; its end nodes are the node patterns around
+ * it. The ids were returned before, so `[n IN nodes(p) | n.name]` gave
+ * nulls, and a variable-length segment added only its end nodes. */
+static int emit_registered_path_members(cypher_transform_context *ctx, transform_var *path_var,
+                                        bool want_nodes)
+{
+    dynamic_buffer u;
+    dbuf_init(&u);
+    /* An OPTIONAL path matches all or nothing: test its first relationship
+     * (an end node can be bound before the OPTIONAL MATCH). */
+    char null_guard[300] = "";
+    for (int i = 0; i < path_var->path_elements->count && !null_guard[0]; i++) {
+        ast_node *el = path_var->path_elements->items[i];
+        if (el->type != AST_NODE_REL_PATTERN) continue;
+        cypher_rel_pattern *rp = (cypher_rel_pattern*)el;
+        const char *a = rp->variable ? transform_var_get_alias(ctx->var_ctx, rp->variable) : NULL;
+        if (a) snprintf(null_guard, sizeof(null_guard), "%s.%s", a, rp->varlen ? "elem_ids" : "id");
+    }
+    int seg = 0;
+    const char *prev_varlen = NULL;   /* alias of a varlen segment just before */
+    for (int i = 0; i < path_var->path_elements->count; i++) {
+        ast_node *el = path_var->path_elements->items[i];
+        if (el->type == AST_NODE_NODE_PATTERN) {
+            cypher_node_pattern *np = (cypher_node_pattern*)el;
+            const char *a = np->variable ? transform_var_get_alias(ctx->var_ctx, np->variable) : NULL;
+            if (!null_guard[0] && a) snprintf(null_guard, sizeof(null_guard), "%s.id", a);
+            const char *after_varlen = prev_varlen;
+            prev_varlen = NULL;
+            if (!want_nodes) continue;
+            if (dbuf_len(&u) > 0) dbuf_append(&u, " UNION ALL ");
+            if (a) dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, %s.id AS v", seg, a);
+            else dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, NULL AS v", seg);
+            /* After a zero-hop segment this node is the node before it. */
+            if (after_varlen)
+                dbuf_appendf(&u, " WHERE json_array_length('[' || %s.elem_ids || ']') > 1", after_varlen);
+            seg++;
+        } else if (el->type == AST_NODE_REL_PATTERN) {
+            cypher_rel_pattern *rp = (cypher_rel_pattern*)el;
+            const char *a = rp->variable ? transform_var_get_alias(ctx->var_ctx, rp->variable) : NULL;
+            if (rp->varlen && a) {
+                prev_varlen = a;
+                if (dbuf_len(&u) > 0) dbuf_append(&u, " UNION ALL ");
+                if (want_nodes) {
+                    dbuf_appendf(&u,
+                        "SELECT %d AS seg, je.key AS k, je.value AS v FROM json_each('[' || %s.elem_ids || ']') je "
+                        "WHERE (je.key %% 2) = 0 AND je.key > 0 AND "
+                        "je.key < json_array_length('[' || %s.elem_ids || ']') - 1", seg, a, a);
+                } else {
+                    dbuf_appendf(&u,
+                        "SELECT %d AS seg, je.key AS k, je.value AS v FROM json_each('[' || %s.elem_ids || ']') je "
+                        "WHERE (je.key %% 2) = 1", seg, a);
+                }
+                seg++;
+            } else if (!want_nodes) {
+                if (dbuf_len(&u) > 0) dbuf_append(&u, " UNION ALL ");
+                if (a) dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, %s.id AS v", seg, a);
+                else dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, NULL AS v", seg);
+                seg++;
+            }
+        }
+    }
+
+    if (dbuf_len(&u) == 0) {
+        dbuf_free(&u);
+        append_sql(ctx, "json_array()");
+        return 0;
+    }
+
+    char *ej = want_nodes ? gql_sql_node_json_expr("", "_pm.v")
+                          : gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
+    if (!ej) { dbuf_free(&u); return -1; }
+    /* A null path (OPTIONAL pattern that did not match) gives null. */
+    if (null_guard[0]) append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE ", null_guard);
+    append_sql(ctx,
+        "(SELECT json_group_array(json(%s) ORDER BY _pm.seg, _pm.k) FROM (%s) _pm%s)",
+        ej, dbuf_get(&u), want_nodes ? "" : " JOIN edges e ON e.id = _pm.v");
+    if (null_guard[0]) append_sql(ctx, " END)");
+    free(ej);
+    dbuf_free(&u);
     return 0;
 }
 
@@ -144,34 +243,7 @@ int transform_path_nodes_function(cypher_transform_context *ctx, cypher_function
         return -1;
     }
 
-    /* Collect node aliases in path order. */
-    const char *node_aliases[64];
-    int n_nodes = 0;
-    for (int i = 0; i < path_var->path_elements->count && n_nodes < 64; i++) {
-        ast_node *element = path_var->path_elements->items[i];
-        if (element->type == AST_NODE_NODE_PATTERN) {
-            cypher_node_pattern *node = (cypher_node_pattern*)element;
-            if (node->variable) {
-                const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
-                if (node_alias) node_aliases[n_nodes++] = node_alias;
-            }
-        }
-    }
-
-    /* nodes() on a null path (OPTIONAL pattern that didn't match) is null,
-     * not [null,...]. Guard on the first node alias's id (all-or-nothing). */
-    if (n_nodes > 0) {
-        append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_array(", node_aliases[0]);
-        for (int i = 0; i < n_nodes; i++) {
-            if (i > 0) append_sql(ctx, ", ");
-            append_sql(ctx, "%s.id", node_aliases[i]);
-        }
-        append_sql(ctx, ") END)");
-    } else {
-        append_sql(ctx, "json_array()");
-    }
-
-    return 0;
+    return emit_registered_path_members(ctx, path_var, true);
 }
 
 /* Transform relationships() function - returns list of relationships in a path */
@@ -228,61 +300,7 @@ int transform_path_relationships_function(cypher_transform_context *ctx, cypher_
         return -1;
     }
 
-    /* Variable-length rel in the path: its edge ids live in the varlen CTE's
-     * interleaved elem_ids (node,edge,node,... — edges at odd positions), not
-     * in a single `.id` column. Build the rel-id list from there.
-     * (Path2 [1]/[2].) */
-    for (int i = 0; i < path_var->path_elements->count; i++) {
-        ast_node *element = path_var->path_elements->items[i];
-        if (element->type == AST_NODE_REL_PATTERN &&
-            ((cypher_rel_pattern*)element)->varlen) {
-            cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
-            const char *alias = rel->variable ?
-                transform_var_get_alias(ctx->var_ctx, rel->variable) : NULL;
-            if (alias) {
-                {
-                    char *ej = gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
-                    if (!ej) return -1;
-                    append_sql(ctx,
-                        "(SELECT json_group_array(%s ORDER BY je.key) "
-                        "FROM json_each('[' || %s.elem_ids || ']') je JOIN edges e ON e.id = je.value "
-                        "WHERE (je.key %% 2) = 1)", ej, alias);
-                    free(ej);
-                }
-                return 0;
-            }
-        }
-    }
-
-    /* Collect relationship aliases in path order. */
-    const char *rel_aliases[64];
-    int n_rels = 0;
-    for (int i = 0; i < path_var->path_elements->count && n_rels < 64; i++) {
-        ast_node *element = path_var->path_elements->items[i];
-        if (element->type == AST_NODE_REL_PATTERN) {
-            cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
-            if (rel->variable) {
-                const char *rel_alias = transform_var_get_alias(ctx->var_ctx, rel->variable);
-                if (rel_alias) rel_aliases[n_rels++] = rel_alias;
-            }
-        }
-    }
-
-    /* relationships() on a null path (e.g. an OPTIONAL pattern that didn't
-     * match) is null, not [null]. Guard on the first rel alias's id being
-     * NULL — an OPTIONAL path matches all-or-nothing. (Path2 [3].) */
-    if (n_rels > 0) {
-        append_sql(ctx, "(CASE WHEN %s.id IS NULL THEN NULL ELSE json_array(", rel_aliases[0]);
-        for (int i = 0; i < n_rels; i++) {
-            if (i > 0) append_sql(ctx, ", ");
-            append_sql(ctx, "%s.id", rel_aliases[i]);
-        }
-        append_sql(ctx, ") END)");
-    } else {
-        append_sql(ctx, "json_array()");
-    }
-
-    return 0;
+    return emit_registered_path_members(ctx, path_var, false);
 }
 
 /* GQLITE-T-0181: shared validation for startNode()/endNode(). Emits the SQL

@@ -49,26 +49,26 @@ out in sections 2 and 3.
 |-------------|--------|---------|----------|--------------|-----------|
 | `CREATE (n {k:v})` | node | `39:…` ✓ (many) | `26:Section 6` ✓ | `26:11.2` ✓ | n/a |
 | `CREATE (a)-[:R {k:v}]->(b)` | rel | `03:…` ✓ | `26:7.1`, `39:#61.2` ✓ (T-0186) | GAP — T-0183 | n/a |
-| `CREATE (n) SET n.k = v` | node | `39:T-0194a` ✓ | `39:T-0194c` ✓ | GAP | n/a |
+| `CREATE (n) SET n.k = v` | node | `39:T-0194a` ✓ | `39:T-0194c` ✓ | `py:test_row_field_set_keeps_types` ✓ (#136) | n/a |
 | `CREATE (n) SET n += {..}` | node | `39:T-0194b` ✓ | `39:T-0194c` ✓ | GAP | `39:T-0194b` ✓ |
 | `MERGE (n {k:v})` | node | `40:…` ✓ | `26:…` ✓ | GAP | n/a |
 | `MERGE (a)-[r:R {k:v}]->(b)` | rel | `39:T-0187` ✓ | `39:T-0187` ✓ (T-0186/7) | GAP | n/a |
-| `MERGE (n) SET n.k = v` | node | `39:T-0195a` ✓ | GAP | GAP | n/a |
+| `MERGE (n) SET n.k = v` | node | `39:T-0195a` ✓ | GAP | `py:test_unwind_merge_set_without_return` ✓ (#136) | n/a |
 | `MERGE (n) SET n += {..}` | node | `39:T-0195b` ✓ | GAP | GAP | `39:T-0195b` ✓ |
 | `MATCH (a) CREATE (a)-[:R]->(b)` | new rel | `10:…`, `39:GH-95` ✓ (incl. `RETURN r`/`r.k` read-back) | GAP | GAP | n/a |
 | `MATCH (a) CREATE (a)-[:R]->(b) SET b.k = v` | new node | `39:T-0198c` ✓ | GAP | GAP | n/a |
 | `MATCH (a) MATCH (b) CREATE (a)-[:R]->(b)` | rel | `39:T-0197a` ✓ | `39:T-0197c` ✓ | GAP | n/a |
-| `MATCH (a) MATCH (b) MERGE (a)-[r]->(b) SET r.k = v` | rel | `39:T-0196` ✓ | `39:T-0196` ✓ | GAP | n/a |
-| `MATCH (a) MATCH (b) SET a.k = v` | node | `39:T-0198d` ✓ | GAP | GAP | n/a |
-| `MERGE ... ON CREATE SET r.k = v` | rel | `39:T-0195c` ✓ | `39:T-0187` ✓ | GAP | n/a |
-| `MERGE ... ON MATCH SET r.k = v` | rel | `39:T-0202a` ✓ | `39:T-0202b` ✓ | GAP | n/a |
+| `MATCH (a) MATCH (b) MERGE (a)-[r]->(b) SET r.k = v` | rel | `39:T-0196` ✓ | `39:T-0196` ✓ | `py:test_relationship_set_reads_unwind_value` ✓ (#136) | n/a |
+| `MATCH (a) MATCH (b) SET a.k = v` | node | `39:T-0198d` ✓ | GAP | `py:test_set_reads_unwind_and_with_values` ✓ (#136) | n/a |
+| `MERGE ... ON CREATE SET r.k = v` | rel | `39:T-0195c` ✓ | `39:T-0187` ✓ | GAP (node: `py:test_row_field_set_keeps_types` ✓) | n/a |
+| `MERGE ... ON MATCH SET r.k = v` | rel | `39:T-0202a` ✓ | `39:T-0202b` ✓ | GAP (node: `py:test_on_match_set_keeps_types` ✓) | n/a |
 | `MERGE ... SET r += {..}` | rel | `39:T-0202c` ✓ | `39:T-0202d` ✓ | GAP | `39:T-0202c` ✓ |
 | `UNWIND [..] AS item CREATE (n {k:item.f})` | node | GAP | GAP | — T-0183 — | n/a |
 | `UNWIND [..] AS item MERGE (n {k:item.f})` | node | GAP | GAP | — T-0183 — | n/a |
 | `UNWIND [{..}] AS item MATCH (n {k:item.f})` (read) | — | `39:T-0185a` ✓ | `39:T-0185b` ✓ | n/a | n/a |
-| `FOREACH (x IN [..] \| CREATE ...)` | node | `28:…` ✓ | GAP | GAP | n/a |
+| `FOREACH (x IN [..] \| CREATE ...)` | node | `28:…` ✓ | `py:test_foreach_param_list` ✓ (#135) | GAP | n/a |
 
-**Column legend:** `NN:…` = `tests/functional/NN_*.sql` covers this cell; `✓` = verified write + read-back assertion; ticket IDs (T-NNNN) reference originating bug.
+**Column legend:** `NN:…` = `tests/functional/NN_*.sql` covers this cell; `py:NAME` = `bindings/python/tests/test_issues_134_136.py::NAME`; `✓` = verified write + read-back assertion; ticket IDs (T-NNNN) reference originating bug.
 
 ---
 
