@@ -4121,6 +4121,32 @@ static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
     return keep ? 0 : 1;   /* 1 = row filtered out */
 }
 
+/* The list of an UNWIND in a write pipeline's tail, as JSON text (owned;
+ * NULL for a null list), evaluated with the row's values and entities. */
+static int rw_eval_list(cypher_executor *executor, ast_node *expr, rw_row *row, char **out)
+{
+    *out = NULL;
+    if (rw_expr_scalar_only(expr, row)) {
+        char *text = NULL;
+        int type = rw_eval_scalar(executor, expr, row, &text);
+        if (type < 0) { free(text); return -1; }
+        *out = text;
+        return 0;
+    }
+    foreach_context *fctx = rw_row_foreach_ctx(executor, row);
+    foreach_context *prev = g_foreach_ctx;
+    if (fctx) g_foreach_ctx = fctx;
+    property_type pt = PROP_TYPE_TEXT;
+    property_value pv;
+    property_value_init(&pv);
+    int erc = executor_eval_value(executor, expr, row->vm, &pt, &pv);
+    g_foreach_ctx = prev;
+    if (fctx) free_foreach_context(fctx);
+    if (erc == 0 && (pt == PROP_TYPE_JSON || pt == PROP_TYPE_TEXT)) { *out = pv.as_str; pv.as_str = NULL; }
+    property_value_free(&pv);
+    return erc == -1 ? -1 : 0;
+}
+
 /* ---- Row-wise RETURN: projection, grouping, DISTINCT, ORDER BY, SKIP,
  * LIMIT (#136 review: the shapes routed here returned rows unsorted, not
  * deduplicated, not limited, and aggregated without grouping). ---------- */
@@ -4581,13 +4607,70 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     }
 
     /* --- 4. Per-row tail --------------------------------------------------- */
-    bool *row_alive = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(bool));
+    /* An UNWIND in the tail forks a row into one row per element; the new
+     * rows go on the end and start at the clause after the UNWIND
+     * (row_start). */
+    int rows_cap = n_rows > 0 ? n_rows : 1;
+    bool *row_alive = calloc((size_t)rows_cap, sizeof(bool));
+    int *row_start = calloc((size_t)rows_cap, sizeof(int));
+    for (int r = 0; r < n_rows; r++) row_start[r] = prefix_end;
     for (int r = 0; r < n_rows && rc >= 0; r++) {
         row_alive[r] = true;
-        for (int i = prefix_end; i < clauses->count && rc >= 0 && row_alive[r]; i++) {
+        for (int i = row_start[r]; i < clauses->count && rc >= 0 && row_alive[r]; i++) {
             ast_node *c = clauses->items[i];
             if (!c) continue;
             switch (c->type) {
+                case AST_NODE_UNWIND: {
+                    cypher_unwind *uw = (cypher_unwind *)c;
+                    char *list_json = NULL;
+                    rc = rw_eval_list(executor, uw->expr, &rows[r], &list_json);
+                    if (rc < 0) break;
+                    row_alive[r] = false;   /* replaced by its forks */
+                    sqlite3_stmt *st = NULL;
+                    if (list_json && sqlite3_prepare_v2(executor->db,
+                            "SELECT value, type FROM json_each(?1) WHERE json_valid(?1) AND json_type(?1) = 'array'",
+                            -1, &st, NULL) == SQLITE_OK) {
+                        sqlite3_bind_text(st, 1, list_json, -1, SQLITE_TRANSIENT);
+                        while (sqlite3_step(st) == SQLITE_ROW) {
+                            if (n_rows == rows_cap) {
+                                int nc = rows_cap * 2;
+                                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                                if (gr) rows = gr;
+                                if (ga) row_alive = ga;
+                                if (gs) row_start = gs;
+                                if (!gr || !ga || !gs) { rc = -1; break; }
+                                rows_cap = nc;
+                            }
+                            rw_row *nr = &rows[n_rows];
+                            memset(nr, 0, sizeof(*nr));
+                            nr->vm = create_variable_map();
+                            rw_fold_map(nr->vm, rows[r].vm);
+                            for (int k = 0; k < rows[r].n_scalars; k++) {
+                                if (strcmp(rows[r].scalars[k].name, uw->alias) == 0) continue;
+                                rw_row_add_scalar(nr, rows[r].scalars[k].name,
+                                                  rows[r].scalars[k].text, rows[r].scalars[k].type);
+                            }
+                            const char *jt = (const char *)sqlite3_column_text(st, 1);
+                            const char *jv = (const char *)sqlite3_column_text(st, 0);
+                            int ty = SQLITE_NULL;
+                            if (jt && strcmp(jt, "integer") == 0) ty = SQLITE_INTEGER;
+                            else if (jt && strcmp(jt, "real") == 0) ty = SQLITE_FLOAT;
+                            else if (jt && (strcmp(jt, "true") == 0 || strcmp(jt, "false") == 0)) {
+                                ty = GQL_COL_TYPE_BOOLEAN; jv = jt;
+                            } else if (jt && strcmp(jt, "text") == 0) ty = GQL_COL_TYPE_STRING;
+                            else if (jt && strcmp(jt, "null") != 0) ty = SQLITE_TEXT;   /* list / map */
+                            rw_row_add_scalar(nr, uw->alias, ty == SQLITE_NULL ? NULL : jv, ty);
+                            row_alive[n_rows] = false;
+                            row_start[n_rows] = i + 1;
+                            n_rows++;
+                        }
+                        sqlite3_finalize(st);
+                    }
+                    free(list_json);
+                    break;
+                }
                 case AST_NODE_DELETE:
                     if (eager_done && eager_done[i]) break;
                     rc = execute_delete_operations(executor, (cypher_delete*)c, rows[r].vm, result);
@@ -4663,6 +4746,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     for (int r = 0; r < n_rows; r++) rw_row_free(&rows[r]);
     free(rows);
     free(row_alive);
+    free(row_start);
     return rc;
 }
 
