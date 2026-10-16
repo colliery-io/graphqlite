@@ -11,6 +11,8 @@
  *    forward-decl pattern with a proper header (runtime/udf_register.h).
  */
 
+#include <stdbool.h>
+#include <stdlib.h>
 #include "graphqlite_sqlite.h"
 #include "runtime/udf_register.h"
 #include "runtime/udf_helpers.h"
@@ -35,6 +37,150 @@ static void gql_label_propagation_func(sqlite3_context *context, int argc, sqlit
   graph_algo_result_free(r);
 }
 
+
+/* _gql_personalized_pagerank(seeds_json, damping, iterations): personalized
+ * PageRank as JSON text, [{node_id, score}, ...] by score, highest first.
+ * The same steps as the SQL form it replaces: seeds start at 1/|seeds|;
+ * each step a node gets (1 - d)/|seeds| if it is a seed, plus d times the
+ * sum of score(m)/outdeg(m) over its in-edges; scores are normalized to sum
+ * to 1. The SQL form was one CTE per step, and SQLite 3.54 counts that
+ * chain against SQLITE_LIMIT_EXPR_DEPTH ("VIEWs and/or subqueries nested
+ * too deep" at 100 steps). */
+static int ppr_index_of(const sqlite3_int64 *ids, int n, sqlite3_int64 id)
+{
+  int lo = 0, hi = n - 1;
+  while (lo <= hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (ids[mid] == id) return mid;
+    if (ids[mid] < id) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+
+typedef struct { sqlite3_int64 id; double score; } ppr_out;
+
+static int ppr_out_cmp(const void *a, const void *b)
+{
+  const ppr_out *x = (const ppr_out *)a, *y = (const ppr_out *)b;
+  if (x->score > y->score) return -1;
+  if (x->score < y->score) return 1;
+  return x->id < y->id ? -1 : (x->id > y->id ? 1 : 0);
+}
+
+static void gql_personalized_pagerank_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  const char *seeds = argc > 0 ? (const char *)sqlite3_value_text(argv[0]) : NULL;
+  double damping = argc > 1 ? sqlite3_value_double(argv[1]) : 0.85;
+  int iterations = argc > 2 ? sqlite3_value_int(argv[2]) : 20;
+  if (iterations < 1) iterations = 1;
+  /* The SQL form wrote both factors with 4 decimals. */
+  char buf[64];
+  sqlite3_snprintf(sizeof(buf), buf, "%.4f", damping);
+  double d = strtod(buf, NULL);
+  sqlite3_snprintf(sizeof(buf), buf, "%.4f", 1.0 - damping);
+  double teleport_total = strtod(buf, NULL);
+
+  sqlite3_stmt *st = NULL;
+  sqlite3_int64 *ids = NULL; int n = 0, cap = 0;
+  if (sqlite3_prepare_v2(db, "SELECT id FROM nodes ORDER BY id", -1, &st, NULL) != SQLITE_OK) goto fail;
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    if (n == cap) {
+      cap = cap ? cap * 2 : 64;
+      sqlite3_int64 *g = realloc(ids, (size_t)cap * sizeof(*ids));
+      if (!g) goto nomem;
+      ids = g;
+    }
+    ids[n++] = sqlite3_column_int64(st, 0);
+  }
+  sqlite3_finalize(st); st = NULL;
+
+  bool *is_seed = calloc((size_t)(n > 0 ? n : 1), sizeof(bool));
+  double *outdeg = calloc((size_t)(n > 0 ? n : 1), sizeof(double));
+  double *pr = calloc((size_t)(n > 0 ? n : 1), sizeof(double));
+  double *nx = calloc((size_t)(n > 0 ? n : 1), sizeof(double));
+  int *esrc = NULL, *etgt = NULL; int ne = 0, ecap = 0;
+  double seed_count = 0;
+  if (!is_seed || !outdeg || !pr || !nx) goto nomem2;
+
+  if (seeds) {
+    if (sqlite3_prepare_v2(db, "SELECT value FROM json_each(?1)", -1, &st, NULL) != SQLITE_OK) goto fail2;
+    sqlite3_bind_text(st, 1, seeds, -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+      seed_count += 1;
+      if (sqlite3_column_type(st, 0) == SQLITE_INTEGER) {
+        int k = ppr_index_of(ids, n, sqlite3_column_int64(st, 0));
+        if (k >= 0) is_seed[k] = true;
+      }
+    }
+    sqlite3_finalize(st); st = NULL;
+  }
+
+  if (sqlite3_prepare_v2(db, "SELECT source_id, target_id FROM edges", -1, &st, NULL) != SQLITE_OK) goto fail2;
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    int a = ppr_index_of(ids, n, sqlite3_column_int64(st, 0));
+    int b = ppr_index_of(ids, n, sqlite3_column_int64(st, 1));
+    if (a < 0 || b < 0) continue;
+    if (ne == ecap) {
+      ecap = ecap ? ecap * 2 : 128;
+      int *gs = realloc(esrc, (size_t)ecap * sizeof(int));
+      if (!gs) goto nomem2;
+      esrc = gs;
+      int *gt = realloc(etgt, (size_t)ecap * sizeof(int));
+      if (!gt) goto nomem2;
+      etgt = gt;
+    }
+    esrc[ne] = a; etgt[ne] = b; ne++;
+    outdeg[a] += 1;
+  }
+  sqlite3_finalize(st); st = NULL;
+
+  for (int i = 0; i < n; i++) pr[i] = (is_seed[i] && seed_count > 0) ? 1.0 / seed_count : 0.0;
+  for (int it = 0; it < iterations; it++) {
+    for (int i = 0; i < n; i++)
+      nx[i] = (is_seed[i] && seed_count > 0) ? teleport_total / seed_count : 0.0;
+    for (int e = 0; e < ne; e++) nx[etgt[e]] += d * (pr[esrc[e]] / outdeg[esrc[e]]);
+    double *t = pr; pr = nx; nx = t;
+  }
+
+  double sum = 0;
+  for (int i = 0; i < n; i++) sum += pr[i];
+  ppr_out *out = calloc((size_t)(n > 0 ? n : 1), sizeof(ppr_out));
+  if (!out) goto nomem2;
+  for (int i = 0; i < n; i++) { out[i].id = ids[i]; out[i].score = pr[i]; }
+  qsort(out, (size_t)n, sizeof(ppr_out), ppr_out_cmp);
+
+  sqlite3_str *js = sqlite3_str_new(db);
+  sqlite3_str_appendchar(js, 1, '[');
+  for (int i = 0; i < n; i++) {
+    if (i) sqlite3_str_appendchar(js, 1, ',');
+    if (sum != 0)
+      sqlite3_str_appendf(js, "{\"node_id\":%lld,\"score\":%!.15g}", out[i].id, out[i].score / sum);
+    else
+      sqlite3_str_appendf(js, "{\"node_id\":%lld,\"score\":null}", out[i].id);
+  }
+  sqlite3_str_appendchar(js, 1, ']');
+  free(out);
+  char *text = sqlite3_str_finish(js);
+  if (!text) goto nomem2;
+  sqlite3_result_text(context, text, -1, sqlite3_free);
+  free(ids); free(is_seed); free(outdeg); free(pr); free(nx); free(esrc); free(etgt);
+  return;
+
+nomem2:
+  free(is_seed); free(outdeg); free(pr); free(nx); free(esrc); free(etgt);
+nomem:
+  if (st) sqlite3_finalize(st);
+  free(ids);
+  sqlite3_result_error_nomem(context);
+  return;
+fail2:
+  free(is_seed); free(outdeg); free(pr); free(nx); free(esrc); free(etgt);
+fail:
+  if (st) sqlite3_finalize(st);
+  free(ids);
+  sqlite3_result_error(context, sqlite3_errmsg(db), -1);
+}
 
 #ifdef _WIN32
 __declspec(dllexport)
@@ -61,6 +207,10 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
 
   rc = sqlite3_create_function(db, "_gql_label_propagation", 1, SQLITE_UTF8, 0,
                          gql_label_propagation_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  rc = sqlite3_create_function(db, "_gql_personalized_pagerank", 3, SQLITE_UTF8, 0,
+                         gql_personalized_pagerank_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_extract_ns", 1, SQLITE_UTF8, 0,

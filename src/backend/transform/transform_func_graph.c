@@ -271,67 +271,12 @@ int transform_personalized_pagerank_function(cypher_transform_context *ctx, cyph
         }
     }
 
-    /* Generate PageRank CTEs with personalization using unified builder */
-    char cte_base[64];
-    snprintf(cte_base, sizeof(cte_base), "_ppr_%d", ctx->cte_count);
-
-    char cte_name[128], cte_query[1024];
-
-    /* Seed nodes CTE - parse the JSON array into a table */
-    snprintf(cte_name, sizeof(cte_name), "%s_seeds", cte_base);
-    snprintf(cte_query, sizeof(cte_query), "SELECT value AS node_id FROM json_each('%s')", seeds_json);
-    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-
-    /* Seed count for normalization */
-    snprintf(cte_name, sizeof(cte_name), "%s_seed_count", cte_base);
-    snprintf(cte_query, sizeof(cte_query), "SELECT CAST(COUNT(*) AS REAL) AS n FROM %s_seeds", cte_base);
-    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-
-    /* Out-degree CTE */
-    snprintf(cte_name, sizeof(cte_name), "%s_od", cte_base);
-    sql_cte(ctx->unified_builder, cte_name, "SELECT source_id, CAST(COUNT(*) AS REAL) AS deg FROM edges GROUP BY source_id", false);
-
-    /* Initial PageRank: seeds get 1/|seeds|, others get 0 */
-    snprintf(cte_name, sizeof(cte_name), "%s_pr0", cte_base);
-    snprintf(cte_query, sizeof(cte_query),
-        "SELECT n.id AS node_id, "
-        "CASE WHEN n.id IN (SELECT node_id FROM %s_seeds) "
-        "THEN 1.0 / (SELECT n FROM %s_seed_count) ELSE 0.0 END AS score "
-        "FROM nodes n",
-        cte_base, cte_base);
-    sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-
-    /* Personalized PageRank iterations - teleport goes to seeds, not uniform */
-    for (int i = 1; i <= iterations; i++) {
-        snprintf(cte_name, sizeof(cte_name), "%s_pr%d", cte_base, i);
-        snprintf(cte_query, sizeof(cte_query),
-            "SELECT n.id AS node_id, "
-            /* Teleport term: (1-d)/|seeds| if seed, else 0 */
-            "CASE WHEN n.id IN (SELECT node_id FROM %s_seeds) "
-            "THEN %.4f / (SELECT sc.n FROM %s_seed_count sc) ELSE 0.0 END + "
-            /* Random walk term: d * sum(PR(m)/deg(m)) using JOINs */
-            "%.4f * COALESCE(SUM(p.score / COALESCE(od.deg, 1.0)), 0.0) AS score "
-            "FROM nodes n "
-            "LEFT JOIN edges e ON e.target_id = n.id "
-            "LEFT JOIN %s_pr%d p ON p.node_id = e.source_id "
-            "LEFT JOIN %s_od od ON od.source_id = e.source_id "
-            "GROUP BY n.id",
-            cte_base,
-            (1.0 - damping), cte_base,
-            damping,
-            cte_base, i - 1,
-            cte_base);
-        sql_cte(ctx->unified_builder, cte_name, cte_query, false);
-    }
-
-    ctx->cte_count++;
-
-    /* Return JSON array ordered by score descending, normalized (#125):
-     * teleport and the leaked rank both go to the seeds, so the same
-     * scaling holds. */
-    append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
-               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC))",
-               cte_base, iterations);
+    /* The C algorithm via _gql_personalized_pagerank: one CTE per step hit
+     * SQLite 3.54's nesting limit at 100 steps. */
+    char *esc = escape_sql_string(seeds_json);
+    append_sql(ctx, "json(_gql_personalized_pagerank('%s', %.17g, %d))",
+               esc ? esc : seeds_json, damping, iterations);
+    free(esc);
 
     return 0;
 }

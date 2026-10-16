@@ -824,6 +824,29 @@ static void test_path_zero_hop(void)
         "[[\"A\"],0],[[\"A\",\"B\"],1]");
 }
 
+/* tail() keeps maps, lists and entities (SQLite before 3.46 gave strings). */
+static void test_tail_keeps_types(void)
+{
+    const char *w[] = {"CREATE (:A {name: 'a'}), (:A {name: 'b'})", NULL};
+    ASSERT_UNWIND(w, NULL, "WITH [{k: 1}, {k: 2}, [3]] AS l RETURN tail(l)", "[{\"k\":2},[3]]");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (a:A) WITH a ORDER BY a.name WITH collect(a) AS ns RETURN [n IN tail(ns) | n.name]",
+        "[\"b\"]");
+    ASSERT_UNWIND(w, NULL, "RETURN [tail([]), tail([1]), tail(null)]", "[[],[],null]");
+}
+
+/* personalizedPageRank with 100 steps (one CTE per step hit SQLite 3.54's
+ * nesting limit). */
+static void test_personalized_pagerank_steps(void)
+{
+    const char *w[] = {"CREATE (a:N)-[:R]->(b:N)-[:R]->(a)", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "RETURN size(personalizedPageRank('[1]', 0.85, 100))", "2");
+    ASSERT_UNWIND(w, NULL,
+        "UNWIND personalizedPageRank('[1]', 0.85, 100) AS r RETURN round(r.score * 1000) ORDER BY r.node_id",
+        "541.0,459.0");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -867,7 +890,9 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "#135: path functions", test_path_functions) ||
         !CU_add_test(suite, "#135: boolean vs number equality", test_boolean_number_equality) ||
         !CU_add_test(suite, "#136: row-wise RETURN modifiers", test_rowwise_return_modifiers) ||
-        !CU_add_test(suite, "#135: zero-hop path", test_path_zero_hop)) {
+        !CU_add_test(suite, "#135: zero-hop path", test_path_zero_hop) ||
+        !CU_add_test(suite, "tail() keeps types", test_tail_keeps_types) ||
+        !CU_add_test(suite, "personalizedPageRank 100 steps", test_personalized_pagerank_steps)) {
         return CU_get_error();
     }
 

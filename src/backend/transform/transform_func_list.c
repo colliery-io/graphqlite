@@ -75,12 +75,13 @@ int transform_list_function(cypher_transform_context *ctx, cypher_function_call 
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
         append_sql(ctx, ", '$[#-1]')");
     } else if (strcasecmp(func_call->function_name, "tail") == 0) {
-        /* tail(list) - all elements except first */
-        /* Use json_remove to remove first element, but that doesn't work well */
-        /* Instead, build a subquery that extracts elements 1..end */
-        append_sql(ctx, "(SELECT json_group_array(value) FROM json_each(");
+        /* tail(list) - all elements except first. json_remove keeps maps,
+         * lists and entities as JSON; json_group_array over json_each.value
+         * stored them as strings on SQLite before 3.46 (json_each gave no
+         * JSON subtype there; Quantifier1-4 [8] on SQLite 3.45). */
+        append_sql(ctx, "json_remove(");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, ") WHERE key > 0)");
+        append_sql(ctx, ", '$[0]')");
     }
 
     return 0;
