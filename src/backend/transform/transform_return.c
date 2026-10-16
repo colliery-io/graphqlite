@@ -1347,7 +1347,11 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                         cypher_node_pattern *node = (cypher_node_pattern*)element;
                                         if (node->variable) {
                                             const char *node_alias = transform_var_get_alias(ctx->var_ctx, node->variable);
-                                            if (node_alias) {
+                                            if (node_alias && (strchr(node_alias, '.') ||
+                                                    transform_var_alias_is_id(ctx->var_ctx, node->variable))) {
+                                                /* A node from WITH: the alias is its id column. */
+                                                append_sql(ctx, "' || %s || '", node_alias);
+                                            } else if (node_alias) {
                                                 append_sql(ctx, "' || %s.id || '", node_alias);
                                             } else {
                                                 append_sql(ctx, "null");

@@ -681,21 +681,25 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 item_tagged[i] = with_append_tag(&col_buf,
                     with_item_tag_sql(ctx, item->expr, ctx->sql_buffer), col_name);
             }
+            char *fn_sql = strdup(ctx->sql_buffer);
 
             /* Restore sql_buffer */
             ctx->sql_size = saved_size;
             strcpy(ctx->sql_buffer, saved_buffer);
             free(saved_buffer);
 
-            /* Check if this is an aggregate function */
-            if (strcasecmp(func->function_name, "count") == 0 ||
-                strcasecmp(func->function_name, "sum") == 0 ||
-                strcasecmp(func->function_name, "avg") == 0 ||
-                strcasecmp(func->function_name, "min") == 0 ||
-                strcasecmp(func->function_name, "max") == 0 ||
-                strcasecmp(func->function_name, "collect") == 0) {
+            /* An aggregate (also nested: `size(collect(x))`) makes the WITH
+             * aggregate. Any other call is a grouping key: `WITH
+             * tail(relationships(p)) AS r, count(*)` grouped nothing and
+             * gave one row (Quantifier1-4 [9]). */
+            if (find_aggregating_call(item->expr) != NULL) {
                 has_aggregate = true;
+            } else if (fn_sql && fn_sql[0]) {
+                if (group_count > 0) dbuf_append(&group_buf, ", ");
+                dbuf_append(&group_buf, fn_sql);
+                group_count++;
             }
+            free(fn_sql);
         } else {
             /* GQLITE-T-0225: any other expression type — let
              * transform_expression try. Common cases: list/map literals,
@@ -793,7 +797,10 @@ with_star_columns_done:
     /* Build CTE body: SELECT <cols> FROM <from><joins> WHERE <where> GROUP BY <group> */
     dbuf_init(&cte_body);
 
-    dbuf_append(&cte_body, "SELECT ");
+    /* DISTINCT applies to the WITH's rows, inside the CTE. On the outer
+     * query it deduplicated the final rows instead (`WITH DISTINCT x RETURN
+     * count(*)` counted the duplicates; With5 [2]). */
+    dbuf_append(&cte_body, with->distinct ? "SELECT DISTINCT " : "SELECT ");
     dbuf_append(&cte_body, dbuf_get(&col_buf));
     if (from_clause) {
         dbuf_append(&cte_body, " FROM ");
@@ -1058,10 +1065,6 @@ with_star_columns_done:
     /* Clear old variables - WITH creates a new scope */
     transform_var_ctx_reset(ctx->var_ctx);
 
-    /* Handle DISTINCT */
-    if (with->distinct) {
-        sql_distinct(ctx->unified_builder);
-    }
 
     /* Set FROM to the CTE */
     sql_from(ctx->unified_builder, cte_name, NULL);
@@ -1209,6 +1212,7 @@ with_star_columns_done:
     }
 
     /* Handle ORDER BY */
+    bool order_limit_in_from = false;
     if (with->order_by && with->order_by->count > 0) {
         /* Validate: every identifier referenced in an ORDER BY expression
          * must be a projected variable. Cypher requires this — references
@@ -1257,14 +1261,41 @@ with_star_columns_done:
          * If it referenced a dropped input variable it was already emitted
          * inside the CTE body above (order_pushed_to_cte) — skip here. */
         if (!order_pushed_to_cte) {
+            /* With SKIP / LIMIT, the ordered and limited rows are the WITH's
+             * rows, not the final ones: read the CTE through a subquery that
+             * orders and limits it, under the CTE's own name, so every
+             * reference stays valid. On the outer query the SKIP removed rows
+             * after a later aggregate or MATCH (`WITH x ORDER BY x SKIP 1
+             * RETURN count(*)` gave no row; WithSkipLimit1 [1]). */
+            dynamic_buffer ord;
+            dbuf_init(&ord);
             for (int i = 0; i < with->order_by->count; i++) {
                 cypher_order_by_item *order_item = (cypher_order_by_item*)with->order_by->items[i];
                 char *order_expr = transform_expression_to_string(ctx, order_item->expr);
                 if (order_expr) {
                     sql_order_by(ctx->unified_builder, order_expr, order_item->descending);
+                    const char *dir = order_item->descending ? " DESC" : "";
+                    dbuf_appendf(&ord, "%s_gql_order_rank(%s)%s, _gql_order_key(%s)%s",
+                                 dbuf_len(&ord) ? ", " : "", order_expr, dir, order_expr, dir);
                     free(order_expr);
                 }
             }
+            if ((with->limit || with->skip) && dbuf_len(&ord) > 0) {
+                char *l = with->limit ? transform_expression_to_string(ctx, with->limit) : NULL;
+                char *o = with->skip ? transform_expression_to_string(ctx, with->skip) : NULL;
+                dynamic_buffer sub;
+                dbuf_init(&sub);
+                dbuf_appendf(&sub, "(SELECT * FROM %s ORDER BY %s LIMIT %s", cte_name,
+                             dbuf_get(&ord), l ? l : "-1");
+                if (o) dbuf_appendf(&sub, " OFFSET %s", o);
+                dbuf_append(&sub, ")");
+                sql_from(ctx->unified_builder, dbuf_get(&sub), cte_name);
+                dbuf_free(&sub);
+                free(l);
+                free(o);
+                order_limit_in_from = true;
+            }
+            dbuf_free(&ord);
         }
     }
 
@@ -1285,9 +1316,10 @@ with_star_columns_done:
      * NOT inlined into the CTE (would lose ordering correctness).
      * Use the outer-builder path for those cases. Otherwise the
      * CTE-inline above already handled it; skip here. */
-    bool inline_limit_done = (with->limit || with->skip) &&
-                             ((!with->order_by || with->order_by->count == 0) ||
-                              order_pushed_to_cte);
+    bool inline_limit_done = order_limit_in_from ||
+                             ((with->limit || with->skip) &&
+                              ((!with->order_by || with->order_by->count == 0) ||
+                               order_pushed_to_cte));
     if (!inline_limit_done && with->limit) {
         limit_str = transform_expression_to_string(ctx, with->limit);
         if (limit_str) {
