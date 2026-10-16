@@ -744,9 +744,167 @@ static bool foreach_after_read(cypher_query *query, clause_flags flags)
     return true;
 }
 
+/* ---- An aggregate inside a list operation of RETURN --------------------
+ * `RETURN all(ok IN collect(x) WHERE ok)` put the aggregate inside a
+ * json_each() in a subquery's FROM, which SQLite refuses ("misuse of
+ * aggregate"; List11 [3]). Rewrite the RETURN as `WITH collect(x) AS a, <keys>
+ * RETURN all(ok IN a WHERE ok)`: the aggregates and the grouping keys move
+ * to a WITH in front. Only for a RETURN without ORDER BY whose other items
+ * keep their column names (an alias, a variable, or var.prop). */
+static bool expr_has_list_op_aggregate(ast_node *e, bool in_list_op)
+{
+    if (!e) return false;
+    if (in_list_op && aggregating_call_name(e)) return true;
+    switch (e->type) {
+        /* Only the list that is iterated: an aggregate in the per-element
+         * part is an InvalidAggregation error (List12 [7]). */
+        case AST_NODE_LIST_PREDICATE:
+            return expr_has_list_op_aggregate(((cypher_list_predicate *)e)->list_expr, true);
+        case AST_NODE_LIST_COMPREHENSION:
+            return expr_has_list_op_aggregate(((cypher_list_comprehension *)e)->list_expr, true);
+        case AST_NODE_REDUCE_EXPR:
+            return expr_has_list_op_aggregate(((cypher_reduce_expr *)e)->list_expr, true);
+        case AST_NODE_BINARY_OP:
+            return expr_has_list_op_aggregate(((cypher_binary_op *)e)->left, in_list_op) ||
+                   expr_has_list_op_aggregate(((cypher_binary_op *)e)->right, in_list_op);
+        case AST_NODE_NOT_EXPR:
+            return expr_has_list_op_aggregate(((cypher_not_expr *)e)->expr, in_list_op);
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *f = (cypher_function_call *)e;
+            for (int i = 0; f->args && i < f->args->count; i++)
+                if (expr_has_list_op_aggregate(f->args->items[i], in_list_op)) return true;
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+static bool expr_has_aggregate(ast_node *e);
+
+/* Replace each aggregate call under e by `__gql_agg_N`, moving the call to
+ * the WITH items. Returns the (possibly new) node. */
+static ast_node *lift_aggregates(ast_node *e, ast_list *with_items, int *n)
+{
+    if (!e) return e;
+    if (aggregating_call_name(e)) {
+        char name[32];
+        snprintf(name, sizeof(name), "__gql_agg_%d", (*n)++);
+        ast_list_append(with_items, (ast_node *)make_return_item(e, name));
+        return (ast_node *)make_identifier(name, 0);
+    }
+    switch (e->type) {
+        case AST_NODE_LIST_PREDICATE: {
+            cypher_list_predicate *lp = (cypher_list_predicate *)e;
+            lp->list_expr = lift_aggregates(lp->list_expr, with_items, n);
+            break;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension *)e;
+            lc->list_expr = lift_aggregates(lc->list_expr, with_items, n);
+            break;
+        }
+        case AST_NODE_REDUCE_EXPR: {
+            cypher_reduce_expr *r = (cypher_reduce_expr *)e;
+            r->list_expr = lift_aggregates(r->list_expr, with_items, n);
+            break;
+        }
+        case AST_NODE_BINARY_OP: {
+            cypher_binary_op *b = (cypher_binary_op *)e;
+            b->left = lift_aggregates(b->left, with_items, n);
+            b->right = lift_aggregates(b->right, with_items, n);
+            break;
+        }
+        case AST_NODE_NOT_EXPR: {
+            cypher_not_expr *ne = (cypher_not_expr *)e;
+            ne->expr = lift_aggregates(ne->expr, with_items, n);
+            break;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *f = (cypher_function_call *)e;
+            for (int i = 0; f->args && i < f->args->count; i++)
+                f->args->items[i] = lift_aggregates(f->args->items[i], with_items, n);
+            break;
+        }
+        default:
+            break;
+    }
+    return e;
+}
+
+static bool expr_has_aggregate(ast_node *e)
+{
+    if (!e) return false;
+    if (aggregating_call_name(e)) return true;
+    return expr_has_list_op_aggregate(e, true) ||
+           (e->type == AST_NODE_BINARY_OP &&
+            (expr_has_aggregate(((cypher_binary_op *)e)->left) ||
+             expr_has_aggregate(((cypher_binary_op *)e)->right))) ||
+           (e->type == AST_NODE_NOT_EXPR && expr_has_aggregate(((cypher_not_expr *)e)->expr));
+}
+
+static void split_list_op_aggregates(cypher_query *query)
+{
+    if (!query || !query->clauses || query->clauses->count == 0) return;
+    ast_node *last = query->clauses->items[query->clauses->count - 1];
+    if (!last || last->type != AST_NODE_RETURN) return;
+    cypher_return *ret = (cypher_return *)last;
+    if (!ret->items || ret->return_all || ret->order_by) return;
+
+    bool needed = false;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+        if (!it || !it->expr) return;
+        if (expr_has_list_op_aggregate(it->expr, false)) needed = true;
+        else if (!expr_has_aggregate(it->expr) && !it->alias &&
+                 it->expr->type != AST_NODE_IDENTIFIER &&
+                 !(it->expr->type == AST_NODE_PROPERTY &&
+                   ((cypher_property *)it->expr)->expr &&
+                   ((cypher_property *)it->expr)->expr->type == AST_NODE_IDENTIFIER)) {
+            return;   /* its column name would change */
+        }
+    }
+    if (!needed) return;
+
+    ast_list *with_items = ast_list_create();
+    if (!with_items) return;
+    int n_agg = 0;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+        if (expr_has_aggregate(it->expr)) {
+            it->expr = lift_aggregates(it->expr, with_items, &n_agg);
+            continue;
+        }
+        /* A grouping key: computed in the WITH, read back by name. */
+        char key[32];
+        snprintf(key, sizeof(key), "__gql_key_%d", i);
+        if (!it->alias) {
+            char col[256];
+            if (it->expr->type == AST_NODE_IDENTIFIER) {
+                snprintf(col, sizeof(col), "%s", ((cypher_identifier *)it->expr)->name);
+            } else {
+                cypher_property *pr = (cypher_property *)it->expr;
+                snprintf(col, sizeof(col), "%s.%s", ((cypher_identifier *)pr->expr)->name, pr->property_name);
+            }
+            it->alias = strdup(col);
+        }
+        ast_list_append(with_items, (ast_node *)make_return_item(it->expr, key));
+        it->expr = (ast_node *)make_identifier(key, 0);
+    }
+    cypher_with *w = make_cypher_with(false, with_items, NULL, NULL, NULL, NULL);
+    if (!w) return;
+    ast_list_append(query->clauses, (ast_node *)w);
+    /* the WITH goes before the RETURN */
+    int c = query->clauses->count;
+    query->clauses->items[c - 1] = (ast_node *)ret;
+    query->clauses->items[c - 2] = (ast_node *)w;
+}
+
 int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
                            cypher_result *result)
 {
+    split_list_op_aggregates(query);
+
     /* Analyze query clauses */
     clause_flags flags = analyze_query_clauses(query);
 
