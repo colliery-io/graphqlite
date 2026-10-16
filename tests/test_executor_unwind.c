@@ -926,6 +926,22 @@ static void test_merge_fan_out_and_tail_match(void)
     ASSERT_UNWIND(w3, NULL, "MERGE (n:M {id: 'x'}) RETURN n.f", "true");
 }
 
+static void test_aggregating_with_after_write(void)
+{
+    const char *w[] = {
+        "CREATE (a {var: 'start'}), (b {var: 'end'}) WITH * UNWIND range(1, 3) AS i "
+        "CREATE (n {var: i}) WITH a, b, [a] + collect(n) + [b] AS nodeList "
+        "UNWIND range(0, size(nodeList) - 2, 1) AS i "
+        "WITH nodeList[i] AS n1, nodeList[i+1] AS n2 CREATE (n1)-[:T]->(n2)", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH ({var: 'start'})-[:T*]->(m {var: 'end'}) RETURN m.var", "end");
+    ASSERT_UNWIND(w, NULL, "MATCH ()-[r:T]->() RETURN count(r)", "4");
+    const char *none[] = {NULL};
+    ASSERT_UNWIND(none, NULL,
+        "UNWIND [1, 2, 2, 3] AS x CREATE (:Q {v: x}) WITH x % 2 AS p, collect(DISTINCT x) AS xs "
+        "WHERE p = 1 RETURN size(xs)", "2");
+    ASSERT_UNWIND(none, NULL, "UNWIND [1, 2] AS x CREATE (n {v: x}) WITH collect(n) AS ns RETURN size(ns)", "2");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -976,7 +992,8 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "GQLITE-T-0422: stored boolean vs number", test_stored_boolean_vs_number) ||
         !CU_add_test(suite, "GQLITE-T-0423: FOREACH over entities", test_foreach_entities) ||
         !CU_add_test(suite, "GQLITE-T-0424: CREATE WITH UNWIND CREATE", test_create_with_unwind_create) ||
-        !CU_add_test(suite, "GQLITE-T-0426: MERGE fan-out and tail MATCH", test_merge_fan_out_and_tail_match)) {
+        !CU_add_test(suite, "GQLITE-T-0426: MERGE fan-out and tail MATCH", test_merge_fan_out_and_tail_match) ||
+        !CU_add_test(suite, "GQLITE-T-0426: aggregating WITH after a write", test_aggregating_with_after_write)) {
         return CU_get_error();
     }
 

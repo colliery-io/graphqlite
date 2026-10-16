@@ -653,7 +653,7 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
         return false;
     }
     bool unwind_seen = false, with_seen = false, delete_seen = false;
-    bool write_seen = false, merge_seen = false, update_after_merge = false;
+    bool write_seen = false, merge_seen = false, update_after_merge = false, agg_tail = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
@@ -669,11 +669,16 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
                 if (!write_seen) {
                     with_seen = true;
                 } else {
-                    /* The pipeline does not aggregate in a tail WITH. */
+                    /* The pipeline aggregates in a tail WITH without
+                     * ORDER BY / SKIP / LIMIT / DISTINCT. */
                     cypher_with *w = (cypher_with *)c;
+                    bool plain = !w->order_by && !w->skip && !w->limit && !w->distinct;
                     for (int wi = 0; w->items && wi < w->items->count; wi++) {
                         cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
-                        if (it && aggregating_call_name(it->expr)) return false;
+                        if (it && aggregating_call_name(it->expr)) {
+                            if (!plain) return false;
+                            agg_tail = true;
+                        }
                     }
                 }
                 break;
@@ -703,7 +708,9 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     /* A WITH-only prefix with DELETE keeps its handler (aggregation after a
      * DELETE, Delete6). */
     if (!unwind_seen && delete_seen) return false;
-    return (flags & CLAUSE_MATCH) || update_after_merge;
+    /* An aggregating WITH after the write: only the pipeline groups the
+     * written rows (`UNWIND .. CREATE (n) WITH collect(n) AS ns`). */
+    return (flags & CLAUSE_MATCH) || update_after_merge || agg_tail;
 }
 
 static bool foreach_after_read(cypher_query *query, clause_flags flags)
@@ -3997,6 +4004,11 @@ static bool rw_expr_scalar_only(ast_node *expr, const rw_row *row)
             for (int i = 0; i < l->items->count; i++) if (!rw_expr_scalar_only(l->items->items[i], row)) return false;
             return true;
         }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript*)expr;
+            return rw_expr_scalar_only(s->expr, row) && rw_expr_scalar_only(s->index, row) &&
+                   rw_expr_scalar_only(s->slice_start, row) && rw_expr_scalar_only(s->slice_end, row);
+        }
         default: return false;
     }
 }
@@ -4252,6 +4264,9 @@ static void rw_fold_map(variable_map *into, variable_map *from)
 
 /* Apply a tail WITH to a row: rename / drop entities and scalars, evaluate
  * scalar-only expressions. */
+static void rw_eval_cell(cypher_executor *executor, ast_node *expr, rw_row *row, char **text, int *type);
+static void rw_bind_value(rw_row *row, const char *name, const char *text, int type);
+
 static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
 {
     if (w->pass_all || !w->items) return 0;
@@ -4273,7 +4288,13 @@ static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
         } else if (it->alias && rw_expr_scalar_only(it->expr, row)) {
             char *text = NULL;
             int type = rw_eval_scalar(executor, it->expr, row, &text);
-            if (type >= 0) rw_row_add_scalar(&next, it->alias, text, type);
+            if (type >= 0) rw_bind_value(&next, it->alias, text, type);   /* list[i] can be an entity */
+            free(text);
+        } else if (it->alias) {
+            /* An expression over the row's entities (`n.x + 1`). */
+            char *text = NULL; int type;
+            rw_eval_cell(executor, it->expr, row, &text, &type);
+            rw_bind_value(&next, it->alias, text, type);
             free(text);
         }
     }
@@ -4592,6 +4613,337 @@ static int rw_count_value(cypher_executor *executor, ast_node *expr, long long *
     return -1;
 }
 
+/* ---- Row-wise aggregation (GQLITE-T-0426): count, collect, sum, avg, min
+ * and max over the cells of the rows of a group, so collect(n) of entities
+ * and an aggregate inside a larger expression work after a write. ------- */
+
+/* The value of expr for the row, as a result cell (an entity is rendered). */
+static void rw_eval_cell(cypher_executor *executor, ast_node *expr, rw_row *row, char **text, int *type)
+{
+    ast_list *items = ast_list_create();
+    ast_list_append(items, (ast_node*)make_return_item(expr, NULL));
+    cypher_return one = {0};
+    one.items = items;
+    rw_out_row cell = {0};
+    rw_project_row(executor, &one, row, &cell);
+    *text = cell.cells ? cell.cells[0] : NULL;
+    *type = cell.types ? cell.types[0] : SQLITE_NULL;
+    if (!*text) *type = SQLITE_NULL;
+    free(cell.cells); free(cell.types);
+    free(items->items[0]);   /* shell only: expr belongs to the query */
+    items->count = 0;
+    ast_list_free(items);
+}
+
+/* A cell as a JSON element of a collect() list. */
+static void rw_json_append_cell(char **buf, const char *text, int type)
+{
+    char *el;
+    if (type == SQLITE_INTEGER || type == SQLITE_FLOAT) el = sqlite3_mprintf("%s", text);
+    else if (type == GQL_COL_TYPE_BOOLEAN)
+        el = sqlite3_mprintf("%s", (strcmp(text, "true") == 0 || strcmp(text, "1") == 0) ? "true" : "false");
+    else if (type != GQL_COL_TYPE_STRING && (text[0] == '[' || text[0] == '{')) el = sqlite3_mprintf("%s", text);
+    else {
+        /* a JSON string */
+        size_t n = strlen(text);
+        char *q = malloc(n * 6 + 3), *o = q;
+        if (!q) return;
+        *o++ = '"';
+        for (const unsigned char *p = (const unsigned char*)text; *p; p++) {
+            if (*p == '"' || *p == '\\') { *o++ = '\\'; *o++ = (char)*p; }
+            else if (*p == '\n') { *o++ = '\\'; *o++ = 'n'; }
+            else if (*p == '\r') { *o++ = '\\'; *o++ = 'r'; }
+            else if (*p == '\t') { *o++ = '\\'; *o++ = 't'; }
+            else if (*p < 0x20) o += sprintf(o, "\\u%04x", *p);
+            else *o++ = (char)*p;
+        }
+        *o++ = '"'; *o = 0;
+        el = sqlite3_mprintf("%s", q);
+        free(q);
+    }
+    char *grown = sqlite3_mprintf("%s%s%s", *buf ? *buf : "", *buf ? "," : "", el);
+    sqlite3_free(el);
+    sqlite3_free(*buf);
+    *buf = grown;
+}
+
+/* Aggregate call `call` over rows[idx[0..n)]. Returns 0 and an owned cell,
+ * or -1 for an aggregate this does not compute. */
+static int rw_aggregate(cypher_executor *executor, ast_node *call, rw_row *rows, const int *idx, int n,
+                        char **out_text, int *out_type)
+{
+    *out_text = NULL; *out_type = SQLITE_NULL;
+    const char *agg = aggregating_call_name(call);
+    if (!agg) return -1;
+    char name[16];
+    snprintf(name, sizeof(name), "%s", agg);   /* agg points to a shared buffer */
+    cypher_function_call *fc = (cypher_function_call*)call;
+    ast_node *arg = (fc->args && fc->args->count > 0) ? fc->args->items[0] : NULL;
+    bool is_count = strcmp(name, "count") == 0, is_collect = strcmp(name, "collect") == 0;
+    bool is_sum = strcmp(name, "sum") == 0, is_avg = strcmp(name, "avg") == 0;
+    bool is_min = strcmp(name, "min") == 0, is_max = strcmp(name, "max") == 0;
+    if (!is_count && !is_collect && !is_sum && !is_avg && !is_min && !is_max) return -1;
+    if (!arg) {
+        if (!is_count) return -1;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", n);
+        *out_text = strdup(buf); *out_type = SQLITE_INTEGER;
+        return 0;
+    }
+    char **cells = calloc((size_t)(n > 0 ? n : 1), sizeof(char*));
+    int *types = calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+    int m = 0;
+    for (int k = 0; k < n; k++) {
+        char *t; int ty;
+        rw_eval_cell(executor, arg, &rows[idx[k]], &t, &ty);
+        if (!t) continue;
+        bool dup = false;
+        for (int q = 0; fc->distinct && q < m && !dup; q++) dup = rw_cell_equal(cells[q], types[q], t, ty);
+        if (dup) { free(t); continue; }
+        cells[m] = t; types[m] = ty; m++;
+    }
+    char buf[64];
+    if (is_count) {
+        snprintf(buf, sizeof(buf), "%d", m);
+        *out_text = strdup(buf); *out_type = SQLITE_INTEGER;
+    } else if (is_collect) {
+        char *body = NULL;
+        for (int k = 0; k < m; k++) rw_json_append_cell(&body, cells[k], types[k]);
+        char *list = sqlite3_mprintf("[%s]", body ? body : "");
+        sqlite3_free(body);
+        *out_text = strdup(list); *out_type = GQL_COL_TYPE_JSON;
+        sqlite3_free(list);
+    } else if (is_min || is_max) {
+        int best = -1;
+        for (int k = 0; k < m; k++) {
+            if (best < 0) { best = k; continue; }
+            int c = rw_cell_cmp(cells[k], types[k], cells[best], types[best]);
+            if ((is_min && c < 0) || (is_max && c > 0)) best = k;
+        }
+        if (best >= 0) { *out_text = strdup(cells[best]); *out_type = types[best]; }
+    } else {
+        bool all_int = true;
+        long long isum = 0; double dsum = 0; int seen = 0;
+        for (int k = 0; k < m; k++) {
+            if (types[k] != SQLITE_INTEGER && types[k] != SQLITE_FLOAT) continue;
+            if (types[k] == SQLITE_FLOAT) all_int = false;
+            isum += strtoll(cells[k], NULL, 10);
+            dsum += strtod(cells[k], NULL);
+            seen++;
+        }
+        if (is_sum) {
+            if (all_int) { snprintf(buf, sizeof(buf), "%lld", isum); *out_type = SQLITE_INTEGER; }
+            else { gql_format_double(buf, sizeof(buf), dsum); *out_type = SQLITE_FLOAT; }
+            *out_text = strdup(buf);
+        } else if (seen > 0) {
+            gql_format_double(buf, sizeof(buf), dsum / seen);
+            *out_text = strdup(buf); *out_type = SQLITE_FLOAT;
+        }
+    }
+    for (int k = 0; k < m; k++) free(cells[k]);
+    free(cells); free(types);
+    return 0;
+}
+
+/* The slots of the aggregate calls in expr (not inside another aggregate). */
+typedef ast_node **rw_slot;
+
+static void rw_find_aggregates(ast_node **slot, rw_slot **slots, int *n)
+{
+    ast_node *e = slot ? *slot : NULL;
+    if (!e) return;
+    if (aggregating_call_name(e)) {
+        rw_slot *grown = realloc(*slots, (size_t)(*n + 1) * sizeof(rw_slot));
+        if (grown) { *slots = grown; (*slots)[(*n)++] = slot; }
+        return;
+    }
+    switch (e->type) {
+        case AST_NODE_BINARY_OP:
+            rw_find_aggregates(&((cypher_binary_op*)e)->left, slots, n);
+            rw_find_aggregates(&((cypher_binary_op*)e)->right, slots, n);
+            break;
+        case AST_NODE_NOT_EXPR: rw_find_aggregates(&((cypher_not_expr*)e)->expr, slots, n); break;
+        case AST_NODE_PROPERTY: rw_find_aggregates(&((cypher_property*)e)->expr, slots, n); break;
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript*)e;
+            rw_find_aggregates(&s->expr, slots, n);
+            rw_find_aggregates(&s->index, slots, n);
+            rw_find_aggregates(&s->slice_start, slots, n);
+            rw_find_aggregates(&s->slice_end, slots, n);
+            break;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            ast_list *a = ((cypher_function_call*)e)->args;
+            for (int i = 0; a && i < a->count; i++) rw_find_aggregates(&a->items[i], slots, n);
+            break;
+        }
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list*)e)->items;
+            for (int i = 0; a && i < a->count; i++) rw_find_aggregates(&a->items[i], slots, n);
+            break;
+        }
+        default: break;
+    }
+}
+
+static bool rw_with_aggregates(cypher_with *w)
+{
+    if (!w || w->pass_all || !w->items) return false;
+    for (int i = 0; i < w->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item*)w->items->items[i];
+        rw_slot *slots = NULL; int n = 0;
+        if (it) rw_find_aggregates(&it->expr, &slots, &n);
+        free(slots);
+        if (n > 0) return true;
+    }
+    return false;
+}
+
+/* Bind a computed value to name: an entity cell binds the entity. */
+static void rw_bind_value(rw_row *row, const char *name, const char *text, int type)
+{
+    bool is_edge = false;
+    long long id = rw_entity_id(text, &is_edge);
+    if (id >= 0 && is_edge) set_variable_edge_id(row->vm, name, (int)id);
+    else if (id >= 0) set_variable_node_id(row->vm, name, (int)id);
+    else rw_row_add_scalar(row, name, text, type);
+}
+
+/* An aggregating WITH over rows[idx[0..n)]: one output row per group of the
+ * grouping items. 0 on success, -1 on error. */
+static int rw_with_aggregate(cypher_executor *executor, cypher_with *w, rw_row *rows, const int *idx, int n,
+                             rw_row **out, int *n_out, cypher_result *result)
+{
+    *out = NULL; *n_out = 0;
+    if (w->order_by || w->skip || w->limit || w->distinct) {
+        set_result_error(result, "WITH with an aggregate, ORDER BY, SKIP, LIMIT or DISTINCT after a write is not supported");
+        return -1;
+    }
+    int ni = w->items->count;
+    bool *is_agg = calloc((size_t)ni, sizeof(bool));
+    for (int i = 0; i < ni; i++) {
+        cypher_return_item *it = (cypher_return_item*)w->items->items[i];
+        rw_slot *slots = NULL; int ns = 0;
+        rw_find_aggregates(&it->expr, &slots, &ns);
+        free(slots);
+        is_agg[i] = ns > 0;
+    }
+    /* key cells per row */
+    rw_out_row *keys = calloc((size_t)(n > 0 ? n : 1), sizeof(rw_out_row));
+    bool any_key = false;
+    for (int k = 0; k < n; k++) {
+        keys[k].cells = calloc((size_t)ni, sizeof(char*));
+        keys[k].types = calloc((size_t)ni, sizeof(int));
+        for (int i = 0; i < ni; i++) {
+            if (is_agg[i]) continue;
+            any_key = true;
+            rw_eval_cell(executor, ((cypher_return_item*)w->items->items[i])->expr, &rows[idx[k]],
+                         &keys[k].cells[i], &keys[k].types[i]);
+        }
+    }
+    bool *key_only = calloc((size_t)ni, sizeof(bool));
+    for (int i = 0; i < ni; i++) key_only[i] = !is_agg[i];
+    bool *used = calloc((size_t)(n > 0 ? n : 1), sizeof(bool));
+    int *members = calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+    rw_row *res = calloc((size_t)(n > 0 ? n : 1), sizeof(rw_row));
+    int n_res = 0, rc = 0;
+    bool empty_group = (!any_key && n == 0);
+    for (int g = 0; (g < n || empty_group) && rc == 0; g++) {
+        if (!empty_group && used[g]) continue;
+        int nm = 0;
+        for (int j = g; !empty_group && j < n; j++) {
+            if (used[j] || !rw_rows_equal(&keys[g], &keys[j], ni, key_only)) continue;
+            used[j] = true;
+            members[nm++] = idx[j];
+        }
+        rw_row *rep = empty_group ? NULL : &rows[idx[g]];
+        rw_row *nr = &res[n_res++];
+        nr->vm = create_variable_map();
+        /* Scope to evaluate the aggregating items: the representative row's
+         * values, its entities rendered as values, and the aggregates. */
+        rw_row ev = {0};
+        if (rep) {
+            for (int s = 0; s < rep->n_scalars; s++)
+                rw_row_add_scalar(&ev, rep->scalars[s].name, rep->scalars[s].text, rep->scalars[s].type);
+            for (int v = 0; rep->vm && v < rep->vm->count; v++) {
+                const char *vn = rep->vm->mappings[v].variable;
+                if (!vn || rw_row_scalar(&ev, vn)) continue;
+                ast_node *id = (ast_node*)make_identifier((char*)vn, 0);
+                char *t; int ty;
+                rw_eval_cell(executor, id, rep, &t, &ty);
+                ast_node_free(id);
+                rw_row_add_scalar(&ev, vn, t, ty == SQLITE_NULL ? SQLITE_NULL : SQLITE_TEXT);
+                free(t);
+            }
+        }
+        for (int i = 0; i < ni && rc == 0; i++) {
+            cypher_return_item *it = (cypher_return_item*)w->items->items[i];
+            const char *alias = it->alias ? it->alias
+                : (it->expr && it->expr->type == AST_NODE_IDENTIFIER ? ((cypher_identifier*)it->expr)->name : NULL);
+            if (!alias) continue;
+            if (!is_agg[i]) {
+                if (it->expr->type == AST_NODE_IDENTIFIER && rep) {
+                    const char *src = ((cypher_identifier*)it->expr)->name;
+                    if (is_variable_edge(rep->vm, src)) { set_variable_edge_id(nr->vm, alias, get_variable_edge_id(rep->vm, src)); continue; }
+                    if (get_variable_node_id(rep->vm, src) >= 0) { set_variable_node_id(nr->vm, alias, get_variable_node_id(rep->vm, src)); continue; }
+                }
+                rw_bind_value(nr, alias, keys[g].cells[i], keys[g].types[i]);
+                continue;
+            }
+            rw_slot *slots = NULL; int ns = 0;
+            rw_find_aggregates(&it->expr, &slots, &ns);
+            ast_node **orig = calloc((size_t)ns, sizeof(ast_node*));
+            for (int s = 0; s < ns && rc == 0; s++) {
+                char *t; int ty;
+                if (rw_aggregate(executor, *slots[s], rows, members, nm, &t, &ty) < 0) {
+                    set_result_error(result, "Unsupported aggregate in WITH after a write");
+                    rc = -1;
+                    break;
+                }
+                char an[32];
+                snprintf(an, sizeof(an), "__rw_agg_%d", s);
+                rw_row_add_scalar(&ev, an, t, ty);
+                free(t);
+                orig[s] = *slots[s];
+                *slots[s] = (ast_node*)make_identifier(an, 0);
+            }
+            if (rc == 0) {
+                char *t = NULL;
+                int ty = rw_expr_scalar_only(it->expr, &ev) ? rw_eval_scalar(executor, it->expr, &ev, &t) : -1;
+                if (ty < 0) { set_result_error(result, "Cannot evaluate an aggregating WITH item after a write"); rc = -1; }
+                else rw_bind_value(nr, alias, t, ty);
+                free(t);
+            }
+            for (int s = 0; s < ns; s++) {
+                if (!orig[s]) continue;
+                ast_node_free(*slots[s]);
+                *slots[s] = orig[s];
+            }
+            free(orig); free(slots);
+        }
+        rw_row_free(&ev);
+        if (rc == 0 && w->where && rw_expr_scalar_only(w->where, nr)) {
+            char *t = NULL;
+            int ty = rw_eval_scalar(executor, w->where, nr, &t);
+            if (!(ty >= 0 && t && strcmp(t, "1") == 0)) { rw_row_free(nr); n_res--; }
+            free(t);
+        }
+        if (empty_group) break;
+    }
+    for (int k = 0; k < n; k++) {
+        for (int i = 0; i < ni; i++) free(keys[k].cells[i]);
+        free(keys[k].cells); free(keys[k].types);
+    }
+    free(keys); free(key_only); free(used); free(members); free(is_agg);
+    if (rc < 0) {
+        for (int k = 0; k < n_res; k++) rw_row_free(&res[k]);
+        free(res);
+        return -1;
+    }
+    *out = res; *n_out = n_res;
+    return 0;
+}
+
 static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_row *rows,
                              const bool *row_alive, int n_rows, cypher_result *result)
 {
@@ -4644,6 +4996,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
         rw_out_row *groups = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(rw_out_row));
         int n_groups = 0;
         variable_map **maps = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(variable_map*));
+        int *member = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(int));
         bool *used = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(bool));
         bool any_key = false;
         for (int i = 0; i < cols; i++) if (key[i]) any_key = true;
@@ -4655,6 +5008,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
             for (int j = first_pass ? n_out : g; j < n_out; j++) {
                 if (used[j] || !rw_rows_equal(&out[g], &out[j], cols, key)) continue;
                 used[j] = true;
+                member[k] = src[j];
                 maps[k++] = rows[src[j]].vm;
             }
             rw_out_row *grp = &groups[n_groups++];
@@ -4665,6 +5019,9 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
                 if (key[i]) {
                     grp->cells[i] = out[g].cells[i] ? strdup(out[g].cells[i]) : NULL;
                     grp->types[i] = out[g].types[i];
+                } else if (rw_aggregate(executor, it->expr, rows, member, k,
+                                        &grp->cells[i], &grp->types[i]) == 0) {
+                    /* computed from the row cells */
                 } else {
                     char ***save_d = result->data; int **save_t = result->data_types;
                     result->data = &grp->cells; result->data_types = &grp->types;
@@ -4678,7 +5035,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
             for (int i = 0; i < cols; i++) free(out[j].cells[i]);
             free(out[j].cells); free(out[j].types);
         }
-        free(out); free(maps); free(used); free(key);
+        free(out); free(maps); free(member); free(used); free(key);
         out = groups;
         n_out = n_groups;
     }
@@ -4916,7 +5273,13 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     bool *row_alive = calloc((size_t)rows_cap, sizeof(bool));
     int *row_start = calloc((size_t)rows_cap, sizeof(int));
     for (int r = 0; r < n_rows; r++) row_start[r] = prefix_end;
-    for (int r = 0; r < n_rows && rc >= 0; r++) {
+    /* An aggregating WITH is a barrier: a row that reaches it parks there
+     * (row_start = -(clause + 1)); when every row has run, the parked rows
+     * of the first barrier are grouped into new rows that go on from the
+     * clause after it. */
+    int scan_from = 0;
+  run_rows:
+    for (int r = scan_from; r < n_rows && rc >= 0; r++) {
         row_alive[r] = true;
         for (int i = row_start[r]; i < clauses->count && rc >= 0 && row_alive[r]; i++) {
             ast_node *c = clauses->items[i];
@@ -5085,6 +5448,11 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     break;
                 }
                 case AST_NODE_WITH: {
+                    if (rw_with_aggregates((cypher_with*)c)) {
+                        row_alive[r] = false;
+                        row_start[r] = -(i + 1);
+                        break;
+                    }
                     int w = rw_apply_with(executor, (cypher_with*)c, &rows[r]);
                     if (w < 0) rc = -1;
                     else if (w == 1) row_alive[r] = false;
@@ -5096,6 +5464,46 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     set_result_error(result, "Unsupported clause in a row-wise write pipeline");
                     rc = -1;
             }
+        }
+    }
+    if (rc >= 0) {
+        int barrier = -1;
+        for (int r = 0; r < n_rows; r++)
+            if (row_start[r] < 0 && (barrier < 0 || -row_start[r] - 1 < barrier)) barrier = -row_start[r] - 1;
+        if (barrier >= 0) {
+            int *idx = calloc((size_t)n_rows, sizeof(int));
+            int n_idx = 0;
+            for (int r = 0; r < n_rows; r++) {
+                if (row_start[r] == -(barrier + 1)) { idx[n_idx++] = r; row_start[r] = clauses->count; }
+            }
+            rw_row *grouped = NULL; int n_grouped = 0;
+            rc = idx ? rw_with_aggregate(executor, (cypher_with*)clauses->items[barrier], rows, idx, n_idx,
+                                         &grouped, &n_grouped, result) : -1;
+            free(idx);
+            if (rc >= 0 && n_rows + n_grouped > rows_cap) {
+                int nc = n_rows + n_grouped;
+                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                if (gr) rows = gr;
+                if (ga) row_alive = ga;
+                if (gs) row_start = gs;
+                if (!gr || !ga || !gs) rc = -1;
+                else rows_cap = nc;
+            }
+            if (rc >= 0) {
+                scan_from = n_rows;
+                for (int g = 0; g < n_grouped; g++) {
+                    rows[n_rows] = grouped[g];
+                    row_alive[n_rows] = false;
+                    row_start[n_rows] = barrier + 1;
+                    n_rows++;
+                }
+                free(grouped);
+                goto run_rows;
+            }
+            for (int g = 0; g < n_grouped; g++) rw_row_free(&grouped[g]);
+            free(grouped);
         }
     }
     free(eager_done);
