@@ -873,10 +873,11 @@ void gql_in_func(
                                         strcmp(etype, "object") == 0);
         bool elem_bool = etype && (strcmp(etype, "true") == 0 || strcmp(etype, "false") == 0);
         tval t = TVAL_FALSE;
-        /* Only a left side known to be a boolean: a stored boolean property
-         * reads back as an untagged 1 / 0 here, and must still find true. */
-        if (lhs_bool) {
-            if (elem_bool) {
+        /* A boolean equals only a boolean. The left side comes in value form
+         * (GQLITE-T-0422), so a stored boolean carries its tag; an untagged
+         * 1 / 0 on the left is a number. */
+        if (lhs_bool || elem_bool) {
+            if (lhs_bool && elem_bool) {
                 bool lv = (strcmp(lhs_s, "true") == 0 || strcmp(lhs_s, "1") == 0);
                 t = (lv == (etype[0] == 't')) ? TVAL_TRUE : TVAL_FALSE;
             }

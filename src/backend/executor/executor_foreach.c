@@ -14,7 +14,7 @@
 
 /* Forward declaration for evaluating list expressions */
 static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
-                                   char **json_out);
+                                   variable_map *outer, char **json_out);
 
 static void fold_var_map(variable_map *into, variable_map *from)
 {
@@ -129,9 +129,21 @@ int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach
     }
     g_foreach_ctx = ctx;
 
+    /* A list literal of literals binds each item with its own type. A list
+     * with any other item (`[a]`, `[x + 1]`) is evaluated as a whole below,
+     * so an item that is an entity is bound as one. */
+    bool literal_list = foreach->list_expr->type == AST_NODE_LIST;
+    if (literal_list) {
+        cypher_list *list = (cypher_list*)foreach->list_expr;
+        for (int i = 0; list->items && i < list->items->count; i++) {
+            ast_node *item = list->items->items[i];
+            if (item && item->type == AST_NODE_RETURN_ITEM) item = ((cypher_return_item*)item)->expr;
+            if (!item || item->type != AST_NODE_LITERAL) { literal_list = false; break; }
+        }
+    }
+
     int rc = 0;
-    if (foreach->list_expr->type == AST_NODE_LIST) {
-        /* List literal: bind each item with its own type */
+    if (literal_list) {
         cypher_list *list = (cypher_list*)foreach->list_expr;
         for (int i = 0; list->items && i < list->items->count && rc >= 0; i++) {
             ast_node *item = list->items->items[i];
@@ -139,27 +151,9 @@ int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach
                 item = ((cypher_return_item*)item)->expr;
             }
             if (bind_foreach_item_ast(ctx, foreach->variable, item) < 0) {
-                /* An expression item: evaluate it as a one-item list */
-                char *json = NULL;
-                ast_list *one = ast_list_create();
-                ast_list_append(one, item);
-                cypher_list *wrap = make_list(one, 0);
-                int erc = evaluate_list_expression(executor, (ast_node*)wrap, &json);
-                one->count = 0;   /* the item belongs to the query */
-                ast_node_free((ast_node*)wrap);
-                sqlite3_stmt *st = NULL;
-                if (erc < 0 || !json ||
-                    sqlite3_prepare_v2(executor->db, "SELECT value, type FROM json_each(?)", -1, &st, NULL) != SQLITE_OK) {
-                    free(json);
-                    set_result_error(result, "Failed to evaluate FOREACH list item");
-                    rc = -1;
-                    break;
-                }
-                sqlite3_bind_text(st, 1, json, -1, SQLITE_TRANSIENT);
-                if (sqlite3_step(st) == SQLITE_ROW) bind_foreach_item_json_each(ctx, foreach->variable, st, 0, 1);
-                else set_foreach_binding_null(ctx, foreach->variable);
-                sqlite3_finalize(st);
-                free(json);
+                set_result_error(result, "Failed to bind FOREACH list item");
+                rc = -1;
+                break;
             }
             rc = execute_foreach_body(executor, foreach, result, outer);
         }
@@ -168,13 +162,22 @@ int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach
          * iterate its JSON with each value's type (#135: a $param list was
          * evaluated without its parameters and created nothing). */
         char *json = NULL;
-        if (evaluate_list_expression(executor, foreach->list_expr, &json) < 0) {
+        if (evaluate_list_expression(executor, foreach->list_expr, outer, &json) < 0) {
             set_result_error(result, "Failed to evaluate FOREACH list expression");
             rc = -1;
         } else if (json) {
+            /* Columns 2 and 3: the id and kind of an item that is a node or
+             * a relationship (GQLITE-T-0423: `FOREACH (n IN nodes(p) | SET
+             * n.x = 1)` bound n as a map, and SET found no entity). */
             sqlite3_stmt *st = NULL;
             if (sqlite3_prepare_v2(executor->db,
-                    "SELECT value, type FROM json_each(?1) WHERE json_valid(?1) AND json_type(?1) = 'array'",
+                    "SELECT value, type, "
+                    "CASE WHEN type = 'object' THEN json_extract(value, '$.id') END, "
+                    "CASE WHEN type <> 'object' OR json_type(value, '$.properties') <> 'object' THEN NULL "
+                    "WHEN json_type(value, '$.labels') = 'array' THEN 'node' "
+                    "WHEN json_type(value, '$.type') = 'text' AND json_type(value, '$.startNode') IS NOT NULL "
+                    "THEN 'edge' END "
+                    "FROM json_each(?1) WHERE json_valid(?1) AND json_type(?1) = 'array'",
                     -1, &st, NULL) != SQLITE_OK) {
                 set_result_error(result, "Failed to iterate FOREACH list");
                 rc = -1;
@@ -182,7 +185,19 @@ int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach
                 sqlite3_bind_text(st, 1, json, -1, SQLITE_TRANSIENT);
                 while (rc >= 0 && sqlite3_step(st) == SQLITE_ROW) {
                     bind_foreach_item_json_each(ctx, foreach->variable, st, 0, 1);
-                    rc = execute_foreach_body(executor, foreach, result, outer);
+                    const char *kind = (const char *)sqlite3_column_text(st, 3);
+                    if (kind && sqlite3_column_type(st, 2) == SQLITE_INTEGER) {
+                        variable_map *iter = create_variable_map();
+                        if (!iter) { rc = -1; break; }
+                        fold_var_map(iter, outer);
+                        int eid = sqlite3_column_int(st, 2);
+                        if (kind[0] == 'n') set_variable_node_id(iter, foreach->variable, eid);
+                        else set_variable_edge_id(iter, foreach->variable, eid);
+                        rc = execute_foreach_body(executor, foreach, result, iter);
+                        free_variable_map(iter);
+                    } else {
+                        rc = execute_foreach_body(executor, foreach, result, outer);
+                    }
                 }
                 sqlite3_finalize(st);
             }
@@ -199,12 +214,29 @@ int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach
  * a null list. The bindings of an enclosing FOREACH/UNWIND and the query
  * parameters are visible. */
 static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
-                                   char **json_out)
+                                   variable_map *outer, char **json_out)
 {
     if (!executor || !expr || !json_out) {
         return -1;
     }
     *json_out = NULL;
+
+    /* With outer variables (MATCH entities), evaluate against them, so
+     * `nodes(p)`, `collect(...)` columns and `n.list` resolve. */
+    if (outer && outer->count > 0) {
+        property_type pt = PROP_TYPE_TEXT;
+        property_value pv;
+        property_value_init(&pv);
+        int erc = executor_eval_value(executor, expr, outer, &pt, &pv);
+        if (erc == -2) { property_value_free(&pv); return 0; }
+        if (erc < 0) { property_value_free(&pv); return -1; }
+        if (pt == PROP_TYPE_JSON || pt == PROP_TYPE_TEXT) {
+            *json_out = pv.as_str;
+            pv.as_str = NULL;
+        }
+        property_value_free(&pv);
+        return 0;
+    }
 
     cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
     if (!ctx) {

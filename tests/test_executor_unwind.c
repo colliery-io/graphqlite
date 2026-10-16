@@ -847,6 +847,69 @@ static void test_personalized_pagerank_steps(void)
         "541.0,459.0");
 }
 
+/* GQLITE-T-0421: an inline property with an expression value filters. */
+static void test_inline_property_expression(void)
+{
+    const char *w[] = {
+        "CREATE (:Item {id: 'a', v: 1, f: true}), (:Item {id: 'b', v: 2}), (:Item {id: 'c', v: 3})",
+        "MATCH (a:Item {id: 'a'}), (b:Item {id: 'b'}), (c:Item {id: 'c'}) "
+        "CREATE (a)-[:R {w: 1}]->(b), (a)-[:R {w: 2}]->(c)",
+        NULL
+    };
+    ASSERT_UNWIND(w, NULL, "UNWIND ['a', 'b'] AS i MATCH (n:Item {id: i}) RETURN n.id ORDER BY n.id", "a,b");
+    ASSERT_UNWIND(w, NULL, "WITH 1 AS x MATCH (n:Item {v: x + 1}) RETURN n.id", "b");
+    ASSERT_UNWIND(w, NULL, "WITH 'A' AS s MATCH (n:Item {id: toLower(s)}) RETURN n.id", "a");
+    ASSERT_UNWIND(w, NULL, "UNWIND [true] AS t MATCH (n:Item {f: t}) RETURN n.id", "a");
+    ASSERT_UNWIND(w, NULL, "UNWIND [1] AS i MATCH (n:Item {id: i}) RETURN count(n)", "0");
+    ASSERT_UNWIND(w, NULL, "UNWIND [2] AS k MATCH (:Item)-[r:R {w: k}]->(b) RETURN b.id", "c");
+    const char *w2[] = {
+        "CREATE (:Item {id: 'a', v: 1}), (:Item {id: 'b', v: 2})",
+        "UNWIND ['a'] AS i MATCH (n:Item {id: i}) SET n.v = 9",
+        NULL
+    };
+    ASSERT_UNWIND(w2, NULL, "MATCH (n:Item) RETURN n.v ORDER BY n.id", "9,2");
+}
+
+/* GQLITE-T-0422: a stored boolean is not equal to a number. */
+static void test_stored_boolean_vs_number(void)
+{
+    const char *w[] = {"CREATE (:Item {flag: true, v: 1})", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (n:Item) RETURN [n.flag = 1, n.flag IN [1], n.v = true, 1 IN [true], n.v IN [true],"
+        " n.flag = true, n.flag IN [true], n.v = 1, n.v IN [1], n.flag <> 1]",
+        "[false,false,false,false,false,true,true,true,true,true]");
+    ASSERT_UNWIND(w, NULL, "MATCH (n:Item) WHERE n.flag = 1 RETURN count(*)", "0");
+}
+
+/* GQLITE-T-0423: FOREACH over entities, and after a leading CREATE. */
+static void test_foreach_entities(void)
+{
+    const char *setup = "CREATE (:Item {name: 'A'})-[:LINK]->(:Item {name: 'B'})-[:LINK]->(:Item {name: 'C'})";
+    const char *w[] = {setup,
+        "MATCH p = (:Item {name: 'A'})-[:LINK*]->(:Item {name: 'C'}) FOREACH (n IN nodes(p) | SET n.seen = true)",
+        NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (n:Item) WHERE n.seen RETURN count(n)", "3");
+    const char *w2[] = {setup,
+        "MATCH p = (:Item {name: 'A'})-[:LINK*]->(:Item {name: 'C'}) FOREACH (r IN relationships(p) | SET r.w = 5)",
+        NULL};
+    ASSERT_UNWIND(w2, NULL, "MATCH ()-[r:LINK]->() RETURN sum(r.w)", "10");
+    const char *w3[] = {setup, "MATCH (a:Item) WITH collect(a) AS ns FOREACH (n IN ns | SET n.k = 1)", NULL};
+    ASSERT_UNWIND(w3, NULL, "MATCH (n:Item) RETURN sum(n.k)", "3");
+    const char *w4[] = {setup, "MATCH (c:Item {name: 'C'}) FOREACH (n IN [c] | DETACH DELETE n)", NULL};
+    ASSERT_UNWIND(w4, NULL, "MATCH (n:Item) RETURN count(n)", "2");
+    const char *w5[] = {"CREATE (x:X) FOREACH (i IN [1, 2] | CREATE (x)-[:R]->(:Y {i: i}))", NULL};
+    ASSERT_UNWIND(w5, NULL, "MATCH (:X)-[:R]->(y:Y) RETURN y.i ORDER BY y.i", "1,2");
+}
+
+/* GQLITE-T-0424: CREATE ... WITH ... UNWIND ... CREATE runs every CREATE. */
+static void test_create_with_unwind_create(void)
+{
+    const char *w[] = {"CREATE (n:Item {id: 'a'}) WITH n UNWIND [1, 2] AS x CREATE (n)-[:R]->(:B {v: x})", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH (:Item {id: 'a'})-[:R]->(b:B) RETURN b.v ORDER BY b.v", "1,2");
+    const char *w2[] = {"UNWIND [1, 2] AS x CREATE (:A {v: x}) CREATE (:B {v: x})", NULL};
+    ASSERT_UNWIND(w2, NULL, "MATCH (n) RETURN count(n)", "4");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -892,7 +955,11 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "#136: row-wise RETURN modifiers", test_rowwise_return_modifiers) ||
         !CU_add_test(suite, "#135: zero-hop path", test_path_zero_hop) ||
         !CU_add_test(suite, "tail() keeps types", test_tail_keeps_types) ||
-        !CU_add_test(suite, "personalizedPageRank 100 steps", test_personalized_pagerank_steps)) {
+        !CU_add_test(suite, "personalizedPageRank 100 steps", test_personalized_pagerank_steps) ||
+        !CU_add_test(suite, "GQLITE-T-0421: inline property expression", test_inline_property_expression) ||
+        !CU_add_test(suite, "GQLITE-T-0422: stored boolean vs number", test_stored_boolean_vs_number) ||
+        !CU_add_test(suite, "GQLITE-T-0423: FOREACH over entities", test_foreach_entities) ||
+        !CU_add_test(suite, "GQLITE-T-0424: CREATE WITH UNWIND CREATE", test_create_with_unwind_create)) {
         return CU_get_error();
     }
 
