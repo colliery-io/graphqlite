@@ -2402,7 +2402,13 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         /* T-0309: mark this rel variable as varlen-bound so the RETURN
          * projector emits a list-of-edges JSON array (and the result
          * builder skips single-edge re-fetch). */
-        if (rel->variable) {
+        /* A relationship list bound by an earlier WITH (`[rs*]`, Match4
+         * [8]): its alias is a column ref; the path must use exactly those
+         * relationships, in order. It keeps its binding. */
+        char bound_rels[256] = "";
+        if (rel->variable && edge_alias && strchr(edge_alias, '.')) {
+            snprintf(bound_rels, sizeof(bound_rels), "%s", edge_alias);
+        } else if (rel->variable) {
             transform_var_set_cte(ctx->var_ctx, rel->variable, cte_name);
         }
 
@@ -2682,6 +2688,11 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
         /* Empty interval (min > max) → unconditionally false. */
         if (empty_interval) {
             dbuf_appendf(&on_cond, " AND 0");
+        }
+        if (bound_rels[0]) {
+            dbuf_appendf(&on_cond,
+                " AND %s.visited = (SELECT ',' || group_concat(COALESCE(json_extract(value, '$.id'), value), ',') || ',' "
+                "FROM json_each(%s))", edge_alias, bound_rels);
         }
 
         /* Add shortest path filtering based on path type */

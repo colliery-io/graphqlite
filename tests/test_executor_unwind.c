@@ -942,6 +942,19 @@ static void test_aggregating_with_after_write(void)
     ASSERT_UNWIND(none, NULL, "UNWIND [1, 2] AS x CREATE (n {v: x}) WITH collect(n) AS ns RETURN size(ns)", "2");
 }
 
+static void test_bound_rel_list_and_delete_create(void)
+{
+    const char *w[] = {"CREATE (a:A), (b:B), (c:C) CREATE (a)-[:Y]->(b), (b)-[:Y]->(c)", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs LIMIT 1 "
+        "MATCH (first)-[rs*]->(second) RETURN labels(first)[0] + labels(second)[0]", "AC");
+    const char *w2[] = {
+        "CREATE (:A {name: 'a'})-[:R]->(:B {name: 'b'})-[:R]->(:C {name: 'c'})",
+        "MATCH (a)-[r]->(b) WHERE NOT a:A DELETE r CREATE (b)-[:LIKES]->(a)", NULL};
+    ASSERT_UNWIND(w2, NULL, "MATCH ()-[r:LIKES]->() RETURN count(r)", "1");
+    ASSERT_UNWIND(w2, NULL, "MATCH ()-[r]->() RETURN count(r)", "2");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -993,7 +1006,8 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "GQLITE-T-0423: FOREACH over entities", test_foreach_entities) ||
         !CU_add_test(suite, "GQLITE-T-0424: CREATE WITH UNWIND CREATE", test_create_with_unwind_create) ||
         !CU_add_test(suite, "GQLITE-T-0426: MERGE fan-out and tail MATCH", test_merge_fan_out_and_tail_match) ||
-        !CU_add_test(suite, "GQLITE-T-0426: aggregating WITH after a write", test_aggregating_with_after_write)) {
+        !CU_add_test(suite, "GQLITE-T-0426: aggregating WITH after a write", test_aggregating_with_after_write) ||
+        !CU_add_test(suite, "GQLITE-T-0426: bound relationship list; DELETE then CREATE", test_bound_rel_list_and_delete_create)) {
         return CU_get_error();
     }
 

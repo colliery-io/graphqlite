@@ -713,6 +713,30 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     return (flags & CLAUSE_MATCH) || update_after_merge || agg_tail;
 }
 
+/* MATCH .. DELETE .. CREATE: the MATCH+DELETE handler ran CREATE first,
+ * then matched again for the DELETE, so it deleted what CREATE had just
+ * made (`MATCH (a)-[r]->(b) DELETE r CREATE (b)-[:R]->(a)`, Match5 [27]).
+ * The row pipeline matches once and deletes before it creates. */
+static bool delete_then_create(cypher_query *query, clause_flags flags)
+{
+    if (!(flags & CLAUSE_MATCH) || !(flags & CLAUSE_DELETE) || !(flags & CLAUSE_CREATE)) return false;
+    if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN |
+                 CLAUSE_MERGE | CLAUSE_RETURN | CLAUSE_WITH | CLAUSE_UNWIND))
+        return false;
+    if (!query->clauses || query->clauses->count < 3) return false;
+    bool write_seen = false, delete_seen = false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_MATCH) { if (write_seen) return false; continue; }
+        if (c->type == AST_NODE_DELETE) { if (write_seen && !delete_seen) return false; delete_seen = write_seen = true; continue; }
+        if (c->type == AST_NODE_CREATE) { if (!delete_seen) return false; write_seen = true; continue; }
+        if (c->type == AST_NODE_SET) { write_seen = true; continue; }
+        return false;
+    }
+    return delete_seen;
+}
+
 static bool foreach_after_read(cypher_query *query, clause_flags flags)
 {
     if (!(flags & CLAUSE_FOREACH)) return false;
@@ -921,6 +945,12 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
     /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
      * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
      * `row` as unbound) or the UNWIND itself (every node was updated). */
+    if (delete_then_create(query, flags)) {
+        CYPHER_DEBUG("Matched shape: MATCH .. DELETE .. CREATE (row-wise)");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
     if (unwind_feeds_write(query, flags)) {
         CYPHER_DEBUG("Matched shape: UNWIND feeding a write (row-wise)");
         executor->stmt_capture = false;
