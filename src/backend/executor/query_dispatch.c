@@ -829,6 +829,36 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
     return (merge && (read_before_merge || writes >= 2)) || read_after_write;
 }
 
+/* CALL { } with UNWIND / WITH before it, or with clauses after a leading
+ * CALL: the CALL handler took its rows only from a MATCH, and dropped the
+ * inner rows of `CALL { ... } RETURN ...` (GQLITE-T-0432). */
+static bool rw_is_write_clause(ast_node_type t);
+
+static bool call_in_rows(cypher_query *query, clause_flags flags)
+{
+    if (!(flags & CLAUSE_CALL)) return false;
+    if (flags & (CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN)) return false;
+    if (!query->clauses || query->clauses->count < 2) return false;
+    int call_pos = -1, calls = 0;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_CALL_SUBQUERY) { if (call_pos < 0) call_pos = i; calls++; }
+    }
+    if (call_pos < 0 || calls > 1) return false;
+    for (int i = 0; i < call_pos; i++) {
+        ast_node_type t = query->clauses->items[i]->type;
+        if (t == AST_NODE_MATCH) return false;            /* the CALL handler */
+        if (t != AST_NODE_UNWIND && t != AST_NODE_WITH) return false;
+    }
+    for (int i = call_pos + 1; i < query->clauses->count; i++) {
+        ast_node_type t = query->clauses->items[i]->type;
+        if (t != AST_NODE_RETURN && t != AST_NODE_WITH && t != AST_NODE_UNWIND &&
+            t != AST_NODE_MATCH && !rw_is_write_clause(t)) return false;
+    }
+    return true;
+}
+
 static bool foreach_after_read(cypher_query *query, clause_flags flags)
 {
     if (!(flags & CLAUSE_FOREACH)) return false;
@@ -1037,6 +1067,12 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
     /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
      * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
      * `row` as unbound) or the UNWIND itself (every node was updated). */
+    if (call_in_rows(query, flags)) {
+        CYPHER_DEBUG("Matched shape: CALL { } in the row pipeline");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
     if (writes_need_rows(query, flags)) {
         CYPHER_DEBUG("Matched shape: writes that need the row pipeline");
         executor->stmt_capture = false;
@@ -5650,6 +5686,123 @@ static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_r
     return rc;
 }
 
+/* ---- CALL { } in the row pipeline (GQLITE-T-0432) ----------------------
+ * For each outer row the inner query runs with the imported variables bound:
+ * an entity through `MATCH (v) WHERE id(v) = $p`, a value through
+ * `WITH $p AS v`. Each inner row continues the outer row. */
+
+/* A row value as JSON text for a parameter (owned, sqlite3_free). */
+static char *rw_scalar_json(const rw_scalar *sc)
+{
+    if (!sc || !sc->text || sc->type == SQLITE_NULL) return sqlite3_mprintf("null");
+    char *buf = NULL;
+    rw_json_append_cell(&buf, sc->text, sc->type);
+    return buf ? buf : sqlite3_mprintf("null");
+}
+
+/* Run the inner query of a CALL for one row. NULL on error (result set). */
+static cypher_result *rw_run_call(cypher_executor *executor, ast_node *inner, rw_row *row,
+                                  cypher_result *result)
+{
+    cypher_with *imp = NULL;
+    cypher_query *iq = inner && inner->type == AST_NODE_QUERY ? (cypher_query*)inner : NULL;
+    if (iq && iq->clauses && iq->clauses->count > 0 && iq->clauses->items[0] &&
+        iq->clauses->items[0]->type == AST_NODE_WITH)
+        imp = (cypher_with*)iq->clauses->items[0];
+    if (!imp) {
+        /* not correlated: the query as it is */
+        cypher_result *ir = cypher_executor_execute_ast(executor, inner);
+        if (!ir || !ir->success) {
+            set_result_error(result, ir && ir->error_message ? ir->error_message : "CALL subquery failed");
+            if (ir) cypher_result_free(ir);
+            return NULL;
+        }
+        return ir;
+    }
+    /* names imported by the leading WITH */
+    char **names = NULL; int n = 0;
+    if (imp->pass_all) {
+        for (int v = 0; row->vm && v < row->vm->count; v++) {
+            names = realloc(names, (size_t)(n + 1) * sizeof(char*));
+            names[n++] = strdup(row->vm->mappings[v].variable);
+        }
+        for (int v = 0; v < row->n_scalars; v++) {
+            names = realloc(names, (size_t)(n + 1) * sizeof(char*));
+            names[n++] = strdup(row->scalars[v].name);
+        }
+    } else {
+        for (int i = 0; imp->items && i < imp->items->count; i++) {
+            cypher_return_item *it = (cypher_return_item*)imp->items->items[i];
+            if (!it || !it->expr || it->expr->type != AST_NODE_IDENTIFIER) continue;
+            names = realloc(names, (size_t)(n + 1) * sizeof(char*));
+            names[n++] = strdup(((cypher_identifier*)it->expr)->name);
+        }
+    }
+    ast_list *synth = ast_list_create();          /* clauses made here */
+    ast_list *with_items = ast_list_create();
+    char *pjson = NULL;
+    for (int i = 0; i < n; i++) {
+        char pname[32];
+        snprintf(pname, sizeof(pname), "__imp_%d", i);
+        const rw_scalar *sc = rw_row_scalar(row, names[i]);
+        int nid = sc ? -1 : get_variable_node_id(row->vm, names[i]);
+        int eid = (!sc && nid < 0 && is_variable_edge(row->vm, names[i])) ? get_variable_edge_id(row->vm, names[i]) : -1;
+        char *val = NULL;
+        if (nid >= 0 || eid >= 0) {
+            ast_list *els = ast_list_create();
+            if (nid >= 0) {
+                ast_list_append(els, (ast_node*)make_node_pattern(names[i], NULL, NULL));
+            } else {
+                ast_list_append(els, (ast_node*)make_node_pattern(NULL, NULL, NULL));
+                ast_list_append(els, (ast_node*)make_rel_pattern(names[i], NULL, NULL, false, true));
+                ast_list_append(els, (ast_node*)make_node_pattern(NULL, NULL, NULL));
+            }
+            ast_list *pat = ast_list_create();
+            ast_list_append(pat, (ast_node*)make_path(els));
+            ast_list *args = ast_list_create();
+            ast_list_append(args, (ast_node*)make_identifier(names[i], 0));
+            ast_node *eq = (ast_node*)make_binary_op(BINARY_OP_EQ, (ast_node*)make_function_call("id", args, false, 0),
+                                                    (ast_node*)make_parameter(pname, 0), 0);
+            ast_list_append(synth, (ast_node*)make_cypher_match(pat, eq, false, NULL));
+            val = sqlite3_mprintf("%d", nid >= 0 ? nid : eid);
+            ast_list_append(with_items, (ast_node*)make_return_item((ast_node*)make_identifier(names[i], 0), NULL));
+        } else {
+            val = rw_scalar_json(sc);   /* unbound: null */
+            ast_list_append(with_items, (ast_node*)make_return_item((ast_node*)make_parameter(pname, 0), names[i]));
+        }
+        char *grown = sqlite3_mprintf("%s%s\"%s\":%s", pjson ? pjson : "", pjson ? "," : "", pname, val);
+        sqlite3_free(val); sqlite3_free(pjson);
+        pjson = grown;
+    }
+    if (with_items->count > 0)
+        ast_list_append(synth, (ast_node*)make_cypher_with(false, with_items, NULL, NULL, NULL, NULL));
+    else
+        ast_list_free(with_items);
+    ast_list *all = ast_list_create();
+    for (int i = 0; i < synth->count; i++) ast_list_append(all, synth->items[i]);
+    for (int i = 0; i < iq->clauses->count; i++) ast_list_append(all, iq->clauses->items[i]);
+    cypher_query *q = make_cypher_query(all, false);
+
+    const char *user_params = executor->params_json;
+    rw_param_sink sink = { pjson, 0 };
+    char *merged = pjson ? rw_params_merged(user_params, &sink) : NULL;
+    if (merged) executor->params_json = merged;
+    cypher_result *ir = cypher_executor_execute_ast(executor, (ast_node*)q);
+    executor->params_json = user_params;
+    sqlite3_free(merged);
+    sqlite3_free(pjson);
+    if (!ir || !ir->success) {
+        set_result_error(result, ir && ir->error_message ? ir->error_message : "CALL subquery failed");
+        if (ir) { cypher_result_free(ir); ir = NULL; }
+    }
+    for (int i = 0; i < synth->count; i++) ast_node_free(synth->items[i]);
+    free(synth->items); free(synth);
+    free(all->items); free(all); free(q);
+    for (int i = 0; i < n; i++) free(names[i]);
+    free(names);
+    return ir;
+}
+
 static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
@@ -5662,7 +5815,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     ast_node *first = clauses->items[0];
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
                     first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH ||
-                    first->type == AST_NODE_MERGE)) {
+                    first->type == AST_NODE_MERGE || first->type == AST_NODE_CALL_SUBQUERY)) {
         if (flags & CLAUSE_WITH) return handle_merge_with_pipeline(executor, query, result, flags);
         return handle_merge_return(executor, query, result, flags);
     }
@@ -5698,7 +5851,8 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     int prefix_end = start;
     while (prefix_end < clauses->count) {
         ast_node *c = clauses->items[prefix_end];
-        if (!c || rw_is_write_clause(c->type) || c->type == AST_NODE_RETURN) break;
+        if (!c || rw_is_write_clause(c->type) || c->type == AST_NODE_RETURN ||
+            c->type == AST_NODE_CALL_SUBQUERY) break;
         prefix_end++;
     }
 
@@ -6023,6 +6177,60 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     int w = rw_apply_with(executor, (cypher_with*)c, &rows[r]);
                     if (w < 0) rc = -1;
                     else if (w == 1) row_alive[r] = false;
+                    break;
+                }
+                case AST_NODE_CALL_SUBQUERY: {
+                    cypher_call_subquery *cs = (cypher_call_subquery*)c;
+                    ast_node *inner = cs->branches && cs->branches->count > 0 ? cs->branches->items[0] : NULL;
+                    cypher_result *ir = inner ? rw_run_call(executor, inner, &rows[r], result) : NULL;
+                    if (!ir) { rc = -1; break; }
+                    result->nodes_created += ir->nodes_created;
+                    result->nodes_deleted += ir->nodes_deleted;
+                    result->relationships_created += ir->relationships_created;
+                    result->relationships_deleted += ir->relationships_deleted;
+                    result->properties_set += ir->properties_set;
+                    bool unit = ir->column_count == 0 || !ir->column_names;
+                    if (unit) { cypher_result_free(ir); break; }   /* a unit subquery: the row goes on */
+                    if (ir->row_count == 0) { row_alive[r] = false; cypher_result_free(ir); break; }
+                    /* the outer row as it was, for the forks */
+                    rw_row base = {0};
+                    base.vm = create_variable_map();
+                    rw_fold_map(base.vm, rows[r].vm);
+                    for (int q = 0; q < rows[r].n_scalars; q++)
+                        rw_row_add_scalar(&base, rows[r].scalars[q].name, rows[r].scalars[q].text, rows[r].scalars[q].type);
+                    for (int k = 0; k < ir->row_count && rc >= 0; k++) {
+                        int target = r;
+                        if (k > 0) {
+                            if (n_rows == rows_cap) {
+                                int nc = rows_cap * 2;
+                                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                                if (gr) rows = gr;
+                                if (ga) row_alive = ga;
+                                if (gs) row_start = gs;
+                                if (!gr || !ga || !gs) { rc = -1; break; }
+                                rows_cap = nc;
+                            }
+                            target = n_rows++;
+                            memset(&rows[target], 0, sizeof(rw_row));
+                            rows[target].vm = create_variable_map();
+                            rw_fold_map(rows[target].vm, base.vm);
+                            for (int q = 0; q < base.n_scalars; q++)
+                                rw_row_add_scalar(&rows[target], base.scalars[q].name, base.scalars[q].text, base.scalars[q].type);
+                            row_alive[target] = false;
+                            row_start[target] = i + 1;
+                        }
+                        for (int col = 0; col < ir->column_count; col++) {
+                            const char *cell = ir->data && ir->data[k] ? ir->data[k][col] : NULL;
+                            int ty = ir->data_types && ir->data_types[k] ? ir->data_types[k][col] : SQLITE_TEXT;
+                            if (!cell) ty = SQLITE_NULL;
+                            if (ty == GQL_COL_TYPE_JSON) ty = SQLITE_TEXT;
+                            rw_bind_value(&rows[target], ir->column_names[col], cell, ty);
+                        }
+                    }
+                    rw_row_free(&base);
+                    cypher_result_free(ir);
                     break;
                 }
                 case AST_NODE_RETURN:
