@@ -822,6 +822,12 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
 
     CYPHER_DEBUG("Executing query: %s", query);
 
+    /* CREATE / DROP / SHOW INDEX and CONSTRAINT (GQLITE-T-0008) */
+    {
+        cypher_result *sr = schema_command_try(executor, query);
+        if (sr) return sr;
+    }
+
     /* Perf review F8: cached read query? */
     {
         stmt_cache_entry *hit = stmt_cache_find(executor, query);
@@ -965,6 +971,16 @@ static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *a
     long keys_before = kc ? kc->key_insertions : 0;
 
     cypher_result *result = cypher_executor_execute_ast(executor, ast);
+
+    /* Constraints hold after each write query; a violation fails the query
+     * and the rollback below undoes its writes (GQLITE-T-0008). */
+    if (guarded && result && result->success) {
+        char *violation = schema_check_constraints(executor);
+        if (violation) {
+            set_result_error(result, violation);
+            free(violation);
+        }
+    }
 
     if (guarded) {
         if (!result || !result->success) {

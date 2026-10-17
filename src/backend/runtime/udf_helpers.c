@@ -35,6 +35,7 @@
 #include "parser/cypher_parser.h"
 #include "parser/cypher_debug.h"
 #include "runtime/gql_error.h"
+#include "executor/executor_internal.h"
 #include "transform/sql_builder.h"
 #include "transform/transform_validate.h"
 
@@ -4086,6 +4087,14 @@ void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_value **ar
     if (!query) {
         validate_result_error(context, "Query is NULL", GQL_ERR_VALIDATION, 0, 0);
         return;
+    }
+
+    /* CREATE / DROP / SHOW INDEX and CONSTRAINT (GQLITE-T-0008) */
+    {
+        char msg[400];
+        int sc = schema_command_check(query, msg, sizeof(msg));
+        if (sc > 0) { sqlite3_result_text(context, "{\"valid\": true}", -1, SQLITE_STATIC); return; }
+        if (sc < 0) { validate_result_error(context, msg, GQL_ERR_PARSE, 0, 0); return; }
     }
 
     cypher_parse_result *parse_result = parse_cypher_query_ext(query);
