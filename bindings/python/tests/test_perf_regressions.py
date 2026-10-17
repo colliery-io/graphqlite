@@ -82,7 +82,8 @@ def test_param_inline_match_is_index_driven(db):
     sql = generated_sql(db, "MATCH (n {id: $id}) RETURN n.n", {"id": "p1"})
     assert ".id IN (SELECT npt.node_id FROM node_props_text npt" in sql
     assert "EXISTS(SELECT 1 FROM node_props_text npt" not in sql
-    plan = query_plan(db, sql, {"id": "p1"})
+    # the engine also binds the type tag of a parameter (`:id__gqlt`)
+    plan = query_plan(db, sql, {"id": "p1", "id__gqlt": "text"})
     assert not any(step.startswith("SCAN") and ("nodes" in step or "_gql_default_alias" in step) for step in plan), plan
     assert any("idx_node_props_text_key_value" in step for step in plan), plan
 
@@ -90,7 +91,7 @@ def test_param_inline_match_is_index_driven(db):
 def test_param_inline_edge_match_is_index_driven(db):
     sql = generated_sql(db, "MATCH ()-[r:R {w: $w}]->() RETURN count(r)", {"w": 3.0})
     assert ".id IN (SELECT ept.edge_id FROM edge_props_text ept" in sql
-    plan = query_plan(db, sql, {"w": 3.0})
+    plan = query_plan(db, sql, {"w": 3.0, "w__gqlt": "num"})
     assert any("idx_edge_props_real_key_value" in step for step in plan), plan
 
 

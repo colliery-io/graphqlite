@@ -200,8 +200,8 @@ static void stmt_cache_insert(cypher_executor *ex, const char *text, ast_node *a
 
 void cypher_executor_release_statements(cypher_executor *executor)
 {
-    if (!executor || !executor->stmt_cache) return;
-    for (int i = 0; i < executor->stmt_cache_count; i++) {
+    if (!executor) return;
+    for (int i = 0; executor->stmt_cache && i < executor->stmt_cache_count; i++) {
         if (executor->stmt_cache[i].stmt) {
             sqlite3_finalize(executor->stmt_cache[i].stmt);
             executor->stmt_cache[i].stmt = NULL;   /* entry is now a miss */
@@ -213,6 +213,44 @@ void cypher_executor_release_statements(cypher_executor *executor)
     }
     /* Perf review F9: the schema manager's write statements too */
     cypher_schema_release_statements(executor->schema_mgr);
+    for (int i = 0; i < executor->helper_count; i++) {
+        if (executor->helper_stmts[i]) sqlite3_finalize(executor->helper_stmts[i]);
+        executor->helper_stmts[i] = NULL;
+        free(executor->helper_sql[i]);
+        executor->helper_sql[i] = NULL;
+    }
+    executor->helper_count = 0;
+}
+
+sqlite3_stmt *cypher_executor_helper_stmt(cypher_executor *executor, const char *sql)
+{
+    if (!executor || !executor->db || !sql) return NULL;
+    for (int i = 0; i < executor->helper_count; i++) {
+        if (executor->helper_sql[i] && strcmp(executor->helper_sql[i], sql) == 0) {
+            sqlite3_reset(executor->helper_stmts[i]);
+            sqlite3_clear_bindings(executor->helper_stmts[i]);
+            return executor->helper_stmts[i];
+        }
+    }
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(executor->db, sql, -1, &st, NULL) != SQLITE_OK) {
+        sqlite3_finalize(st);
+        return NULL;
+    }
+    int slot = executor->helper_count;
+    if (slot == GQL_HELPER_STMT_MAX) {
+        /* full: drop the oldest */
+        sqlite3_finalize(executor->helper_stmts[0]);
+        free(executor->helper_sql[0]);
+        memmove(&executor->helper_stmts[0], &executor->helper_stmts[1], (GQL_HELPER_STMT_MAX - 1) * sizeof(sqlite3_stmt*));
+        memmove(&executor->helper_sql[0], &executor->helper_sql[1], (GQL_HELPER_STMT_MAX - 1) * sizeof(char*));
+        slot = GQL_HELPER_STMT_MAX - 1;
+    } else {
+        executor->helper_count++;
+    }
+    executor->helper_stmts[slot] = st;
+    executor->helper_sql[slot] = strdup(sql);
+    return st;
 }
 
 static int executor_trace_close_cb(unsigned type, void *arg, void *p, void *x)
