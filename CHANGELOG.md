@@ -23,6 +23,8 @@ it did not before. Several of the bugs it found lost or changed data.
   savepoint (#134).
 - **A boolean is not equal to a number:** `true = 1`, `true IN [1]` and a stored
   `n.flag = 1` are false.
+- **Parameters match by type:** `MATCH (n {k: $x})` and `WHERE n.k = $x` with
+  `$x = 1` no longer match a stored `true` or `'1'` (`1.0` still matches).
 - **`CALL name(...)`** raises `ProcedureError: ProcedureNotFound` (GraphQLite
   has no procedures). The `call_procedures` capability now reports `false`.
 - These are errors now: `UNWIND` to a variable that is already bound,
@@ -60,12 +62,29 @@ it did not before. Several of the bugs it found lost or changed data.
   `WITH` grouping, `DISTINCT` and `ORDER BY` with `SKIP` / `LIMIT`, and many
   more TCK cases (3826 → 3880).
 - An aggregating `WITH` after a write.
+- **Wrong rows written:** `MATCH (n {id: $id}) SET ...` changed nodes whose `id`
+  had another type (`true`, `'1'` for `$id = 1`).
+- `CALL { RETURN 1 AS x } RETURN x` returned write statistics, not a row; a
+  `CALL { WITH y ... }` after `UNWIND` or `WITH` failed with "no such column".
+- A comparison written as a property (`MERGE (:C {k: i % 2 = 0})`) was stored
+  as `0` / `1`, not a boolean.
+
+### Performance
+
+- Writes that run row by row (a `MATCH`, `MERGE` or `SET` per row) reuse their
+  prepared statements, and `UNWIND $rows MERGE ...` keeps its batch handler.
+  On 5,000 rows against 0.10.0: `UNWIND MERGE ... ON CREATE SET` 259 → 254 ms;
+  `UNWIND CREATE` unchanged. Shapes that 0.10.0 ran wrong, and that now run row
+  by row, cost more than 0.10.0 but stay within about 2x of a batch write
+  (`MATCH (n) SET ... WITH n RETURN count(n)` 33 ms).
 
 ### Tests
 
 - The TCK harness is strict on error classes, side effects and column names
   (`tests/tck/README.md`).
-- `tests/functional/55_*.sql`, `56_tck_gap.sql`, `57_strict_tck.sql`;
+- `tests/functional/55_*.sql` to `59_call_subquery_rows.sql`;
+  `bindings/python/tests/test_write_speed.py` (statements of a row-by-row write
+  do not grow with the row count; timing ratios);
   `bindings/python/tests/test_issues_134_136.py` and
   `test_inline_props_foreach_booleans.py`.
 
