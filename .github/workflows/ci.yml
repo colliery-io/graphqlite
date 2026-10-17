@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# A new push to a PR branch cancels the older run of that branch: the
+# runners are shared by the organization. Runs on main all finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # =============================================================================
   # Fast Tests - Run first on all PRs and pushes
