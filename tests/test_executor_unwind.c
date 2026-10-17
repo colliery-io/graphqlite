@@ -955,6 +955,28 @@ static void test_bound_rel_list_and_delete_create(void)
     ASSERT_UNWIND(w2, NULL, "MATCH ()-[r]->() RETURN count(r)", "2");
 }
 
+static void test_unwind_scope(void)
+{
+    const char *none[] = {NULL};
+    ASSERT_UNWIND(none, NULL, "UNWIND [1] AS x WITH * RETURN x", "1");
+    ASSERT_UNWIND(none, NULL, "UNWIND [1] AS x WITH * UNWIND [2] AS y RETURN x + y", "3");
+
+    /* UNWIND introduces a new variable: rebinding one is an error. */
+    sqlite3 *db = NULL;
+    CU_ASSERT_EQUAL_FATAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+    cypher_executor *ex = cypher_executor_create(db);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(ex);
+    cypher_result *r = cypher_executor_execute(ex, "WITH 'Hi' AS label UNWIND ['A'] AS label RETURN *");
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) {
+        CU_ASSERT_FALSE(r->success);
+        CU_ASSERT_PTR_NOT_NULL(r->error_message ? strstr(r->error_message, "VariableAlreadyBound") : NULL);
+        cypher_result_free(r);
+    }
+    cypher_executor_free(ex);
+    sqlite3_close(db);
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -1007,7 +1029,8 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "GQLITE-T-0424: CREATE WITH UNWIND CREATE", test_create_with_unwind_create) ||
         !CU_add_test(suite, "GQLITE-T-0426: MERGE fan-out and tail MATCH", test_merge_fan_out_and_tail_match) ||
         !CU_add_test(suite, "GQLITE-T-0426: aggregating WITH after a write", test_aggregating_with_after_write) ||
-        !CU_add_test(suite, "GQLITE-T-0426: bound relationship list; DELETE then CREATE", test_bound_rel_list_and_delete_create)) {
+        !CU_add_test(suite, "GQLITE-T-0426: bound relationship list; DELETE then CREATE", test_bound_rel_list_and_delete_create) ||
+        !CU_add_test(suite, "GQLITE-T-0426: UNWIND scope and rebinding", test_unwind_scope)) {
         return CU_get_error();
     }
 
