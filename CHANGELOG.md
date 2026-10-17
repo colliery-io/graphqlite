@@ -4,6 +4,94 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-10-17
+
+GitHub issues #134, #135 and #136, and the openCypher TCK at 3880 / 3880 with
+a strict harness: it now checks error classes and details, side effects
+(nodes, relationships, labels and properties written) and column names, which
+it did not before. Several of the bugs it found lost or changed data.
+
+### Upgrade notes
+
+- **Error messages start with the openCypher class and detail**, for example
+  `SyntaxError: UnexpectedSyntax: Line 1, Col 10: syntax error, ...` or
+  `SyntaxError: UndefinedVariable: ...`. The `code` field is unchanged.
+- **Column names of unaliased expressions are the expression as written:**
+  `count(DISTINCT a)` (was `count(a)`), `n.x IS NULL` (was `column_0`),
+  `abs(-1)` (was `abs(...)`), `labels(a)` after a write (was `?column?`).
+- **A failed write query leaves no writes:** each write query runs in a
+  savepoint (#134).
+- **A boolean is not equal to a number:** `true = 1`, `true IN [1]` and a stored
+  `n.flag = 1` are false.
+- **Parameters match by type:** `MATCH (n {k: $x})` and `WHERE n.k = $x` with
+  `$x = 1` no longer match a stored `true` or `'1'` (`1.0` still matches).
+- **`CALL name(...)`** raises `ProcedureError: ProcedureNotFound` (GraphQLite
+  has no procedures). The `call_procedures` capability now reports `false`.
+- These are errors now: `UNWIND` to a variable that is already bound,
+  `DELETE` of a value that is not a node, relationship or path, an aggregate in
+  `WHERE` or inside another aggregate.
+
+### Fixed
+
+- **Data loss:** a property key made in a rolled-back transaction stayed in the
+  key cache; later writes lost properties or stored them under another key
+  (#134).
+- **Data loss:** an inline property with an expression value (`{id: row.id}`,
+  `{v: x + 1}`) did not filter, so a write after the `MATCH` changed every node.
+- **Data loss:** `MATCH (a)-[r]->(b) DELETE r CREATE (b)-[:R]->(a)` deleted the
+  relationships it had just created.
+- `OPTIONAL MATCH` miss then `SET` wrote the property to a node that does not
+  exist; `SET` / `REMOVE` on null now do nothing.
+- A `SET`, `REMOVE` or `DELETE` before a `WITH` was dropped
+  (`MATCH (n) REMOVE n.x WITH n ...`).
+- `MERGE` after `WITH` lost its properties; `MERGE` after `MATCH` merged once,
+  not once per row; `MERGE (a) MERGE (b) MERGE (a)-[:R]->(b)` made no
+  relationship; `ON CREATE` / `ON MATCH SET` could not read `UNWIND` values.
+- `UNWIND` or `WITH` before a write ran it once, not per row; only matched nodes
+  change now, with values keeping their types (#136).
+- `FOREACH` runs `MERGE`, `REMOVE`, `DELETE` and `SET`, sees outer variables,
+  iterates `$param` lists and `nodes(p)` (#135).
+- `DELETE` of a list element, a map value or a path; `MATCH () CREATE ()`;
+  `CREATE (n) DELETE n` in one query.
+- `collect(p)` returned id text, not paths; a stored string that looks like JSON
+  (`'[1]'`) came back as a list after a write; `{true: 1}` did not parse.
+- Variable-length paths: `length()`, `nodes()` and `relationships()`; a list of
+  relationships bound by `WITH` in `[rs*]`.
+- Named time zones (embedded IANA data, 1800–2100) with daylight saving.
+- Expressions: precedence of `IN` / `IS` / `STARTS WITH`, comparison chains,
+  `WITH` grouping, `DISTINCT` and `ORDER BY` with `SKIP` / `LIMIT`, and many
+  more TCK cases (3826 → 3880).
+- An aggregating `WITH` after a write.
+- **Wrong rows written:** `MATCH (n {id: $id}) SET ...` changed nodes whose `id`
+  had another type (`true`, `'1'` for `$id = 1`).
+- `CALL { RETURN 1 AS x } RETURN x` returned write statistics, not a row; a
+  `CALL { WITH y ... }` after `UNWIND` or `WITH` failed with "no such column".
+- A comparison written as a property (`MERGE (:C {k: i % 2 = 0})`) was stored
+  as `0` / `1`, not a boolean.
+
+### Performance
+
+- Writes that run row by row (a `MATCH`, `MERGE` or `SET` per row) reuse their
+  prepared statements, and `UNWIND $rows MERGE ...` keeps its batch handler.
+  On 5,000 rows against 0.10.0: `UNWIND MERGE ... ON CREATE SET` 259 → 254 ms;
+  `UNWIND CREATE` unchanged. Shapes that 0.10.0 ran wrong, and that now run row
+  by row, cost more than 0.10.0 but stay within about 2x of a batch write
+  (`MATCH (n) SET ... WITH n RETURN count(n)` 33 ms).
+
+### Tests
+
+- The TCK harness is strict on error classes, side effects and column names
+  (`tests/tck/README.md`).
+- `tests/functional/55_*.sql` to `59_call_subquery_rows.sql`;
+  `bindings/python/tests/test_write_speed.py` (statements of a row-by-row write
+  do not grow with the row count; timing ratios);
+  `bindings/python/tests/test_issues_134_136.py` and
+  `test_inline_props_foreach_booleans.py`.
+
+### CI
+
+- A new push to a pull request cancels the older run of that branch.
+
 ## [0.10.0] — 2026-10-13
 
 GitHub issue #128, and the bugs that three new tests found once they checked
