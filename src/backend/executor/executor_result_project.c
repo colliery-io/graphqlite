@@ -423,13 +423,16 @@ void project_return_row_from_var_map(cypher_executor *executor,
                     };
                     const char **type_tables = node_id >= 0 ? node_tables : edge_tables;
                     for (int t = 0; type_tables[t]; t++) {
-                        char sql[512];
+                        char sql[256];
                         snprintf(sql, sizeof(sql),
-                            "SELECT value FROM %s WHERE %s = %d AND key_id = "
-                            "(SELECT id FROM property_keys WHERE key = '%s')",
-                            type_tables[t], id_col, ent_id, sql_esc_tmp(prop_name));
-                        sqlite3_stmt *stmt;
-                        if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                            "SELECT value FROM %s WHERE %s = ?1 AND key_id = "
+                            "(SELECT id FROM property_keys WHERE key = ?2)",
+                            type_tables[t], id_col);
+                        /* prepared once, values bound (GQLITE-T-0431) */
+                        sqlite3_stmt *stmt = cypher_executor_helper_stmt(executor, sql);
+                        if (stmt) {
+                            sqlite3_bind_int64(stmt, 1, ent_id);
+                            sqlite3_bind_text(stmt, 2, prop_name, -1, SQLITE_TRANSIENT);
                             if (sqlite3_step(stmt) == SQLITE_ROW) {
                                 int sql_type = sqlite3_column_type(stmt, 0);
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
@@ -450,7 +453,7 @@ void project_return_row_from_var_map(cypher_executor *executor,
                                     }
                                 }
                             }
-                            sqlite3_finalize(stmt);
+                            sqlite3_reset(stmt);
                         }
                         if (result->data[row_idx][i]) break;
                     }
@@ -464,45 +467,26 @@ void project_return_row_from_var_map(cypher_executor *executor,
             const char *var_name = ((cypher_identifier*)expr)->name;
             int node_id = get_variable_node_id(var_map, var_name);
             int edge_id = (node_id < 0) ? get_variable_edge_id(var_map, var_name) : -1;
-            if (node_id >= 0) {
-                char *sql;
-                {
-                    char id_e[32];
-                    snprintf(id_e, sizeof(id_e), "%d", node_id);
-                    char *nj = gql_sql_node_json_expr("", id_e);
-                    if (!nj) continue;
-                    sql = sqlite3_mprintf("SELECT %s", nj);
+            if (node_id >= 0 || edge_id >= 0) {
+                /* One prepared statement per kind, the id bound
+                 * (GQLITE-T-0431: it was prepared for every row). */
+                static GQL_THREAD_LOCAL char *node_sql, *edge_sql;
+                if (!node_sql) {
+                    char *nj = gql_sql_node_json_expr("", "?1");
+                    node_sql = nj ? sqlite3_mprintf("SELECT %s", nj) : NULL;
                     free(nj);
-                    if (!sql) continue;
                 }
-                sqlite3_stmt *stmt;
-                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(stmt) == SQLITE_ROW) {
-                        const char *val = (const char *)sqlite3_column_text(stmt, 0);
-                        if (val) {
-                            result->data[row_idx][i] = strdup(val);
-                            result->data_types[row_idx][i] = SQLITE_TEXT;
-                        }
-                    }
-                    sqlite3_finalize(stmt);
-                }
-                sqlite3_free(sql);
-            } else if (edge_id >= 0) {
-                char *sql;
-                {
-                    char id_e[32], ty_e[96], st_e[96], en_e[96];
-                    snprintf(id_e, sizeof(id_e), "%d", edge_id);
-                    snprintf(ty_e, sizeof(ty_e), "(SELECT type FROM edges WHERE id = %d)", edge_id);
-                    snprintf(st_e, sizeof(st_e), "(SELECT source_id FROM edges WHERE id = %d)", edge_id);
-                    snprintf(en_e, sizeof(en_e), "(SELECT target_id FROM edges WHERE id = %d)", edge_id);
-                    char *ej = gql_sql_edge_json_expr("", id_e, ty_e, st_e, en_e);
-                    if (!ej) continue;
-                    sql = sqlite3_mprintf("SELECT %s", ej);
+                if (!edge_sql) {
+                    char *ej = gql_sql_edge_json_expr("", "?1", "(SELECT type FROM edges WHERE id = ?1)",
+                                                      "(SELECT source_id FROM edges WHERE id = ?1)",
+                                                      "(SELECT target_id FROM edges WHERE id = ?1)");
+                    edge_sql = ej ? sqlite3_mprintf("SELECT %s", ej) : NULL;
                     free(ej);
-                    if (!sql) continue;
                 }
-                sqlite3_stmt *stmt;
-                if (sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                const char *sql = node_id >= 0 ? node_sql : edge_sql;
+                sqlite3_stmt *stmt = sql ? cypher_executor_helper_stmt(executor, sql) : NULL;
+                if (stmt) {
+                    sqlite3_bind_int64(stmt, 1, node_id >= 0 ? node_id : edge_id);
                     if (sqlite3_step(stmt) == SQLITE_ROW) {
                         const char *val = (const char *)sqlite3_column_text(stmt, 0);
                         if (val) {
@@ -510,9 +494,8 @@ void project_return_row_from_var_map(cypher_executor *executor,
                             result->data_types[row_idx][i] = SQLITE_TEXT;
                         }
                     }
-                    sqlite3_finalize(stmt);
+                    sqlite3_reset(stmt);
                 }
-                sqlite3_free(sql);
             }
         } else if (expr && expr->type == AST_NODE_FUNCTION_CALL) {
             /* Handle entity-introspection functions on var_map entries:

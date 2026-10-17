@@ -413,28 +413,28 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     "%s IN ("
                                     "SELECT npt.node_id FROM node_props_text npt "
                                     "JOIN property_keys pk ON npt.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND npt.value = :%s "
+                                    "WHERE pk.key = '%s' AND npt.value = :%s AND :%s__gqlt = 'text' "
                                     "UNION ALL SELECT npi.node_id FROM node_props_int npi "
                                     "JOIN property_keys pk ON npi.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND npi.value = :%s "
+                                    "WHERE pk.key = '%s' AND npi.value = :%s AND :%s__gqlt = 'num' "
                                     "UNION ALL SELECT npr.node_id FROM node_props_real npr "
                                     "JOIN property_keys pk ON npr.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND npr.value = :%s "
+                                    "WHERE pk.key = '%s' AND npr.value = :%s AND :%s__gqlt = 'num' "
                                     "UNION ALL SELECT npb.node_id FROM node_props_bool npb "
                                     "JOIN property_keys pk ON npb.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND npb.value = :%s "
+                                    "WHERE pk.key = '%s' AND npb.value = :%s AND :%s__gqlt = 'bool' "
                                     /* GQLITE-T-0411: a list or map parameter */
                                     "UNION ALL SELECT npj.node_id FROM node_props_json npj "
                                     "JOIN property_keys pk ON npj.key_id = pk.id "
                                     "WHERE pk.key = '%s' AND json(npj.value) = "
-                                    "(CASE WHEN json_valid(:%s) THEN json(:%s) END)"
+                                    "(CASE WHEN json_valid(:%s) THEN json(:%s) END) AND :%s__gqlt = 'json'"
                                     ")",
                                     node_id_ref,
-                                    key_sql, param->name,
-                                    key_sql, param->name,
-                                    key_sql, param->name,
-                                    key_sql, param->name,
-                                    key_sql, param->name, param->name);
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name, param->name);
                                 free(esc_key);
 
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
@@ -673,28 +673,28 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                     "+%s.id IN ("
                                     "SELECT ept.edge_id FROM edge_props_text ept "
                                     "JOIN property_keys pk ON ept.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND ept.value = :%s "
+                                    "WHERE pk.key = '%s' AND ept.value = :%s AND :%s__gqlt = 'text' "
                                     "UNION ALL SELECT epi.edge_id FROM edge_props_int epi "
                                     "JOIN property_keys pk ON epi.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND epi.value = :%s "
+                                    "WHERE pk.key = '%s' AND epi.value = :%s AND :%s__gqlt = 'num' "
                                     "UNION ALL SELECT epr.edge_id FROM edge_props_real epr "
                                     "JOIN property_keys pk ON epr.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND epr.value = :%s "
+                                    "WHERE pk.key = '%s' AND epr.value = :%s AND :%s__gqlt = 'num' "
                                     "UNION ALL SELECT epb.edge_id FROM edge_props_bool epb "
                                     "JOIN property_keys pk ON epb.key_id = pk.id "
-                                    "WHERE pk.key = '%s' AND epb.value = :%s "
+                                    "WHERE pk.key = '%s' AND epb.value = :%s AND :%s__gqlt = 'bool' "
                                     /* GQLITE-T-0411: a list or map parameter */
                                     "UNION ALL SELECT epj.edge_id FROM edge_props_json epj "
                                     "JOIN property_keys pk ON epj.key_id = pk.id "
                                     "WHERE pk.key = '%s' AND json(epj.value) = "
-                                    "(CASE WHEN json_valid(:%s) THEN json(:%s) END)"
+                                    "(CASE WHEN json_valid(:%s) THEN json(:%s) END) AND :%s__gqlt = 'json'"
                                     ")",
                                     edge_alias,
-                                    key_sql, param->name,
-                                    key_sql, param->name,
-                                    key_sql, param->name,
-                                    key_sql, param->name,
-                                    key_sql, param->name, param->name);
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name,
+                                    key_sql, param->name, param->name, param->name);
                                 free(esc_key);
                                 sql_where(ctx->unified_builder, dbuf_get(&cond));
                                 dbuf_free(&cond);
@@ -2257,15 +2257,15 @@ static bool build_anchor_ids_sql(cypher_transform_context *ctx, const char *alia
             cypher_parameter *param = (cypher_parameter*)pair->value;
             dbuf_appendf(&one,
                 "SELECT npt.node_id FROM node_props_text npt JOIN property_keys pk ON npt.key_id = pk.id "
-                "WHERE pk.key = '%s' AND npt.value = :%s "
+                "WHERE pk.key = '%s' AND npt.value = :%s AND :%s__gqlt = 'text' "
                 "UNION ALL SELECT npi.node_id FROM node_props_int npi JOIN property_keys pk ON npi.key_id = pk.id "
-                "WHERE pk.key = '%s' AND npi.value = :%s "
+                "WHERE pk.key = '%s' AND npi.value = :%s AND :%s__gqlt = 'num' "
                 "UNION ALL SELECT npr.node_id FROM node_props_real npr JOIN property_keys pk ON npr.key_id = pk.id "
-                "WHERE pk.key = '%s' AND npr.value = :%s "
+                "WHERE pk.key = '%s' AND npr.value = :%s AND :%s__gqlt = 'num' "
                 "UNION ALL SELECT npb.node_id FROM node_props_bool npb JOIN property_keys pk ON npb.key_id = pk.id "
-                "WHERE pk.key = '%s' AND npb.value = :%s",
-                key_sql, param->name, key_sql, param->name,
-                key_sql, param->name, key_sql, param->name);
+                "WHERE pk.key = '%s' AND npb.value = :%s AND :%s__gqlt = 'bool'",
+                key_sql, param->name, param->name, key_sql, param->name, param->name,
+                key_sql, param->name, param->name, key_sql, param->name, param->name);
         } else {
             dbuf_free(&one); free(esc_key); continue;
         }

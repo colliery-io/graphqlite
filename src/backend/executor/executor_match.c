@@ -145,8 +145,17 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     CYPHER_DEBUG("Generated SQL: %s", ctx->sql_buffer);
 
     /* Execute the SQL query */
-    sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    sqlite3_stmt *stmt = NULL;
+    /* Outside the read cache's capture, reuse a prepared statement for the
+     * same SQL: the row pipeline runs one MATCH per row (GQLITE-T-0431). */
+    bool cached = !executor->stmt_capture;
+    int rc = SQLITE_OK;
+    if (cached) {
+        stmt = cypher_executor_helper_stmt(executor, ctx->sql_buffer);
+        if (!stmt) rc = SQLITE_ERROR;
+    } else {
+        rc = sqlite3_prepare_v2(executor->db, ctx->sql_buffer, -1, &stmt, NULL);
+    }
     if (rc != SQLITE_OK) {
         char error[512];
         snprintf(error, sizeof(error), "SQL prepare failed: %s", sqlite3_errmsg(executor->db));
@@ -159,7 +168,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
     if (executor->params_json) {
         if (bind_params_from_json(stmt, executor->params_json) < 0) {
             set_result_error(result, "Failed to bind query parameters");
-            sqlite3_finalize(stmt);
+            if (cached) sqlite3_reset(stmt); else sqlite3_finalize(stmt);
             cypher_transform_free_context(ctx);
             return -1;
         }
@@ -171,7 +180,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
 
     /* Build result from SQL execution */
     if (build_query_results(executor, stmt, return_clause, result, ctx) < 0) {
-        sqlite3_finalize(stmt);
+        if (cached) sqlite3_reset(stmt); else sqlite3_finalize(stmt);
         cypher_transform_free_context(ctx);
         return -1;
     }
@@ -193,7 +202,7 @@ int execute_match_return_query(cypher_executor *executor, cypher_match *match, c
         executor->captured_ret = return_clause;
         return 0;
     }
-    sqlite3_finalize(stmt);
+    if (cached) sqlite3_reset(stmt); else sqlite3_finalize(stmt);
     cypher_transform_free_context(ctx);
     return 0;
 }

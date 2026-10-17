@@ -11,6 +11,8 @@
 
 /* Forward declarations */
 typedef struct cypher_executor cypher_executor;
+
+#define GQL_HELPER_STMT_MAX 32
 struct cypher_transform_context;
 struct cypher_return;
 
@@ -98,6 +100,13 @@ struct cypher_executor {
      * hook must never dereference a freed executor: freeing the executor
      * clears trace_ctx->ex, and the hook frees trace_ctx when it fires. */
     struct executor_trace_ctx *trace_ctx;
+
+    /* Prepared statements of fixed helper SQL with bound parameters
+     * (entity rendering, property reads), reused across rows of a write
+     * pipeline (GQLITE-T-0431). Keyed by SQL text. */
+    sqlite3_stmt *helper_stmts[GQL_HELPER_STMT_MAX];
+    char *helper_sql[GQL_HELPER_STMT_MAX];
+    int helper_count;
 };
 
 typedef struct executor_trace_ctx {
@@ -107,6 +116,11 @@ typedef struct executor_trace_ctx {
 /* Finalize every cached statement (called from the SQLITE_TRACE_CLOSE hook
  * before SQLite's unfinalized-statement check, and from executor free). */
 void cypher_executor_release_statements(cypher_executor *executor);
+
+/* A prepared statement for `sql` (fixed text, values bound by the caller),
+ * reset and with its bindings cleared; owned by the executor, do not
+ * finalize. NULL when it does not prepare. */
+sqlite3_stmt *cypher_executor_helper_stmt(cypher_executor *executor, const char *sql);
 
 /* Executor lifecycle */
 cypher_executor* cypher_executor_create(sqlite3 *db);
