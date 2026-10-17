@@ -294,6 +294,8 @@ typedef struct cypher_node_pattern {
     char *variable;       /* Variable name (optional) */
     ast_list *labels;     /* List of node labels (optional) - supports :A:B:C syntax */
     ast_node *properties; /* Property map (optional) */
+    ast_list *label_alternatives; /* `:A|B|C`: the node has one of these labels
+                                   * (string literals; labels is NULL then) */
 } cypher_node_pattern;
 
 /* Relationship pattern: -[var:TYPE {props}]-> */

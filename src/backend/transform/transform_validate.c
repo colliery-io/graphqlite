@@ -1878,6 +1878,25 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
  *  - `CREATE (a)-[r:T]->(b)` where `r` was already bound to a relationship
  *    variable → error.
  */
+/* CREATE and MERGE make the labels they name: `(n:A|B)` names no label to
+ * make (GQLITE-T-0125). */
+static int check_no_label_alternatives(ast_list *patterns, const char *kw, char **error_message)
+{
+    for (int i = 0; patterns && i < patterns->count; i++) {
+        ast_node *it = patterns->items[i];
+        ast_list *els = NULL;
+        if (it && it->type == AST_NODE_PATH) els = ((cypher_path *)it)->elements;
+        for (int j = 0; it && (els ? j < els->count : j < 1); j++) {
+            ast_node *el = els ? els->items[j] : it;
+            if (el && el->type == AST_NODE_NODE_PATTERN && ((cypher_node_pattern *)el)->label_alternatives) {
+                set_error(error_message, "SyntaxError: InvalidLabelExpression: %s cannot use a label disjunction (:A|B)", kw);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int check_create_rebinds_ex(ast_list *patterns, const name_set *bound,
                                     bool is_merge, char **error_message)
 {
@@ -2501,7 +2520,8 @@ int transform_validate_query(cypher_query *query, char **error_message)
             }
             case AST_NODE_CREATE: {
                 cypher_create *c = (cypher_create *)clause;
-                rc = check_create_rebinds_ex(c->pattern, &bound, false, error_message);
+                rc = check_no_label_alternatives(c->pattern, "CREATE", error_message);
+                if (rc == 0) rc = check_create_rebinds_ex(c->pattern, &bound, false, error_message);
                 if (rc == 0) rc = validate_write_rel_patterns(c->pattern, "CREATE", error_message);
                 if (rc == 0) rc = validate_write_undef_in_props(c->pattern, &bound, "CREATE", error_message);
                 if (rc == 0) collect_pattern_names(c->pattern, &bound);
@@ -2556,7 +2576,8 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 /* MERGE shares the same re-binding rules as CREATE except
                  * single-node and label/prop predicates on an already-bound
                  * node are legal (matches the existing binding). */
-                rc = check_create_rebinds_ex(m->pattern, &bound, true, error_message);
+                rc = check_no_label_alternatives(m->pattern, "MERGE", error_message);
+                if (rc == 0) rc = check_create_rebinds_ex(m->pattern, &bound, true, error_message);
                 if (rc == 0) rc = validate_write_rel_patterns(m->pattern, "MERGE", error_message);
                 if (rc == 0) rc = validate_write_undef_in_props(m->pattern, &bound, "MERGE", error_message);
                 /* MERGE rejects null property values at runtime per spec
