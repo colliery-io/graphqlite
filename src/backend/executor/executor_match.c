@@ -675,7 +675,9 @@ agtype_value* create_property_agtype_value(const char* value, int col_type)
     if (!has_leading_zero) {
         char *endptr;
         errno = 0;
-        long long_val = strtoll(value, &endptr, 10);
+        /* int64_t, not long: long is 32 bits on Windows, and a millisecond
+         * timestamp (about 1.7e12) was cut (GQLITE-T-0391) */
+        int64_t long_val = strtoll(value, &endptr, 10);
         if (errno == 0 && *endptr == '\0' && endptr != value) {
             /* Successfully parsed as integer */
             return agtype_value_create_integer((int64_t)long_val);

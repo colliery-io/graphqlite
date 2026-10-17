@@ -2446,6 +2446,19 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 }
                 break;
             }
+            case AST_NODE_CALL_PROCEDURE: {
+                /* YIELD binds its outputs (GQLITE-T-0389); an in-query use
+                 * of an output needs YIELD, as in Cypher. */
+                cypher_call_procedure *cp = (cypher_call_procedure *)clause;
+                for (int yi = 0; cp->yields && yi < cp->yields->count; yi++) {
+                    cypher_return_item *y = (cypher_return_item *)cp->yields->items[yi];
+                    if (!y) continue;
+                    if (y->alias) nset_add(&bound, y->alias);
+                    else if (y->expr && y->expr->type == AST_NODE_IDENTIFIER)
+                        nset_add(&bound, ((cypher_identifier *)y->expr)->name);
+                }
+                break;
+            }
             case AST_NODE_DELETE: {
                 /* DELETE takes nodes, relationships, paths, or a list or
                  * map that holds them (Delete1 [8], Delete5 [8]/[9]). */

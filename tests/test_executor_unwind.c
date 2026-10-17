@@ -977,6 +977,38 @@ static void test_unwind_scope(void)
     sqlite3_close(db);
 }
 
+/* GQLITE-T-0389: CALL of an algorithm; errors for an unknown output and an
+ * unknown procedure. */
+static void call_expect_error(const char *query, const char *detail)
+{
+    sqlite3 *db = NULL;
+    CU_ASSERT_EQUAL_FATAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+    cypher_executor *ex = cypher_executor_create(db);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(ex);
+    cypher_result *w = cypher_executor_execute(ex, "CREATE (:C)-[:R]->(:C)");
+    if (w) cypher_result_free(w);
+    cypher_result *r = cypher_executor_execute(ex, query);
+    CU_ASSERT_PTR_NOT_NULL(r);
+    if (r) {
+        CU_ASSERT_FALSE(r->success);
+        if (!(r->error_message && strstr(r->error_message, detail)))
+            printf("\n%s\n  expected %s, got %s\n", query, detail, r->error_message ? r->error_message : "(none)");
+        CU_ASSERT_PTR_NOT_NULL(r->error_message ? strstr(r->error_message, detail) : NULL);
+        cypher_result_free(r);
+    }
+    cypher_executor_free(ex);
+    sqlite3_close(db);
+}
+
+static void test_call_algorithm(void)
+{
+    const char *w[] = {"CREATE (:C {id: 'a'})-[:R]->(:C {id: 'b'})", NULL};
+    ASSERT_UNWIND(w, NULL, "CALL degreeCentrality() YIELD user_id, degree WHERE degree = 1 RETURN count(*)", "2");
+    ASSERT_UNWIND(w, NULL, "CALL pageRank() YIELD score RETURN count(score)", "2");
+    call_expect_error("CALL pageRank() YIELD nope RETURN nope", "has no output");
+    call_expect_error("CALL db.labels() YIELD label RETURN label", "ProcedureNotFound");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -1030,7 +1062,8 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "GQLITE-T-0426: MERGE fan-out and tail MATCH", test_merge_fan_out_and_tail_match) ||
         !CU_add_test(suite, "GQLITE-T-0426: aggregating WITH after a write", test_aggregating_with_after_write) ||
         !CU_add_test(suite, "GQLITE-T-0426: bound relationship list; DELETE then CREATE", test_bound_rel_list_and_delete_create) ||
-        !CU_add_test(suite, "GQLITE-T-0426: UNWIND scope and rebinding", test_unwind_scope)) {
+        !CU_add_test(suite, "GQLITE-T-0426: UNWIND scope and rebinding", test_unwind_scope) ||
+        !CU_add_test(suite, "GQLITE-T-0389: CALL of an algorithm", test_call_algorithm)) {
         return CU_get_error();
     }
 

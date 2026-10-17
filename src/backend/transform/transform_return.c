@@ -1225,6 +1225,27 @@ int transform_expression(cypher_transform_context *ctx, ast_node *expr)
     ctx->where_conjunct = saved_wc;
     return rc;
 }
+/* A map projection value as a JSON element; a boolean stays a JSON boolean
+ * (`n {k: true}` gave 1, GQLITE-T-0136). */
+static int append_map_projection_value(cypher_transform_context *ctx, ast_node *val)
+{
+    bool saved_cmp = ctx->in_comparison;
+    ctx->in_comparison = false;
+    int rc = 0;
+    if (ast_yields_boolean(val)) {
+        append_sql(ctx, "_gql_json_elem(_gql_bool_str(CASE WHEN (");
+        rc = transform_expression(ctx, val);
+        if (rc >= 0) { append_sql(ctx, ") IS NULL THEN NULL WHEN ("); rc = transform_expression(ctx, val); }
+        if (rc >= 0) append_sql(ctx, ") THEN 1 ELSE 0 END))");
+    } else {
+        append_sql(ctx, "_gql_json_elem(");
+        rc = transform_expression(ctx, val);
+        if (rc >= 0) append_sql(ctx, ")");
+    }
+    ctx->in_comparison = saved_cmp;
+    return rc < 0 ? -1 : 0;
+}
+
 
 static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr)
 {
@@ -1870,28 +1891,68 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 }
 
                 bool is_projected = transform_var_is_projected(ctx->var_ctx, base_name);
+                /* the base's id (or its value): the id itself after WITH */
+                bool id_is_alias = is_projected || (base_name && transform_var_alias_is_id(ctx->var_ctx, base_name));
+                char base_ref[320] = "";
+                if (base_alias) snprintf(base_ref, sizeof(base_ref), "%s%s", base_alias, id_is_alias ? "" : ".id");
+                /* a null base (an OPTIONAL MATCH miss) projects to null */
+                if (base_alias) append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL ELSE ", base_ref);
 
-                /* Check if we have .* (all properties) - use properties() function approach */
+                /* `.*` (all properties) anywhere in the list (GQLITE-T-0136):
+                 * the properties of the entity, or the map itself for a map
+                 * value; the other items are set on it. */
                 bool has_all_props = false;
-                if (proj->items && proj->items->count == 1) {
-                    cypher_map_projection_item *item = (cypher_map_projection_item*)proj->items->items[0];
-                    if (item->property && strcmp(item->property, "*") == 0) {
-                        has_all_props = true;
-                    }
+                for (int i = 0; proj->items && i < proj->items->count; i++) {
+                    cypher_map_projection_item *item = (cypher_map_projection_item*)proj->items->items[i];
+                    if (item->property && strcmp(item->property, "*") == 0) has_all_props = true;
                 }
 
                 if (has_all_props && base_alias) {
-                    /* Use properties() function approach for n{.*} */
-                    {
-                        char id_e[300];
-                        snprintf(id_e, sizeof(id_e), "%s%s", base_alias, is_projected ? "" : ".id");
+                    char *base_sql = NULL;
+                    if (is_projected) {
+                        /* a map value (`WITH {a: 1} AS m RETURN m {.*}`) */
+                        size_t n = strlen(base_alias) * 3 + 96;
+                        base_sql = malloc(n);
+                        if (base_sql)
+                            snprintf(base_sql, n, "(CASE WHEN json_valid(%s) AND json_type(%s) = 'object' THEN json(%s) END)",
+                                     base_alias, base_alias, base_alias);
+                    } else {
                         bool proj_edge = base_name && transform_var_is_edge(ctx->var_ctx, base_name);
-                        char *pe = proj_edge ? gql_sql_props_expr("edge", "edge_id", "", id_e)
-                                             : gql_sql_props_expr("node", "node_id", "", id_e);
-                        if (!pe) return -1;
-                        append_sql(ctx, "%s", pe);
-                        free(pe);
+                        base_sql = proj_edge ? gql_sql_props_expr("edge", "edge_id", "", base_ref)
+                                             : gql_sql_props_expr("node", "node_id", "", base_ref);
                     }
+                    if (!base_sql) return -1;
+                    int others = 0;
+                    for (int i = 0; proj->items && i < proj->items->count; i++) {
+                        cypher_map_projection_item *item = (cypher_map_projection_item*)proj->items->items[i];
+                        if (!(item->property && strcmp(item->property, "*") == 0)) others++;
+                    }
+                    if (others == 0) {
+                        append_sql(ctx, "%s", base_sql);
+                    } else {
+                        /* json_set keeps a null value as JSON null */
+                        append_sql(ctx, "json_set(%s", base_sql);
+                        for (int i = 0; i < proj->items->count; i++) {
+                            cypher_map_projection_item *item = (cypher_map_projection_item*)proj->items->items[i];
+                            if (item->property && strcmp(item->property, "*") == 0) continue;
+                            const char *key = item->key ? item->key : item->property;
+                            char *ek = escape_sql_string(key);
+                            append_sql(ctx, ", '$.\"%s\"', ", ek ? ek : key);
+                            free(ek);
+                            ast_node *val = item->expr;
+                            ast_node *pa = NULL;
+                            if (!val) {
+                                pa = (ast_node *)make_property((ast_node *)make_identifier((char *)base_name, 0),
+                                                               item->property, 0);
+                                val = pa;
+                            }
+                            int prc = append_map_projection_value(ctx, val);
+                            if (pa) ast_node_free(pa);
+                            if (prc < 0) { free(base_sql); return -1; }
+                        }
+                        append_sql(ctx, ")");
+                    }
+                    free(base_sql);
                 } else {
                     append_sql(ctx, "json_object(");
                     if (proj->items) {
@@ -1927,16 +1988,13 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         } else if (item->expr) {
                             /* Computed expression; a boolean stays a JSON
                              * boolean (GQLITE-T-0404). */
-                            append_sql(ctx, "_gql_json_elem(");
-                            if (transform_expression(ctx, item->expr) < 0) {
-                                return -1;
-                            }
-                            append_sql(ctx, ")");
+                            if (append_map_projection_value(ctx, item->expr) < 0) return -1;
                         }
                     }
                     }
                     append_sql(ctx, ")");
                 }
+                if (base_alias) append_sql(ctx, " END)");
             }
             break;
 

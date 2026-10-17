@@ -1054,6 +1054,161 @@ static void split_list_op_aggregates(cypher_query *query)
     query->clauses->items[c - 2] = (ast_node *)w;
 }
 
+/* Row values as named parameters (see rw_param_for_literal). */
+typedef struct { char *json; int n; } rw_param_sink;
+static char *rw_params_merged(const char *user, const rw_param_sink *sink);
+static graph_algo_result *run_graph_algorithm(cypher_executor *executor, graph_algo_params algo_params);
+
+/* ---- CALL name(args) [YIELD ...] (GQLITE-T-0389) -----------------------
+ * The graph algorithms are the procedures. The algorithm runs in C; its
+ * result objects become rows through
+ *   UNWIND $__gql_algo_rows AS __gql_algo_row
+ *   WITH __gql_algo_row.k AS a, ... [WHERE ...]
+ * followed by the rest of the query (or a RETURN of the yielded names). */
+static int handle_call_procedure(cypher_executor *executor, cypher_query *query, cypher_result *result)
+{
+    ast_list *clauses = query->clauses;
+    cypher_call_procedure *cp = (cypher_call_procedure*)clauses->items[0];
+    for (int i = 1; i < clauses->count; i++) {
+        if (clauses->items[i] && clauses->items[i]->type == AST_NODE_CALL_PROCEDURE) {
+            set_result_error(result, "SyntaxError: InvalidClauseComposition: a procedure CALL must be the first clause");
+            return -1;
+        }
+    }
+    /* which algorithm: the detection reads a RETURN of the function call */
+    ast_list *args = cp->args ? cp->args : ast_list_create();
+    cypher_function_call *fc = make_function_call(cp->name, args, false, 0);
+    ast_list *ritems = ast_list_create();
+    ast_list_append(ritems, (ast_node*)make_return_item((ast_node*)fc, NULL));
+    cypher_return *ret = make_cypher_return(false, ritems, NULL, NULL, NULL);
+    graph_algo_params params = detect_graph_algorithm(ret, executor->params_json);
+    fc->args = NULL;                       /* the arguments stay with the CALL */
+    if (!cp->args) ast_list_free(args);
+    ast_node_free((ast_node*)ret);
+    if (params.type == GRAPH_ALGO_NONE) {
+        char msg[300];
+        snprintf(msg, sizeof(msg), "ProcedureError: ProcedureNotFound: there is no procedure %s", cp->name);
+        set_result_error(result, msg);
+        return -1;
+    }
+    graph_algo_result *ar = run_graph_algorithm(executor, params);
+    if (!ar || !ar->success) {
+        set_result_error(result, ar && ar->error_message ? ar->error_message : "Graph algorithm failed");
+        if (ar) graph_algo_result_free(ar);
+        return -1;
+    }
+    /* one row per result object (dijkstra and astar give one object) */
+    char *rows = NULL;
+    char **keys = NULL; int nk = 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(executor->db,
+            "SELECT CASE json_type(?1) WHEN 'array' THEN json(?1) WHEN 'object' THEN json_array(json(?1)) "
+            "ELSE json('[]') END", -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, ar->json_result ? ar->json_result : "[]", -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_text(st, 0))
+            rows = strdup((const char*)sqlite3_column_text(st, 0));
+        sqlite3_finalize(st);
+    }
+    graph_algo_result_free(ar);
+    if (!rows) { set_result_error(result, "CALL: could not read the algorithm result"); return -1; }
+    if (sqlite3_prepare_v2(executor->db, "SELECT key FROM json_each(json_extract(?1, '$[0]'))", -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, rows, -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            keys = realloc(keys, (size_t)(nk + 1) * sizeof(char*));
+            keys[nk++] = strdup((const char*)sqlite3_column_text(st, 0));
+        }
+        sqlite3_finalize(st);
+    }
+    int rc = 0;
+    /* outputs: the YIELD items, or every key */
+    ast_list *with_items = ast_list_create();
+    ast_list *ret_items = ast_list_create();
+    if (cp->yields && !cp->yield_all) {
+        for (int i = 0; i < cp->yields->count && rc == 0; i++) {
+            cypher_return_item *y = (cypher_return_item*)cp->yields->items[i];
+            const char *out = ((cypher_identifier*)y->expr)->name;
+            bool known = nk == 0;          /* no rows: nothing to check */
+            for (int k = 0; k < nk && !known; k++) known = strcmp(keys[k], out) == 0;
+            if (!known) {
+                char msg[300];
+                snprintf(msg, sizeof(msg), "SyntaxError: UndefinedVariable: procedure %s has no output `%s`", cp->name, out);
+                set_result_error(result, msg);
+                rc = -1;
+                break;
+            }
+            const char *alias = y->alias ? y->alias : out;
+            ast_list_append(with_items, (ast_node*)make_return_item(
+                (ast_node*)make_property((ast_node*)make_identifier("__gql_algo_row", 0), (char*)out, 0), (char*)alias));
+            ast_list_append(ret_items, (ast_node*)make_return_item((ast_node*)make_identifier((char*)alias, 0), (char*)alias));
+        }
+    } else {
+        for (int k = 0; k < nk; k++) {
+            ast_list_append(with_items, (ast_node*)make_return_item(
+                (ast_node*)make_property((ast_node*)make_identifier("__gql_algo_row", 0), keys[k], 0), keys[k]));
+            ast_list_append(ret_items, (ast_node*)make_return_item((ast_node*)make_identifier(keys[k], 0), keys[k]));
+        }
+    }
+    for (int k = 0; k < nk; k++) free(keys[k]);
+    free(keys);
+    if (rc == 0 && with_items->count == 0) {
+        /* no rows and no outputs to name: an empty result */
+        result->success = true;
+        ast_list_free(with_items); ast_list_free(ret_items); free(rows);
+        return 0;
+    }
+    if (rc < 0) { ast_list_free(with_items); ast_list_free(ret_items); free(rows); return -1; }
+
+    ast_list *made = ast_list_create();        /* clauses made here */
+    ast_list_append(made, (ast_node*)make_cypher_unwind((ast_node*)make_parameter("__gql_algo_rows", 0), "__gql_algo_row", 0));
+    ast_list_append(made, (ast_node*)make_cypher_with(false, with_items, NULL, NULL, NULL, cp->where));
+    bool own_return = clauses->count == 1;
+    if (own_return) ast_list_append(made, (ast_node*)make_cypher_return(false, ret_items, NULL, NULL, NULL));
+    else ast_list_free(ret_items);
+    ast_list *all = ast_list_create();
+    for (int i = 0; i < made->count; i++) ast_list_append(all, made->items[i]);
+    for (int i = 1; i < clauses->count; i++) ast_list_append(all, clauses->items[i]);
+    cypher_query *q = make_cypher_query(all, false);
+
+    rw_param_sink sink = { NULL, 0 };
+    sink.json = sqlite3_mprintf("\"__gql_algo_rows\":%s", rows);
+    free(rows);
+    const char *user_params = executor->params_json;
+    char *merged = rw_params_merged(user_params, &sink);
+    executor->params_json = merged;
+    executor->stmt_capture = false;
+    cypher_result *ir = cypher_executor_execute_ast(executor, (ast_node*)q);
+    executor->params_json = user_params;
+    sqlite3_free(merged);
+    sqlite3_free(sink.json);
+
+    if (!ir || !ir->success) {
+        set_result_error(result, ir && ir->error_message ? ir->error_message : "CALL failed");
+        rc = -1;
+    } else {
+        /* the rows of the rewritten query are the result */
+        result->success = true;
+        result->row_count = ir->row_count;
+        result->column_count = ir->column_count;
+        result->column_names = ir->column_names; ir->column_names = NULL;
+        result->data = ir->data; ir->data = NULL;
+        result->data_types = ir->data_types; ir->data_types = NULL;
+        result->agtype_data = ir->agtype_data; ir->agtype_data = NULL;
+        result->use_agtype = ir->use_agtype;
+        result->nodes_created += ir->nodes_created;
+        result->nodes_deleted += ir->nodes_deleted;
+        result->relationships_created += ir->relationships_created;
+        result->relationships_deleted += ir->relationships_deleted;
+        result->properties_set += ir->properties_set;
+    }
+    if (ir) cypher_result_free(ir);
+    /* free what was made here; the WHERE and the rest belong to the query */
+    ((cypher_with*)made->items[1])->where = NULL;
+    for (int i = 0; i < made->count; i++) ast_node_free(made->items[i]);
+    free(made->items); free(made);
+    free(all->items); free(all); free(q);
+    return rc;
+}
+
 int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
                            cypher_result *result)
 {
@@ -1063,6 +1218,12 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
     clause_flags flags = analyze_query_clauses(query);
 
     CYPHER_DEBUG("Query clauses: %s", clause_flags_to_string(flags));
+
+    if (query->clauses && query->clauses->count > 0 && query->clauses->items[0] &&
+        query->clauses->items[0]->type == AST_NODE_CALL_PROCEDURE) {
+        CYPHER_DEBUG("Matched shape: CALL of a procedure");
+        return handle_call_procedure(executor, query, result);
+    }
 
     /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
      * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
@@ -2867,6 +3028,118 @@ static int handle_unwind_merge(cypher_executor *executor, cypher_query *query,
     return -1;
 }
 
+/* Run a graph algorithm in C (GQLITE-T-0389: also for CALL algo()). */
+static graph_algo_result *run_graph_algorithm(cypher_executor *executor, graph_algo_params algo_params)
+{
+    graph_algo_result *algo_result = NULL;
+    /* A CSR graph loaded before a write is stale: rebuild it in place so
+     * gql_load_graph() callers keep seeing current data. */
+    if (executor->cached_graph && executor->graph_dirty && executor->cached_graph_slot) {
+        CYPHER_DEBUG("Cached graph is stale after a write; reloading");
+        csr_graph_free(executor->cached_graph);
+        csr_graph *fresh = csr_graph_load(executor->db);
+        *executor->cached_graph_slot = fresh;
+        executor->cached_graph = fresh;
+        executor->graph_dirty = false;
+    }
+
+        switch (algo_params.type) {
+        case GRAPH_ALGO_PAGERANK:
+            CYPHER_DEBUG("Executing C-based PageRank");
+            algo_result = execute_pagerank(executor->db, executor->cached_graph,
+                                           algo_params.damping,
+                                           algo_params.iterations,
+                                           algo_params.top_k);
+            break;
+        case GRAPH_ALGO_LABEL_PROPAGATION:
+            CYPHER_DEBUG("Executing C-based Label Propagation");
+            algo_result = execute_label_propagation(executor->db, executor->cached_graph,
+                                                    algo_params.iterations);
+            break;
+        case GRAPH_ALGO_DIJKSTRA:
+            CYPHER_DEBUG("Executing C-based Dijkstra");
+            algo_result = execute_dijkstra(executor->db, executor->cached_graph,
+                                           algo_params.source_id,
+                                           algo_params.target_id,
+                                           algo_params.weight_prop);
+            free(algo_params.source_id);
+            free(algo_params.target_id);
+            free(algo_params.weight_prop);
+            break;
+        case GRAPH_ALGO_DEGREE_CENTRALITY:
+            CYPHER_DEBUG("Executing C-based Degree Centrality");
+            algo_result = execute_degree_centrality(executor->db, executor->cached_graph);
+            break;
+        case GRAPH_ALGO_WCC:
+            CYPHER_DEBUG("Executing C-based Weakly Connected Components");
+            algo_result = execute_wcc(executor->db, executor->cached_graph);
+            break;
+        case GRAPH_ALGO_SCC:
+            CYPHER_DEBUG("Executing C-based Strongly Connected Components");
+            algo_result = execute_scc(executor->db, executor->cached_graph);
+            break;
+        case GRAPH_ALGO_BETWEENNESS_CENTRALITY:
+            CYPHER_DEBUG("Executing C-based Betweenness Centrality");
+            algo_result = execute_betweenness_centrality(executor->db, executor->cached_graph);
+            break;
+        case GRAPH_ALGO_CLOSENESS_CENTRALITY:
+            CYPHER_DEBUG("Executing C-based Closeness Centrality");
+            algo_result = execute_closeness_centrality(executor->db, executor->cached_graph);
+            break;
+        case GRAPH_ALGO_LOUVAIN:
+            CYPHER_DEBUG("Executing C-based Louvain Community Detection");
+            algo_result = execute_louvain(executor->db, executor->cached_graph, algo_params.resolution);
+            break;
+        case GRAPH_ALGO_TRIANGLE_COUNT:
+            CYPHER_DEBUG("Executing C-based Triangle Count");
+            algo_result = execute_triangle_count(executor->db, executor->cached_graph);
+            break;
+        case GRAPH_ALGO_ASTAR:
+            CYPHER_DEBUG("Executing C-based A* Shortest Path");
+            algo_result = execute_astar(executor->db, executor->cached_graph, algo_params.source_id,
+                                        algo_params.target_id, algo_params.weight_prop,
+                                        algo_params.lat_prop, algo_params.lon_prop);
+            break;
+        case GRAPH_ALGO_BFS:
+            CYPHER_DEBUG("Executing C-based BFS Traversal");
+            algo_result = execute_bfs(executor->db, executor->cached_graph, algo_params.source_id,
+                                      algo_params.max_depth);
+            break;
+        case GRAPH_ALGO_DFS:
+            CYPHER_DEBUG("Executing C-based DFS Traversal");
+            algo_result = execute_dfs(executor->db, executor->cached_graph, algo_params.source_id,
+                                      algo_params.max_depth);
+            break;
+        case GRAPH_ALGO_NODE_SIMILARITY:
+            CYPHER_DEBUG("Executing C-based Node Similarity (Jaccard)");
+            algo_result = execute_node_similarity(executor->db, executor->cached_graph,
+                                                  algo_params.source_id,
+                                                  algo_params.target_id,
+                                                  algo_params.threshold,
+                                                  algo_params.top_k);
+            break;
+        case GRAPH_ALGO_KNN:
+            CYPHER_DEBUG("Executing C-based K-Nearest Neighbors");
+            algo_result = execute_knn(executor->db, executor->cached_graph,
+                                      algo_params.source_id,
+                                      algo_params.k);
+            break;
+        case GRAPH_ALGO_EIGENVECTOR_CENTRALITY:
+            CYPHER_DEBUG("Executing C-based Eigenvector Centrality");
+            algo_result = execute_eigenvector_centrality(executor->db, executor->cached_graph,
+                                                          algo_params.iterations);
+            break;
+        case GRAPH_ALGO_APSP:
+            CYPHER_DEBUG("Executing C-based All Pairs Shortest Path");
+            algo_result = execute_apsp(executor->db, executor->cached_graph);
+            break;
+        default:
+            break;
+    }
+
+    return algo_result;
+}
+
 /*
  * Standalone RETURN handler - handles graph algorithms and expressions
  */
@@ -2881,112 +3154,7 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
     /* Check for graph algorithm functions - execute in C for performance */
     graph_algo_params algo_params = detect_graph_algorithm(ret, executor->params_json);
     if (algo_params.type != GRAPH_ALGO_NONE) {
-        graph_algo_result *algo_result = NULL;
-
-        /* A CSR graph loaded before a write is stale: rebuild it in place so
-         * gql_load_graph() callers keep seeing current data. */
-        if (executor->cached_graph && executor->graph_dirty && executor->cached_graph_slot) {
-            CYPHER_DEBUG("Cached graph is stale after a write; reloading");
-            csr_graph_free(executor->cached_graph);
-            csr_graph *fresh = csr_graph_load(executor->db);
-            *executor->cached_graph_slot = fresh;
-            executor->cached_graph = fresh;
-            executor->graph_dirty = false;
-        }
-
-        switch (algo_params.type) {
-            case GRAPH_ALGO_PAGERANK:
-                CYPHER_DEBUG("Executing C-based PageRank");
-                algo_result = execute_pagerank(executor->db, executor->cached_graph,
-                                               algo_params.damping,
-                                               algo_params.iterations,
-                                               algo_params.top_k);
-                break;
-            case GRAPH_ALGO_LABEL_PROPAGATION:
-                CYPHER_DEBUG("Executing C-based Label Propagation");
-                algo_result = execute_label_propagation(executor->db, executor->cached_graph,
-                                                        algo_params.iterations);
-                break;
-            case GRAPH_ALGO_DIJKSTRA:
-                CYPHER_DEBUG("Executing C-based Dijkstra");
-                algo_result = execute_dijkstra(executor->db, executor->cached_graph,
-                                               algo_params.source_id,
-                                               algo_params.target_id,
-                                               algo_params.weight_prop);
-                free(algo_params.source_id);
-                free(algo_params.target_id);
-                free(algo_params.weight_prop);
-                break;
-            case GRAPH_ALGO_DEGREE_CENTRALITY:
-                CYPHER_DEBUG("Executing C-based Degree Centrality");
-                algo_result = execute_degree_centrality(executor->db, executor->cached_graph);
-                break;
-            case GRAPH_ALGO_WCC:
-                CYPHER_DEBUG("Executing C-based Weakly Connected Components");
-                algo_result = execute_wcc(executor->db, executor->cached_graph);
-                break;
-            case GRAPH_ALGO_SCC:
-                CYPHER_DEBUG("Executing C-based Strongly Connected Components");
-                algo_result = execute_scc(executor->db, executor->cached_graph);
-                break;
-            case GRAPH_ALGO_BETWEENNESS_CENTRALITY:
-                CYPHER_DEBUG("Executing C-based Betweenness Centrality");
-                algo_result = execute_betweenness_centrality(executor->db, executor->cached_graph);
-                break;
-            case GRAPH_ALGO_CLOSENESS_CENTRALITY:
-                CYPHER_DEBUG("Executing C-based Closeness Centrality");
-                algo_result = execute_closeness_centrality(executor->db, executor->cached_graph);
-                break;
-            case GRAPH_ALGO_LOUVAIN:
-                CYPHER_DEBUG("Executing C-based Louvain Community Detection");
-                algo_result = execute_louvain(executor->db, executor->cached_graph, algo_params.resolution);
-                break;
-            case GRAPH_ALGO_TRIANGLE_COUNT:
-                CYPHER_DEBUG("Executing C-based Triangle Count");
-                algo_result = execute_triangle_count(executor->db, executor->cached_graph);
-                break;
-            case GRAPH_ALGO_ASTAR:
-                CYPHER_DEBUG("Executing C-based A* Shortest Path");
-                algo_result = execute_astar(executor->db, executor->cached_graph, algo_params.source_id,
-                                            algo_params.target_id, algo_params.weight_prop,
-                                            algo_params.lat_prop, algo_params.lon_prop);
-                break;
-            case GRAPH_ALGO_BFS:
-                CYPHER_DEBUG("Executing C-based BFS Traversal");
-                algo_result = execute_bfs(executor->db, executor->cached_graph, algo_params.source_id,
-                                          algo_params.max_depth);
-                break;
-            case GRAPH_ALGO_DFS:
-                CYPHER_DEBUG("Executing C-based DFS Traversal");
-                algo_result = execute_dfs(executor->db, executor->cached_graph, algo_params.source_id,
-                                          algo_params.max_depth);
-                break;
-            case GRAPH_ALGO_NODE_SIMILARITY:
-                CYPHER_DEBUG("Executing C-based Node Similarity (Jaccard)");
-                algo_result = execute_node_similarity(executor->db, executor->cached_graph,
-                                                      algo_params.source_id,
-                                                      algo_params.target_id,
-                                                      algo_params.threshold,
-                                                      algo_params.top_k);
-                break;
-            case GRAPH_ALGO_KNN:
-                CYPHER_DEBUG("Executing C-based K-Nearest Neighbors");
-                algo_result = execute_knn(executor->db, executor->cached_graph,
-                                          algo_params.source_id,
-                                          algo_params.k);
-                break;
-            case GRAPH_ALGO_EIGENVECTOR_CENTRALITY:
-                CYPHER_DEBUG("Executing C-based Eigenvector Centrality");
-                algo_result = execute_eigenvector_centrality(executor->db, executor->cached_graph,
-                                                              algo_params.iterations);
-                break;
-            case GRAPH_ALGO_APSP:
-                CYPHER_DEBUG("Executing C-based All Pairs Shortest Path");
-                algo_result = execute_apsp(executor->db, executor->cached_graph);
-                break;
-            default:
-                break;
-        }
+        graph_algo_result *algo_result = run_graph_algorithm(executor, algo_params);
 
         if (algo_result) {
             if (algo_result->success) {
@@ -2996,6 +3164,15 @@ static int handle_return_only(cypher_executor *executor, cypher_query *query,
                 result->data[0] = malloc(sizeof(char*));
                 result->data[0][0] = strdup(algo_result->json_result);
                 result->success = true;
+                /* `RETURN pageRank() AS pr` names the column; without an
+                 * alias it stays column_0, which the bindings read
+                 * (GQLITE-T-0389). */
+                cypher_return_item *it0 = ret && ret->items && ret->items->count > 0
+                    ? (cypher_return_item*)ret->items->items[0] : NULL;
+                if (it0 && it0->alias) {
+                    result->column_names = malloc(sizeof(char*));
+                    if (result->column_names) result->column_names[0] = strdup(it0->alias);
+                }
             } else {
                 set_result_error(result, algo_result->error_message ?
                                  algo_result->error_message : "Graph algorithm failed");
@@ -4496,7 +4673,6 @@ static void rw_subst_add(rw_subst **subs, int *n_subs, ast_node **slot, ast_node
 /* Row values of a pattern as named parameters, so the SQL text of a
  * per-row MATCH / MERGE is the same for every row and its prepared
  * statement is reused (GQLITE-T-0431). Off when NULL. */
-typedef struct { char *json; int n; } rw_param_sink;
 static GQL_THREAD_LOCAL rw_param_sink *g_rw_params;
 
 /* A scalar literal as a parameter of the sink: the parameter node, or NULL

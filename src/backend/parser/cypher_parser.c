@@ -47,6 +47,7 @@ static struct {
     {"is", CYPHER_IS},
     {"limit", CYPHER_LIMIT},
     {"load", CYPHER_LOAD},
+    {"yield", CYPHER_YIELD},
     {"match", CYPHER_MATCH},
     {"merge", CYPHER_MERGE},
     {"none", CYPHER_NONE},
