@@ -483,6 +483,35 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
+    /* A parameter against a value known only at run time (`n.k = $x`):
+     * both are 1 / 0 for a boolean, so a boolean against a number was
+     * equal. Compare the boolean tags first (GQLITE-T-0431). */
+    if ((binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ) &&
+        ((binary_op->left->type == AST_NODE_PARAMETER) != (binary_op->right->type == AST_NODE_PARAMETER))) {
+        ast_node *pn = binary_op->left->type == AST_NODE_PARAMETER ? binary_op->left : binary_op->right;
+        ast_node *other = pn == binary_op->left ? binary_op->right : binary_op->left;
+        if (other->type != AST_NODE_LITERAL && other->type != AST_NODE_LIST && other->type != AST_NODE_MAP) {
+            const char *pname = ((cypher_parameter *)pn)->name;
+            const char *op_sql = binary_op->op_type == BINARY_OP_EQ ? "=" : "<>";
+            int mismatch = binary_op->op_type == BINARY_OP_EQ ? 0 : 1;
+            bool saved = ctx->in_comparison;
+            ctx->in_comparison = false;
+            char *ov = cypher_transform_capture_expression(ctx, other);
+            ctx->in_comparison = saved;
+            if (!ov) return -1;
+            append_sql(ctx, "(CASE WHEN (%s) IS NULL OR :%s IS NULL THEN NULL "
+                            "WHEN (_gql_typetag(%s) = 'bool') <> (:%s__gqlt = 'bool') THEN %d ELSE (",
+                       ov, pname, ov, pname, mismatch);
+            if (transform_expression(ctx, binary_op->left) < 0) { free(ov); return -1; }
+            append_sql(ctx, " %s ", op_sql);
+            if (transform_expression(ctx, binary_op->right) < 0) { free(ov); return -1; }
+            append_sql(ctx, ") END)");
+            free(ov);
+            ctx->in_comparison = was_in_comparison;
+            return 0;
+        }
+    }
+
     /* GQLITE-T-0422: one side is a number or a boolean by its shape, the
      * other is not known until run time (a property, a variable). In a
      * comparison a stored boolean is 1 / 0, so `n.flag = 1` was true. Check
