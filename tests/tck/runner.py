@@ -46,6 +46,7 @@ class _ProcedureFixture:
     scenario's CALL hits the procedure. """
     name: str
     arg_names: list[str] = field(default_factory=list)
+    arg_types: list[str] = field(default_factory=list)
     yield_names: list[str] = field(default_factory=list)
     rows: list[list[Any]] = field(default_factory=list)
 
@@ -264,6 +265,7 @@ def _h_executing_query(step, state, backend, m):
         # the remaining query. The procedure has no rows/columns to
         # contribute by design.
         rewritten = _strip_embedded_noyield_call(step.docstring, state)
+        rewritten = _rewrite_embedded_yield_calls(rewritten, state)
         state.last_result = backend.execute(rewritten, state.parameters or None)
     # Record backend-side trouble so the runner can decide between fail and error
     # at the Then-step. We don't raise here — TCK has scenarios that *expect* an
@@ -294,6 +296,42 @@ def _strip_embedded_noyield_call(query: str, state) -> str:
     return out
 
 
+def _cypher_literal(value: Any) -> str | None:
+    """A fixture value as a Cypher literal, or None for a value it cannot write."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return None
+
+
+def _rewrite_embedded_yield_calls(query: str, state) -> str:
+    """Rewrite `CALL <proc>() YIELD x [AS y]` inside a longer query as
+    `UNWIND [<fixture values>] AS y`, for a registered procedure with no
+    arguments and one yield column (Call6 [1]). A CALL is a row source like
+    UNWIND, so the rest of the query runs in the backend. """
+    if not state.procedures:
+        return query
+    out = query
+    for name, fixture in state.procedures.items():
+        if fixture.arg_names or len(fixture.yield_names) != 1:
+            continue
+        values = [_cypher_literal(r[0] if r else None) for r in fixture.rows]
+        if any(v is None for v in values):
+            continue
+        col = fixture.yield_names[0]
+        pat = re.compile(
+            rf"\bCALL\s+{re.escape(name)}\s*(?:\(\s*\))?\s+YIELD\s+{re.escape(col)}(?:\s+AS\s+(?P<alias>\w+))?\b",
+            re.IGNORECASE,
+        )
+        out = pat.sub(lambda mm: f"UNWIND [{', '.join(values)}] AS {mm.group('alias') or col}", out)
+    return out
+
+
 def _split_signature_columns(sig: str) -> list[str]:
     """Parse `in :: INTEGER?, out :: STRING?` into ['in', 'out']."""
     if not sig.strip():
@@ -308,12 +346,42 @@ def _split_signature_columns(sig: str) -> list[str]:
     return out
 
 
+def _split_signature_types(sig: str) -> list[str]:
+    """Parse `in :: INTEGER?, out :: STRING?` into ['INTEGER?', 'STRING?']."""
+    if not sig.strip():
+        return []
+    return [p.split("::", 1)[1].strip().upper() if "::" in p else "ANY?"
+            for p in (q.strip() for q in sig.split(",")) if p]
+
+
+def _arg_matches_type(value: Any, typ: str) -> bool:
+    """Does an argument value fit a declared procedure type (`INTEGER?`)?"""
+    nullable = typ.endswith("?")
+    base = typ.rstrip("?").strip()
+    if value is None:
+        return nullable
+    if base in ("ANY", ""):
+        return True
+    if base == "BOOLEAN":
+        return isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if base == "INTEGER":
+        return isinstance(value, int)
+    if base in ("FLOAT", "NUMBER"):
+        return isinstance(value, (int, float))   # an INTEGER is accepted as a FLOAT (Call3 [5]/[6])
+    if base == "STRING":
+        return isinstance(value, str)
+    return True
+
+
 def _h_procedure_declared(step, state, backend, m):
     """T-0252: register a test.* procedure fixture for this scenario."""
     name = m.group("name")
     arg_names = _split_signature_columns(m.group("args"))
     yield_names = _split_signature_columns(m.group("yields"))
-    fixture = _ProcedureFixture(name=name, arg_names=arg_names, yield_names=yield_names)
+    fixture = _ProcedureFixture(name=name, arg_names=arg_names, yield_names=yield_names,
+                                arg_types=_split_signature_types(m.group("args")))
     if step.table:
         # The first row is the column header (matches arg/yield names);
         # remaining rows are fixture data. parse_value each cell so types
@@ -409,6 +477,14 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     # error class. (Call1 [7]/[8]/[9]/[10] family.)
     if args_raw is not None and len(explicit_args) != len(fixture.arg_names):
         return None
+
+    # A literal argument of the wrong type is a compile-time SyntaxError
+    # InvalidArgumentType (Call2 [5]/[6]).
+    if args_raw is not None and args_raw.strip():
+        for value, typ in zip(explicit_args, fixture.arg_types):
+            if not _arg_matches_type(value, typ):
+                return QueryResult(error="SyntaxError",
+                                   error_message=f"InvalidArgumentType: {value!r} is not {typ}")
 
     # YIELD/RETURN projection. Build:
     #   - yield_alias_map: {alias_in_query: fixture_column_name}

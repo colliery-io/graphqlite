@@ -2253,6 +2253,12 @@ int transform_validate_query(cypher_query *query, char **error_message)
             case AST_NODE_UNWIND: {
                 cypher_unwind *u = (cypher_unwind *)clause;
                 rc = validate_unwind_clause(u, &vctx, error_message);
+                /* UNWIND introduces a new variable (Call1 [15] through a
+                 * procedure row source, `WITH 1 AS x UNWIND [2] AS x`). */
+                if (rc == 0 && u->alias && nset_contains(&bound, u->alias)) {
+                    set_error(error_message, "SyntaxError: VariableAlreadyBound: %s is already bound", u->alias);
+                    rc = -1;
+                }
                 if (u->alias) nset_add(&bound, u->alias);
                 break;
             }

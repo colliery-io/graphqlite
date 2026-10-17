@@ -84,5 +84,8 @@ SELECT cypher('MATCH (a:L56)-[r:Y56]->(b) WHERE a.n > 1 DELETE r CREATE (b)-[:Z5
 INSERT INTO _assert SELECT 'DELETE then CREATE keeps the new relationship',
     json_extract(cypher('MATCH (:L56)-[r:Z56]->(:L56) RETURN count(r) AS c'), '$[0].c') = 1;
 
+INSERT INTO _assert SELECT 'UNWIND variable through WITH *',
+    json(cypher('UNWIND [1] AS x WITH * UNWIND [2] AS y RETURN x, y')) = json('[{"x":1,"y":2}]');
+
 SELECT name, ok FROM _assert;
 SELECT '=== Test 56 Complete ===' as test_section;

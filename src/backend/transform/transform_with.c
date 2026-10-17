@@ -514,9 +514,13 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             bool is_projected = (var->kind == VAR_KIND_PROJECTED);
             bool skip_id = var->alias_is_id || is_projected;
             const char *id_suffix = skip_id ? "" : ".id";
+            /* A projected value (an UNWIND variable) keeps its SQL in
+             * source_expr: `UNWIND [1] AS x WITH * RETURN x` gave null. */
+            const char *src = transform_var_get_alias(ctx->var_ctx, var->name);
+            if (!src) src = var->table_alias ? var->table_alias : "NULL";
 
             { char idbuf[128];
-              dbuf_appendf(&col_buf, "%s%s AS %s", var->table_alias, id_suffix,
+              dbuf_appendf(&col_buf, "%s%s AS %s", src, id_suffix,
                            sql_ident(idbuf, sizeof(idbuf), var->name)); }
             if (is_projected && var->tag_expr && star_tagged_n < 256) {
                 char tb[320];
@@ -524,7 +528,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                              with_tag_col(tb, sizeof(tb), var->name));
                 star_tagged[star_tagged_n++] = strdup(var->name);
             }
-            dbuf_appendf(&group_buf, "%s%s", var->table_alias, id_suffix);
+            dbuf_appendf(&group_buf, "%s%s", src, id_suffix);
             group_count++;
             added++;
         }
