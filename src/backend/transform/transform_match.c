@@ -261,6 +261,11 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                 
                 /* Use unified variable system for node variables */
                 const char *alias;
+                /* The alias of an anonymous node. At this scope: `alias` is read
+                 * after the else block below, and an -O2 build reused the stack
+                 * of a block-local buffer (garbage table alias in release
+                 * builds, GQLITE-T-0430). */
+                char temp_alias[32];
                 if (node->variable) {
                     transform_var *var = transform_var_lookup(ctx->var_ctx, node->variable);
                     if (var && (var->kind == VAR_KIND_EDGE || var->kind == VAR_KIND_PATH)) {
@@ -298,7 +303,6 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                     }
                 } else {
                     /* Anonymous node - use legacy approach for now */
-                    char temp_alias[32];
                     snprintf(temp_alias, sizeof(temp_alias), "n_%d", ctx->anon_node_base + j);
                     alias = temp_alias;
                 }
