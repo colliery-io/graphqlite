@@ -20,7 +20,7 @@ INSERT INTO _assert SELECT 'T-0100 1.4 dialect', json_extract(cypher_capabilitie
 INSERT INTO _assert SELECT 'T-0100 1.5 sqlite version matches library', json_extract(cypher_capabilities(), '$.sqlite.version') = sqlite_version();
 INSERT INTO _assert SELECT 'T-0100 1.6 json1', json_extract(cypher_capabilities(), '$.sqlite.json1') = 1;
 INSERT INTO _assert SELECT 'T-0100 2.1 full EXISTS flag on', json_extract(cypher_capabilities(), '$.features.existential_subquery_full') = 1;
-INSERT INTO _assert SELECT 'T-0100 2.2 load_csv flag off', json_extract(cypher_capabilities(), '$.features.load_csv') = 0;
+INSERT INTO _assert SELECT 'T-0100 2.2 load_csv flag on', json_extract(cypher_capabilities(), '$.features.load_csv') = 1;
 INSERT INTO _assert SELECT 'T-0100 2.3 deterministic', cypher_capabilities() = cypher_capabilities();
 
 SELECT name, ok FROM _assert;

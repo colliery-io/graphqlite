@@ -4788,7 +4788,7 @@ fn test_capabilities_reports_version_and_flags() {
     assert!(caps.json1);
     assert!(caps.supports("validate"));
     assert!(caps.supports("existential_subquery_full"));
-    assert!(!caps.supports("load_csv"));
+    assert!(caps.supports("load_csv"));
     assert!(!caps.supports("definitely_unknown_flag"));
     assert!(!caps.neo4j_compat);
 }

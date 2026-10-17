@@ -4446,7 +4446,7 @@ static const gql_capability_flag gql_capability_flags[] = {
     {"merge_on_create_on_match",      1},
     {"union",                         1},
     {"call_subquery",                 1},  /* CALL { ... } */
-    {"call_procedures",               0},  /* CALL proc.name(...): no procedures; ProcedureNotFound */
+    {"call_procedures",               1},  /* CALL algorithm(...) YIELD ...; other names: ProcedureNotFound */
     {"existential_subquery_pattern",  1},  /* EXISTS((p)), EXISTS { (p) WHERE ... } */
     {"existential_subquery_full",     1},  /* EXISTS { MATCH ... RETURN ... } */
     {"pattern_comprehension",         1},
@@ -4465,14 +4465,13 @@ static const gql_capability_flag gql_capability_flags[] = {
     {"cypher_rows_vtab",              1},  /* cypher_rows() table-valued function */
     {"validate",                      1},  /* cypher_validate() */
     {"write_stats",                   1},  /* JSON stats object on writes */
-    /* Not implemented */
-    {"load_csv",                      0},
-    {"profile",                       0},
+    {"load_csv",                      1},  /* local files */
+    {"profile",                       1},
     {"explain",                       1},
-    {"create_index",                  0},
-    {"create_constraint",             0},
-    {"label_disjunction",             0},  /* (n:A|B) */
-    {"map_projection_all_properties", 0},  /* n{.*} */
+    {"create_index",                  1},  /* a record only: each property is indexed */
+    {"create_constraint",             1},  /* node UNIQUE and NOT NULL */
+    {"label_disjunction",             1},  /* (n:A|B) in MATCH */
+    {"map_projection_all_properties", 1},  /* n{.*} */
 };
 
 void cypher_capabilities_func(sqlite3_context *context, int argc, sqlite3_value **argv)
