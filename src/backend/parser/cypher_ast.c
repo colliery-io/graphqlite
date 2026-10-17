@@ -177,6 +177,16 @@ void ast_node_free(ast_node *node)
             }
             break;
 
+        case AST_NODE_CALL_PROCEDURE:
+            {
+                cypher_call_procedure *cp = (cypher_call_procedure*)node;
+                free(cp->name);
+                if (cp->args) ast_list_free(cp->args);
+                if (cp->yields) ast_list_free(cp->yields);
+                if (cp->where) ast_node_free(cp->where);
+            }
+            break;
+
         case AST_NODE_LOAD_CSV:
             {
                 cypher_load_csv *load_csv = (cypher_load_csv*)node;
@@ -743,6 +753,18 @@ cypher_call_subquery* make_cypher_call_subquery(ast_list *branches, int location
 
     call->branches = branches;
     return call;
+}
+
+cypher_call_procedure* make_cypher_call_procedure(char *name, ast_list *args, ast_list *yields, bool yield_all, ast_node *where, int location)
+{
+    cypher_call_procedure *cp = (cypher_call_procedure*)ast_node_create(AST_NODE_CALL_PROCEDURE, location, sizeof(cypher_call_procedure));
+    if (!cp) return NULL;
+    cp->name = name ? strdup(name) : NULL;
+    cp->args = args;
+    cp->yields = yields;
+    cp->yield_all = yield_all;
+    cp->where = where;
+    return cp;
 }
 
 cypher_load_csv* make_cypher_load_csv(char *file_path, char *variable, bool with_headers, char *fieldterminator, int location)
@@ -1403,6 +1425,7 @@ const char* ast_node_type_name(ast_node_type type)
         case AST_NODE_UNWIND:         return "UNWIND";
         case AST_NODE_FOREACH:        return "FOREACH";
         case AST_NODE_CALL_SUBQUERY:  return "CALL_SUBQUERY";
+        case AST_NODE_CALL_PROCEDURE: return "CALL_PROCEDURE";
         case AST_NODE_LOAD_CSV:       return "LOAD_CSV";
         case AST_NODE_PATTERN:        return "PATTERN";
         case AST_NODE_PATH:           return "PATH";

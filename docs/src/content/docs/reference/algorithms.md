@@ -6,15 +6,30 @@ GraphQLite provides 18 built-in graph algorithms accessible via Cypher functions
 
 > For guidance on choosing the right algorithm for your use case, see [Using Graph Algorithms](../../how-to/graph-algorithms/).
 
-In Cypher, call an algorithm as a function in a `RETURN` clause with no other clause. The query gives one row. The value is a JSON array of result objects, or one JSON object for `dijkstra` and `astar`. The comment under each signature shows the keys. To get one row for each result in SQL, use `json_each`:
+In Cypher, you can call an algorithm in two forms. The comment under each signature shows the keys of the result objects.
+
+**`CALL` form.** The query gives one row for each result object. `YIELD` selects the keys, and `AS` can rename them. `YIELD ... WHERE` filters the rows. Other clauses can follow:
+
+```cypher
+CALL pageRank() YIELD user_id, score
+RETURN user_id, score ORDER BY score DESC LIMIT 10
+```
+
+```cypher
+CALL pageRank() YIELD node_id, score
+MATCH (n) WHERE id(n) = node_id
+SET n.rank = score
+```
+
+Without `YIELD`, the query gives every key. A key that the algorithm does not give is an error. `dijkstra` and `astar` give one row. A `CALL` of a name that is not an algorithm gives `ProcedureError: ProcedureNotFound`. The `CALL` must be the first clause of the query.
+
+**Function form.** Use the algorithm as a function in a `RETURN` clause with no other clause. The query gives one row. The value is a JSON array of result objects, or one JSON object for `dijkstra` and `astar`. The column is `column_0`, or the alias of `RETURN pageRank() AS pr`. To get one row for each result in SQL, use `json_each`:
 
 ```sql
 SELECT json_extract(value, '$.user_id') AS user_id,
        json_extract(value, '$.score') AS score
 FROM json_each(cypher('RETURN pageRank(0.85, 20)'), '$[0].column_0');
 ```
-
-The `CALL algorithm() YIELD ...` form is not supported.
 
 ---
 

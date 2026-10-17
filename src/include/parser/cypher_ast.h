@@ -29,6 +29,7 @@ typedef enum ast_node_type {
     AST_NODE_UNWIND,
     AST_NODE_FOREACH,
     AST_NODE_CALL_SUBQUERY,
+    AST_NODE_CALL_PROCEDURE,
     AST_NODE_LOAD_CSV,
 
     /* Patterns */
@@ -192,6 +193,16 @@ typedef struct cypher_call_subquery {
     ast_node base;
     ast_list *branches;   /* List of subquery branches (one per UNION branch, each a query AST) */
 } cypher_call_subquery;
+
+/* CALL name(args) [YIELD a, b AS c [WHERE ...]] (GQLITE-T-0389) */
+typedef struct cypher_call_procedure {
+    ast_node base;
+    char *name;           /* procedure name, dots kept (`db.labels`) */
+    ast_list *args;       /* argument expressions; NULL when written without parentheses */
+    ast_list *yields;     /* return items: an identifier (the output) and its alias; NULL for none / YIELD * */
+    bool yield_all;       /* YIELD * */
+    ast_node *where;      /* YIELD ... WHERE */
+} cypher_call_procedure;
 
 /* LOAD CSV clause - import data from CSV files */
 typedef struct cypher_load_csv {
@@ -526,6 +537,7 @@ cypher_with* make_cypher_with(bool distinct, ast_list *items, ast_list *order_by
 cypher_unwind* make_cypher_unwind(ast_node *expr, char *alias, int location);
 cypher_foreach* make_cypher_foreach(char *variable, ast_node *list_expr, ast_list *body, int location);
 cypher_call_subquery* make_cypher_call_subquery(ast_list *branches, int location);
+cypher_call_procedure* make_cypher_call_procedure(char *name, ast_list *args, ast_list *yields, bool yield_all, ast_node *where, int location);
 cypher_load_csv* make_cypher_load_csv(char *file_path, char *variable, bool with_headers, char *fieldterminator, int location);
 cypher_create* make_cypher_create(ast_list *pattern);
 cypher_merge* make_cypher_merge(ast_list *pattern, ast_list *on_create, ast_list *on_match);

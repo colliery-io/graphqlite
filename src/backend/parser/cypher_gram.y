@@ -136,7 +136,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %token NOT_EQ LT_EQ GT_EQ DOT_DOT TYPECAST PLUS_EQ REGEX_MATCH
 
 /* Keywords */
-%token MATCH RETURN CREATE WHERE WITH SET DELETE REMOVE MERGE UNWIND DETACH FOREACH CALL
+%token MATCH RETURN CREATE WHERE WITH SET DELETE REMOVE MERGE UNWIND DETACH FOREACH CALL YIELD
 %token OPTIONAL DISTINCT ORDER BY SKIP LIMIT AS ASC DESC
 %token AND OR XOR NOT IN IS NULL_P TRUE_P FALSE_P EXISTS
 %token ANY NONE SINGLE REDUCE
@@ -166,6 +166,8 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %type <set_item> set_item
 %type <delete_item> delete_item
 %type <string> procedure_name
+%type <list> proc_args_opt yield_item_list
+%type <return_item> yield_item
 %type <remove_item> remove_item
 %type <boolean> detach_opt
 %type <path> path simple_path
@@ -386,20 +388,60 @@ call_clause:
             ast_list_append(branches, $3);
             $$ = (ast_node*)make_cypher_call_subquery(branches, @1.first_line);
         }
-    | CALL procedure_name
+    | CALL procedure_name proc_args_opt
         {
-            /* GraphQLite has no procedures: `CALL db.labels()` names one
-             * that does not exist (Call1 [13]/[14]). */
-            char msg[300];
-            snprintf(msg, sizeof(msg), "ProcedureError: ProcedureNotFound: there is no procedure %s", $2);
+            /* `CALL pageRank()`: the graph algorithms are procedures; any
+             * other name is ProcedureNotFound at run time (GQLITE-T-0389). */
+            $$ = (ast_node*)make_cypher_call_procedure($2, $3, NULL, false, NULL, @1.first_line);
             free($2);
-            free(context->error_message);
-            context->error_message = strdup(msg);
-            context->has_error = true;
-            context->error_location = @2.first_line;
-            context->error_column = @2.first_column;
-            $$ = NULL;
-            YYERROR;
+        }
+    | CALL procedure_name proc_args_opt YIELD '*'
+        {
+            $$ = (ast_node*)make_cypher_call_procedure($2, $3, NULL, true, NULL, @1.first_line);
+            free($2);
+        }
+    | CALL procedure_name proc_args_opt YIELD yield_item_list
+        {
+            $$ = (ast_node*)make_cypher_call_procedure($2, $3, $5, false, NULL, @1.first_line);
+            free($2);
+        }
+    | CALL procedure_name proc_args_opt YIELD yield_item_list WHERE expr
+        {
+            $$ = (ast_node*)make_cypher_call_procedure($2, $3, $5, false, $7, @1.first_line);
+            free($2);
+        }
+    ;
+
+proc_args_opt:
+    /* empty: no parentheses */  { $$ = NULL; }
+    | '(' ')'                    { $$ = ast_list_create(); }
+    | '(' argument_list ')'      { $$ = $2; }
+    ;
+
+yield_item_list:
+    yield_item
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)$1);
+        }
+    | yield_item_list ',' yield_item
+        {
+            ast_list_append($1, (ast_node*)$3);
+            $$ = $1;
+        }
+    ;
+
+yield_item:
+    IDENTIFIER
+        {
+            $$ = make_return_item((ast_node*)make_identifier($1, @1.first_line), $1);
+            free($1);
+        }
+    | IDENTIFIER AS IDENTIFIER
+        {
+            $$ = make_return_item((ast_node*)make_identifier($1, @1.first_line), $3);
+            free($1);
+            free($3);
         }
     ;
 
@@ -2018,6 +2060,7 @@ non_reserved_kw:
     | PATTERN       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "PATTERN"); }
     | CSV           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CSV"); }
     | LOAD          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "LOAD"); }
+    | YIELD         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "YIELD"); }
     | IN            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "IN"); }
     | IS            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "IS"); }
     | AS            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "AS"); }
