@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "parser/cypher_parser.h"
 #include "parser/cypher_keywords.h"
@@ -100,6 +101,25 @@ cypher_parse_result* parse_cypher_query_ext(const char *query)
         return result;
     }
     
+    /* `PROFILE <query>` (GQLITE-T-0135): a prefix, not a keyword, so names
+     * such as `n.profile` and `AS profile` stay names. The word is blanked
+     * (spaces keep the error columns). */
+    bool profile = false;
+    char *profiled = NULL;
+    {
+        const char *p = query;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if (strncasecmp(p, "PROFILE", 7) == 0 &&
+            (p[7] == ' ' || p[7] == '\t' || p[7] == '\n' || p[7] == '\r')) {
+            profiled = strdup(query);
+            if (profiled) {
+                memset(profiled + (p - query), ' ', 7);
+                query = profiled;
+                profile = true;
+            }
+        }
+    }
+
     /* Set up scanner with input query */
     context->scanner = cypher_scanner_create();
     if (!context->scanner) {
@@ -111,6 +131,7 @@ cypher_parse_result* parse_cypher_query_ext(const char *query)
     if (cypher_scanner_set_input_string(context->scanner, query) != 0) {
         result->error_message = strdup("Failed to set scanner input");
         cypher_parser_context_destroy(context);
+        free(profiled);
         return result;
     }
     
@@ -131,10 +152,18 @@ cypher_parse_result* parse_cypher_query_ext(const char *query)
         context->error_column = context->scanner->int_min_column;
     }
 
+    if (parse_result == 0 && !context->has_error && profile && context->result &&
+        context->result->type != AST_NODE_QUERY) {
+        context->has_error = true;
+        free(context->error_message);
+        context->error_message = strdup("SyntaxError: UnexpectedSyntax: PROFILE of a UNION is not supported");
+    }
     if (parse_result == 0 && !context->has_error) {
         /* Parsing succeeded */
         result->ast = context->result;
         context->result = NULL; /* Transfer ownership */
+        if (profile && result->ast && result->ast->type == AST_NODE_QUERY)
+            ((cypher_query*)result->ast)->profile = true;
     } else {
         /* Parsing failed - copy error message and location */
         if (context->error_message) {
@@ -147,6 +176,7 @@ cypher_parse_result* parse_cypher_query_ext(const char *query)
     }
     
     cypher_parser_context_destroy(context);
+    free(profiled);
     return result;
 }
 

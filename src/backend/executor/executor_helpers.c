@@ -262,6 +262,19 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
         return 0;  /* No params to bind */
     }
 
+    /* A statement without named parameters needs nothing from the JSON:
+     * skip reading it (a large $param made every per-row statement of a
+     * write pipeline read the whole list, GQLITE-T-0134). */
+    {
+        int np = sqlite3_bind_parameter_count(stmt);
+        bool named = false;
+        for (int i = 1; i <= np && !named; i++) {
+            const char *nm = sqlite3_bind_parameter_name(stmt, i);
+            if (nm && nm[0] == ':') named = true;
+        }
+        if (!named) return 0;
+    }
+
     /* Skip whitespace */
     const char *p = params_json;
     while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;

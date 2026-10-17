@@ -1209,6 +1209,208 @@ static int handle_call_procedure(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/* ---- LOAD CSV (GQLITE-T-0134) --------------------------------------------
+ * The file is read and parsed here (RFC 4180: quoted fields, "" in quotes,
+ * line breaks in quotes). Each line becomes a row: a map with HEADERS, a
+ * list without. The rest of the query runs as
+ *   UNWIND $__gql_csv_rows AS __gql_csv
+ *   WITH __gql_csv.row AS <var>, __gql_csv.line AS __gql_linenumber, ...
+ * so linenumber() and file() work in the clause after LOAD CSV. */
+
+static void csv_json_append_string(dynamic_buffer *b, const char *t, size_t n)
+{
+    dbuf_append(b, "\"");
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)t[i];
+        if (c == '"' || c == '\\') { char e[3] = {'\\', (char)c, 0}; dbuf_append(b, e); }
+        else if (c == '\n') dbuf_append(b, "\\n");
+        else if (c == '\r') dbuf_append(b, "\\r");
+        else if (c == '\t') dbuf_append(b, "\\t");
+        else if (c < 0x20) dbuf_appendf(b, "\\u%04x", c);
+        else { char e[2] = {(char)c, 0}; dbuf_append(b, e); }
+    }
+    dbuf_append(b, "\"");
+}
+
+typedef struct { char *text; size_t len; bool quoted; } csv_field;
+
+/* One record from text at *pos. Returns the field count (fields owned),
+ * -1 at end of input. */
+static int csv_next_record(const char *t, size_t n, size_t *pos, char sep, csv_field **out)
+{
+    if (*pos >= n) return -1;
+    int count = 0, cap = 8;
+    csv_field *f = calloc((size_t)cap, sizeof(csv_field));
+    size_t i = *pos;
+    for (;;) {
+        dynamic_buffer v; dbuf_init(&v);
+        bool quoted = false;
+        if (i < n && t[i] == '"') {
+            quoted = true;
+            i++;
+            while (i < n) {
+                if (t[i] == '"') {
+                    if (i + 1 < n && t[i + 1] == '"') { dbuf_append(&v, "\""); i += 2; continue; }
+                    i++;
+                    break;
+                }
+                char c[2] = {t[i], 0};
+                dbuf_append(&v, c);
+                i++;
+            }
+        }
+        while (i < n && t[i] != sep && t[i] != '\n' && t[i] != '\r') {
+            char c[2] = {t[i], 0};
+            dbuf_append(&v, c);
+            i++;
+        }
+        if (count == cap) { cap *= 2; f = realloc(f, (size_t)cap * sizeof(csv_field)); }
+        const char *got = dbuf_get(&v);
+        f[count].text = strdup(got ? got : "");
+        f[count].len = dbuf_len(&v);
+        f[count].quoted = quoted;
+        count++;
+        dbuf_free(&v);
+        if (i < n && t[i] == sep) { i++; continue; }
+        if (i < n && t[i] == '\r') i++;
+        if (i < n && t[i] == '\n') i++;
+        break;
+    }
+    *pos = i;
+    *out = f;
+    return count;
+}
+
+static void csv_free_record(csv_field *f, int n)
+{
+    for (int i = 0; i < n; i++) free(f[i].text);
+    free(f);
+}
+
+static int handle_load_csv(cypher_executor *executor, cypher_query *query, cypher_result *result)
+{
+    ast_list *clauses = query->clauses;
+    cypher_load_csv *lc = (cypher_load_csv*)clauses->items[0];
+    const char *path = lc->file_path ? lc->file_path : "";
+    if (strncmp(path, "file://", 7) == 0) path += 7;
+    if (strstr(path, "://")) {
+        set_result_error(result, "LOAD CSV: only local files are supported (a path or file://)");
+        return -1;
+    }
+    char sep = lc->fieldterminator && lc->fieldterminator[0] ? lc->fieldterminator[0] : ',';
+    if (lc->fieldterminator && strcmp(lc->fieldterminator, "\\t") == 0) sep = '\t';
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        char msg[600];
+        snprintf(msg, sizeof(msg), "LOAD CSV: cannot open %s", path);
+        set_result_error(result, msg);
+        return -1;
+    }
+    dynamic_buffer text; dbuf_init(&text);
+    char chunk[65536];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof(chunk) - 1, fp)) > 0) { chunk[got] = 0; dbuf_append(&text, chunk); }
+    fclose(fp);
+    const char *t = dbuf_get(&text);
+    size_t n = dbuf_len(&text);
+    size_t pos = 0;
+    if (n >= 3 && (unsigned char)t[0] == 0xEF && (unsigned char)t[1] == 0xBB && (unsigned char)t[2] == 0xBF) pos = 3;  /* BOM */
+
+    csv_field *hdr = NULL; int nh = 0;
+    if (lc->with_headers) {
+        nh = csv_next_record(t ? t : "", n, &pos, sep, &hdr);
+        if (nh < 0) nh = 0;
+    }
+    dynamic_buffer rows; dbuf_init(&rows);
+    dbuf_append(&rows, "[");
+    int line = lc->with_headers ? 1 : 0, nrows = 0;
+    csv_field *rec = NULL; int nf;
+    while ((nf = csv_next_record(t ? t : "", n, &pos, sep, &rec)) >= 0) {
+        line++;
+        if (nf == 1 && rec[0].len == 0 && !rec[0].quoted) { csv_free_record(rec, nf); continue; }  /* blank line */
+        dbuf_append(&rows, nrows++ ? ",{\"line\":" : "{\"line\":");
+        dbuf_appendf(&rows, "%d,\"row\":", line);
+        if (lc->with_headers) {
+            dbuf_append(&rows, "{");
+            for (int i = 0; i < nh; i++) {
+                if (i) dbuf_append(&rows, ",");
+                csv_json_append_string(&rows, hdr[i].text, hdr[i].len);
+                dbuf_append(&rows, ":");
+                /* a missing or empty (unquoted) field is null */
+                if (i >= nf || (rec[i].len == 0 && !rec[i].quoted)) dbuf_append(&rows, "null");
+                else csv_json_append_string(&rows, rec[i].text, rec[i].len);
+            }
+            dbuf_append(&rows, "}");
+        } else {
+            dbuf_append(&rows, "[");
+            for (int i = 0; i < nf; i++) {
+                if (i) dbuf_append(&rows, ",");
+                if (rec[i].len == 0 && !rec[i].quoted) dbuf_append(&rows, "null");
+                else csv_json_append_string(&rows, rec[i].text, rec[i].len);
+            }
+            dbuf_append(&rows, "]");
+        }
+        dbuf_append(&rows, "}");
+        csv_free_record(rec, nf);
+    }
+    dbuf_append(&rows, "]");
+    if (hdr) csv_free_record(hdr, nh);
+    dbuf_free(&text);
+
+    /* the rest of the query over the rows */
+    ast_list *with_items = ast_list_create();
+    ast_list_append(with_items, (ast_node*)make_return_item(
+        (ast_node*)make_property((ast_node*)make_identifier("__gql_csv", 0), "row", 0), lc->variable));
+    ast_list_append(with_items, (ast_node*)make_return_item(
+        (ast_node*)make_property((ast_node*)make_identifier("__gql_csv", 0), "line", 0), "__gql_linenumber"));
+    ast_list_append(with_items, (ast_node*)make_return_item(
+        (ast_node*)make_string_literal((char*)path, 0), "__gql_file"));
+    ast_list *made = ast_list_create();
+    ast_list_append(made, (ast_node*)make_cypher_unwind((ast_node*)make_parameter("__gql_csv_rows", 0), "__gql_csv", 0));
+    ast_list_append(made, (ast_node*)make_cypher_with(false, with_items, NULL, NULL, NULL, NULL));
+    ast_list *all = ast_list_create();
+    for (int i = 0; i < made->count; i++) ast_list_append(all, made->items[i]);
+    for (int i = 1; i < clauses->count; i++) ast_list_append(all, clauses->items[i]);
+    cypher_query *q = make_cypher_query(all, false);
+
+    rw_param_sink sink = { NULL, 0 };
+    sink.json = sqlite3_mprintf("\"__gql_csv_rows\":%s", dbuf_get(&rows));
+    dbuf_free(&rows);
+    const char *user_params = executor->params_json;
+    char *merged = rw_params_merged(user_params, &sink);
+    executor->params_json = merged;
+    executor->stmt_capture = false;
+    cypher_result *ir = cypher_executor_execute_ast(executor, (ast_node*)q);
+    executor->params_json = user_params;
+    sqlite3_free(merged);
+    sqlite3_free(sink.json);
+
+    int rc = 0;
+    if (!ir || !ir->success) {
+        set_result_error(result, ir && ir->error_message ? ir->error_message : "LOAD CSV failed");
+        rc = -1;
+    } else {
+        result->success = true;
+        result->row_count = ir->row_count;
+        result->column_count = ir->column_count;
+        result->column_names = ir->column_names; ir->column_names = NULL;
+        result->data = ir->data; ir->data = NULL;
+        result->data_types = ir->data_types; ir->data_types = NULL;
+        result->agtype_data = ir->agtype_data; ir->agtype_data = NULL;
+        result->use_agtype = ir->use_agtype;
+        result->nodes_created += ir->nodes_created;
+        result->nodes_deleted += ir->nodes_deleted;
+        result->relationships_created += ir->relationships_created;
+        result->relationships_deleted += ir->relationships_deleted;
+        result->properties_set += ir->properties_set;
+    }
+    if (ir) cypher_result_free(ir);
+    for (int i = 0; i < made->count; i++) ast_node_free(made->items[i]);
+    free(made->items); free(made);
+    free(all->items); free(all); free(q);
+    return rc;
+}
+
 int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
                            cypher_result *result)
 {
@@ -1223,6 +1425,11 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
         query->clauses->items[0]->type == AST_NODE_CALL_PROCEDURE) {
         CYPHER_DEBUG("Matched shape: CALL of a procedure");
         return handle_call_procedure(executor, query, result);
+    }
+    if (query->clauses && query->clauses->count > 0 && query->clauses->items[0] &&
+        query->clauses->items[0]->type == AST_NODE_LOAD_CSV) {
+        CYPHER_DEBUG("Matched shape: LOAD CSV");
+        return handle_load_csv(executor, query, result);
     }
 
     /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs

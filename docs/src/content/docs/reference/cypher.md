@@ -22,14 +22,17 @@ GraphQLite implements a substantial subset of openCypher. This page is a quick-r
 | `UNWIND` | Supported | List expansion |
 | `FOREACH` | Supported | Mutation inside list iteration |
 | `UNION` / `UNION ALL` | Supported | |
-| `LOAD CSV WITH HEADERS FROM` | Supported | Local file paths |
+| `LOAD CSV [WITH HEADERS] FROM` | Supported | Local files, `FIELDTERMINATOR`, `linenumber()`, `file()` |
 | `FROM` | Supported | Multi-graph queries (GraphQLite extension) |
-| `CALL {}` subqueries | **Not supported** | |
-| `CALL procedure` | **Not supported** | No procedure registry |
-| `CREATE INDEX` | **Not supported** | Schema is managed automatically |
+| `CALL {}` subqueries | Supported | Importing `WITH`, writes in the body |
+| `CALL procedure` | Supported | Graph algorithms: `CALL pageRank() YIELD node, score` |
+| `CREATE` / `DROP` / `SHOW INDEX` | Supported | A record only: each property is indexed already |
+| `CREATE` / `DROP` / `SHOW CONSTRAINT` | Supported | Node `IS UNIQUE` and `IS NOT NULL` |
+| `EXPLAIN` / `PROFILE` | Supported | `PROFILE` runs the query and gives the plan, rows and time |
+| Label disjunction | Supported | `(n:A\|B)` in `MATCH` |
+| Map projection | Supported | `n {.name, .*, k: expr}` |
 | `CASE` in `SET` | **Not supported** | Use `CASE` in `RETURN`/`WITH` instead |
-| Nested `FOREACH` | **Not supported** | |
-| `EXPLAIN` / `PROFILE` | **Not supported** | |
+| Relationship indexes and constraints | **Not supported** | |
 
 ## Functions
 
@@ -62,12 +65,9 @@ GraphQLite implements a substantial subset of openCypher. This page is a quick-r
 
 ## Not Supported
 
-- `CALL {}` correlated subqueries
-- `CALL procedure(...)` procedure invocations
-- `CREATE INDEX ON :Label(prop)`
-- `EXPLAIN` / `PROFILE`
-- `CASE` expressions on the left-hand side of `SET`
-- Nested `FOREACH`
+- `CASE` expressions in `SET` values
+- Relationship property indexes and relationship constraints
+- Procedures other than the graph algorithms
 
 ## Sub-pages
 

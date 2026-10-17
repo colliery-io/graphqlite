@@ -321,6 +321,7 @@ void ast_node_free(ast_node *node)
                     CYPHER_DEBUG("Freeing variable: %s", pattern->variable);
                     free(pattern->variable);
                 }
+                if (pattern->label_alternatives) ast_list_free(pattern->label_alternatives);
                 if (pattern->labels) {
                     CYPHER_DEBUG("Freeing labels list with %d items", pattern->labels->count);
                     ast_list_free(pattern->labels);
@@ -931,6 +932,14 @@ cypher_node_pattern* make_node_pattern(char *variable, ast_list *labels, ast_nod
 
     pattern->variable = variable ? strdup(variable) : NULL;
     pattern->labels = labels;  /* Take ownership of the list */
+    /* `:A|B` arrives as one AST_NODE_LIST item (label_alt_list) */
+    if (labels && labels->count == 1 && labels->items[0] && labels->items[0]->type == AST_NODE_LIST) {
+        cypher_list *alts = (cypher_list*)labels->items[0];
+        pattern->label_alternatives = alts->items;
+        alts->items = NULL;
+        ast_list_free(labels);
+        pattern->labels = NULL;
+    }
     pattern->properties = properties;
 
     CYPHER_DEBUG("Set variable=%p, labels=%p, properties=%p",

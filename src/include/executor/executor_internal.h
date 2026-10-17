@@ -123,6 +123,15 @@ int foreach_map_property(sqlite3 *db, foreach_context *ctx, ast_node *expr,
 
 /* Result helper functions */
 cypher_result* create_empty_result(void);
+
+/* CREATE / DROP / SHOW of indexes and constraints (GQLITE-T-0008): the
+ * result, or NULL when query is not such a statement. */
+cypher_result *schema_command_try(cypher_executor *executor, const char *query);
+/* NULL when the data meets every constraint, else the error (owned). */
+char *schema_check_constraints(cypher_executor *executor);
+/* 1 when query is a valid schema statement, -1 with msg when it is an
+ * invalid one, 0 when it is not one. */
+int schema_command_check(const char *query, char *msg, size_t msglen);
 void set_result_error(cypher_result *result, const char *error_msg);
 /* set_result_error plus a GQL_ERR_* code and a 1-based source location
  * (0 = unknown). The code must point at static storage. */

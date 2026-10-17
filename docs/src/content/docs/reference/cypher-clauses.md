@@ -401,22 +401,98 @@ MATCH (n:Company) RETURN n.name AS name
 
 ---
 
-## LOAD CSV WITH HEADERS FROM
+## LOAD CSV
 
 **Syntax**
 
 ```
-LOAD CSV WITH HEADERS FROM 'file:///path/to/file.csv' AS row
+LOAD CSV [WITH HEADERS] FROM 'file:///path/to/file.csv' AS row
 [FIELDTERMINATOR char]
 ```
 
-Reads a CSV file and binds each row as a map keyed by header names. All values are strings; use `toInteger()`, `toFloat()`, or `toBoolean()` as needed.
+Reads a CSV file (RFC 4180 quoting). With `WITH HEADERS`, each row is a map keyed by the header names. Without it, each row is a list. All values are strings; use `toInteger()`, `toFloat()`, or `toBoolean()` as needed. `linenumber()` gives the line of the current row, and `file()` gives the path.
 
 **Example**
 
 ```cypher
 LOAD CSV WITH HEADERS FROM 'file:///data/people.csv' AS row
 CREATE (:Person {name: row.name, age: toInteger(row.age)})
+```
+
+---
+
+## CALL procedure
+
+**Syntax**
+
+```
+CALL algorithm([args]) [YIELD * | YIELD column [AS alias], ... [WHERE expr]]
+```
+
+Runs a graph algorithm and gives one row for each result. See [Graph algorithms](../algorithms/) for the algorithms and their columns.
+
+**Example**
+
+```cypher
+CALL pageRank() YIELD node, score
+WHERE score > 0.1
+RETURN node, score ORDER BY score DESC
+```
+
+---
+
+## EXPLAIN / PROFILE
+
+**Syntax**
+
+```
+EXPLAIN query
+PROFILE query
+```
+
+`EXPLAIN` gives the generated SQL and does not run the query. `PROFILE` runs the query and gives one row with the columns `pattern`, `clauses`, `sql`, `plan` (the SQLite query plan), `rows`, `time_ms` and the write counters.
+
+**Example**
+
+```cypher
+PROFILE MATCH (p:Person) WHERE p.age > 30 RETURN p.name
+```
+
+---
+
+## CREATE / DROP / SHOW INDEX
+
+**Syntax**
+
+```
+CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.prop, ...)
+CREATE INDEX ON :Label(prop, ...)
+DROP INDEX name [IF EXISTS]
+SHOW [ALL | RANGE] INDEXES
+```
+
+GraphQLite indexes each property already, so an index is a record only. The statements are accepted so that scripts from other databases run. Relationship indexes are not supported.
+
+---
+
+## CREATE / DROP / SHOW CONSTRAINT
+
+**Syntax**
+
+```
+CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.prop IS UNIQUE
+CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE (n.a, n.b) IS UNIQUE
+CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.prop IS NOT NULL
+DROP CONSTRAINT name [IF EXISTS]
+SHOW CONSTRAINTS
+```
+
+The old forms `ON (n:Label) ASSERT n.prop IS UNIQUE` and `ASSERT EXISTS (n.prop)` are also accepted. GraphQLite checks the constraints after each write query. A query that breaks a constraint fails with `ConstraintValidationFailed`, and none of its writes stay. A new constraint fails if the data in the graph breaks it. The integer `1` and the float `1.0` are the same value; the string `"1"` is a different value. Relationship constraints are not supported.
+
+**Example**
+
+```cypher
+CREATE CONSTRAINT person_email FOR (p:Person) REQUIRE p.email IS UNIQUE
 ```
 
 ---
