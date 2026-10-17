@@ -1,0 +1,2 @@
+# LOAD CSV test data: a quoted field holds a newline, so keep LF on every platform
+tests/functional/data/*.csv text eol=lf
