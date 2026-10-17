@@ -82,6 +82,16 @@ class ExtensionBackend(Backend):
         rows = [list(r) for r in (resp.get("rows") or [])]
         return QueryResult(headers=columns, rows=rows)
 
+    def graph_state(self) -> dict | None:
+        """Node ids, relationship ids, label names and property triples, for
+        side effects. None when the worker cannot report it."""
+        try:
+            resp = self._send({"cmd": "state"})
+        except BackendError:
+            self._spawn()
+            return None
+        return resp if resp.get("ok") else None
+
     def close(self) -> None:
         if self._proc is None or self._proc.poll() is not None:
             return

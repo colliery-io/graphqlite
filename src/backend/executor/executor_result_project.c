@@ -95,6 +95,8 @@ bool synthesize_delete_return(cypher_return *ret, cypher_result *result)
         cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
         if (item->alias) {
             result->column_names[i] = strdup(item->alias);
+        } else if (item->source_text) {
+            result->column_names[i] = strdup(item->source_text);
         } else if (all_count) {
             result->column_names[i] = strdup("count");
         } else {
@@ -441,7 +443,10 @@ void project_return_row_from_var_map(cypher_executor *executor,
                                         result->data_types[row_idx][i] = GQL_COL_TYPE_JSON;
                                     } else {
                                         result->data[row_idx][i] = strdup(val);
-                                        result->data_types[row_idx][i] = sql_type;
+                                        /* a stored string stays a string, also
+                                         * when it looks like JSON ('[1]') */
+                                        result->data_types[row_idx][i] =
+                                            strstr(type_tables[t], "_props_text") ? GQL_COL_TYPE_STRING : sql_type;
                                     }
                                 }
                             }
@@ -572,6 +577,8 @@ void set_return_column_names(cypher_return *ret, cypher_result *result) {
         cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
         const char *alias = item->alias;
         ast_node *expr = item->expr;
+        /* An unaliased expression is named as written (GQLITE-T-0429). */
+        if (!alias && item->source_text && expr && expr->type != AST_NODE_IDENTIFIER) alias = item->source_text;
         if (alias) {
             result->column_names[i] = strdup(alias);
         } else if (expr && expr->type == AST_NODE_PROPERTY) {

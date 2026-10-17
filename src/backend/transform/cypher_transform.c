@@ -647,7 +647,7 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
         ctx->has_error = true;
         char msg[256];
         snprintf(msg, sizeof(msg),
-                 "Variable `%s` is already bound as a %s and cannot be used as a path (SyntaxError: VariableAlreadyBound)",
+                 "SyntaxError: VariableAlreadyBound: Variable `%s` is already bound as a %s and cannot be used as a path",
                  name, kind_str);
         ctx->error_message = strdup(msg);
         return -1;

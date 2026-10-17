@@ -162,7 +162,7 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in aggregation: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: aggregation: `%s` is a path" : "SyntaxError: UndefinedVariable: aggregation: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -307,11 +307,15 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
             return 0;
         }
         ctx->has_error = true;
-        ctx->error_message = strdup("type() function argument must be a relationship variable");
+        ctx->error_message = strdup("SyntaxError: InvalidArgumentType: type() takes a relationship");
         return -1;
     }
 
-    if (arg->type != AST_NODE_IDENTIFIER) {
+    if (arg->type != AST_NODE_IDENTIFIER ||
+        (!transform_var_is_edge(ctx->var_ctx, ((cypher_identifier*)arg)->name) &&
+         transform_var_get_alias(ctx->var_ctx, ((cypher_identifier*)arg)->name) &&
+         transform_var_lookup(ctx->var_ctx, ((cypher_identifier*)arg)->name) &&
+         transform_var_lookup(ctx->var_ctx, ((cypher_identifier*)arg)->name)->kind == VAR_KIND_PROJECTED)) {
         /* type() accepts type Any (Graph4 [5]): a non-identifier argument
          * (e.g. `type(list[0])`) is resolved at runtime by the _gql_type UDF —
          * a relationship value yields its type, null yields null, anything else
@@ -329,7 +333,7 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in type() function: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: type() function: `%s` is a path" : "SyntaxError: UndefinedVariable: type() function: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -337,7 +341,7 @@ int transform_type_function(cypher_transform_context *ctx, cypher_function_call 
     /* Check if the variable is a relationship/edge variable */
     if (!transform_var_is_edge(ctx->var_ctx, id->name)) {
         ctx->has_error = true;
-        ctx->error_message = strdup("type() function argument must be a relationship variable");
+        ctx->error_message = strdup("SyntaxError: InvalidArgumentType: type() takes a relationship");
         return -1;
     }
 

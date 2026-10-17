@@ -422,6 +422,7 @@ int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
                     first = false;
                 }
             }
+            if (first) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
             append_sql(ctx, " %s", temp);
             free(temp);
         }

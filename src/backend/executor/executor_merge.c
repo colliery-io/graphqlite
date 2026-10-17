@@ -1249,6 +1249,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
             }
         }
 
+        if (first) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
         append_sql(ctx, " %s", temp);
         free(temp);
     }
@@ -1292,7 +1293,9 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
             transform_var *var = transform_var_at(ctx->var_ctx, i);
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(rm, var->name, (int)node_id);
+                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
+                if (sqlite3_column_type(stmt, col) != SQLITE_NULL)
+                    set_variable_node_id(rm, var->name, (int)node_id);
                 CYPHER_DEBUG("MERGE row %d bound variable '%s' to node %lld", row_count, var->name, (long long)node_id);
                 col++;
             }

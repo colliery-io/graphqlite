@@ -258,6 +258,10 @@ void ast_node_free(ast_node *node)
                     free(item->variable);
                     item->variable = NULL;
                 }
+                if (item->expr) {
+                    ast_node_free(item->expr);
+                    item->expr = NULL;
+                }
             }
             break;
 
@@ -286,6 +290,7 @@ void ast_node_free(ast_node *node)
                 cypher_return_item *item = (cypher_return_item*)node;
                 ast_node_free(item->expr);
                 free(item->alias);
+                free(item->source_text);
             }
             break;
             
@@ -822,6 +827,23 @@ cypher_delete_item* make_delete_item(char *variable)
     }
 
     item->variable = variable ? strdup(variable) : NULL;
+    return item;
+}
+
+cypher_delete_item* make_delete_item_expr(ast_node *expr)
+{
+    cypher_delete_item *item = (cypher_delete_item*)ast_node_create(AST_NODE_DELETE_ITEM, -1, sizeof(cypher_delete_item));
+    if (!item) {
+        ast_node_free(expr);
+        return NULL;
+    }
+    /* A plain variable keeps the form every DELETE executor reads. */
+    if (expr && expr->type == AST_NODE_IDENTIFIER) {
+        item->variable = strdup(((cypher_identifier*)expr)->name);
+        ast_node_free(expr);
+    } else {
+        item->expr = expr;
+    }
     return item;
 }
 

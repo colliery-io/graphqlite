@@ -67,6 +67,7 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
             }
         }
 
+        if (first) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
         append_sql(ctx, " %s", temp);
         free(temp);
     }
@@ -112,12 +113,14 @@ int execute_match_remove_query(cypher_executor *executor, cypher_match *match, c
             transform_var *var = transform_var_at(ctx->var_ctx, i);
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, var->name, (int)node_id);
+                set_variable_node_id(var_map, var->name,
+                                     sqlite3_column_type(stmt, col) == SQLITE_NULL ? GQL_NULL_ENTITY_ID : (int)node_id);
                 CYPHER_DEBUG("Bound variable '%s' to node %lld", var->name, (long long)node_id);
                 col++;
             } else if (var && var->kind == VAR_KIND_EDGE) {
                 int64_t edge_id = sqlite3_column_int64(stmt, col);
-                set_variable_edge_id(var_map, var->name, (int)edge_id);
+                set_variable_edge_id(var_map, var->name,
+                                     sqlite3_column_type(stmt, col) == SQLITE_NULL ? GQL_NULL_ENTITY_ID : (int)edge_id);
                 CYPHER_DEBUG("Bound variable '%s' to edge %lld", var->name, (long long)edge_id);
                 col++;
             }
@@ -170,6 +173,8 @@ int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, 
 
             /* Get the node ID for this variable */
             int node_id = get_variable_node_id(var_map, var_id->name);
+            if (node_id == GQL_NULL_ENTITY_ID) continue;   /* REMOVE on null does nothing */
+
             if (node_id < 0) {
                 char error[256];
                 snprintf(error, sizeof(error), "Unbound variable in REMOVE label: %s", var_id->name);
@@ -208,6 +213,8 @@ int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, 
 
         if (is_edge) {
             entity_id = get_variable_edge_id(var_map, var_id->name);
+            if (entity_id == GQL_NULL_ENTITY_ID) continue;   /* REMOVE on null does nothing */
+
             if (entity_id < 0) {
                 /* Cypher semantics: REMOVE on a null/unbound variable is a no-op
                  * (Remove1 [6]). Matches the parallel node behavior below. */
@@ -225,6 +232,8 @@ int execute_remove_operations(cypher_executor *executor, cypher_remove *remove, 
             }
         } else {
             entity_id = get_variable_node_id(var_map, var_id->name);
+            if (entity_id == GQL_NULL_ENTITY_ID) continue;   /* REMOVE on null does nothing */
+
             if (entity_id < 0) {
                 /* Cypher semantics: REMOVE on a null/unbound variable is a no-op.
                  * Also covers the case where an OPTIONAL-bound edge variable falls

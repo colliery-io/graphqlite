@@ -150,7 +150,8 @@ static void test_type_function_errors(void)
         /* Should fail with error about requiring relationship */
         CU_ASSERT_TRUE(result2->has_error);
         if (result2->error_message) {
-            CU_ASSERT_PTR_NOT_NULL(strstr(result2->error_message, "relationship variable"));
+            /* compile-time SyntaxError: InvalidArgumentType (Graph4 [7]) */
+            CU_ASSERT_PTR_NOT_NULL(strstr(result2->error_message, "InvalidArgumentType"));
         }
         cypher_free_result(result2);
     }

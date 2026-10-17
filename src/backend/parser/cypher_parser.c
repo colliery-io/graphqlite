@@ -262,6 +262,16 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
     /* Set location information */
     yylloc->first_line = yylloc->last_line = token.line;
     yylloc->first_column = yylloc->last_column = token.column;
+    /* last_column: the last byte of the token, so a rule's span covers its
+     * source text (the name of an unaliased RETURN column). */
+    if (token.text && token.text[0]) {
+        int line = token.line, col = token.column;
+        for (const char *p = token.text; p[1]; p++) {
+            if (*p == '\n') { line++; col = 1; } else col++;
+        }
+        yylloc->last_line = line;
+        yylloc->last_column = col;
+    }
     
     /* Convert token to Bison format */
     int bison_token = cypher_token_to_bison(&token);

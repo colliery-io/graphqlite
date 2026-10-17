@@ -93,7 +93,7 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in label expression: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: label expression: `%s` is a path" : "SyntaxError: UndefinedVariable: label expression: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -1114,7 +1114,7 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in property access: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: property access: `%s` is a path" : "SyntaxError: UndefinedVariable: property access: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -1263,7 +1263,7 @@ int transform_function_call(cypher_transform_context *ctx, cypher_function_call 
     /* Unsupported function */
     ctx->has_error = true;
     char error[256];
-    snprintf(error, sizeof(error), "Unsupported function: %s", func_call->function_name);
+    snprintf(error, sizeof(error), "SyntaxError: UnknownFunction: %s", func_call->function_name);
     ctx->error_message = strdup(error);
     return -1;
 }

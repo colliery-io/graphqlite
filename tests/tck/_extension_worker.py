@@ -12,6 +12,9 @@ Protocol (one JSON object per line on stdin, one JSON object per line on stdout)
                                                         decoding)
                                                     -> {"ok": false, "error_class": "...",
                                                         "error_message": "..."}
+    request:  {"cmd": "state"}                      -> {"ok": true, "nodes": [...], "rels": [...],
+                                                        "labels": [...], "props": [...]}
+                                                       (graph state, for side effects)
     request:  {"cmd": "shutdown"}                   -> {"ok": true}, then exit
 
 The harness's `ExtensionBackend` supervises this worker and respawns it on
@@ -109,6 +112,8 @@ def main() -> int:
                 else:
                     raw = conn.execute("SELECT cypher(?)", (req.get("query", ""),)).fetchall()
                 _write(proto, _decode_payload([r[0] for r in raw]))
+            elif cmd == "state":
+                _write(proto, dict(ok=True, **_graph_state(conn)))
             elif cmd == "shutdown":
                 conn.close()
                 _write(proto, {"ok": True})
@@ -179,7 +184,7 @@ def _decode_payload(raw_payloads: list) -> dict:
                     rows.append([item])
         elif isinstance(decoded, dict) and "error" in decoded:
             return {"ok": False,
-                    "error_class": _classify(decoded.get("code", "")) or "GraphQLiteError",
+                    "error_class": _classify(text),
                     "error_message": decoded.get("error", text)}
         elif isinstance(decoded, dict) and "nodes_created" in decoded:
             # Write-statistics object for a RETURN-less mutation: not data.
@@ -195,6 +200,31 @@ def _decode_payload(raw_payloads: list) -> dict:
     if status:
         out["status"] = status
     return out
+
+
+_PROP_TABLES = ("int", "real", "text", "bool", "json")
+
+
+def _graph_state(conn: sqlite3.Connection) -> dict:
+    """The graph as sets the TCK diffs for side effects: node ids,
+    relationship ids, the label names in use, and (entity, key, value)
+    property triples. Empty before the first query creates the tables."""
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "nodes" not in have:
+        return {"nodes": [], "rels": [], "labels": [], "props": []}
+    nodes = [r[0] for r in conn.execute("SELECT id FROM nodes")]
+    rels = [r[0] for r in conn.execute("SELECT id FROM edges")]
+    labels = [r[0] for r in conn.execute("SELECT DISTINCT label FROM node_labels")]
+    props = []
+    for kind, col in (("node", "node_id"), ("edge", "edge_id")):
+        for t in _PROP_TABLES:
+            table = f"{kind}_props_{t}"
+            if table not in have:
+                continue
+            for eid, key, value in conn.execute(
+                    f"SELECT p.{col}, k.key, p.value FROM {table} p JOIN property_keys k ON k.id = p.key_id"):
+                props.append([kind, eid, key, t, value])
+    return {"nodes": nodes, "rels": rels, "labels": labels, "props": props}
 
 
 def _new_conn(ext_path: Path) -> sqlite3.Connection:
@@ -251,30 +281,29 @@ def _write(proto, msg: dict) -> None:
     proto.flush()
 
 
-_ERROR_CLASS_PREFIX = re.compile(r"^(\w+(?:Error|Failed|Failure|NotFound)):")
+_ERROR_CLASS_PREFIX = re.compile(r"^(\w+(?:Error|Failed|Failure|NotFound|Missing)):")
 
 
 def _classify(msg: str) -> str:
-    # The engine prefixes classified errors with the openCypher class name
-    # ("TypeError: ...", "EntityNotFound: DeletedEntityAccess: ...",
-    # "ConstraintVerificationFailed: DeleteConnectedNode: ..."); trust that
-    # before falling back to keyword sniffing.
-    m = _ERROR_CLASS_PREFIX.match((msg or "").lstrip())
+    """The openCypher error class of an engine error, strictly: the class
+    the engine names at the start of the message ("TypeError: ...",
+    "EntityNotFound: DeletedEntityAccess: ..."), or SyntaxError for a parse
+    error. Anything else is unclassified (GraphQLiteError): the harness
+    does not guess a class from words in the message (GQLITE-T-0429)."""
+    text = (msg or "").strip()
+    code = ""
+    if text.startswith("{"):
+        try:
+            obj = json.loads(text)
+            text = str(obj.get("error", ""))
+            code = str(obj.get("code", ""))
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    m = _ERROR_CLASS_PREFIX.match(text.lstrip())
     if m:
         return m.group(1)
-    lower = (msg or "").lower()
-    if "parse" in lower or "syntax" in lower:
+    if code == "PARSE_ERROR" or text == "PARSE_ERROR":
         return "SyntaxError"
-    if "type" in lower:
-        return "TypeError"
-    if "not found" in lower:
-        return "EntityNotFound"
-    if "constraint" in lower:
-        return "ConstraintViolation"
-    if "not_implemented" in lower:
-        return "NotImplementedError"
-    if "execution" in lower:
-        return "GraphQLiteError"
     return "GraphQLiteError"
 
 

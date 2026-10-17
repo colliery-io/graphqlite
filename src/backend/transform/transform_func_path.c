@@ -399,7 +399,7 @@ static int emit_endpoint_id(cypher_transform_context *ctx, cypher_function_call 
     const char *alias = transform_var_get_alias(ctx->var_ctx, id->name);
     if (!alias) {
         ctx->has_error = true;
-        snprintf(err, sizeof(err), "Unknown variable in %s() function: %s", fname, id->name);
+        snprintf(err, sizeof(err), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: %s() function: `%s` is a path" : "SyntaxError: UndefinedVariable: %s() function: `%s` is not defined", fname, id->name);
         ctx->error_message = strdup(err);
         return -1;
     }

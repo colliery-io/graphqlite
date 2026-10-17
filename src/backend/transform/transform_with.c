@@ -118,7 +118,7 @@ static int validate_identifiers_in_scope_ex(cypher_transform_context *ctx, ast_n
             ctx->has_error = true;
             char msg[256];
             snprintf(msg, sizeof(msg),
-                     "Variable `%s` not defined (SyntaxError: UndefinedVariable)",
+                     "SyntaxError: UndefinedVariable: Variable `%s` not defined",
                      id->name);
             ctx->error_message = strdup(msg);
             return -1;

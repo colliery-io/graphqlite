@@ -57,6 +57,9 @@ class _State:
     parameters: dict[str, Any] = field(default_factory=dict)
     skipped_reason: str | None = None
     procedures: dict[str, _ProcedureFixture] = field(default_factory=dict)
+    # Side effects of the last `executing query`: counter -> count, or None
+    # when the backend cannot report graph state.
+    side_effects: dict[str, int] | None = None
 
 
 # Step matchers ordered by specificity.
@@ -80,8 +83,8 @@ _STEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^the result should be empty$"), "result_empty"),
     # Any openCypher error class: SyntaxError, TypeError, ArgumentError,
     # ProcedureError, EntityNotFound, ConstraintVerificationFailed, ... The
-    # class name and detail (after the colon) are captured for diagnostics;
-    # the handler only requires that the engine raised *some* error.
+    # handler requires that class, and the detail after the colon in the
+    # error message (GQLITE-T-0429).
     (re.compile(r"^a (?P<err>\w+) should be raised at (?:compile time|runtime|any time)(?::\s*(?P<detail>\w+))?"),
      "expect_error"),
     (re.compile(r"^no side effects$"), "no_side_effects"),
@@ -229,7 +232,10 @@ def _h_named_graph(step, state, backend, m):
 def _h_having_executed(step, state, backend, m):
     if not step.docstring:
         raise _Mismatch("missing docstring for 'having executed'")
-    backend.execute(step.docstring, state.parameters or None)
+    r = backend.execute(step.docstring, state.parameters or None)
+    if r is not None and r.error:
+        # A setup query must succeed: the rest of the scenario reads its graph.
+        raise _BackendErrorAtThen(r.error, "setup: " + (r.error_message or ""))
 
 def _h_parameters(step, state, backend, m):
     if not step.table:
@@ -255,6 +261,7 @@ def _h_executing_query(step, state, backend, m):
     # test.* fixtures. If the procedure is declared in this scenario,
     # synthesize the QueryResult from the fixture rows; otherwise fall
     # through to the backend.
+    before = _graph_state(backend)
     intercepted = _maybe_call_procedure(step.docstring, state)
     if intercepted is not None:
         state.last_result = intercepted
@@ -266,10 +273,36 @@ def _h_executing_query(step, state, backend, m):
         # contribute by design.
         rewritten = _strip_embedded_noyield_call(step.docstring, state)
         rewritten = _rewrite_embedded_yield_calls(rewritten, state)
-        state.last_result = backend.execute(rewritten, state.parameters or None)
+        state.last_result = (_embedded_call_error(step.docstring, state)
+                             or backend.execute(rewritten, state.parameters or None))
+    after = _graph_state(backend) if before is not None else None
+    state.side_effects = _diff_side_effects(before, after) if after is not None else None
     # Record backend-side trouble so the runner can decide between fail and error
     # at the Then-step. We don't raise here — TCK has scenarios that *expect* an
     # error, and the verdict is decided by the matching Then-step.
+
+
+_SIDE_EFFECT_KEYS = ("+nodes", "-nodes", "+relationships", "-relationships",
+                     "+labels", "-labels", "+properties", "-properties")
+
+
+def _graph_state(backend) -> dict | None:
+    fn = getattr(backend, "graph_state", None)
+    return fn() if fn else None
+
+
+def _diff_side_effects(before: dict, after: dict) -> dict[str, int]:
+    """TCK side effects as the difference of two graph states: node and
+    relationship ids, the label names in use, and property triples (an
+    overwrite is one -property and one +property)."""
+    out = {}
+    for key, field_ in (("nodes", "nodes"), ("relationships", "rels"), ("labels", "labels"),
+                        ("properties", "props")):
+        b = {tuple(x) if isinstance(x, list) else x for x in before.get(field_, [])}
+        a = {tuple(x) if isinstance(x, list) else x for x in after.get(field_, [])}
+        out["+" + key] = len(a - b)
+        out["-" + key] = len(b - a)
+    return out
 
 
 def _strip_embedded_noyield_call(query: str, state) -> str:
@@ -306,6 +339,21 @@ def _cypher_literal(value: Any) -> str | None:
         return repr(value)
     if isinstance(value, str):
         return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return None
+
+
+_AGGREGATE_CALL = re.compile(r"\b(count|sum|avg|min|max|collect|stdev|stdevp|percentileCont|percentileDisc)\s*\(",
+                             re.IGNORECASE)
+
+
+def _embedded_call_error(query: str, state) -> QueryResult | None:
+    """An argument of a registered procedure may not aggregate
+    (`CALL test.labels(count(n))`, Call1 [16])."""
+    for name in state.procedures:
+        for mm in re.finditer(rf"\bCALL\s+{re.escape(name)}\s*\(([^)]*\)?)\)", query, re.IGNORECASE):
+            if _AGGREGATE_CALL.search(mm.group(1)):
+                return QueryResult(error="SyntaxError",
+                                   error_message="InvalidAggregation: a procedure argument may not aggregate")
     return None
 
 
@@ -431,12 +479,16 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     # Cypher syntax error (UndefinedVariable). Fall through to backend
     # so the harness sees the expected error class.
     if m.group("rets") and not m.group("yields"):
+        if fixture.yield_names:
+            return QueryResult(error="SyntaxError",
+                               error_message="UndefinedVariable: an in-query CALL must YIELD its outputs")
         return None
     # T-0252: CALL <proc> YIELD * RETURN ... is in-query YIELD * which
     # the Cypher spec disallows (UnexpectedSyntax). Fall through.
     # (Standalone CALL YIELD * is OK — handled when rets is absent.)
     if m.group("yields") and m.group("yields").strip() == "*" and m.group("rets"):
-        return None
+        return QueryResult(error="SyntaxError",
+                           error_message="UnexpectedSyntax: YIELD * is only allowed in a standalone CALL")
 
     # Parse args. Three cases:
     # - Explicit: CALL name(a, b)        → use literal values.
@@ -445,6 +497,10 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     # - Empty:    CALL name()            → no filtering.
     args_raw = m.group("args")  # None if no parens, "" if empty parens
     explicit_args: list[Any] = []
+    if args_raw is None and fixture.arg_names and (m.group("yields") or m.group("rets")):
+        # Arguments pass implicitly only in a standalone CALL (Call2 [4]).
+        return QueryResult(error="SyntaxError",
+                           error_message="InvalidArgumentPassingMode: an in-query CALL passes its arguments explicitly")
     if args_raw is None:
         # Implicit-arg mode: look up each declared arg name in parameters.
         # If none of the args have matching params, skip filtering.
@@ -452,11 +508,8 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
             if arg_name in state.parameters:
                 explicit_args.append(state.parameters[arg_name])
             else:
-                # Missing parameter — fall through to backend; the
-                # expected ParameterMissing error class won't surface
-                # from our synthesizer but the backend will (or won't)
-                # produce something the harness can score.
-                return None
+                return QueryResult(error="ParameterMissing",
+                                   error_message=f"MissingParameter: ${arg_name}")
     elif args_raw.strip():
         for part in [p.strip() for p in args_raw.split(",")]:
             if not part:
@@ -476,7 +529,8 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
     # Fall through to backend so the harness can score the expected
     # error class. (Call1 [7]/[8]/[9]/[10] family.)
     if args_raw is not None and len(explicit_args) != len(fixture.arg_names):
-        return None
+        return QueryResult(error="SyntaxError",
+                           error_message=f"InvalidNumberOfArguments: {name} takes {len(fixture.arg_names)}")
 
     # A literal argument of the wrong type is a compile-time SyntaxError
     # InvalidArgumentType (Call2 [5]/[6]).
@@ -505,7 +559,8 @@ def _maybe_call_procedure(query: str, state) -> QueryResult | None:
             mas = re.match(r"^(?P<src>\w+)\s+AS\s+(?P<dst>\w+)$", item, re.IGNORECASE)
             dst = mas.group("dst") if mas else item
             if dst in seen_dst:
-                return None
+                return QueryResult(error="SyntaxError",
+                                   error_message=f"VariableAlreadyBound: {dst}")
             seen_dst.add(dst)
     if yield_clause and yield_clause.strip() != "*":
         for item in [c.strip() for c in yield_clause.split(",") if c.strip()]:
@@ -610,25 +665,49 @@ def _h_result_ordered_lists_unordered(step, state, backend, m):
 def _h_result_empty(step, state, backend, m):
     if state.last_result is None:
         raise _Mismatch("no result captured")
+    if state.last_result.error:
+        # An error is not an empty result.
+        raise _BackendErrorAtThen(state.last_result.error, state.last_result.error_message or "")
     if state.last_result.rows:
         raise _Mismatch("expected empty result", expected=[], actual=state.last_result.rows)
     return _PassMarker
 
 def _h_expect_error(step, state, backend, m):
-    if state.last_result is None or state.last_result.error is None:
-        raise _Mismatch(f"expected error {m.group('err')!r}, none raised")
+    want, detail = m.group("err"), m.group("detail")
+    r = state.last_result
+    if r is None or r.error is None:
+        raise _Mismatch(f"expected error {want!r}, none raised")
+    # The error class must match, and the detail (`: InvalidArgumentType`)
+    # must be named in the message when the scenario gives one.
+    if r.error != want:
+        raise _Mismatch(f"expected error {want}, got {r.error}",
+                        expected=f"{want}: {detail}", actual=(r.error_message or "")[:300])
+    if detail and detail not in (r.error_message or ""):
+        raise _Mismatch(f"expected error detail {detail}",
+                        expected=f"{want}: {detail}", actual=(r.error_message or "")[:300])
     return _PassMarker
 
+def _check_side_effects(state, expected: dict[str, int]) -> None:
+    got = state.side_effects
+    if got is None:
+        return   # the backend cannot report graph state
+    want = {k: expected.get(k, 0) for k in _SIDE_EFFECT_KEYS}
+    if want != got:
+        diff = {k: (want[k], got[k]) for k in _SIDE_EFFECT_KEYS if want[k] != got[k]}
+        raise _Mismatch(f"side effects (expected, got): {diff}", expected=want, actual=got)
+
+
 def _h_no_side_effects(step, state, backend, m):
-    # v1: until the extension reports side-effect counters, accept this silently.
+    _check_side_effects(state, {})
     return _PassMarker
 
 def _h_side_effects_table(step, state, backend, m):
-    # The extension doesn't surface side-effect counters yet (separate ticket
-    # in [[GQLITE-T-0228]]). Treat the step as soft-pass so a scenario that
-    # has already had its data result verified isn't downgraded to `skipped`
-    # by an unverifiable counter check. Mismatches in counters are tracked as
-    # their own work and do not affect the conformance pass count here.
+    # A counter the table does not list is 0.
+    expected = {}
+    for row in step.table or []:
+        if len(row) >= 2 and row[0].strip() in _SIDE_EFFECT_KEYS:
+            expected[row[0].strip()] = int(row[1].strip())
+    _check_side_effects(state, expected)
     return _PassMarker
 
 
@@ -668,6 +747,10 @@ def _compare_result_table(result: QueryResult | None, table: list[list[str]] | N
     # output preserves user-named columns but not user-declared order; if the
     # backend reports headers, reorder cells so cell[i] matches header[i].
     actual_rows = result.rows
+    # The columns must be the expected ones, by name. A result with no rows
+    # does not report its columns.
+    if actual_rows and result.headers and sorted(result.headers) != sorted(headers):
+        raise _Mismatch("columns", expected=headers, actual=result.headers)
     if result.headers and len(result.headers) == len(headers):
         try:
             index_map = [result.headers.index(h) for h in headers]
