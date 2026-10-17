@@ -5,6 +5,7 @@
 #include <CUnit/Basic.h>
 
 #include "executor/agtype.h"
+#include "executor/executor_internal.h"
 
 /* Test creating null value */
 static void test_agtype_null(void)
@@ -349,6 +350,19 @@ static void test_agtype_string_special(void)
 }
 
 /* Register test suite */
+/* GQLITE-T-0391: a cell typed from its text keeps 64 bits. A millisecond
+ * timestamp was parsed into a long, which is 32 bits on Windows. */
+static void test_agtype_text_integer_64bit(void)
+{
+    agtype_value *val = create_property_agtype_value("1767225600000", -1);
+    CU_ASSERT_PTR_NOT_NULL(val);
+    if (val) {
+        CU_ASSERT_EQUAL(val->type, AGTV_INTEGER);
+        CU_ASSERT(val->val.int_value == 1767225600000LL);
+        agtype_value_free(val);
+    }
+}
+
 int register_agtype_tests(void)
 {
     CU_pSuite suite = CU_add_suite("AGType", NULL, NULL);
@@ -356,6 +370,7 @@ int register_agtype_tests(void)
 
     if (!CU_add_test(suite, "Create null", test_agtype_null)) return -1;
     if (!CU_add_test(suite, "Create integer", test_agtype_integer)) return -1;
+    if (!CU_add_test(suite, "Integer from text keeps 64 bits", test_agtype_text_integer_64bit)) return -1;
     if (!CU_add_test(suite, "Create negative integer", test_agtype_negative_integer)) return -1;
     if (!CU_add_test(suite, "Create float", test_agtype_float)) return -1;
     if (!CU_add_test(suite, "Create negative float", test_agtype_negative_float)) return -1;

@@ -1899,6 +1899,13 @@ map_projection_item:
             $$ = (ast_node*)make_map_projection_item($1, NULL, $3, @1.first_line);
             free($1);
         }
+    | IDENTIFIER
+        {
+            /* Variable selector: `m {x}` is `m {x: x}` (GQLITE-T-0136) */
+            $$ = (ast_node*)make_map_projection_item($1, NULL,
+                     (ast_node*)make_identifier($1, @1.first_line), @1.first_line);
+            free($1);
+        }
     ;
 
 /* CASE expression - two forms:
