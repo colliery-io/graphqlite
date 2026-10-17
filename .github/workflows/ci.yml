@@ -249,6 +249,42 @@ jobs:
         working-directory: bindings/python
         run: pytest tests/ -v
 
+  # The release workflow builds with RELEASE=1 (-O2). An -O2 build can show
+  # a memory bug that the debug build hides (0.11.0: a block-local buffer
+  # read after its block), so test that build here too, not only at tag time.
+  release-build-tests:
+    needs: [build-and-test, rust-check, python-check, windows-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev
+
+      - name: Build extension (release)
+        run: make extension RELEASE=1
+
+      - name: Install Python package
+        working-directory: bindings/python
+        run: pip install -e ".[dev]"
+
+      - name: Run Python tests
+        working-directory: bindings/python
+        run: pytest tests/ -q
+
+      - name: Run the TCK
+        run: python -m tests.tck --out build/tck-results-release.json
+
+      - name: Compare the TCK against the baseline
+        run: scripts/check-tck-baseline.sh build/tck-results-release.json
+
   full-python-tests-macos:
     needs: [build-and-test, rust-check, python-check, windows-build]
     runs-on: macos-latest
