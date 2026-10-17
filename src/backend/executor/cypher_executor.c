@@ -12,6 +12,7 @@
 #include <sqlite3.h>
 
 #include "executor/cypher_executor.h"
+#include "executor/json_builder.h"
 #include "executor/executor_internal.h"
 #include "executor/query_patterns.h"
 #include "executor/graph_algorithms.h"
@@ -390,6 +391,112 @@ void cypher_executor_free(cypher_executor *executor)
 static void note_write(cypher_executor *executor, const cypher_result *result);
 static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *ast);
 
+/* A string as a JSON string literal (owned). */
+static char *profile_json_string(const char *t)
+{
+    if (!t) t = "";
+    size_t n = strlen(t);
+    char *q = malloc(n * 6 + 3), *o = q;
+    if (!q) return NULL;
+    *o++ = '"';
+    for (const unsigned char *c = (const unsigned char *)t; *c; c++) {
+        if (*c == '"' || *c == '\\') { *o++ = '\\'; *o++ = (char)*c; }
+        else if (*c == '\n') { *o++ = '\\'; *o++ = 'n'; }
+        else if (*c < 0x20) o += sprintf(o, "\\u%04x", *c);
+        else *o++ = (char)*c;
+    }
+    *o++ = '"'; *o = 0;
+    return q;
+}
+
+/* Milliseconds from the SQLite VFS clock (portable, also on Windows). */
+static double profile_now_ms(sqlite3 *db)
+{
+    (void)db;
+    sqlite3_vfs *vfs = sqlite3_vfs_find(NULL);
+    sqlite3_int64 t = 0;
+    if (vfs && vfs->iVersion >= 2 && vfs->xCurrentTimeInt64) vfs->xCurrentTimeInt64(vfs, &t);
+    return (double)t;
+}
+
+/* PROFILE <query> (GQLITE-T-0135): run the query, then give one row: the
+ * dispatch pattern, the clauses, the SQL of the transform and its SQLite
+ * plan (EXPLAIN QUERY PLAN), the row count, the time and the writes. */
+static void execute_profile(cypher_executor *executor, cypher_query *query, cypher_result *result)
+{
+    clause_flags flags = analyze_query_clauses(query);
+    const query_pattern *pattern = find_matching_pattern(flags);
+    const char *pattern_name = pattern ? pattern->name : "NONE";
+    char *flags_str = strdup(clause_flags_to_string(flags));
+
+    /* the SQL and its plan; a write pipeline may run other statements */
+    char *sql = NULL;
+    json_builder plan;
+    jbuf_init(&plan, 256);
+    jbuf_start_array(&plan);
+    cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
+    if (ctx && cypher_transform_generate_sql(ctx, query) >= 0 && !ctx->has_error && ctx->sql_buffer) {
+        sql = strdup(ctx->sql_buffer);
+        char *eqp = sqlite3_mprintf("EXPLAIN QUERY PLAN %s", sql);
+        sqlite3_stmt *st = NULL;
+        if (eqp && sqlite3_prepare_v2(executor->db, eqp, -1, &st, NULL) == SQLITE_OK) {
+            while (sqlite3_step(st) == SQLITE_ROW) {
+                char *d = profile_json_string((const char *)sqlite3_column_text(st, 3));
+                if (d) { jbuf_add_item(&plan, "%s", d); free(d); }
+            }
+        }
+        sqlite3_finalize(st);
+        sqlite3_free(eqp);
+    }
+    if (ctx) cypher_transform_free_context(ctx);
+    jbuf_end_array(&plan);
+
+    /* run it */
+    query->profile = false;
+    cypher_result *run = create_empty_result();
+    double t0 = profile_now_ms(executor->db);
+    if (run) dispatch_query_pattern(executor, query, run);
+    double t1 = profile_now_ms(executor->db);
+    query->profile = true;
+    if (!run || !run->success) {
+        set_result_error(result, run && run->error_message ? run->error_message : "PROFILE: the query failed");
+        if (run) cypher_result_free(run);
+        free(sql); free(flags_str); jbuf_free(&plan);
+        return;
+    }
+
+    static const char *names[] = {"pattern", "clauses", "sql", "plan", "rows", "time_ms",
+                                  "nodes_created", "nodes_deleted", "relationships_created",
+                                  "relationships_deleted", "properties_set"};
+    int nc = (int)(sizeof(names) / sizeof(names[0]));
+    result->column_count = nc;
+    result->row_count = 1;
+    result->column_names = calloc((size_t)nc, sizeof(char *));
+    result->data = malloc(sizeof(char **));
+    result->data_types = malloc(sizeof(int *));
+    result->data[0] = calloc((size_t)nc, sizeof(char *));
+    result->data_types[0] = calloc((size_t)nc, sizeof(int));
+    for (int i = 0; i < nc; i++) result->column_names[i] = strdup(names[i]);
+    char buf[64];
+    result->data[0][0] = strdup(pattern_name);           result->data_types[0][0] = GQL_COL_TYPE_STRING;
+    result->data[0][1] = flags_str;                       result->data_types[0][1] = GQL_COL_TYPE_STRING;
+    result->data[0][2] = sql ? sql : NULL;                result->data_types[0][2] = sql ? GQL_COL_TYPE_STRING : SQLITE_NULL;
+    result->data[0][3] = jbuf_take(&plan);                result->data_types[0][3] = GQL_COL_TYPE_JSON;
+    snprintf(buf, sizeof(buf), "%d", run->row_count);
+    result->data[0][4] = strdup(buf);                     result->data_types[0][4] = SQLITE_INTEGER;
+    snprintf(buf, sizeof(buf), "%.3f", t1 - t0);
+    result->data[0][5] = strdup(buf);                     result->data_types[0][5] = SQLITE_FLOAT;
+    int counts[] = {run->nodes_created, run->nodes_deleted, run->relationships_created,
+                    run->relationships_deleted, run->properties_set};
+    for (int i = 0; i < 5; i++) {
+        snprintf(buf, sizeof(buf), "%d", counts[i]);
+        result->data[0][6 + i] = strdup(buf);
+        result->data_types[0][6 + i] = SQLITE_INTEGER;
+    }
+    result->success = true;
+    cypher_result_free(run);
+}
+
 cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *ast)
 {
     if (!executor || !ast) {
@@ -500,6 +607,10 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                 }
 
                 if (query->clauses) {
+                    if (query->profile && !query->explain) {
+                        execute_profile(executor, query, result);
+                        return result;
+                    }
                     /* Handle EXPLAIN - return generated SQL and pattern info */
                     if (query->explain) {
                         CYPHER_DEBUG("EXPLAIN mode - returning generated SQL and pattern info");
@@ -766,6 +877,10 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
      * text-path execution; a read handler parks its statement instead of
      * finalizing it, and it becomes a cache entry below. */
     executor->stmt_capture = executor->stmt_cache_enabled;
+    /* PROFILE runs the query each time and returns its profile, not rows
+     * that the cache could replay (GQLITE-T-0135). */
+    if (ast && ast->type == AST_NODE_QUERY && ((cypher_query *)ast)->profile)
+        executor->stmt_capture = false;
     executor->captured_ctx = NULL;
     executor->captured_stmt = NULL;
     executor->captured_ret = NULL;

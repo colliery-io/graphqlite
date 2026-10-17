@@ -131,6 +131,7 @@ typedef struct cypher_query {
     ast_node base;
     ast_list *clauses;  /* List of clauses */
     bool explain;       /* EXPLAIN prefix - return SQL instead of executing */
+    bool profile;       /* PROFILE prefix - run, then return the plan, rows and time */
 } cypher_query;
 
 /* UNION query - combines multiple queries */
