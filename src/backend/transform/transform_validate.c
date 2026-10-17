@@ -2465,6 +2465,12 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 }
                 break;
             }
+            case AST_NODE_LOAD_CSV: {
+                /* LOAD CSV binds its row variable (GQLITE-T-0134) */
+                cypher_load_csv *lc = (cypher_load_csv *)clause;
+                if (lc->variable) nset_add(&bound, lc->variable);
+                break;
+            }
             case AST_NODE_CALL_PROCEDURE: {
                 /* YIELD binds its outputs (GQLITE-T-0389); an in-query use
                  * of an output needs YIELD, as in Cypher. */
