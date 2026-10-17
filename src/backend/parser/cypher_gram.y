@@ -185,7 +185,8 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %type <map_pair> map_pair
 %type <list> map_pair_list
 
-%type <list> label_opt label_list
+%type <list> label_opt label_list label_alt_list
+%type <string> label_name
 %type <string> variable_opt from_graph_opt non_reserved_kw
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list rel_type_list
@@ -1211,9 +1212,38 @@ varlen_range_opt:
 label_opt:
     /* empty */         { $$ = NULL; }
     | label_list        { $$ = $1; }
+    | ':' label_alt_list
+        {
+            /* `:A|B`: one AST_NODE_LIST item; make_node_pattern moves it to
+             * label_alternatives (GQLITE-T-0125) */
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)make_list($2, @1.first_line));
+        }
     ;
 
 /* Support for multiple labels: :Label1:Label2:Label3 or :`Quoted Label` */
+label_name:
+    IDENTIFIER          { $$ = $1; }
+    | BQIDENT           { $$ = $1; }
+    | non_reserved_kw   { $$ = $1; }
+    ;
+
+label_alt_list:
+    label_name '|' label_name
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)make_string_literal($1, @1.first_line));
+            ast_list_append($$, (ast_node*)make_string_literal($3, @3.first_line));
+            free($1); free($3);
+        }
+    | label_alt_list '|' label_name
+        {
+            ast_list_append($1, (ast_node*)make_string_literal($3, @3.first_line));
+            free($3);
+            $$ = $1;
+        }
+    ;
+
 label_list:
     ':' IDENTIFIER
         {

@@ -131,6 +131,7 @@ typedef struct cypher_query {
     ast_node base;
     ast_list *clauses;  /* List of clauses */
     bool explain;       /* EXPLAIN prefix - return SQL instead of executing */
+    bool profile;       /* PROFILE prefix - run, then return the plan, rows and time */
 } cypher_query;
 
 /* UNION query - combines multiple queries */
@@ -294,6 +295,8 @@ typedef struct cypher_node_pattern {
     char *variable;       /* Variable name (optional) */
     ast_list *labels;     /* List of node labels (optional) - supports :A:B:C syntax */
     ast_node *properties; /* Property map (optional) */
+    ast_list *label_alternatives; /* `:A|B|C`: the node has one of these labels
+                                   * (string literals; labels is NULL then) */
 } cypher_node_pattern;
 
 /* Relationship pattern: -[var:TYPE {props}]-> */

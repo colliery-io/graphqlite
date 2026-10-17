@@ -215,6 +215,24 @@ CREATE TABLE IF NOT EXISTS edge_props_json (
 
 ---
 
+## Schema Objects
+
+### `graphqlite_schema_objects`
+
+```sql
+CREATE TABLE IF NOT EXISTS graphqlite_schema_objects (
+  name       TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL,   -- index | constraint
+  type       TEXT NOT NULL,   -- RANGE | UNIQUE | NOT_NULL
+  label      TEXT NOT NULL,
+  properties TEXT NOT NULL    -- JSON list of property names
+);
+```
+
+The first `CREATE INDEX` or `CREATE CONSTRAINT` makes this table. It holds the indexes and constraints of the Cypher schema statements. An index row is a record only. A constraint row is checked after each write query.
+
+---
+
 ## Indexes
 
 All indexes use `CREATE INDEX IF NOT EXISTS`.

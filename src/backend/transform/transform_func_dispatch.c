@@ -27,7 +27,26 @@
  * Entries are checked in order, so more specific handlers should come first.
  * All lookups are case-insensitive.
  */
+/* linenumber() and file() of LOAD CSV (GQLITE-T-0134): the line and the
+ * path that the LOAD CSV rewrite carries in the next clause; null outside. */
+static int transform_csv_context_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    const char *var = strcasecmp(func_call->function_name, "linenumber") == 0 ? "__gql_linenumber" : "__gql_file";
+    if (!transform_var_get_alias(ctx->var_ctx, var)) {
+        append_sql(ctx, "NULL");
+        return 0;
+    }
+    cypher_identifier *id = make_identifier((char *)var, 0);
+    int rc = transform_expression(ctx, (ast_node *)id);
+    ast_node_free((ast_node *)id);
+    return rc;
+}
+
 static const transform_func_entry dispatch_table[] = {
+    /* LOAD CSV context */
+    {"linenumber",      transform_csv_context_function},
+    {"file",            transform_csv_context_function},
+
     /* Entity introspection functions */
     {"type",            transform_type_function},
     {"id",              transform_id_function},

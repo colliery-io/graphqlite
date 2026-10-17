@@ -185,6 +185,28 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
     return id_ref_buf;
 }
 
+/* " AND EXISTS (... label IN (...))" for a node written `(n:A|B)`, owned;
+ * NULL when the node has no alternatives (GQLITE-T-0125). */
+static char *label_alternatives_cond(cypher_transform_context *ctx, cypher_node_pattern *node,
+                                     const char *id_expr)
+{
+    if (!node || !node->label_alternatives || node->label_alternatives->count == 0) return NULL;
+    dynamic_buffer b;
+    dbuf_init(&b);
+    dbuf_appendf(&b, " AND EXISTS (SELECT 1 FROM %s WHERE node_id = %s AND label IN (",
+                 get_graph_table(ctx, "node_labels"), id_expr);
+    for (int i = 0; i < node->label_alternatives->count; i++) {
+        const char *label = get_label_string(node->label_alternatives->items[i]);
+        char *esc = escape_sql_string(label ? label : "");
+        dbuf_appendf(&b, "%s'%s'", i > 0 ? ", " : "", esc ? esc : "");
+        free(esc);
+    }
+    dbuf_append(&b, "))");
+    char *out = strdup(dbuf_get(&b));
+    dbuf_free(&b);
+    return out;
+}
+
 /* Transform a MATCH clause into SQL */
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
@@ -1308,6 +1330,9 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                     ast_node *el = path->elements->items[j];
                     if (el->type != AST_NODE_NODE_PATTERN || is_bound_pos[j]) continue;
                     cypher_node_pattern *np = (cypher_node_pattern *)el;
+                    { char idx[32]; snprintf(idx, sizeof(idx), "_n%d.id", j);
+                      char *alt = label_alternatives_cond(ctx, np, idx);
+                      if (alt) { dbuf_append(&dt, alt); free(alt); } }
                     if (!has_labels(np)) continue;
                     for (int li = 0; li < np->labels->count; li++) {
                         char *esc = escape_sql_string(get_label_string(np->labels->items[li]));
@@ -1626,6 +1651,8 @@ skip_combined_exists:
                          * Previously the entire node attach was skipped,
                          * silently dropping the predicate. Emit each label
                          * as an EXISTS WHERE condition against node_labels. */
+                        { char *alt = label_alternatives_cond(ctx, node, alias);
+                          if (alt) { sql_where(ctx->unified_builder, alt + 5 /* skip " AND " */); free(alt); } }
                         if (has_labels(node)) {
                             const char *graph_prefix = ctx->current_graph ? ctx->current_graph : "";
                             for (int li = 0; li < node->labels->count; li++) {
@@ -2145,6 +2172,17 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
         }
     }
 
+    /* `(n:A|B)`: one of the labels (GQLITE-T-0125). For OPTIONAL MATCH the
+     * condition joins the node's ON, so a miss keeps the row. */
+    {
+        char *alt = label_alternatives_cond(ctx, node, get_node_id_ref(ctx, alias, node->variable));
+        if (alt) {
+            if (optional) sql_join_append_on(ctx->unified_builder, alt + 5);
+            else sql_where(ctx->unified_builder, alt + 5);
+            free(alt);
+        }
+    }
+
     return 0;
 }
 
@@ -2621,6 +2659,18 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
          * optional doesn't match. Instead, fold the label into the deferred
          * target's LEFT JOIN ON as a correlated EXISTS (built below). */
         char deferred_tgt_label_cond[512] = "";
+        {
+            const char *tid = get_node_id_ref(ctx, target_alias, target_node->variable);
+            char *alt = label_alternatives_cond(ctx, target_node, tid);
+            if (alt) {
+                if (optional && tgt_deferred)
+                    strncat(deferred_tgt_label_cond, alt,
+                            sizeof(deferred_tgt_label_cond) - strlen(deferred_tgt_label_cond) - 1);
+                else
+                    sql_where(ctx->unified_builder, alt + 5);
+                free(alt);
+            }
+        }
         if (has_labels(target_node)) {
             const char *target_id = get_node_id_ref(ctx, target_alias, target_node->variable);
 
@@ -2880,6 +2930,15 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
             /* For OPTIONAL MATCH, we LEFT JOIN edges first, then target through edge */
             /* This ensures we get NULLs for unmatched patterns, not cartesian products */
 
+            /* `(p)<-[r:K]-(q)` is the edge from q to p: below, source is the
+             * edge's source. A left arrow matched nothing, because the
+             * columns came from the positions (GQLITE-T-0125). */
+            if (rel->left_arrow && !rel->right_arrow) {
+                cypher_node_pattern *tn = source_node; source_node = target_node; target_node = tn;
+                const char *ta = source_alias; source_alias = target_alias; target_alias = ta;
+                bool td = src_deferred; src_deferred = tgt_deferred; tgt_deferred = td;
+            }
+
             /* T-0320: when the rel has no user-visible variable AND we
              * have exactly one bound + one deferred endpoint AND no
              * named-path captures the rel, use an EXISTS-based LEFT
@@ -3005,6 +3064,9 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                     dbuf_append(&on_cond, ")");
                 }
                 /* Label filter on the deferred node. */
+                { char idx[160]; snprintf(idx, sizeof(idx), "%s.id", deferred_alias);
+                  char *alt = label_alternatives_cond(ctx, deferred_node, idx);
+                  if (alt) { dbuf_append(&on_cond, alt); free(alt); } }
                 if (has_labels(deferred_node)) {
                     for (int li = 0; li < deferred_node->labels->count; li++) {
                         const char *label = get_label_string(deferred_node->labels->items[li]);
@@ -3138,6 +3200,11 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
              * match and the target node's LEFT JOIN produces NULL, leaving
              * r non-null when the pattern shouldn't match. */
             const char *graph_prefix = ctx->current_graph ? ctx->current_graph : "";
+            if (!target_already_added) {
+                char idx[160]; snprintf(idx, sizeof(idx), "%s.target_id", edge_alias);
+                char *alt = label_alternatives_cond(ctx, target_node, idx);
+                if (alt) { dbuf_append(&edge_cond, alt); free(alt); }
+            }
             if (!target_already_added && has_labels(target_node)) {
                 for (int li = 0; li < target_node->labels->count; li++) {
                     const char *label = get_label_string(target_node->labels->items[li]);
@@ -3184,6 +3251,9 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 dynamic_buffer src_cond; dbuf_init(&src_cond);
                 dbuf_appendf(&src_cond, "%s.id = %s.source_id",
                              source_alias, edge_alias);
+                { char idx[160]; snprintf(idx, sizeof(idx), "%s.id", source_alias);
+                  char *alt = label_alternatives_cond(ctx, source_node, idx);
+                  if (alt) { dbuf_append(&src_cond, alt); free(alt); } }
                 if (has_labels(source_node)) {
                     for (int li = 0; li < source_node->labels->count; li++) {
                         const char *label = get_label_string(source_node->labels->items[li]);
@@ -3217,8 +3287,11 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                     dynamic_buffer target_cond;
                     dbuf_init(&target_cond);
                     dbuf_appendf(&target_cond, "%s.id = %s.target_id", target_alias, edge_alias);
+                    { char idx[160]; snprintf(idx, sizeof(idx), "%s.id", target_alias);
+                      char *alt = label_alternatives_cond(ctx, target_node, idx);
+                      if (alt) { dbuf_append(&target_cond, alt); free(alt); } }
 
-                    for (int i = 0; i < target_node->labels->count; i++) {
+                    for (int i = 0; target_node->labels && i < target_node->labels->count; i++) {
                         const char *label = get_label_string(target_node->labels->items[i]);
                         if (label) {
                             { char *esc_label = escape_sql_string(label);
