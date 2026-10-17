@@ -310,7 +310,23 @@ int transform_length_function(cypher_transform_context *ctx, cypher_function_cal
         }
     }
 
-    /* Otherwise treat as string length */
+    /* A projected value can be a path ({nodes, rels} object, e.g. a path
+     * bound in a write pipeline): its length is the number of
+     * relationships. Otherwise the length of a string. */
+    if (func_call->args && func_call->args->count == 1 && func_call->args->items[0] &&
+        func_call->args->items[0]->type == AST_NODE_IDENTIFIER &&
+        transform_var_is_projected(ctx->var_ctx,
+                                   ((cypher_identifier*)func_call->args->items[0])->name)) {
+        char *v = cypher_transform_capture_expression(ctx, func_call->args->items[0]);
+        if (!v) return -1;
+        append_sql(ctx, "(CASE WHEN json_valid(%s) AND json_type(%s) = 'object' AND "
+                        "json_type(%s, '$.rels') = 'array' THEN json_array_length(%s, '$.rels') ELSE ",
+                   v, v, v, v);
+        free(v);
+        if (transform_string_function(ctx, func_call) < 0) return -1;
+        append_sql(ctx, " END)");
+        return 0;
+    }
     return transform_string_function(ctx, func_call);
 }
 

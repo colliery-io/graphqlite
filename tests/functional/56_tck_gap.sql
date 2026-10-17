@@ -3,7 +3,9 @@
 -- ========================================================================
 -- PURPOSE: named time zones (IANA tzdata), operator precedence, comparison
 --          chains and typed ordering, WITH ordering / limits / DISTINCT,
---          path functions, keyword names, aggregates as a quantifier list.
+--          path functions, keyword names, aggregates as a quantifier list,
+--          MERGE fan-out, reads and aggregation after a write, a bound
+--          relationship list, DELETE then CREATE.
 -- NOTE:    Assertions are hard: _assert has CHECK (ok = 1), so under
 --          `sqlite3 -bail` any failed expectation aborts the run.
 -- ========================================================================
@@ -60,6 +62,27 @@ INSERT INTO _assert SELECT 'path forwarded through WITH',
     json(cypher('MATCH p = (:P56 {name: ''A''})-[:IN*]->(:P56 {name: ''C''}) WITH p RETURN length(p) AS l')) = json('[{"l":2}]');
 INSERT INTO _assert SELECT 'NULL map key keeps its spelling',
     json(cypher('RETURN keys({null: 1, NULL: 2}) AS k')) = json('[{"k":["null","NULL"]}]');
+
+-- Writes: MERGE gives a row per match; MATCH and OPTIONAL MATCH after a write.
+SELECT cypher('CREATE (:M56 {k: 1}), (:M56 {k: 1})') as setup3;
+INSERT INTO _assert SELECT 'MERGE gives a row per match',
+    json_array_length(cypher('MERGE (n:M56 {k: 1}) RETURN n.k AS k')) = 2;
+INSERT INTO _assert SELECT 'MATCH after a write',
+    json_extract(cypher('CREATE (:M56b) WITH 1 AS x MATCH (m:M56) RETURN count(m) AS c'), '$[0].c') = 2;
+INSERT INTO _assert SELECT 'OPTIONAL MATCH after a write',
+    json_type(cypher('CREATE (:M56c) WITH 1 AS x OPTIONAL MATCH (z:Nope56) RETURN z'), '$[0].z') = 'null';
+
+INSERT INTO _assert SELECT 'aggregating WITH after a write',
+    json_extract(cypher('UNWIND [1, 2, 2] AS x CREATE (:A56 {v: x}) WITH collect(DISTINCT x) AS xs RETURN size(xs) AS s'), '$[0].s') = 2;
+
+-- A bound relationship list in a variable-length pattern; DELETE then CREATE.
+SELECT cypher('CREATE (:L56 {n: 1})-[:Y56]->(:L56 {n: 2})-[:Y56]->(:L56 {n: 3})') as setup4;
+INSERT INTO _assert SELECT 'bound relationship list',
+    json(cypher('MATCH ()-[r1:Y56]->()-[r2:Y56]->() WITH [r1, r2] AS rs LIMIT 1 MATCH (a)-[rs*]->(b) RETURN a.n AS a, b.n AS b'))
+    = json('[{"a":1,"b":3}]');
+SELECT cypher('MATCH (a:L56)-[r:Y56]->(b) WHERE a.n > 1 DELETE r CREATE (b)-[:Z56]->(a)') as rewire;
+INSERT INTO _assert SELECT 'DELETE then CREATE keeps the new relationship',
+    json_extract(cypher('MATCH (:L56)-[r:Z56]->(:L56) RETURN count(r) AS c'), '$[0].c') = 1;
 
 SELECT name, ok FROM _assert;
 SELECT '=== Test 56 Complete ===' as test_section;

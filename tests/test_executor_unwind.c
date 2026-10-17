@@ -910,6 +910,51 @@ static void test_create_with_unwind_create(void)
     ASSERT_UNWIND(w2, NULL, "MATCH (n) RETURN count(n)", "4");
 }
 
+/* GQLITE-T-0426: MERGE that matches several entities gives a row for each;
+ * MATCH / OPTIONAL MATCH after a write; MERGE binds a path. */
+static void test_merge_fan_out_and_tail_match(void)
+{
+    const char *w[] = {"CREATE (a:A), (b:B) CREATE (a)-[:T1]->(b), (b)-[:T2]->(a)", NULL};
+    ASSERT_UNWIND(w, NULL, "MERGE (b) RETURN count(*)", "2");
+    ASSERT_UNWIND(w, NULL, "MATCH (a) MERGE (b) WITH * RETURN count(*)", "4");
+    ASSERT_UNWIND(w, NULL, "MATCH (a) MERGE (b) WITH * OPTIONAL MATCH (a)--(b) RETURN count(*)", "6");
+    ASSERT_UNWIND(w, NULL,
+        "MATCH (a:A) WITH a MERGE (a)-[:T1]->(b) WITH * MATCH (b)-[r]->(c) RETURN type(r)", "T2");
+    const char *w2[] = {"CREATE ({num: 1})", NULL};
+    ASSERT_UNWIND(w2, NULL, "MERGE p = ({num: 1}) RETURN length(p)", "0");
+    const char *w3[] = {"MERGE (n:M {id: 'x'}) WITH n SET n.f = true", NULL};
+    ASSERT_UNWIND(w3, NULL, "MERGE (n:M {id: 'x'}) RETURN n.f", "true");
+}
+
+static void test_aggregating_with_after_write(void)
+{
+    const char *w[] = {
+        "CREATE (a {var: 'start'}), (b {var: 'end'}) WITH * UNWIND range(1, 3) AS i "
+        "CREATE (n {var: i}) WITH a, b, [a] + collect(n) + [b] AS nodeList "
+        "UNWIND range(0, size(nodeList) - 2, 1) AS i "
+        "WITH nodeList[i] AS n1, nodeList[i+1] AS n2 CREATE (n1)-[:T]->(n2)", NULL};
+    ASSERT_UNWIND(w, NULL, "MATCH ({var: 'start'})-[:T*]->(m {var: 'end'}) RETURN m.var", "end");
+    ASSERT_UNWIND(w, NULL, "MATCH ()-[r:T]->() RETURN count(r)", "4");
+    const char *none[] = {NULL};
+    ASSERT_UNWIND(none, NULL,
+        "UNWIND [1, 2, 2, 3] AS x CREATE (:Q {v: x}) WITH x % 2 AS p, collect(DISTINCT x) AS xs "
+        "WHERE p = 1 RETURN size(xs)", "2");
+    ASSERT_UNWIND(none, NULL, "UNWIND [1, 2] AS x CREATE (n {v: x}) WITH collect(n) AS ns RETURN size(ns)", "2");
+}
+
+static void test_bound_rel_list_and_delete_create(void)
+{
+    const char *w[] = {"CREATE (a:A), (b:B), (c:C) CREATE (a)-[:Y]->(b), (b)-[:Y]->(c)", NULL};
+    ASSERT_UNWIND(w, NULL,
+        "MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs LIMIT 1 "
+        "MATCH (first)-[rs*]->(second) RETURN labels(first)[0] + labels(second)[0]", "AC");
+    const char *w2[] = {
+        "CREATE (:A {name: 'a'})-[:R]->(:B {name: 'b'})-[:R]->(:C {name: 'c'})",
+        "MATCH (a)-[r]->(b) WHERE NOT a:A DELETE r CREATE (b)-[:LIKES]->(a)", NULL};
+    ASSERT_UNWIND(w2, NULL, "MATCH ()-[r:LIKES]->() RETURN count(r)", "1");
+    ASSERT_UNWIND(w2, NULL, "MATCH ()-[r]->() RETURN count(r)", "2");
+}
+
 int init_executor_unwind_suite(void)
 {
     CU_pSuite suite = CU_add_suite("Executor UNWIND", setup_executor_unwind_suite, teardown_executor_unwind_suite);
@@ -959,7 +1004,10 @@ int init_executor_unwind_suite(void)
         !CU_add_test(suite, "GQLITE-T-0421: inline property expression", test_inline_property_expression) ||
         !CU_add_test(suite, "GQLITE-T-0422: stored boolean vs number", test_stored_boolean_vs_number) ||
         !CU_add_test(suite, "GQLITE-T-0423: FOREACH over entities", test_foreach_entities) ||
-        !CU_add_test(suite, "GQLITE-T-0424: CREATE WITH UNWIND CREATE", test_create_with_unwind_create)) {
+        !CU_add_test(suite, "GQLITE-T-0424: CREATE WITH UNWIND CREATE", test_create_with_unwind_create) ||
+        !CU_add_test(suite, "GQLITE-T-0426: MERGE fan-out and tail MATCH", test_merge_fan_out_and_tail_match) ||
+        !CU_add_test(suite, "GQLITE-T-0426: aggregating WITH after a write", test_aggregating_with_after_write) ||
+        !CU_add_test(suite, "GQLITE-T-0426: bound relationship list; DELETE then CREATE", test_bound_rel_list_and_delete_create)) {
         return CU_get_error();
     }
 
