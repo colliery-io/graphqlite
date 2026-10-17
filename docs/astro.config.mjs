@@ -116,7 +116,7 @@ export default defineConfig({
 				// `versions`, build, and commit the new files.
 				starlightVersions({
 					current: { label: 'Latest' },
-					versions: [{ slug: '0.11.0', label: 'v0.11.0' }, { slug: '0.10.0', label: 'v0.10.0' }, { slug: '0.9.4', label: 'v0.9.4' }, { slug: '0.9.3', label: 'v0.9.3' }, { slug: '0.9.2', label: 'v0.9.2' }],
+					versions: [{ slug: '0.12.0', label: 'v0.12.0' }, { slug: '0.11.0', label: 'v0.11.0' }, { slug: '0.10.0', label: 'v0.10.0' }, { slug: '0.9.4', label: 'v0.9.4' }, { slug: '0.9.3', label: 'v0.9.3' }, { slug: '0.9.2', label: 'v0.9.2' }],
 				}),
 			],
 			sidebar,

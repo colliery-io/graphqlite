@@ -4,6 +4,60 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] — 2026-10-17
+
+New Cypher: `LOAD CSV`, `PROFILE`, `CALL algorithm() YIELD`, label
+disjunction, map projection with `.*`, and `CREATE` / `DROP` / `SHOW` for
+indexes and constraints. The openCypher TCK stays at 3880 / 3880.
+
+### Upgrade notes
+
+- **`cypher_capabilities()` flags:** `load_csv`, `profile`, `create_index`,
+  `create_constraint`, `label_disjunction`, `map_projection_all_properties`
+  and `call_procedures` are now `true`.
+- **`CALL pageRank() YIELD node, score`** and the other graph algorithms run as
+  procedures. Other procedure names still raise `ProcedureError:
+  ProcedureNotFound`.
+- **`RETURN pageRank() AS x`** names the column `x`.
+- The first `CREATE INDEX` or `CREATE CONSTRAINT` adds the table
+  `graphqlite_schema_objects` to the database.
+
+### Added
+
+- `LOAD CSV [WITH HEADERS] FROM 'file:///…' AS row [FIELDTERMINATOR c]` for
+  local files: RFC 4180 quoting, a UTF-8 BOM, rows as maps or lists,
+  `linenumber()` and `file()`.
+- `PROFILE <query>` runs the query and returns one row: the pattern, the SQL,
+  the SQLite query plan, the row count, the time and the write counts.
+- `CALL <algorithm>(args) [YIELD * | YIELD a [AS b], ... [WHERE ...]]`.
+- Label disjunction `(n:A|B)` in `MATCH` and `OPTIONAL MATCH`. `CREATE` and
+  `MERGE` refuse it (`SyntaxError: InvalidLabelExpression`).
+- Map projection: `n {.*}` (in any position), a map value as the base, the
+  variable selector `n {x}`; a null base gives null.
+- `CREATE` / `DROP` / `SHOW` `INDEX` and `CONSTRAINT`, in the current and the
+  old (`ON … ASSERT`) forms. An index is a record only, because each property
+  is indexed already. Node `IS UNIQUE` (one or more properties) and
+  `IS NOT NULL` constraints are checked after each write query; a query that
+  breaks one fails with `ConstraintValidationFailed` and keeps none of its
+  writes. Relationship indexes and constraints are not supported.
+
+### Fixed
+
+- `OPTIONAL MATCH (p)<-[r:K]-(q)` joined the wrong ends of the relationship.
+- Booleans in a map projection came back as `1` / `0`.
+- Windows: an integer result above 2^31 that was typed from its text (a
+  millisecond timestamp) was cut to 32 bits.
+
+### Performance
+
+- Parameter binding skips statements with no named parameters. A 50,000-row
+  `LOAD CSV … CREATE` takes 3.4 s (it took 9 min before the change).
+
+### Tests
+
+- `tests/functional/61_*.sql` to `66_schema_indexes.sql`;
+  `bindings/python/tests/test_schema_objects.py`.
+
 ## [0.11.0] — 2026-10-17
 
 GitHub issues #134, #135 and #136, and the openCypher TCK at 3880 / 3880 with

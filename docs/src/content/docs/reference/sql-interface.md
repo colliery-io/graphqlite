@@ -339,12 +339,12 @@ The function takes no arguments and never touches the graph.
 
 ```json
 {"schema_version": 1,
- "graphqlite_version": "0.9.4",
+ "graphqlite_version": "0.12.0",
  "cypher_dialect": "openCypher 9",
  "sqlite": {"version": "3.47.2", "json1": true},
  "neo4j_compat": false,
  "features": {"bracket_property_access": true, "list_literals": true,
-              "existential_subquery_full": true, "load_csv": false, "...": true}}
+              "existential_subquery_full": true, "load_csv": true, "...": true}}
 ```
 
 | Key | Meaning |

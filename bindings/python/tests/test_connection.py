@@ -1471,7 +1471,7 @@ def test_capabilities_reports_version_and_flags(db):
     assert caps.json1 is True
     assert caps.supports("validate")
     assert caps.supports("existential_subquery_full")
-    assert caps.supports("load_csv") is False
+    assert caps.supports("load_csv") is True
     assert caps.supports("definitely_unknown_flag") is False
     assert caps.neo4j_compat is False
 
