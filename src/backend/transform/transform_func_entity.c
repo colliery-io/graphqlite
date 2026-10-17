@@ -70,7 +70,7 @@ int transform_id_function(cypher_transform_context *ctx, cypher_function_call *f
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in id() function: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: id() function: `%s` is a path" : "SyntaxError: UndefinedVariable: id() function: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -132,7 +132,7 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in labels() function: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: labels() function: `%s` is a path" : "SyntaxError: UndefinedVariable: labels() function: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -214,7 +214,7 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in properties() function: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: properties() function: `%s` is a path" : "SyntaxError: UndefinedVariable: properties() function: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -296,7 +296,7 @@ int transform_graph_function(cypher_transform_context *ctx, cypher_function_call
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in graph() function: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: graph() function: `%s` is a path" : "SyntaxError: UndefinedVariable: graph() function: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }
@@ -371,7 +371,7 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     if (!alias) {
         ctx->has_error = true;
         char error[256];
-        snprintf(error, sizeof(error), "Unknown variable in keys() function: %s", id->name);
+        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: keys() function: `%s` is a path" : "SyntaxError: UndefinedVariable: keys() function: `%s` is not defined", id->name);
         ctx->error_message = strdup(error);
         return -1;
     }

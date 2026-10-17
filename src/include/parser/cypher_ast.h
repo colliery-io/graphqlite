@@ -240,7 +240,8 @@ typedef struct cypher_delete {
 /* DELETE item (e.g., n or r) */
 typedef struct cypher_delete_item {
     ast_node base;
-    char *variable;       /* Variable name to delete */
+    char *variable;       /* Variable name to delete (NULL for an expression) */
+    ast_node *expr;       /* `DELETE list[0]`, `DELETE m.key`: the expression */
 } cypher_delete_item;
 
 /* REMOVE clause */
@@ -266,6 +267,7 @@ typedef struct cypher_return_item {
     ast_node base;
     ast_node *expr;       /* Expression to return */
     char *alias;          /* Optional alias (AS alias) */
+    char *source_text;    /* The expression as written, for an unaliased column name */
 } cypher_return_item;
 
 /* Order by item: expression with optional ASC/DESC */
@@ -531,6 +533,7 @@ cypher_set* make_cypher_set(ast_list *items);
 cypher_set_item* make_cypher_set_item(ast_node *property, ast_node *expr, bool is_merge);
 cypher_delete* make_cypher_delete(ast_list *items, bool detach);
 cypher_delete_item* make_delete_item(char *variable);
+cypher_delete_item* make_delete_item_expr(ast_node *expr);
 cypher_remove* make_cypher_remove(ast_list *items);
 cypher_remove_item* make_remove_item(ast_node *target);
 cypher_return_item* make_return_item(ast_node *expr, char *alias);

@@ -258,6 +258,9 @@ int build_query_results(cypher_executor *executor, sqlite3_stmt *stmt, cypher_re
         if (item->alias) {
             /* Use explicit alias if provided */
             result->column_names[i] = strdup(item->alias);
+        } else if (item->source_text && item->expr && item->expr->type != AST_NODE_IDENTIFIER) {
+            /* An unaliased expression is named as written (GQLITE-T-0429). */
+            result->column_names[i] = strdup(item->source_text);
         } else if (item->expr && item->expr->type == AST_NODE_PROPERTY) {
             /* Build full property path from property access (n.age -> "n.age") */
             cypher_property *prop = (cypher_property*)item->expr;
@@ -959,6 +962,7 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
                 first = false;
             }
         }
+        if (first) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
         append_sql(ctx, " %s", temp);
         free(temp);
     }
@@ -989,12 +993,16 @@ int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match
             transform_var *var = transform_var_at(ctx->var_ctx, i);
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, var->name, (int)node_id);
+                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
+                if (sqlite3_column_type(stmt, col) != SQLITE_NULL)
+                    set_variable_node_id(var_map, var->name, (int)node_id);
                 CYPHER_DEBUG("multi-MATCH bound '%s' -> node %lld", var->name, (long long)node_id);
                 col++;
             } else if (var && var->kind == VAR_KIND_EDGE) {
                 int64_t edge_id = sqlite3_column_int64(stmt, col);
-                set_variable_edge_id(var_map, var->name, (int)edge_id);
+                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
+                if (sqlite3_column_type(stmt, col) != SQLITE_NULL)
+                    set_variable_edge_id(var_map, var->name, (int)edge_id);
                 CYPHER_DEBUG("multi-MATCH bound '%s' -> edge %lld", var->name, (long long)edge_id);
                 col++;
             }
@@ -1101,6 +1109,7 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
                     first_col = false;
                 }
             }
+            if (first_col) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
             append_sql(ctx, " %s", temp);
             free(temp);
         }
@@ -1329,6 +1338,7 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
             }
         }
         
+        if (first) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
         append_sql(ctx, " %s", temp);
         free(temp);
     }
@@ -1373,7 +1383,9 @@ int execute_match_create_query(cypher_executor *executor, cypher_match *match, c
             transform_var *var = transform_var_at(ctx->var_ctx, i);
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, var->name, (int)node_id);
+                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
+                if (sqlite3_column_type(stmt, col) != SQLITE_NULL)
+                    set_variable_node_id(var_map, var->name, (int)node_id);
                 CYPHER_DEBUG("Bound variable '%s' to existing node %lld", var->name, (long long)node_id);
                 col++;
             }

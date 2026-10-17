@@ -24,6 +24,29 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 }
 
 %code {
+/* The source text from (line, col) to (last_line, last_col), both
+ * 1-based and inclusive, trimmed. NULL when the input cannot be read. */
+static char *source_text_span(cypher_parser_context *context, int line, int col,
+                              int last_line, int last_col)
+{
+    const char *in = (context && context->scanner) ? context->scanner->input_string : NULL;
+    if (!in || line < 1 || col < 1 || last_line < line) return NULL;
+    const char *p = in;
+    for (int l = 1; l < line && *p; p++) if (*p == '\n') l++;
+    for (int c = 1; c < col && *p && *p != '\n'; c++) p++;
+    const char *q = p;
+    int l = line, c = col;
+    while (*q && (l < last_line || (l == last_line && c < last_col))) {
+        if (*q == '\n') { l++; c = 1; } else c++;
+        q++;
+    }
+    if (*q) q++;   /* inclusive end */
+    while (p < q && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+    while (q > p && (q[-1] == ' ' || q[-1] == '\t' || q[-1] == '\n' || q[-1] == '\r')) q--;
+    if (q <= p) return NULL;
+    return strndup(p, (size_t)(q - p));
+}
+
 /* The spelling of a keyword as written, at `line` / `col` (1-based) of the
  * input, for a keyword used as a map key: `{NULL: 1}` keeps the key "NULL"
  * (the scanner upper-cases keywords; Map1 [5], Map2 [5]). `fallback` when
@@ -142,6 +165,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %type <list> pattern_list return_item_list set_item_list delete_item_list remove_item_list
 %type <set_item> set_item
 %type <delete_item> delete_item
+%type <string> procedure_name
 %type <remove_item> remove_item
 %type <boolean> detach_opt
 %type <path> path simple_path
@@ -362,6 +386,34 @@ call_clause:
             ast_list_append(branches, $3);
             $$ = (ast_node*)make_cypher_call_subquery(branches, @1.first_line);
         }
+    | CALL procedure_name
+        {
+            /* GraphQLite has no procedures: `CALL db.labels()` names one
+             * that does not exist (Call1 [13]/[14]). */
+            char msg[300];
+            snprintf(msg, sizeof(msg), "ProcedureError: ProcedureNotFound: there is no procedure %s", $2);
+            free($2);
+            free(context->error_message);
+            context->error_message = strdup(msg);
+            context->has_error = true;
+            context->error_location = @2.first_line;
+            context->error_column = @2.first_column;
+            $$ = NULL;
+            YYERROR;
+        }
+    ;
+
+procedure_name:
+    IDENTIFIER
+        { $$ = $1; }
+    | procedure_name '.' IDENTIFIER
+        {
+            size_t n = strlen($1) + strlen($3) + 2;
+            $$ = malloc(n);
+            snprintf($$, n, "%s.%s", $1, $3);
+            free($1);
+            free($3);
+        }
     ;
 
 /* LOAD CSV clause - import data from CSV files */
@@ -520,6 +572,10 @@ return_item:
     expr
         {
             $$ = make_return_item($1, NULL);
+            /* The column of an unaliased item is named as written
+             * (`count( * )`, `n.missing IS NULL`). */
+            if ($$) $$->source_text = source_text_span(context, @1.first_line, @1.first_column,
+                                                       @1.last_line, @1.last_column);
         }
     | expr AS IDENTIFIER
         {
@@ -706,10 +762,10 @@ delete_item_list:
     ;
 
 delete_item:
-    IDENTIFIER
+    expr
         {
-            $$ = make_delete_item($1);
-            free($1);
+            /* `DELETE n`, or an expression: `DELETE list[0]`, `DELETE m.key`. */
+            $$ = make_delete_item_expr($1);
         }
     ;
 
@@ -1097,6 +1153,17 @@ varlen_range_opt:
         { $$ = make_varlen_range(1, $3); }   /* max bounded: *..3 */
     | '*' DOT_DOT
         { $$ = make_varlen_range(1, -1); }   /* unbounded with explicit range: *.. */
+    | '*' '-' INTEGER
+        {
+            /* `[*-2]` (Match4 [10]) */
+            free(context->error_message);
+            context->error_message = strdup("SyntaxError: InvalidRelationshipPattern: a variable-length bound cannot be negative");
+            context->has_error = true;
+            context->error_location = @2.first_line;
+            context->error_column = @2.first_column;
+            $$ = NULL;
+            YYERROR;
+        }
     ;
 
 label_opt:
@@ -1306,8 +1373,10 @@ expr:
     | expr '^' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_POW, $1, $3, @2.first_line); }
     | expr '=' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_EQ, $1, $3, @2.first_line); }
     | expr NOT_EQ expr  { $$ = (ast_node*)make_binary_op(BINARY_OP_NEQ, $1, $3, @2.first_line); }
-    | expr '<' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_LT, $1, $3, @2.first_line); }
-    | expr '>' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_GT, $1, $3, @2.first_line); }
+    /* %dprec: `(a)-->(:C)<-[s]-(b {k: 1})` in WHERE is a pattern, not
+     * `... < -[s] - b {k: 1}` (Pattern1 [10]). */
+    | expr '<' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_LT, $1, $3, @2.first_line); } %dprec 1
+    | expr '>' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_GT, $1, $3, @2.first_line); } %dprec 1
     | expr LT_EQ expr   { $$ = (ast_node*)make_binary_op(BINARY_OP_LTE, $1, $3, @2.first_line); }
     | expr GT_EQ expr   { $$ = (ast_node*)make_binary_op(BINARY_OP_GTE, $1, $3, @2.first_line); }
     | expr REGEX_MATCH expr { $$ = (ast_node*)make_binary_op(BINARY_OP_REGEX_MATCH, $1, $3, @2.first_line); }
@@ -1339,7 +1408,7 @@ expr:
             ast_list *pattern_list = ast_list_create();
             ast_list_append(pattern_list, (ast_node*)path);
             $$ = (ast_node*)make_exists_pattern_expr(pattern_list, @1.first_line);
-        }
+        } %dprec 2
     | node_pattern rel_pattern node_pattern rel_pattern node_pattern
         {
             /* Chained pattern: (a)-[r1]->(b)-[r2]->(c) */
@@ -1353,7 +1422,7 @@ expr:
             ast_list *pattern_list = ast_list_create();
             ast_list_append(pattern_list, (ast_node*)path);
             $$ = (ast_node*)make_exists_pattern_expr(pattern_list, @1.first_line);
-        }
+        } %dprec 2
     | expr '.' IDENTIFIER
         {
             $$ = (ast_node*)make_property($1, $3, @3.first_line);
@@ -2036,6 +2105,19 @@ map_pair:
         {
             $$ = make_map_pair("asc", $3, @1.first_line);
         }
+    | TRUE_P ':' expr
+        {
+            /* `{true: true}`: a keyword as a map key keeps its spelling (Boolean4 [4]). */
+            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "true");
+            $$ = make_map_pair(k, $3, @1.first_line);
+            free(k);
+        }
+    | FALSE_P ':' expr
+        {
+            char *k = keyword_text_at(context, @1.first_line, @1.first_column, "false");
+            $$ = make_map_pair(k, $3, @1.first_line);
+            free(k);
+        }
     | DESC ':' expr
         {
             $$ = make_map_pair("desc", $3, @1.first_line);
@@ -2065,16 +2147,29 @@ void cypher_yyerror(CYPHER_YYLTYPE *yylloc, cypher_parser_context *context, cons
     /* Create error message with line number - Bison's detailed error mode
      * provides good context about what was expected */
     char error_buffer[512];
+    /* Bison's own error is the openCypher SyntaxError UnexpectedSyntax; two
+     * tokens say more: a parameter where a pattern takes only a map literal
+     * (`MATCH (n $p)`, Match1 [6]), and a range without `*` in a
+     * relationship pattern (`[:T 1..2]`, Match4 [9]). */
+    const char *cls = "";
+    if (strncmp(msg, "syntax error", 12) == 0) {
+        if (strstr(msg, "unexpected PARAMETER, expecting ')'") || strstr(msg, "unexpected PARAMETER, expecting ']'"))
+            cls = "SyntaxError: InvalidParameterUse: ";
+        else if (strstr(msg, "unexpected DOT_DOT, expecting ']'"))
+            cls = "SyntaxError: InvalidRelationshipPattern: ";
+        else
+            cls = "SyntaxError: UnexpectedSyntax: ";
+    }
     if (yylloc && yylloc->first_line > 0) {
         if (yylloc->first_column > 0) {
             snprintf(error_buffer, sizeof(error_buffer),
-                     "Line %d, Col %d: %s", yylloc->first_line, yylloc->first_column, msg);
+                     "%sLine %d, Col %d: %s", cls, yylloc->first_line, yylloc->first_column, msg);
         } else {
             snprintf(error_buffer, sizeof(error_buffer),
-                     "Line %d: %s", yylloc->first_line, msg);
+                     "%sLine %d: %s", cls, yylloc->first_line, msg);
         }
     } else {
-        snprintf(error_buffer, sizeof(error_buffer), "%s", msg);
+        snprintf(error_buffer, sizeof(error_buffer), "%s%s", cls, msg);
     }
 
     free(context->error_message);

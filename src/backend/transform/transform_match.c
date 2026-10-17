@@ -267,7 +267,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                         ctx->has_error = true;
                         char msg[256];
                         snprintf(msg, sizeof(msg),
-                                 "Variable `%s` is already bound as a %s and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                                 "SyntaxError: VariableTypeConflict: Variable `%s` is already bound as a %s and cannot be used as a node",
                                  node->variable,
                                  var->kind == VAR_KIND_EDGE ? "relationship" : "path");
                         ctx->error_message = strdup(msg);
@@ -1541,7 +1541,7 @@ skip_combined_exists:
                     ctx->has_error = true;
                     char msg[256];
                     snprintf(msg, sizeof(msg),
-                             "Variable `%s` is already bound as a %s and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                             "SyntaxError: VariableTypeConflict: Variable `%s` is already bound as a %s and cannot be used as a node",
                              node->variable,
                              var->kind == VAR_KIND_EDGE ? "relationship" : "path");
                     ctx->error_message = strdup(msg);
@@ -1551,7 +1551,7 @@ skip_combined_exists:
                     ctx->has_error = true;
                     char msg[256];
                     snprintf(msg, sizeof(msg),
-                             "Variable `%s` is already bound to a scalar value and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                             "SyntaxError: VariableTypeConflict: Variable `%s` is already bound to a scalar value and cannot be used as a node",
                              node->variable);
                     ctx->error_message = strdup(msg);
                     return -1;
@@ -2300,7 +2300,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             ctx->has_error = true;
             char msg[256];
             snprintf(msg, sizeof(msg),
-                     "Variable `%s` is already bound as a %s and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                     "SyntaxError: VariableTypeConflict: Variable `%s` is already bound as a %s and cannot be used as a node",
                      source_node->variable,
                      src_var->kind == VAR_KIND_EDGE ? "relationship" : "path");
             ctx->error_message = strdup(msg);
@@ -2329,7 +2329,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             ctx->has_error = true;
             char msg[256];
             snprintf(msg, sizeof(msg),
-                     "Variable `%s` is already bound as a %s and cannot be used as a node (SyntaxError: VariableTypeConflict)",
+                     "SyntaxError: VariableTypeConflict: Variable `%s` is already bound as a %s and cannot be used as a node",
                      target_node->variable,
                      tgt_var->kind == VAR_KIND_EDGE ? "relationship" : "path");
             ctx->error_message = strdup(msg);
@@ -2359,9 +2359,20 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
             ctx->has_error = true;
             char msg[256];
             snprintf(msg, sizeof(msg),
-                     "Variable `%s` is already bound as a %s and cannot be used as a relationship (SyntaxError: VariableTypeConflict)",
+                     "SyntaxError: VariableTypeConflict: Variable `%s` is already bound as a %s and cannot be used as a relationship",
                      rel->variable,
                      rel_var->kind == VAR_KIND_NODE ? "node" : "path");
+            ctx->error_message = strdup(msg);
+            return -1;
+        }
+        /* `WITH true AS r MATCH ()-[r]-()` (Match2 [13]); a list may name the
+         * relationships of a variable-length pattern (`[rs*]`). */
+        if (rel_var && !rel->varlen && (rel_var->is_scalar_value || rel_var->kind == VAR_KIND_PROJECTED)) {
+            ctx->has_error = true;
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "SyntaxError: VariableTypeConflict: Variable `%s` is already bound to a value and cannot be used as a relationship",
+                     rel->variable);
             ctx->error_message = strdup(msg);
             return -1;
         }

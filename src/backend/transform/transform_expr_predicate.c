@@ -518,7 +518,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                         if (!alias) {
                             ctx->has_error = true;
                             char error[256];
-                            snprintf(error, sizeof(error), "Unknown variable in EXISTS property: %s", id->name);
+                            snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, id->name) ? "SyntaxError: InvalidArgumentType: EXISTS property: `%s` is a path" : "SyntaxError: UndefinedVariable: EXISTS property: `%s` is not defined", id->name);
                             ctx->error_message = strdup(error);
                             return -1;
                         }

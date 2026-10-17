@@ -795,8 +795,11 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
 
             /* Add to unified builder; a user alias is quoted as needed
              * (GQLITE-T-0396), an auto alias is quoted already. */
-            char alias_buf[256];
+            char alias_buf[512];
             if (alias && alias == item->alias) alias = sql_ident(alias_buf, sizeof(alias_buf), alias);
+            /* An unaliased expression is named as written (GQLITE-T-0429). */
+            if (!item->alias && item->source_text && item->expr->type != AST_NODE_IDENTIFIER)
+                alias = sql_ident(alias_buf, sizeof(alias_buf), item->source_text);
             /* A bare identifier keeps its name as the column name, also
              * when its SQL is wrapped in _gql_retag (GQLITE-A-0007). */
             if (!alias && item->expr->type == AST_NODE_IDENTIFIER)
@@ -1051,8 +1054,10 @@ return_star_done:
 
                 /* Add to unified builder; a user alias is quoted as needed
                  * (GQLITE-T-0396), an auto alias is quoted already. */
-                char alias_buf[256];
+                char alias_buf[512];
                 if (alias && alias == item->alias) alias = sql_ident(alias_buf, sizeof(alias_buf), alias);
+                if (!item->alias && item->source_text && item->expr->type != AST_NODE_IDENTIFIER)
+                    alias = sql_ident(alias_buf, sizeof(alias_buf), item->source_text);
                 if (!alias && item->expr->type == AST_NODE_IDENTIFIER)
                     alias = sql_ident(alias_buf, sizeof(alias_buf), ((cypher_identifier *)item->expr)->name);
                 sql_select(ctx->unified_builder, expr_str, alias);
@@ -1497,7 +1502,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         /* Unknown identifier */
                         ctx->has_error = true;
                         char error[256];
-                        snprintf(error, sizeof(error), "Unknown variable: %s", id->name);
+                        snprintf(error, sizeof(error), "SyntaxError: UndefinedVariable: `%s` is not defined", id->name);
                         ctx->error_message = strdup(error);
                         return -1;
                     }
@@ -1858,7 +1863,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     if (!base_alias) {
                         ctx->has_error = true;
                         char error[256];
-                        snprintf(error, sizeof(error), "Unknown variable in map projection: %s", ident->name);
+                        snprintf(error, sizeof(error), transform_var_is_path(ctx->var_ctx, ident->name) ? "SyntaxError: InvalidArgumentType: map projection: `%s` is a path" : "SyntaxError: UndefinedVariable: map projection: `%s` is not defined", ident->name);
                         ctx->error_message = strdup(error);
                         return -1;
                     }

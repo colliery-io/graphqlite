@@ -600,6 +600,7 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
             }
         }
 
+        if (first) append_sql(ctx, "1");   /* no named variable: `MATCH () CREATE ()` */
         append_sql(ctx, " %s", temp);
         free(temp);
     }
@@ -645,12 +646,16 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
             transform_var *var = transform_var_at(ctx->var_ctx, i);
             if (var && var->kind == VAR_KIND_NODE) {
                 int64_t node_id = sqlite3_column_int64(stmt, col);
-                set_variable_node_id(var_map, var->name, (int)node_id);
+                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
+                set_variable_node_id(var_map, var->name,
+                                     sqlite3_column_type(stmt, col) == SQLITE_NULL ? GQL_NULL_ENTITY_ID : (int)node_id);
                 CYPHER_DEBUG("Bound variable '%s' to node %lld", var->name, (long long)node_id);
                 col++;
             } else if (var && var->kind == VAR_KIND_EDGE) {
                 int64_t edge_id = sqlite3_column_int64(stmt, col);
-                set_variable_edge_id(var_map, var->name, (int)edge_id);
+                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
+                set_variable_edge_id(var_map, var->name,
+                                     sqlite3_column_type(stmt, col) == SQLITE_NULL ? GQL_NULL_ENTITY_ID : (int)edge_id);
                 CYPHER_DEBUG("Bound variable '%s' to edge %lld", var->name, (long long)edge_id);
                 col++;
             }
@@ -805,6 +810,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
 
             /* Get the node ID for this variable */
             int node_id = get_variable_node_id(var_map, var_id->name);
+            if (node_id == GQL_NULL_ENTITY_ID) continue;   /* SET on null does nothing */
             if (node_id < 0) {
                 char error[256];
                 snprintf(error, sizeof(error), "Unbound variable in SET label: %s", var_id->name);
@@ -880,6 +886,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
 
             if (is_edge) {
                 entity_id = get_variable_edge_id(var_map, var_id->name);
+                if (entity_id == GQL_NULL_ENTITY_ID) continue;   /* SET on null does nothing */
                 if (entity_id < 0) {
                     char error[256];
                     snprintf(error, sizeof(error), "Unbound edge variable in bulk SET: %s", var_id->name);
@@ -888,6 +895,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 }
             } else {
                 entity_id = get_variable_node_id(var_map, var_id->name);
+                if (entity_id == GQL_NULL_ENTITY_ID) continue;   /* SET on null does nothing */
                 if (entity_id < 0) {
                     char error[256];
                     snprintf(error, sizeof(error), "Unbound variable in bulk SET: %s", var_id->name);
@@ -1032,6 +1040,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
 
         if (is_edge) {
             entity_id = get_variable_edge_id(var_map, var_id->name);
+            if (entity_id == GQL_NULL_ENTITY_ID) continue;   /* SET on null does nothing */
             if (entity_id < 0) {
                 char error[256];
                 snprintf(error, sizeof(error), "Unbound edge variable in SET: %s", var_id->name);
@@ -1040,6 +1049,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             }
         } else {
             entity_id = get_variable_node_id(var_map, var_id->name);
+            if (entity_id == GQL_NULL_ENTITY_ID) continue;   /* SET on null does nothing */
             if (entity_id < 0) {
                 char error[256];
                 snprintf(error, sizeof(error), "Unbound variable in SET: %s", var_id->name);

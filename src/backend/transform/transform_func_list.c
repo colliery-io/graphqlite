@@ -21,6 +21,7 @@
 #include "transform/transform_helpers.h"
 #include "transform/transform_func_list.h"
 #include "transform/transform_func_path.h"
+#include "transform/transform_variables.h"
 #include "transform/transform_func_string.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
@@ -123,7 +124,7 @@ int transform_range_function(cypher_transform_context *ctx, cypher_function_call
                 case LITERAL_BOOLEAN:
                     ctx->has_error = true;
                     ctx->error_message = strdup(
-                        "ArgumentError: InvalidArgumentType — range() arguments must be integers");
+                        "ArgumentError: InvalidArgumentType: range() arguments must be integers");
                     return -1;
                 default:
                     break;
@@ -131,7 +132,7 @@ int transform_range_function(cypher_transform_context *ctx, cypher_function_call
         } else if (a->type == AST_NODE_LIST || a->type == AST_NODE_MAP) {
             ctx->has_error = true;
             ctx->error_message = strdup(
-                "ArgumentError: InvalidArgumentType — range() arguments must be integers");
+                "ArgumentError: InvalidArgumentType: range() arguments must be integers");
             return -1;
         }
     }
@@ -234,6 +235,17 @@ int transform_collect_function(cypher_transform_context *ctx, cypher_function_ca
          * boolean tag: give it one, so `collect(x = 1)` is [true, false],
          * not [1, 0]. */
         ast_node *arg = func_call->args->items[0];
+        transform_var *pv = arg->type == AST_NODE_IDENTIFIER
+            ? transform_var_lookup_path(ctx->var_ctx, ((cypher_identifier*)arg)->name) : NULL;
+        if (pv && pv->path_elements && !(pv->table_alias && strchr(pv->table_alias, '.'))) {
+            /* collect(p): a list of path objects, not of their id text. */
+            append_sql(ctx, "json(");
+            if (transform_path_object(ctx, ((cypher_identifier*)arg)->name) != 0) return -1;
+            append_sql(ctx, ")) FILTER (WHERE ");
+            if (transform_expression(ctx, arg) < 0) return -1;
+            append_sql(ctx, " IS NOT NULL)");
+            return 0;
+        }
         append_sql(ctx, "_gql_json_elem(");
         if (ast_is_boolean_expr(arg) && !(arg->type == AST_NODE_LITERAL)) {
             append_sql(ctx, "_gql_bool_str(CASE WHEN (");

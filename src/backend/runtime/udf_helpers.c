@@ -4437,7 +4437,7 @@ static const gql_capability_flag gql_capability_flags[] = {
     {"merge_on_create_on_match",      1},
     {"union",                         1},
     {"call_subquery",                 1},  /* CALL { ... } */
-    {"call_procedures",               1},  /* CALL proc.name(...) YIELD */
+    {"call_procedures",               0},  /* CALL proc.name(...): no procedures; ProcedureNotFound */
     {"existential_subquery_pattern",  1},  /* EXISTS((p)), EXISTS { (p) WHERE ... } */
     {"existential_subquery_full",     1},  /* EXISTS { MATCH ... RETURN ... } */
     {"pattern_comprehension",         1},

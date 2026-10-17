@@ -409,14 +409,14 @@ static int validate_list_map_call(cypher_function_call *func, char **error_messa
             const cypher_literal *lit = (const cypher_literal *)arg;
             if (lit->literal_type != LITERAL_NULL) {
                 set_error(error_message,
-                    "TypeError: InvalidArgumentType: %s() does not accept argument of type %s",
+                    "SyntaxError: InvalidArgumentType: %s() does not accept argument of type %s",
                     fname, literal_type_name(arg));
                 return -1;
             }
         }
         if (arg && arg->type == AST_NODE_MAP) {
             set_error(error_message,
-                "TypeError: InvalidArgumentType: %s() does not accept argument of type Map",
+                "SyntaxError: InvalidArgumentType: %s() does not accept argument of type Map",
                 fname);
             return -1;
         }
@@ -433,14 +433,14 @@ static int validate_list_map_call(cypher_function_call *func, char **error_messa
             const cypher_literal *lit = (const cypher_literal *)arg;
             if (lit->literal_type != LITERAL_NULL) {
                 set_error(error_message,
-                    "TypeError: InvalidArgumentType: %s() does not accept argument of type %s",
+                    "SyntaxError: InvalidArgumentType: %s() does not accept argument of type %s",
                     fname, literal_type_name(arg));
                 return -1;
             }
         }
         if (arg && arg->type == AST_NODE_LIST) {
             set_error(error_message,
-                "TypeError: InvalidArgumentType: %s() does not accept argument of type List",
+                "SyntaxError: InvalidArgumentType: %s() does not accept argument of type List",
                 fname);
             return -1;
         }
@@ -456,7 +456,7 @@ static int validate_list_map_call(cypher_function_call *func, char **error_messa
             if (lit->literal_type != LITERAL_INTEGER &&
                 lit->literal_type != LITERAL_NULL) {
                 set_error(error_message,
-                    "TypeError: InvalidArgumentType: range() arguments must be integers (got %s)",
+                    "ArgumentError: InvalidArgumentType: range() arguments must be integers (got %s)",
                     literal_type_name(arg));
                 return -1;
             }
@@ -1155,6 +1155,71 @@ static int check_ambiguous_aggregation(const ast_node *expr,
     return 0;
 }
 
+/* An ORDER BY expression that wraps an aggregate together with a variable
+ * the projection uses only inside a larger expression (`RETURN me.age +
+ * you.age, count(*) ORDER BY me.age + you.age + count(*)`) is ambiguous
+ * (ReturnOrderBy6 [5], WithOrderBy4 [20]). A projected column or property
+ * path is fine (ReturnOrderBy6 [3]); a variable the projection does not use
+ * at all is left to the UndefinedVariable check ([4]). */
+static int order_by_ambiguous_walk(const ast_node *expr, const name_set *available,
+                                   const name_set *available_props, const name_set *projected_vars,
+                                   char **error_message)
+{
+    if (!expr || ast_is_aggregate_func(expr)) return 0;
+    switch (expr->type) {
+        case AST_NODE_IDENTIFIER: {
+            const char *n = ((const cypher_identifier *)expr)->name;
+            if (available && nset_contains(available, n)) return 0;
+            if (projected_vars && nset_contains(projected_vars, n)) {
+                set_error(error_message,
+                          "SyntaxError: AmbiguousAggregationExpression: ORDER BY mixes an aggregate "
+                          "with `%s`, which is not a projected column", n);
+                return -1;
+            }
+            return 0;
+        }
+        case AST_NODE_PROPERTY: {
+            const cypher_property *p = (const cypher_property *)expr;
+            if (p->expr && p->expr->type == AST_NODE_IDENTIFIER && p->property_name && available_props) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "%s.%s", ((const cypher_identifier *)p->expr)->name, p->property_name);
+                if (nset_contains(available_props, buf)) return 0;
+            }
+            return order_by_ambiguous_walk(p->expr, available, available_props, projected_vars, error_message);
+        }
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            if (order_by_ambiguous_walk(b->left, available, available_props, projected_vars, error_message) < 0) return -1;
+            return order_by_ambiguous_walk(b->right, available, available_props, projected_vars, error_message);
+        }
+        case AST_NODE_NOT_EXPR:
+            return order_by_ambiguous_walk(((const cypher_not_expr *)expr)->expr, available, available_props, projected_vars, error_message);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            for (int i = 0; f->args && i < f->args->count; i++)
+                if (order_by_ambiguous_walk(f->args->items[i], available, available_props, projected_vars, error_message) < 0) return -1;
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+static int order_by_ambiguous_check(const ast_node *expr, const name_set *available,
+                                    const name_set *available_props, ast_list *items,
+                                    char **error_message)
+{
+    if (!expr || ast_is_aggregate_func(expr) || !ast_contains_aggregate(expr)) return 0;
+    name_set projected_vars; nset_init(&projected_vars);
+    for (int i = 0; items && i < items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)items->items[i];
+        if (it && it->expr) collect_free_var_names(it->expr, &projected_vars);
+    }
+    int rc = order_by_ambiguous_walk(expr, available, available_props, &projected_vars, error_message);
+    nset_free(&projected_vars);
+    return rc;
+}
+
 /* Recursive walker for ORDER BY: accept if every non-aggregate free
  * reference is in `available` or, in property-path form,
  * `available_props`. Skips inside aggregate calls — but the aggregate
@@ -1317,8 +1382,10 @@ static int validate_order_by_with_projection(ast_list *order_by,
     for (int i = 0; i < order_by->count && rc == 0; i++) {
         cypher_order_by_item *obi = (cypher_order_by_item *)order_by->items[i];
         if (!obi || !obi->expr) continue;
-        rc = order_by_walk_check(obi->expr, &available, &available_props,
-                                  &projected_agg_names, error_message);
+        rc = order_by_ambiguous_check(obi->expr, &available, &available_props, projection, error_message);
+        if (rc == 0)
+            rc = order_by_walk_check(obi->expr, &available, &available_props,
+                                      &projected_agg_names, error_message);
     }
     nset_free(&available);
     nset_free(&available_props);
@@ -1330,10 +1397,85 @@ static int validate_order_by_with_projection(ast_list *order_by,
 
 /* Walk a clause's expressions with the given var-type context, also
  * picking up new var bindings from WITH items along the way. */
+/* Where an aggregate may stand (GQLITE-T-0429): not inside another
+ * aggregate (NestedAggregation, `count(count(*))`), and not in the filter or
+ * projection of a list comprehension (InvalidAggregation, `[x IN l |
+ * count(*)]`); its source list may aggregate. */
+static int check_aggregate_placement(const ast_node *expr, char **error_message)
+{
+    if (!expr) return 0;
+    if (ast_is_aggregate_func(expr)) {
+        const cypher_function_call *f = (const cypher_function_call *)expr;
+        for (int i = 0; f->args && i < f->args->count; i++) {
+            if (ast_contains_aggregate(f->args->items[i])) {
+                set_error(error_message, "SyntaxError: NestedAggregation: `%s` contains an aggregate", f->function_name);
+                return -1;
+            }
+        }
+        return 0;
+    }
+    switch (expr->type) {
+        case AST_NODE_LIST_COMPREHENSION: {
+            const cypher_list_comprehension *lc = (const cypher_list_comprehension *)expr;
+            if (ast_contains_aggregate(lc->where_expr) || ast_contains_aggregate(lc->transform_expr)) {
+                set_error(error_message, "SyntaxError: InvalidAggregation: a list comprehension may not aggregate");
+                return -1;
+            }
+            return check_aggregate_placement(lc->list_expr, error_message);
+        }
+        case AST_NODE_BINARY_OP: {
+            const cypher_binary_op *b = (const cypher_binary_op *)expr;
+            if (check_aggregate_placement(b->left, error_message) < 0) return -1;
+            return check_aggregate_placement(b->right, error_message);
+        }
+        case AST_NODE_NOT_EXPR:
+            return check_aggregate_placement(((const cypher_not_expr *)expr)->expr, error_message);
+        case AST_NODE_PROPERTY:
+            return check_aggregate_placement(((const cypher_property *)expr)->expr, error_message);
+        case AST_NODE_FUNCTION_CALL: {
+            const cypher_function_call *f = (const cypher_function_call *)expr;
+            for (int i = 0; f->args && i < f->args->count; i++)
+                if (check_aggregate_placement(f->args->items[i], error_message) < 0) return -1;
+            return 0;
+        }
+        case AST_NODE_LIST: {
+            const cypher_list *l = (const cypher_list *)expr;
+            for (int i = 0; l->items && i < l->items->count; i++)
+                if (check_aggregate_placement(l->items->items[i], error_message) < 0) return -1;
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+static int check_projection_aggregates(ast_list *items, ast_list *order_by, bool is_return,
+                                       char **error_message)
+{
+    bool aggregating = false;
+    for (int i = 0; items && i < items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)items->items[i];
+        if (!it) continue;
+        if (check_aggregate_placement(it->expr, error_message) < 0) return -1;
+        if (ast_contains_aggregate(it->expr)) aggregating = true;
+    }
+    /* `RETURN n.num1 ORDER BY max(n.num2)`: ORDER BY of a projection that
+     * does not aggregate may not aggregate (ReturnOrderBy2 [14]). */
+    for (int i = 0; is_return && items && !aggregating && order_by && i < order_by->count; i++) {
+        cypher_order_by_item *obi = (cypher_order_by_item *)order_by->items[i];
+        if (obi && ast_contains_aggregate(obi->expr)) {
+            set_error(error_message, "SyntaxError: InvalidAggregation: ORDER BY of a RETURN that does not aggregate may not aggregate");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
                                   char **error_message)
 {
     if (!ret) return 0;
+    if (check_projection_aggregates(ret->items, ret->order_by, true, error_message) < 0) return -1;
     if (ret->items) {
         /* Collect grouping keys for ambiguous-aggregation detection. */
         name_set grouping_keys; nset_init(&grouping_keys);
@@ -1393,6 +1535,11 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
                                  char **error_message)
 {
     if (!with) return 0;
+    if (check_projection_aggregates(with->items, NULL, false, error_message) < 0) return -1;
+    if (with->where && ast_contains_aggregate(with->where)) {
+        set_error(error_message, "SyntaxError: InvalidAggregation: WHERE may not aggregate");
+        return -1;
+    }
     if (with->items) {
         /* Collect grouping keys for ambiguous-aggregation detection. */
         name_set grouping_keys; nset_init(&grouping_keys);
@@ -1418,6 +1565,16 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
              * `WITH a` is fine (carries the bare variable forward), but
              * `WITH a, count(*)` requires `count(*) AS c` (With4 [5]). */
             if (!item->alias && item->expr->type != AST_NODE_IDENTIFIER) {
+                /* An ambiguous ORDER BY is the error the TCK names first
+                 * (WithOrderBy4 [20]). */
+                for (int oi = 0; with->order_by && oi < with->order_by->count; oi++) {
+                    cypher_order_by_item *obi = (cypher_order_by_item *)with->order_by->items[oi];
+                    if (obi && order_by_ambiguous_check(obi->expr, NULL, NULL, with->items, error_message) < 0) {
+                        nset_free(&seen);
+                        nset_free(&grouping_keys);
+                        return -1;
+                    }
+                }
                 set_error(error_message,
                           "SyntaxError: NoExpressionAlias: every WITH item that is not a bare variable must be aliased");
                 nset_free(&seen);
@@ -1466,6 +1623,45 @@ static int validate_match_clause(cypher_match *match, const var_type_ctx *vctx,
                                   char **error_message)
 {
     if (!match) return 0;
+    /* A path variable named as a node or a relationship inside its own
+     * path or in an earlier part of the MATCH (`MATCH p = (p)-->()`,
+     * `MATCH (p)-->(), p = ()-->()`, Match6 [23]/[24]), or a second path
+     * of that name. A later use is a VariableTypeConflict (Match1 [10]),
+     * reported where the pattern is transformed. */
+    for (int i = 0; match->pattern && i < match->pattern->count; i++) {
+        ast_node *pi = match->pattern->items[i];
+        if (!pi || pi->type != AST_NODE_PATH || !((cypher_path *)pi)->var_name) continue;
+        const char *pv = ((cypher_path *)pi)->var_name;
+        for (int j = 0; j < match->pattern->count; j++) {
+            ast_node *pj = match->pattern->items[j];
+            if (!pj) continue;
+            if (pj->type == AST_NODE_NODE_PATTERN) {
+                const char *v = ((cypher_node_pattern *)pj)->variable;
+                if (j < i && v && strcmp(v, pv) == 0) goto already_bound;
+                continue;
+            }
+            if (pj->type != AST_NODE_PATH) continue;
+            if (j != i && ((cypher_path *)pj)->var_name && strcmp(((cypher_path *)pj)->var_name, pv) == 0) goto already_bound;
+            if (j > i) continue;
+            ast_list *els = ((cypher_path *)pj)->elements;
+            for (int k = 0; els && k < els->count; k++) {
+                ast_node *el = els->items[k];
+                const char *v = NULL;
+                if (el && el->type == AST_NODE_NODE_PATTERN) v = ((cypher_node_pattern *)el)->variable;
+                else if (el && el->type == AST_NODE_REL_PATTERN) v = ((cypher_rel_pattern *)el)->variable;
+                if (v && strcmp(v, pv) == 0) goto already_bound;
+            }
+        }
+        continue;
+already_bound:
+        set_error(error_message, "SyntaxError: VariableAlreadyBound: `%s` is bound twice in the same MATCH", pv);
+        return -1;
+    }
+    if (match->where && ast_contains_aggregate(match->where)) {
+        /* `MATCH (a) WHERE count(a) > 10` (MatchWhere1 [15]) */
+        set_error(error_message, "SyntaxError: InvalidAggregation: WHERE may not aggregate");
+        return -1;
+    }
     if (match->where) {
         /* Pattern1 [11]: `MATCH (n) WHERE (n) RETURN n`. After paren
          * stripping the WHERE expression is the bare identifier `n`,
@@ -2247,6 +2443,34 @@ int transform_validate_query(cypher_query *query, char **error_message)
                  * variables count as bound. */
                 if (rc == 0 && m->where) {
                     rc = validate_where_pattern_vars(m->where, &bound, error_message);
+                }
+                break;
+            }
+            case AST_NODE_DELETE: {
+                /* DELETE takes nodes, relationships, paths, or a list or
+                 * map that holds them (Delete1 [8], Delete5 [8]/[9]). */
+                cypher_delete *d = (cypher_delete *)clause;
+                for (int di = 0; rc == 0 && d->items && di < d->items->count; di++) {
+                    cypher_delete_item *it = (cypher_delete_item *)d->items->items[di];
+                    if (!it) continue;
+                    if (it->variable && !nset_contains(&bound, it->variable)) {
+                        set_error(error_message, "SyntaxError: UndefinedVariable: DELETE references undefined variable `%s`", it->variable);
+                        rc = -1;
+                    } else if (it->expr && it->expr->type == AST_NODE_LABEL_EXPR) {
+                        set_error(error_message, "SyntaxError: InvalidDelete: DELETE removes a node, not a label; use REMOVE");
+                        rc = -1;
+                    } else if (it->expr && (it->expr->type == AST_NODE_LITERAL ||
+                                            it->expr->type == AST_NODE_BINARY_OP ||
+                                            it->expr->type == AST_NODE_NOT_EXPR ||
+                                            it->expr->type == AST_NODE_NULL_CHECK)) {
+                        if (!(it->expr->type == AST_NODE_LITERAL &&
+                              ((cypher_literal *)it->expr)->literal_type == LITERAL_NULL)) {
+                            set_error(error_message, "SyntaxError: InvalidArgumentType: DELETE takes a node, a relationship or a path");
+                            rc = -1;
+                        }
+                    } else if (it->expr) {
+                        rc = check_undef_in_expr(it->expr, &bound, "DELETE", error_message);
+                    }
                 }
                 break;
             }

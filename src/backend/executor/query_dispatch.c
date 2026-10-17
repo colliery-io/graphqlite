@@ -654,6 +654,7 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     }
     bool unwind_seen = false, with_seen = false, delete_seen = false;
     bool write_seen = false, merge_seen = false, update_after_merge = false, agg_tail = false;
+    bool early_write = false, with_after_write = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
@@ -669,6 +670,7 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
                 if (!write_seen) {
                     with_seen = true;
                 } else {
+                    with_after_write = true;
                     /* The pipeline aggregates in a tail WITH without
                      * ORDER BY / SKIP / LIMIT / DISTINCT. */
                     cypher_with *w = (cypher_with *)c;
@@ -702,12 +704,14 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
             default:
                 return false;
         }
-        if (!unwind_seen && !with_seen && write_seen) return false;
+        if (!unwind_seen && !with_seen && write_seen) early_write = true;
     }
     if (!write_seen) return false;
-    /* A WITH-only prefix with DELETE keeps its handler (aggregation after a
-     * DELETE, Delete6). */
-    if (!unwind_seen && delete_seen) return false;
+    /* A write straight after MATCH keeps its handler, unless a WITH
+     * follows it: the read handlers dropped the write (`MATCH (n) REMOVE
+     * n.x WITH n ...`, Remove3 / Set6). */
+    if (early_write && !with_after_write) return false;
+    (void)delete_seen;   /* the pipeline groups after a DELETE too (Delete6) */
     /* An aggregating WITH after the write: only the pipeline groups the
      * written rows (`UNWIND .. CREATE (n) WITH collect(n) AS ns`). */
     return (flags & CLAUSE_MATCH) || update_after_merge || agg_tail;
@@ -719,22 +723,103 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
  * The row pipeline matches once and deletes before it creates. */
 static bool delete_then_create(cypher_query *query, clause_flags flags)
 {
-    if (!(flags & CLAUSE_MATCH) || !(flags & CLAUSE_DELETE) || !(flags & CLAUSE_CREATE)) return false;
+    if (!(flags & CLAUSE_MATCH) || !(flags & CLAUSE_DELETE)) return false;
     if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN |
                  CLAUSE_MERGE | CLAUSE_RETURN | CLAUSE_WITH | CLAUSE_UNWIND))
         return false;
-    if (!query->clauses || query->clauses->count < 3) return false;
-    bool write_seen = false, delete_seen = false;
+    if (!query->clauses || query->clauses->count < 2) return false;
+    /* Also `MATCH (n) OPTIONAL MATCH (n)-[r]-() DELETE n, r` (r can be
+     * null, Delete2 [2]) and `MATCH () CREATE (n) DELETE n` (Delete4 [3]). */
+    bool write_seen = false, delete_seen = false, create_seen = false, optional_seen = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
-        if (c->type == AST_NODE_MATCH) { if (write_seen) return false; continue; }
-        if (c->type == AST_NODE_DELETE) { if (write_seen && !delete_seen) return false; delete_seen = write_seen = true; continue; }
-        if (c->type == AST_NODE_CREATE) { if (!delete_seen) return false; write_seen = true; continue; }
+        if (c->type == AST_NODE_MATCH) {
+            if (write_seen) return false;
+            if (((cypher_match*)c)->optional) optional_seen = true;
+            continue;
+        }
+        if (c->type == AST_NODE_DELETE) { delete_seen = write_seen = true; continue; }
+        if (c->type == AST_NODE_CREATE) { create_seen = write_seen = true; continue; }
         if (c->type == AST_NODE_SET) { write_seen = true; continue; }
         return false;
     }
-    return delete_seen;
+    return delete_seen && (create_seen || optional_seen);
+}
+
+/* DELETE of a path variable or an expression (`MATCH p = ()-->() DETACH
+ * DELETE p`, `DELETE list[0]`): the MATCH+DELETE handler deletes only node
+ * and relationship variables (Delete3 [1]). The row pipeline deletes each
+ * entity the value holds. */
+static bool delete_of_value(cypher_query *query, clause_flags flags)
+{
+    if (!(flags & CLAUSE_DELETE) || !(flags & CLAUSE_MATCH)) return false;
+    if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
+        return false;
+    if (!query->clauses || !query->clauses->items[0] ||
+        query->clauses->items[0]->type != AST_NODE_MATCH) return false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c || c->type != AST_NODE_DELETE) continue;
+        cypher_delete *d = (cypher_delete*)c;
+        for (int k = 0; d->items && k < d->items->count; k++) {
+            cypher_delete_item *it = (cypher_delete_item*)d->items->items[k];
+            if (!it) continue;
+            if (it->expr) return true;
+            for (int j = 0; it->variable && j < i; j++) {
+                ast_node *m = query->clauses->items[j];
+                if (!m || m->type != AST_NODE_MATCH) continue;
+                ast_list *pat = ((cypher_match*)m)->pattern;
+                for (int q = 0; pat && q < pat->count; q++) {
+                    ast_node *pi = pat->items[q];
+                    if (pi && pi->type == AST_NODE_PATH && ((cypher_path*)pi)->var_name &&
+                        strcmp(((cypher_path*)pi)->var_name, it->variable) == 0) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/* Write shapes the per-pattern handlers lost part of (GQLITE-T-0429, side
+ * effects): a MERGE after a WITH or a MATCH (`WITH 42 AS v MERGE (:N {v: v})`
+ * stored no property; `MATCH (p) MERGE (:C {name: p.x})` merged once), a
+ * query with two or more writes where one is a MERGE (`MERGE (a) MERGE (b)
+ * MERGE (a)-[:R]->(b)` made no relationship; `MERGE (t) CREATE ...` lost t's
+ * label), and a MATCH after a write (`MATCH () CREATE () WITH * MATCH ()
+ * CREATE ()` made one node). The row pipeline runs each row through every
+ * clause. */
+static bool writes_need_rows(cypher_query *query, clause_flags flags)
+{
+    if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
+        return false;
+    if (!query->clauses || query->clauses->count < 2) return false;
+    int writes = 0;
+    bool merge = false, read_before_merge = false, read_after_write = false, read_seen = false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        switch (c->type) {
+            case AST_NODE_MATCH: case AST_NODE_WITH: case AST_NODE_UNWIND:
+                if (writes > 0 && c->type == AST_NODE_MATCH) read_after_write = true;
+                read_seen = true;
+                break;
+            case AST_NODE_MERGE:
+                if (read_seen) read_before_merge = true;
+                merge = true;
+                writes++;
+                break;
+            case AST_NODE_CREATE: case AST_NODE_SET: case AST_NODE_DELETE: case AST_NODE_REMOVE:
+                writes++;
+                break;
+            case AST_NODE_RETURN:
+                break;
+            default:
+                return false;
+        }
+    }
+    if (writes == 0) return false;
+    return (merge && (read_before_merge || writes >= 2)) || read_after_write;
 }
 
 static bool foreach_after_read(cypher_query *query, clause_flags flags)
@@ -945,6 +1030,18 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
     /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
      * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
      * `row` as unbound) or the UNWIND itself (every node was updated). */
+    if (writes_need_rows(query, flags)) {
+        CYPHER_DEBUG("Matched shape: writes that need the row pipeline");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
+    if (delete_of_value(query, flags)) {
+        CYPHER_DEBUG("Matched shape: DELETE of a path or an expression (row-wise)");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
     if (delete_then_create(query, flags)) {
         CYPHER_DEBUG("Matched shape: MATCH .. DELETE .. CREATE (row-wise)");
         executor->stmt_capture = false;
@@ -3071,7 +3168,8 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
         /* Set column names so the harness sees the schema, then return. */
         for (int i = 0; i < col_count; i++) {
             cypher_return_item *item = (cypher_return_item*)ret->items->items[i];
-            result->column_names[i] = strdup(item->alias ? item->alias : "?column?");
+            result->column_names[i] = strdup(item->alias ? item->alias :
+                                              item->source_text ? item->source_text : "?column?");
         }
         result->data = NULL;
         result->data_types = NULL;
@@ -3098,7 +3196,7 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
             result->column_names[i] = strdup(alias);
         } else {
             /* Build name from expression */
-            result->column_names[i] = strdup("?column?");
+            result->column_names[i] = strdup(item->source_text ? item->source_text : "?column?");
         }
 
         result->data[0][i] = NULL;
@@ -4185,8 +4283,41 @@ typedef struct { ast_node **slot; ast_node *original; ast_node *substitute; } rw
 
 /* A literal for a scalar-only expression of the row, keeping its type.
  * NULL when expr is not scalar-only or cannot be evaluated. */
+static void rw_eval_cell(cypher_executor *executor, ast_node *expr, rw_row *row, char **text, int *type);
+
+/* Is every variable of expr bound by the row (a value or an entity)? */
+static bool rw_expr_bound(ast_node *expr, const rw_row *row)
+{
+    if (!expr) return true;
+    switch (expr->type) {
+        case AST_NODE_LITERAL: case AST_NODE_PARAMETER: return true;
+        case AST_NODE_IDENTIFIER: {
+            const char *n = ((cypher_identifier*)expr)->name;
+            return rw_row_scalar(row, n) || get_variable_node_id(row->vm, n) >= 0 || is_variable_edge(row->vm, n);
+        }
+        case AST_NODE_PROPERTY: return rw_expr_bound(((cypher_property*)expr)->expr, row);
+        case AST_NODE_BINARY_OP:
+            return rw_expr_bound(((cypher_binary_op*)expr)->left, row) && rw_expr_bound(((cypher_binary_op*)expr)->right, row);
+        case AST_NODE_FUNCTION_CALL: {
+            ast_list *a = ((cypher_function_call*)expr)->args;
+            if (aggregating_call_name(expr)) return false;
+            for (int i = 0; a && i < a->count; i++) if (!rw_expr_bound(a->items[i], row)) return false;
+            return true;
+        }
+        default: return false;
+    }
+}
+
 static ast_node *rw_value_literal(cypher_executor *executor, ast_node *expr, const rw_row *row)
 {
+    if (expr && !rw_expr_scalar_only(expr, row) && expr->type != AST_NODE_IDENTIFIER && rw_expr_bound(expr, row)) {
+        /* A value over the row's entities (`MERGE (:City {name: p.bornIn})`). */
+        char *text = NULL; int type;
+        rw_eval_cell(executor, expr, (rw_row*)row, &text, &type);
+        ast_node *lit = rw_make_literal(executor, text, text ? type : SQLITE_NULL);
+        free(text);
+        return lit;
+    }
     if (!expr || !rw_expr_scalar_only(expr, row)) return NULL;
     ast_node *lit = rw_map_property_literal(executor, expr, row);
     if (!lit && expr->type == AST_NODE_IDENTIFIER) {
@@ -4247,6 +4378,9 @@ static void rw_literalize_set(cypher_executor *executor, cypher_set *set, const 
             rw_literalize_props(executor, it->expr, row, subs, n_subs);
             continue;
         }
+        /* A value over entities (`SET n.p = n.q`) is read by SET itself,
+         * which keeps a string that looks like JSON a string. */
+        if (!rw_expr_scalar_only(it->expr, row)) continue;
         ast_node *lit = rw_value_literal(executor, it->expr, row);
         if (lit) rw_subst_add(subs, n_subs, &it->expr, lit);
     }
@@ -4297,6 +4431,19 @@ static void rw_fold_map(variable_map *into, variable_map *from)
 static void rw_eval_cell(cypher_executor *executor, ast_node *expr, rw_row *row, char **text, int *type);
 static void rw_bind_value(rw_row *row, const char *name, const char *text, int type);
 
+/* Does a WITH ... WHERE keep the row? A predicate over values runs as SQL;
+ * one over entities (`WHERE n.num % 2 = 0`) through the row's bindings. */
+static bool rw_where_keeps(cypher_executor *executor, ast_node *where, rw_row *row)
+{
+    char *text = NULL;
+    int type;
+    if (rw_expr_scalar_only(where, row)) type = rw_eval_scalar(executor, where, row, &text);
+    else rw_eval_cell(executor, where, row, &text, &type);
+    bool keep = type >= 0 && text && (strcmp(text, "1") == 0 || strcmp(text, "true") == 0);
+    free(text);
+    return keep;
+}
+
 static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
 {
     if (w->pass_all || !w->items) return 0;
@@ -4328,13 +4475,7 @@ static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
             free(text);
         }
     }
-    bool keep = true;
-    if (w->where && rw_expr_scalar_only(w->where, &next)) {
-        char *text = NULL;
-        int type = rw_eval_scalar(executor, w->where, &next, &text);
-        keep = (type >= 0 && text && strcmp(text, "1") == 0);
-        free(text);
-    }
+    bool keep = !w->where || rw_where_keeps(executor, w->where, &next);
     rw_row_free(row);
     *row = next;
     return keep ? 0 : 1;   /* 1 = row filtered out */
@@ -4521,7 +4662,11 @@ static void rw_project_row(cypher_executor *executor, cypher_return *ret, rw_row
             cells[i] = text;
             types[i] = type >= 0 ? type : SQLITE_NULL;
         } else if (!cells[i] && it->expr && it->expr->type != AST_NODE_LITERAL &&
-                   it->expr->type != AST_NODE_IDENTIFIER && it->expr->type != AST_NODE_PROPERTY) {
+                   it->expr->type != AST_NODE_IDENTIFIER &&
+                   (it->expr->type != AST_NODE_PROPERTY ||
+                    (((cypher_property*)it->expr)->expr &&
+                     ((cypher_property*)it->expr)->expr->type != AST_NODE_IDENTIFIER))) {
+            /* also `startNode(r).id`: a property of a computed value */
             /* An expression over the row's entities and values
              * (`n.x + 1`, `toUpper(n.id)`). */
             foreach_context *fctx = rw_row_foreach_ctx(executor, row);
@@ -4952,12 +5097,7 @@ static int rw_with_aggregate(cypher_executor *executor, cypher_with *w, rw_row *
             free(orig); free(slots);
         }
         rw_row_free(&ev);
-        if (rc == 0 && w->where && rw_expr_scalar_only(w->where, nr)) {
-            char *t = NULL;
-            int ty = rw_eval_scalar(executor, w->where, nr, &t);
-            if (!(ty >= 0 && t && strcmp(t, "1") == 0)) { rw_row_free(nr); n_res--; }
-            free(t);
-        }
+        if (rc == 0 && w->where && !rw_where_keeps(executor, w->where, nr)) { rw_row_free(nr); n_res--; }
         if (empty_group) break;
     }
     for (int k = 0; k < n; k++) {
@@ -5141,6 +5281,95 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
     return rc;
 }
 
+/* DELETE for one row of the pipeline. A plain variable deletes its entity;
+ * an expression (`DELETE list[0]`, `DELETE m.key`, a path) deletes each node
+ * and relationship in its value (Delete5). */
+static char *rw_hydrate_path(cypher_executor *executor, const char *ids);
+
+/* Is `name` a path variable of a MATCH in clauses? */
+static bool rw_is_match_path(ast_list *clauses, const char *name)
+{
+    for (int j = 0; clauses && name && j < clauses->count; j++) {
+        ast_node *m = clauses->items[j];
+        if (!m || m->type != AST_NODE_MATCH) continue;
+        ast_list *pat = ((cypher_match*)m)->pattern;
+        for (int q = 0; pat && q < pat->count; q++) {
+            ast_node *pi = pat->items[q];
+            if (pi && pi->type == AST_NODE_PATH && ((cypher_path*)pi)->var_name &&
+                strcmp(((cypher_path*)pi)->var_name, name) == 0) return true;
+        }
+    }
+    return false;
+}
+
+static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                             ast_list *clauses, cypher_result *result)
+{
+    bool has_expr = false;
+    for (int i = 0; del->items && i < del->items->count; i++) {
+        cypher_delete_item *it = (cypher_delete_item*)del->items->items[i];
+        if (it && (it->expr || (it->variable && rw_row_scalar(row, it->variable)))) has_expr = true;
+    }
+    if (!has_expr) return execute_delete_operations(executor, del, row->vm, result);
+
+    variable_map *vm = create_variable_map();
+    ast_list *items = ast_list_create();
+    if (!vm || !items) { if (vm) free_variable_map(vm); if (items) ast_list_free(items); return -1; }
+    int n = 0;
+    for (int i = 0; i < del->items->count; i++) {
+        cypher_delete_item *it = (cypher_delete_item*)del->items->items[i];
+        if (!it) continue;
+        if (!it->expr && it->variable && !rw_row_scalar(row, it->variable)) {
+            char name[32];
+            snprintf(name, sizeof(name), "__del_%d", n++);
+            if (is_variable_edge(row->vm, it->variable)) set_variable_edge_id(vm, name, get_variable_edge_id(row->vm, it->variable));
+            else if (get_variable_node_id(row->vm, it->variable) >= 0) set_variable_node_id(vm, name, get_variable_node_id(row->vm, it->variable));
+            else continue;
+            ast_list_append(items, (ast_node*)make_delete_item(name));
+            continue;
+        }
+        if (!it->expr && !it->variable) continue;
+        /* An expression, or a variable bound to a value (a path, a list). */
+        char *text = NULL; int type;
+        ast_node *vexpr = it->expr ? it->expr : (ast_node*)make_identifier(it->variable, 0);
+        rw_eval_cell(executor, vexpr, row, &text, &type);
+        if (!it->expr) ast_node_free(vexpr);
+        /* A path variable holds its interleaved ids: render the path. */
+        if (!it->expr && text && rw_is_match_path(clauses, it->variable)) {
+            char *hp = rw_hydrate_path(executor, text);
+            if (hp) { free(text); text = hp; }
+        }
+        if (!text) continue;   /* DELETE null does nothing */
+        /* Every rendered node ({"id", "labels", "properties"}) and
+         * relationship ({"id", "type", "startNode", ...}) in the value. */
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(executor->db,
+                "SELECT json_extract(value, '$.id'), json_type(value, '$.startNode') IS NOT NULL "
+                "FROM json_tree(?1) WHERE type = 'object' AND json_type(value, '$.id') = 'integer' "
+                "AND json_type(value, '$.properties') = 'object' "
+                "AND (json_type(value, '$.labels') = 'array' OR json_type(value, '$.startNode') IS NOT NULL)",
+                -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, text, -1, SQLITE_TRANSIENT);
+            while (sqlite3_step(st) == SQLITE_ROW) {
+                char name[32];
+                snprintf(name, sizeof(name), "__del_%d", n++);
+                int id = sqlite3_column_int(st, 0);
+                if (sqlite3_column_int(st, 1)) set_variable_edge_id(vm, name, id);
+                else set_variable_node_id(vm, name, id);
+                ast_list_append(items, (ast_node*)make_delete_item(name));
+            }
+            sqlite3_finalize(st);
+        }
+        free(text);
+    }
+    cypher_delete synth = *del;
+    synth.items = items;
+    int rc = execute_delete_operations(executor, &synth, vm, result);
+    ast_list_free(items);
+    free_variable_map(vm);
+    return rc;
+}
+
 static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
@@ -5282,14 +5511,17 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     /* --- 3. Eager DELETE pass: every DELETE that precedes the first MERGE
      *        runs for all rows before any MERGE runs for any row. --------- */
     int first_merge = clauses->count;
+    /* ... and before the first CREATE: `CREATE (n) DELETE n` deletes the
+     * node the row created (Delete4 [3]). */
     for (int i = prefix_end; i < clauses->count; i++)
-        if (clauses->items[i] && clauses->items[i]->type == AST_NODE_MERGE) { first_merge = i; break; }
+        if (clauses->items[i] && (clauses->items[i]->type == AST_NODE_MERGE ||
+                                  clauses->items[i]->type == AST_NODE_CREATE)) { first_merge = i; break; }
     bool *eager_done = calloc((size_t)clauses->count, sizeof(bool));
     for (int i = prefix_end; i < first_merge; i++) {
         ast_node *c = clauses->items[i];
         if (!c || c->type != AST_NODE_DELETE) continue;
         for (int r = 0; r < n_rows && rc >= 0; r++) {
-            rc = execute_delete_operations(executor, (cypher_delete*)c, rows[r].vm, result);
+            rc = rw_execute_delete(executor, (cypher_delete*)c, &rows[r], clauses, result);
         }
         if (eager_done) eager_done[i] = true;
         if (rc < 0) break;
@@ -5368,7 +5600,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 }
                 case AST_NODE_DELETE:
                     if (eager_done && eager_done[i]) break;
-                    rc = execute_delete_operations(executor, (cypher_delete*)c, rows[r].vm, result);
+                    rc = rw_execute_delete(executor, (cypher_delete*)c, &rows[r], clauses, result);
                     break;
                 case AST_NODE_MATCH:
                 case AST_NODE_MERGE: {
@@ -5382,10 +5614,21 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     ast_list *pat = is_merge ? mg->pattern : mt->pattern;
                     rw_subst *subs = NULL; int n_subs = 0;
                     rw_literalize_pattern(executor, pat, &rows[r], &subs, &n_subs);
+                    /* ON CREATE / ON MATCH SET read the row's values too
+                     * (`UNWIND $rows AS row MERGE (n {id: row.id}) ON CREATE
+                     * SET n.v = row.v`). */
+                    rw_subst *asubs = NULL; int n_asubs = 0;
+                    if (is_merge) {
+                        cypher_set on_create = {0}, on_match = {0};
+                        on_create.items = mg->on_create;
+                        on_match.items = mg->on_match;
+                        rw_literalize_set(executor, &on_create, &rows[r], &asubs, &n_asubs);
+                        rw_literalize_set(executor, &on_match, &rows[r], &asubs, &n_asubs);
+                    }
                     rw_row *maps = NULL;
                     int nm = rw_match_maps(executor, pat, is_merge ? NULL : mt->where, &rows[r], &maps, result);
                     bool matched_existing = nm > 0;
-                    if (nm < 0) { rw_restore_subs(subs, n_subs); rc = -1; free(maps); break; }
+                    if (nm < 0) { rw_restore_subs(subs, n_subs); rw_restore_subs(asubs, n_asubs); rc = -1; free(maps); break; }
                     if (nm == 0) {
                         free(maps); maps = NULL;
                         if (is_merge) {
@@ -5403,6 +5646,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                         }
                         if (nm <= 0) {
                             rw_restore_subs(subs, n_subs);
+                            rw_restore_subs(asubs, n_asubs);
                             if (nm < 0) rc = -1;
                             free(maps);
                             break;
@@ -5439,6 +5683,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                         if (is_merge && matched_existing && mg->on_match && mg->on_match->count > 0 && rc >= 0)
                             rc = execute_set_items(executor, mg->on_match, rows[target].vm, result);
                     }
+                    rw_restore_subs(asubs, n_asubs);
                     for (int k = 0; k < nm; k++) rw_row_free(&maps[k]);
                     free(maps);
                     break;

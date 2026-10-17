@@ -36,6 +36,10 @@ typedef struct {
     int capacity;
 } variable_map;
 
+/* entity_id of a variable bound to null (an OPTIONAL MATCH miss): SET on
+ * it does nothing. Below 0, so it reads as unbound everywhere else. */
+#define GQL_NULL_ENTITY_ID (-2)
+
 /* FOREACH variable binding - stores current iteration value */
 typedef struct {
     char *variable;

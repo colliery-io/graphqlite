@@ -10,6 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <limits.h>
 #include <stdbool.h>
 
@@ -163,6 +164,24 @@ operator    [+*/%^=!&|~]+
     prepare_decimal_token(yyextra, yytext);
     return CYPHER_TOKEN_DECIMAL;
 }
+{digit}{alnum}*/[ \t]*":"[^:] {
+    /* A map key that starts with a digit (`{1B2c: 1}`, Literals8 [19]) is
+     * unexpected syntax, not a number. */
+    char msg[160];
+    snprintf(msg, sizeof(msg), "SyntaxError: UnexpectedSyntax: '%.100s' cannot start a map key", yytext);
+    scanner_error(yyextra, msg, yyleng);
+    prepare_token(yyextra, CYPHER_TOKEN_EOF, "");
+    return CYPHER_TOKEN_EOF;
+}
+{digit}{alnum}+ {
+    /* A number run into letters (`123abc`, `0x`, `0x1j`): longer than any
+     * valid number literal at this position, so flex picks it only then. */
+    char msg[160];
+    snprintf(msg, sizeof(msg), "SyntaxError: InvalidNumberLiteral: '%.100s' is not a number", yytext);
+    scanner_error(yyextra, msg, yyleng);
+    prepare_token(yyextra, CYPHER_TOKEN_EOF, "");
+    return CYPHER_TOKEN_EOF;
+}
 
 {string}        {
                     /* Remove quotes and handle escapes */
@@ -274,8 +293,12 @@ operator    [+*/%^=!&|~]+
 
 .               {
                     char msg[100];
-                    snprintf(msg, sizeof(msg), "Unexpected character: '%c' (0x%02x)", 
-                            yytext[0], (unsigned char)yytext[0]);
+                    unsigned char c0 = (unsigned char)yytext[0];
+                    if (c0 >= 0x80)   /* a byte of a non-ASCII character: name the byte only */
+                        snprintf(msg, sizeof(msg), "SyntaxError: InvalidUnicodeCharacter: unexpected character (byte 0x%02x)", c0);
+                    else
+                        snprintf(msg, sizeof(msg), "SyntaxError: UnexpectedSyntax: unexpected character '%c' (0x%02x)",
+                                 yytext[0], c0);
                     scanner_error(yyextra, msg, yyleng);
                     prepare_token(yyextra, CYPHER_TOKEN_EOF, "");
                     return CYPHER_TOKEN_EOF;
@@ -360,6 +383,12 @@ static void prepare_decimal_token(CypherScannerState *state, const char *text)
 {
     prepare_token(state, CYPHER_TOKEN_DECIMAL, text);
     state->current_token.value.decimal = strtod(text, NULL);
+    if (isinf(state->current_token.value.decimal)) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "SyntaxError: FloatingPointOverflow: float literal '%.100s' is out of range", text);
+        scanner_error(state, buf, (int)strlen(text));
+    }
 }
 
 /* Record a scanner error at the start of the offending token. YY_USER_ACTION
