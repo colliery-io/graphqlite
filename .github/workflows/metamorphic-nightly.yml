@@ -1,0 +1,69 @@
+name: Metamorphic nightly
+
+# Generated query testing at scale (GQLITE-T-0452). Cover mode runs every
+# relation's covering array with a seed from the date, then random mode
+# fills the rest of the budget. It does not gate anything: read the summary
+# and the results artifact, and record new signatures as tasks.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Random-mode budget in minutes"
+        default: "20"
+
+jobs:
+  metamorphic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build extension
+        run: make extension
+
+      - name: Seed from the date
+        run: echo "SEED=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+
+      - name: Cover mode
+        continue-on-error: true
+        run: |
+          python -m tests.metamorphic --mode cover --seed "$SEED" --reps 3 \
+            --out build/metamorphic-cover.json | tee build/metamorphic-cover.txt
+
+      - name: Random mode
+        continue-on-error: true
+        run: |
+          python -m tests.metamorphic --mode random --seed "$SEED" \
+            --minutes "${{ github.event.inputs.minutes || '20' }}" \
+            --out build/metamorphic-random.json | tee build/metamorphic-random.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Metamorphic nightly, seed $SEED"
+            echo '```'
+            grep -hE '^(metamorphic|ran in|  known|NEW|CRASH|TIMEOUT|HARNESS)' build/metamorphic-*.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metamorphic-nightly
+          path: build/metamorphic-*
+          retention-days: 14
