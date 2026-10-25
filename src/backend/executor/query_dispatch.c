@@ -5098,11 +5098,11 @@ static char *rw_hydrate_path(cypher_executor *executor, const char *ids)
     char *nj = gql_sql_node_json_expr("", "je.value");
     char *ej = gql_sql_edge_json_expr("", "e.id", "e.type", "e.source_id", "e.target_id");
     char *sql = (nj && ej) ? sqlite3_mprintf(
-        "SELECT json_object('nodes', (SELECT json_group_array(json(%s)) FROM "
-        "(SELECT value FROM json_each(?1) WHERE key %% 2 = 0 ORDER BY key) je), "
-        "'rels', (SELECT json_group_array(json(%s)) FROM "
+        "SELECT json_object('nodes', json((SELECT json_group_array(json(%s)) FROM "
+        "(SELECT value FROM json_each(?1) WHERE key %% 2 = 0 ORDER BY key) je)), "
+        "'rels', json((SELECT json_group_array(json(%s)) FROM "
         "(SELECT value FROM json_each(?1) WHERE key %% 2 = 1 ORDER BY key) je2 "
-        "JOIN edges e ON e.id = je2.value))", nj, ej) : NULL;
+        "JOIN edges e ON e.id = je2.value)))", nj, ej) : NULL;
     free(nj); free(ej);
     char *out = NULL;
     sqlite3_stmt *st = NULL;

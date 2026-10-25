@@ -164,7 +164,7 @@ static int emit_registered_path_members(cypher_transform_context *ctx, transform
     /* A null path (OPTIONAL pattern that did not match) gives null. */
     if (null_guard[0]) append_sql(ctx, "(CASE WHEN %s THEN NULL ELSE ", null_guard);
     append_sql(ctx,
-        "(SELECT json_group_array(json(%s) ORDER BY _pm.seg, _pm.k) FROM (%s) _pm%s)",
+        "json((SELECT json_group_array(json(%s) ORDER BY _pm.seg, _pm.k) FROM (%s) _pm%s))",
         ej, dbuf_get(&u), want_nodes ? "" : " JOIN edges e ON e.id = _pm.v");
     if (null_guard[0]) append_sql(ctx, " END)");
     free(ej);
@@ -190,8 +190,8 @@ static int emit_json_path_members(cypher_transform_context *ctx, ast_node *arg, 
     append_sql(ctx,
         "(CASE WHEN %s IS NULL THEN NULL"
         " WHEN json_valid(%s) AND json_type(%s) = 'object' THEN json_extract(%s, '$.%s')"
-        " ELSE (SELECT json_group_array(json(%s) ORDER BY je.key) FROM json_each(%s) je%s"
-        " WHERE (je.key %% 2) = %d) END)",
+        " ELSE json((SELECT json_group_array(json(%s) ORDER BY je.key) FROM json_each(%s) je%s"
+        " WHERE (je.key %% 2) = %d)) END)",
         v, v, v, v, want_nodes ? "nodes" : "rels",
         ej, v, want_nodes ? "" : " JOIN edges e ON e.id = je.value",
         want_nodes ? 0 : 1);

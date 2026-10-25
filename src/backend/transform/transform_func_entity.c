@@ -165,7 +165,7 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
                         transform_var_alias_is_id(ctx->var_ctx, id->name);
     append_sql(ctx,
         "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
-        "COALESCE((SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s), json('[]')) END)",
+        "COALESCE(json((SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s)), json('[]')) END)",
         alias, is_projected ? "" : ".id",
         gprefix, alias, is_projected ? "" : ".id");
 
@@ -334,9 +334,9 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     /* keys() also works on maps. For map literals or projected map values,
      * use SQLite's json functions to extract keys directly. */
     if (arg->type == AST_NODE_MAP) {
-        append_sql(ctx, "(SELECT json_group_array(key) FROM json_each(");
+        append_sql(ctx, "json((SELECT json_group_array(key) FROM json_each(");
         if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, "))");
+        append_sql(ctx, ")))");
         return 0;
     }
 
@@ -359,13 +359,13 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
          * object (carries a `properties` object) use that object's keys instead
          * of the wrapper keys. NULL-guarded. */
         append_sql(ctx,
-            "(SELECT CASE WHEN _kv.v IS NULL THEN NULL ELSE "
+            "json((SELECT CASE WHEN _kv.v IS NULL THEN NULL ELSE "
             "(SELECT json_group_array(key) FROM json_each("
             "CASE WHEN json_type(_kv.v, '$.properties') = 'object' "
             "THEN json_extract(_kv.v, '$.properties') ELSE _kv.v END)) END "
             "FROM (SELECT ");
         if (transform_expression(ctx, arg) < 0) return -1;
-        append_sql(ctx, " AS v) _kv)");
+        append_sql(ctx, " AS v) _kv))");
         return 0;
     }
 
@@ -389,7 +389,7 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
     if (is_projected && !is_edge && !alias_is_id) {
         append_sql(ctx,
             "(CASE WHEN %s IS NULL THEN NULL ELSE "
-            "(SELECT json_group_array(key) FROM json_each(%s)) END)",
+            "json((SELECT json_group_array(key) FROM json_each(%s))) END)",
             alias, alias);
         return 0;
     }
@@ -410,23 +410,23 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
         /* For edges, query edge property tables */
         /* Use separate EXISTS checks with OR - SQLite doesn't handle EXISTS with UNION ALL correctly */
         append_sql(ctx, "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
-            "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
+            "json((SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
             "EXISTS (SELECT 1 FROM %sedge_props_text WHERE edge_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %sedge_props_int WHERE edge_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %sedge_props_real WHERE edge_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %sedge_props_bool WHERE edge_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %sedge_props_json WHERE edge_id = %s%s AND key_id = pk.id)) END)",
+            "EXISTS (SELECT 1 FROM %sedge_props_json WHERE edge_id = %s%s AND key_id = pk.id))) END)",
             alias, id_suffix, gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     } else {
         /* For nodes, query node property tables */
         /* Use separate EXISTS checks with OR - SQLite doesn't handle EXISTS with UNION ALL correctly */
         append_sql(ctx, "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
-            "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
+            "json((SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
             "EXISTS (SELECT 1 FROM %snode_props_text WHERE node_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %snode_props_int WHERE node_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %snode_props_real WHERE node_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %snode_props_bool WHERE node_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %snode_props_json WHERE node_id = %s%s AND key_id = pk.id)) END)",
+            "EXISTS (SELECT 1 FROM %snode_props_json WHERE node_id = %s%s AND key_id = pk.id))) END)",
             alias, id_suffix, gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     }
 

@@ -112,8 +112,8 @@ int transform_pagerank_function(cypher_transform_context *ctx, cypher_function_c
     /* Return JSON array of {node_id, score} objects ordered by score descending.
      * The steps leak the rank of nodes without out-edges; normalizing gives
      * the same vector as spreading that rank to every node (#125). */
-    append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
-               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC))",
+    append_sql(ctx, "json((SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
+               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC)))",
                cte_base, iterations);
 
     return 0;
@@ -208,8 +208,8 @@ int transform_top_pagerank_function(cypher_transform_context *ctx, cypher_functi
     ctx->cte_count++;
 
     /* Return top-k as JSON array, normalized over all nodes before LIMIT (#125) */
-    append_sql(ctx, "(SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
-               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC LIMIT %d))",
+    append_sql(ctx, "json((SELECT json_group_array(json_object('node_id', node_id, 'score', score)) "
+               "FROM (SELECT node_id, " PAGERANK_NORMALIZED_SCORE " AS score FROM %s_pr%d ORDER BY score DESC LIMIT %d)))",
                cte_base, iterations, k);
 
     return 0;
@@ -403,9 +403,9 @@ int transform_community_members_function(cypher_transform_context *ctx, cypher_f
         }
     }
 
-    append_sql(ctx, "(SELECT json_group_array(nid) FROM (SELECT json_extract(value, '$.node_id') AS nid "
+    append_sql(ctx, "json((SELECT json_group_array(nid) FROM (SELECT json_extract(value, '$.node_id') AS nid "
                "FROM json_each(_gql_label_propagation(%d)) WHERE json_extract(value, '$.community') = %d "
-               "ORDER BY nid))",
+               "ORDER BY nid)))",
                iterations, community_id);
 
     return 0;

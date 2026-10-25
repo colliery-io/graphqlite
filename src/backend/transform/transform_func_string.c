@@ -220,7 +220,7 @@ int transform_split_function(cypher_transform_context *ctx, cypher_function_call
 
     /* Use json_each with recursive splitting via instr */
     /* For simplicity, use a subquery that splits into JSON array */
-    append_sql(ctx, "(SELECT json_group_array(value) FROM (WITH RECURSIVE split_cte(remaining, value) AS (");
+    append_sql(ctx, "json((SELECT json_group_array(value) FROM (WITH RECURSIVE split_cte(remaining, value) AS (");
     append_sql(ctx, "SELECT ");
     if (transform_expression(ctx, func_call->args->items[0]) < 0) {
         return -1;
@@ -242,7 +242,7 @@ int transform_split_function(cypher_transform_context *ctx, cypher_function_call
         return -1;
     }
     append_sql(ctx, ") - 1) FROM split_cte WHERE remaining != ''");
-    append_sql(ctx, ") SELECT value FROM split_cte WHERE value != ''))");
+    append_sql(ctx, ") SELECT value FROM split_cte WHERE value != '')))");
 
     return 0;
 }
