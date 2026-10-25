@@ -159,7 +159,10 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
      * `json('[]')` — `json_group_array` over an empty result set
      * yields NULL in SQLite, but Cypher spec says labels() on a
      * label-less node returns []. T-0325. */
-    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    /* The alias is the id column when the variable came through WITH or
+     * UNWIND (GQLITE-T-0450), as in id(). */
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name) ||
+                        transform_var_alias_is_id(ctx->var_ctx, id->name);
     append_sql(ctx,
         "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
         "COALESCE((SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s), json('[]')) END)",
@@ -227,7 +230,7 @@ int transform_properties_function(cypher_transform_context *ctx, cypher_function
         return 0;
     }
     bool is_edge = transform_var_is_edge(ctx->var_ctx, id->name);
-    const char *id_suffix = is_projected ? "" : ".id";
+    const char *id_suffix = (is_projected || alias_is_id_check) ? "" : ".id";
 
     /* Multi-graph support: get graph prefix for table references */
     const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
@@ -390,7 +393,7 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
             alias, alias);
         return 0;
     }
-    const char *id_suffix = is_projected ? "" : ".id";
+    const char *id_suffix = (is_projected || alias_is_id) ? "" : ".id";
 
     /* Multi-graph support: get graph prefix for table references */
     const char *graph = transform_var_get_graph(ctx->var_ctx, id->name);
@@ -401,26 +404,30 @@ int transform_keys_function(cypher_transform_context *ctx, cypher_function_call 
         gprefix = gprefix_buf;
     }
 
+    /* keys(null) is null, as labels(null); an entity with no properties
+     * gives [] (json_group_array over no rows is '[]'). */
     if (is_edge) {
         /* For edges, query edge property tables */
         /* Use separate EXISTS checks with OR - SQLite doesn't handle EXISTS with UNION ALL correctly */
-        append_sql(ctx, "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
+        append_sql(ctx, "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
+            "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
             "EXISTS (SELECT 1 FROM %sedge_props_text WHERE edge_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %sedge_props_int WHERE edge_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %sedge_props_real WHERE edge_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %sedge_props_bool WHERE edge_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %sedge_props_json WHERE edge_id = %s%s AND key_id = pk.id))",
-            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
+            "EXISTS (SELECT 1 FROM %sedge_props_json WHERE edge_id = %s%s AND key_id = pk.id)) END)",
+            alias, id_suffix, gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     } else {
         /* For nodes, query node property tables */
         /* Use separate EXISTS checks with OR - SQLite doesn't handle EXISTS with UNION ALL correctly */
-        append_sql(ctx, "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
+        append_sql(ctx, "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
+            "(SELECT json_group_array(pk.key) FROM %sproperty_keys pk WHERE "
             "EXISTS (SELECT 1 FROM %snode_props_text WHERE node_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %snode_props_int WHERE node_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %snode_props_real WHERE node_id = %s%s AND key_id = pk.id) OR "
             "EXISTS (SELECT 1 FROM %snode_props_bool WHERE node_id = %s%s AND key_id = pk.id) OR "
-            "EXISTS (SELECT 1 FROM %snode_props_json WHERE node_id = %s%s AND key_id = pk.id))",
-            gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
+            "EXISTS (SELECT 1 FROM %snode_props_json WHERE node_id = %s%s AND key_id = pk.id)) END)",
+            alias, id_suffix, gprefix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix, gprefix, alias, id_suffix);
     }
 
     return 0;

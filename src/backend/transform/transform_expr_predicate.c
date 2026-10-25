@@ -316,6 +316,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                         bool first_table = true;
                         char node_aliases[10][32];  /* Support up to 10 nodes in pattern */
+                        char node_ids[10][72];      /* each node's id expression */
                         bool node_is_external[10];  /* Track which nodes are from outer context */
                         int node_count = 0;
 
@@ -345,15 +346,16 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                     strncpy(node_aliases[node_count], outer_alias,
                                            sizeof(node_aliases[node_count]) - 1);
                                     node_aliases[node_count][sizeof(node_aliases[node_count]) - 1] = '\0';
-                                    /* GQLITE-T-0139: an outer entity seeded into an
-                                     * EXISTS { } body carries its id expression
-                                     * (`<alias>.id`) as alias; the emitters below
-                                     * append `.id` themselves, so strip it here. */
-                                    if (transform_var_alias_is_id(ctx->var_ctx, node->variable)) {
-                                        size_t al = strlen(node_aliases[node_count]);
-                                        if (al > 3 && strcmp(node_aliases[node_count] + al - 3, ".id") == 0) {
-                                            node_aliases[node_count][al - 3] = '\0';
-                                        }
+                                    /* An outer variable whose alias is its id
+                                     * expression: an entity seeded into an EXISTS { }
+                                     * body (`<alias>.id`, GQLITE-T-0139), or a node
+                                     * carried through WITH / UNWIND (`_with_0.a`,
+                                     * GQLITE-T-0450). Otherwise the id is `<alias>.id`. */
+                                    if (transform_var_alias_is_id(ctx->var_ctx, node->variable) ||
+                                        transform_var_is_projected(ctx->var_ctx, node->variable)) {
+                                        snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s", outer_alias);
+                                    } else {
+                                        snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", outer_alias);
                                     }
                                     node_is_external[node_count] = true;
                                 } else {
@@ -364,6 +366,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                     snprintf(node_aliases[node_count], sizeof(node_aliases[node_count]),
                                             "n%d", node_count);
                                     append_sql(ctx, "nodes AS %s", node_aliases[node_count]);
+                                    snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", node_aliases[node_count]);
                                     node_is_external[node_count] = false;
                                     /* Register the inner node var so an inner WHERE
                                      * can reference it (ExistentialSubquery1 [2]). */
@@ -417,21 +420,21 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                                 if (rel->left_arrow && !rel->right_arrow) {
                                     /* Incoming: <-[]-  means edge goes right_node -> left_node */
-                                    append_sql(ctx, "e%d.source_id = %s.id AND e%d.target_id = %s.id",
-                                              rel_index, node_aliases[right_node],
-                                              rel_index, node_aliases[left_node]);
+                                    append_sql(ctx, "e%d.source_id = %s AND e%d.target_id = %s",
+                                              rel_index, node_ids[right_node],
+                                              rel_index, node_ids[left_node]);
                                 } else if (!rel->left_arrow && !rel->right_arrow) {
                                     /* Undirected: -[]-  match either direction */
-                                    append_sql(ctx, "((e%d.source_id = %s.id AND e%d.target_id = %s.id) OR (e%d.source_id = %s.id AND e%d.target_id = %s.id))",
-                                              rel_index, node_aliases[left_node],
-                                              rel_index, node_aliases[right_node],
-                                              rel_index, node_aliases[right_node],
-                                              rel_index, node_aliases[left_node]);
+                                    append_sql(ctx, "((e%d.source_id = %s AND e%d.target_id = %s) OR (e%d.source_id = %s AND e%d.target_id = %s))",
+                                              rel_index, node_ids[left_node],
+                                              rel_index, node_ids[right_node],
+                                              rel_index, node_ids[right_node],
+                                              rel_index, node_ids[left_node]);
                                 } else {
                                     /* Outgoing: -[]->  (default) */
-                                    append_sql(ctx, "e%d.source_id = %s.id AND e%d.target_id = %s.id",
-                                              rel_index, node_aliases[left_node],
-                                              rel_index, node_aliases[right_node]);
+                                    append_sql(ctx, "e%d.source_id = %s AND e%d.target_id = %s",
+                                              rel_index, node_ids[left_node],
+                                              rel_index, node_ids[right_node]);
                                 }
 
                                 /* Add relationship type constraint if specified */
@@ -455,8 +458,8 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                             }
 
                                             int current_node = (i == 0) ? 0 : i / 2;
-                                            append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s.id AND label = ",
-                                                      node_aliases[current_node]);
+                                            append_sql(ctx, "EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s AND label = ",
+                                                      node_ids[current_node]);
                                             append_string_literal(ctx, label);
                                             append_sql(ctx, ")");
                                             first_condition = false;
