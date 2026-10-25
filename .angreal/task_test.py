@@ -365,42 +365,55 @@ def test_tck(backend: str = "extension", filter: str = "", limit: int = 0,
     about="Run metamorphic query tests (generated queries, equivalent rewrites)",
     tool=angreal.ToolDescription(
         """
-Run the metamorphic query harness (tests/metamorphic, GQLITE-T-0448).
+Run the metamorphic query harness (tests/metamorphic; GQLITE-T-0448, GQLITE-T-0452).
 
 Each case is a random small graph and query variants that must give the
-same result: a pass-through WITH *, renamed variables, an alias that
-reuses a variable name, collect(DISTINCT) against WITH DISTINCT, :A|B
-against OR, OPTIONAL MATCH filtered against MATCH, a write expression
-inline against computed in a WITH. A variant that errors, or results that
-differ, is a failure. Failures of open bugs are listed in
+same result, over 22 relations: pass-through WITH *, renames, keyword
+names, ternary logic partitioning of WHERE and count(*), SKIP/LIMIT slices,
+DISTINCT, UNION, var-length vs fixed paths, reversed patterns, OPTIONAL
+MATCH vs NOT EXISTS, :A|B vs OR, write expressions, SET read-back, MERGE
+idempotence, DETACH DELETE. A variant that errors, results that differ, a
+crash or a hang is a failure. Open bugs are listed in
 tests/metamorphic/known.json with their Kairos task and do not fail the run.
 
+Modes:
+- random: --count cases from --seed, or --minutes of cases.
+- cover: per relation, a covering array over the dimensions it reads (all
+  pairs; all triples of the clause-structure dimensions), --reps runs each.
+
 ## When to use
-- After a change to the transform or executor
-- To look for new wrong-result bugs: raise --count or change --seed
+- After a change to the transform or executor: `angreal test metamorphic --mode cover`
+- To hunt for new bugs: raise --count, change --seed, or give --minutes
 
 ## Examples
 ```
 angreal test metamorphic
-angreal test metamorphic --seed 1000 --count 20000
+angreal test metamorphic --mode cover --reps 3
+angreal test metamorphic --minutes 10 --seed 20261025
 angreal test metamorphic --relation optional
 ```
 
 ## Output
-- Stdout: known and new failure signatures; each new one with its seed, a
-  shrunk graph and the query variants with their results.
+- Stdout: known tasks with case counts; each new signature with a replay id,
+  the dimension values every failing case shares, a shrunk graph and the
+  variants. Replay one case: `python -m tests.metamorphic --replay <id>`.
 - `build/metamorphic-results.json`
 
 ## Exit code
-1 when there is a new (not known) failure signature, else 0.
+1 on a new signature, or a crash or hang that no known task covers; else 0.
 """,
         risk_level="safe"
     )
 )
-@angreal.argument(name="seed", long="seed", python_type="int", help="First seed (default 1)")
-@angreal.argument(name="count", long="count", python_type="int", help="Number of cases (default 500)")
+@angreal.argument(name="mode", long="mode", help="random (default) or cover")
+@angreal.argument(name="seed", long="seed", python_type="int", help="Seed (default 1)")
+@angreal.argument(name="count", long="count", python_type="int", help="random mode: cases (default 500)")
+@angreal.argument(name="minutes", long="minutes", python_type="float", help="random mode: time budget")
+@angreal.argument(name="reps", long="reps", python_type="int", help="cover mode: runs per row (default 2)")
+@angreal.argument(name="jobs", long="jobs", python_type="int", help="Worker processes (default: cores - 1)")
 @angreal.argument(name="relation", long="relation", help="Only relations whose name contains this")
-def test_metamorphic(seed: int = 1, count: int = 500, relation: str = "") -> int:
+def test_metamorphic(mode: str = "", seed: int = 1, count: int = 500, minutes: float = 0.0,
+                     reps: int = 0, jobs: int = 0, relation: str = "") -> int:
     """Run the metamorphic query harness."""
     if not ensure_extension_built():
         return 1
@@ -409,8 +422,14 @@ def test_metamorphic(seed: int = 1, count: int = 500, relation: str = "") -> int
     if python is None:
         print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
         return 2
-    cmd = [python, "-m", "tests.metamorphic", "--seed", str(seed or 1),
-           "--count", str(count or 500)]
+    cmd = [python, "-m", "tests.metamorphic", "--mode", mode or "random",
+           "--seed", str(seed or 1), "--count", str(count or 500)]
+    if minutes:
+        cmd += ["--minutes", str(minutes)]
+    if reps:
+        cmd += ["--reps", str(reps)]
+    if jobs:
+        cmd += ["--jobs", str(jobs)]
     if relation:
         cmd += ["--relation", relation]
     env = os.environ.copy()

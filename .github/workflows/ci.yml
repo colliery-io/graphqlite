@@ -402,7 +402,9 @@ jobs:
         run: scripts/check-tck-baseline.sh
 
       - name: Run metamorphic query tests
-        run: python -m tests.metamorphic --seed 1 --count 3000
+        run: |
+          python -m tests.metamorphic --mode cover --seed 1 --reps 1 --out build/metamorphic-cover.json
+          python -m tests.metamorphic --mode random --seed 1 --count 3000 --out build/metamorphic-results.json
 
       - name: Upload TCK results
         if: always()
@@ -413,6 +415,7 @@ jobs:
             build/tck-results.json
             build/tck-debug.log
             build/metamorphic-results.json
+            build/metamorphic-cover.json
           if-no-files-found: warn
           retention-days: 14
 
