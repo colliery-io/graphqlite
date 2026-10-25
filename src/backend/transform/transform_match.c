@@ -185,6 +185,25 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
     return id_ref_buf;
 }
 
+/* Is this node of an OPTIONAL path already in scope: a variable bound by an
+ * earlier clause (including a node carried through WITH / UNWIND, whose
+ * alias is its id column, GQLITE-T-0436), or an alias already joined? */
+static bool optional_path_node_is_bound(cypher_transform_context *ctx,
+                                        cypher_node_pattern *np, const char *alias)
+{
+    if (np->variable && transform_var_lookup(ctx->var_ctx, np->variable) &&
+        (transform_var_is_bound(ctx->var_ctx, np->variable) ||
+         transform_var_alias_is_id(ctx->var_ctx, np->variable) ||
+         transform_var_is_projected(ctx->var_ctx, np->variable)))
+        return true;
+    if (!alias) return false;
+    const char *fs = dbuf_get(&ctx->unified_builder->from);
+    const char *js = dbuf_get(&ctx->unified_builder->joins);
+    char needle[80];
+    snprintf(needle, sizeof(needle), " AS %s", alias);
+    return (fs && strstr(fs, needle)) || (js && strstr(js, needle));
+}
+
 /* " AND EXISTS (... label IN (...))" for a node written `(n:A|B)`, owned;
  * NULL when the node has no alternatives (GQLITE-T-0125). */
 static char *label_alternatives_cond(cypher_transform_context *ctx, cypher_node_pattern *node,
@@ -1231,19 +1250,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 ast_node *el = path->elements->items[j];
                 if (el->type != AST_NODE_NODE_PATTERN) continue;
                 cypher_node_pattern *np = (cypher_node_pattern *)el;
-                bool bound = false;
-                if (np->variable) {
-                    transform_var *v = transform_var_lookup(ctx->var_ctx, np->variable);
-                    if (v && transform_var_is_bound(ctx->var_ctx, np->variable)) bound = true;
-                }
-                const char *al = node_alias[j];
-                if (al && !bound) {
-                    const char *fs = dbuf_get(&ctx->unified_builder->from);
-                    const char *js = dbuf_get(&ctx->unified_builder->joins);
-                    char needle[80];
-                    snprintf(needle, sizeof(needle), " AS %s", al);
-                    if ((fs && strstr(fs, needle)) || (js && strstr(js, needle))) bound = true;
-                }
+                bool bound = optional_path_node_is_bound(ctx, np, node_alias[j]);
                 is_bound_pos[j] = bound;
                 if (!bound) {
                     unbound_count++;
@@ -1447,11 +1454,15 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             /* get_node_id_ref returns a static buffer — copy each
              * result into a local before calling again, otherwise
              * both src_id and tgt_id alias the same memory. */
+            /* Pass the variable: a node carried through WITH is its own id
+             * (`_with_0.a`, not `_with_0.a.id`; GQLITE-T-0436). */
             char src_id[256], tgt_id[256];
             snprintf(src_id, sizeof(src_id), "%s",
-                     get_node_id_ref(ctx, src_a, NULL));
+                     get_node_id_ref(ctx, src_a,
+                                     ((cypher_node_pattern *)path->elements->items[j - 1])->variable));
             snprintf(tgt_id, sizeof(tgt_id), "%s",
-                     get_node_id_ref(ctx, tgt_a, NULL));
+                     get_node_id_ref(ctx, tgt_a,
+                                     ((cypher_node_pattern *)path->elements->items[j + 1])->variable));
             if (!first_cond) dbuf_append(&ec, " AND ");
             first_cond = false;
             if (r->left_arrow && !r->right_arrow) {
@@ -1494,24 +1505,8 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             ast_node *el = path->elements->items[j];
             if (el->type != AST_NODE_NODE_PATTERN) continue;
             cypher_node_pattern *np = (cypher_node_pattern *)el;
-            /* Bound? (variable existed pre-this-MATCH) */
-            bool bound = false;
-            if (np->variable) {
-                transform_var *v = transform_var_lookup(ctx->var_ctx, np->variable);
-                if (v && transform_var_is_bound(ctx->var_ctx, np->variable)) bound = true;
-            }
-            /* Already in joins/from? */
             const char *al = node_alias[j];
-            if (al && !bound) {
-                const char *fs = dbuf_get(&ctx->unified_builder->from);
-                const char *js = dbuf_get(&ctx->unified_builder->joins);
-                char needle[80];
-                snprintf(needle, sizeof(needle), " AS %s", al);
-                if ((fs && strstr(fs, needle)) || (js && strstr(js, needle))) {
-                    bound = true;
-                }
-            }
-            if (bound) {
+            if (optional_path_node_is_bound(ctx, np, al)) {
                 combined_node_skip[j] = true;  /* Already in scope, skip path-loop emission. */
                 continue;
             }

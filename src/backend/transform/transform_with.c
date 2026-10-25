@@ -359,6 +359,23 @@ static bool with_append_tag(dynamic_buffer *col_buf, char *tag_sql, const char *
     return true;
 }
 
+/* Does the FROM or a JOIN of the builder define `alias` (" AS alias")? */
+static bool sql_builder_has_alias(sql_builder *b, const char *alias)
+{
+    if (!b || !alias) return false;
+    char needle[128];
+    snprintf(needle, sizeof(needle), " AS %s", alias);
+    size_t n = strlen(needle);
+    const char *bufs[2] = { dbuf_get(&b->from), dbuf_get(&b->joins) };
+    for (int i = 0; i < 2; i++) {
+        for (const char *p = bufs[i]; p && (p = strstr(p, needle)); p += n) {
+            char c = p[n];
+            if (!(isalnum((unsigned char)c) || c == '_')) return true;  /* whole word */
+        }
+    }
+    return false;
+}
+
 int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
 {
     CYPHER_DEBUG("Transforming WITH clause");
@@ -506,6 +523,18 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
         for (int vi = 0; vi < var_count; vi++) {
             transform_var *var = transform_var_at(ctx->var_ctx, vi);
             if (!var || !var->is_visible || !var->name) continue;
+            /* An anonymous node / relationship (internal name) whose table is
+             * not in the query: an anonymous relationship of an OPTIONAL MATCH
+             * is checked with EXISTS and has no table ("no such column:
+             * _gql_default_alias_3.id"). No later clause can name it. Others
+             * stay: a named path is rebuilt from them. */
+            if ((strncmp(var->name, "_gql_default_alias_", 19) == 0 ||
+                 strncmp(var->name, "__unnamed_rel_", 14) == 0) &&
+                !var->alias_is_id && var->table_alias &&
+                !sql_builder_has_alias(ctx->unified_builder, var->table_alias)) {
+                var->is_visible = false;   /* not carried: hide it from later clauses */
+                continue;
+            }
 
             if (added > 0) {
                 dbuf_append(&col_buf, ", ");
