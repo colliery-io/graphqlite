@@ -24,6 +24,23 @@ int cypher_yylex(CYPHER_YYSTYPE *yylval, CYPHER_YYLTYPE *yylloc, cypher_parser_c
 }
 
 %code {
+/* The pattern list of a pattern comprehension: one path of `first`
+ * followed by the relationship-node `steps` (moved, the list freed). */
+static ast_list *comp_pattern(cypher_node_pattern *first, ast_list *steps)
+{
+    ast_list *elements = ast_list_create();
+    ast_list_append(elements, (ast_node*)first);
+    for (int i = 0; steps && i < steps->count; i++)
+        ast_list_append(elements, steps->items[i]);
+    if (steps) {
+        steps->count = 0;          /* items moved: free only the list */
+        ast_list_free(steps);
+    }
+    ast_list *pattern = ast_list_create();
+    ast_list_append(pattern, (ast_node*)make_path(elements));
+    return pattern;
+}
+
 /* The source text from (line, col) to (last_line, last_col), both
  * 1-based and inclusive, trimmed. NULL when the input cannot be read. */
 static char *source_text_span(cypher_parser_context *context, int line, int col,
@@ -159,7 +176,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %type <remove> remove_clause
 %type <with_clause> with_clause
 %type <node> unwind_clause foreach_clause call_clause load_csv_clause list_literal list_comprehension pattern_comprehension map_literal map_projection map_projection_item case_expression when_clause
-%type <list> map_projection_list foreach_update_list
+%type <list> map_projection_list foreach_update_list comp_steps
 %type <list> when_clause_list on_create_clause on_match_clause
 
 %type <list> pattern_list return_item_list set_item_list delete_item_list remove_item_list
@@ -206,11 +223,14 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %left '+' '-'
 %left '*' '/' '%'
 %left '^'
-%left '.' '['
 /* Unary -/+ bind tightest among arithmetic: `-3^2` = (-3)^2 = 9
  * (Precedence2 [4]). Negation of a non-literal is materialized as 0 - expr
  * in the '-' expr production. */
 %right UNARY_MINUS UNARY_PLUS
+/* Property access and subscripts bind tighter than unary -/+: `-a.v` is
+ * -(a.v), not (-a).v, which read a key of the number 0 - a (null)
+ * (GQLITE-T-0460). */
+%left '.' '['
 
 %%
 
@@ -1852,62 +1872,47 @@ list_comprehension:
  *   [(a:Person)-[:KNOWS]->(b) WHERE b.age > 21 | b.name]
  */
 pattern_comprehension:
-    '[' '(' variable_opt label_opt properties_opt ')' rel_pattern node_pattern '|' expr ']'
+    '[' '(' variable_opt label_opt properties_opt ')' comp_steps '|' expr ']'
         {
-            cypher_node_pattern *first = make_node_pattern($3, $4, (ast_node*)$5);
-            ast_list *elements = ast_list_create();
-            ast_list_append(elements, (ast_node*)first);
-            ast_list_append(elements, (ast_node*)$7);
-            ast_list_append(elements, (ast_node*)$8);
-            cypher_path *path = make_path(elements);
-
-            ast_list *pattern = ast_list_create();
-            ast_list_append(pattern, (ast_node*)path);
-            $$ = (ast_node*)make_pattern_comprehension(pattern, NULL, $10, @1.first_line);
+            $$ = (ast_node*)make_pattern_comprehension(
+                comp_pattern(make_node_pattern($3, $4, (ast_node*)$5), $7), NULL, $9, @1.first_line);
         }
-    | '[' '(' variable_opt label_opt properties_opt ')' rel_pattern node_pattern WHERE expr '|' expr ']'
+    | '[' '(' variable_opt label_opt properties_opt ')' comp_steps WHERE expr '|' expr ']'
         {
-            cypher_node_pattern *first = make_node_pattern($3, $4, (ast_node*)$5);
-            ast_list *elements = ast_list_create();
-            ast_list_append(elements, (ast_node*)first);
-            ast_list_append(elements, (ast_node*)$7);
-            ast_list_append(elements, (ast_node*)$8);
-            cypher_path *path = make_path(elements);
-
-            ast_list *pattern = ast_list_create();
-            ast_list_append(pattern, (ast_node*)path);
-            $$ = (ast_node*)make_pattern_comprehension(pattern, $10, $12, @1.first_line);
+            $$ = (ast_node*)make_pattern_comprehension(
+                comp_pattern(make_node_pattern($3, $4, (ast_node*)$5), $7), $9, $11, @1.first_line);
         }
     /* T-0332: path-assignment form `[p = (...)-->(...) | expr]` */
-    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' rel_pattern node_pattern '|' expr ']'
+    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' comp_steps '|' expr ']'
         {
-            cypher_node_pattern *first = make_node_pattern($5, $6, (ast_node*)$7);
-            ast_list *elements = ast_list_create();
-            ast_list_append(elements, (ast_node*)first);
-            ast_list_append(elements, (ast_node*)$9);
-            ast_list_append(elements, (ast_node*)$10);
-            cypher_path *path = make_path(elements);
-
-            ast_list *pattern = ast_list_create();
-            ast_list_append(pattern, (ast_node*)path);
-            cypher_pattern_comprehension *pc = make_pattern_comprehension(pattern, NULL, $12, @1.first_line);
+            cypher_pattern_comprehension *pc = make_pattern_comprehension(
+                comp_pattern(make_node_pattern($5, $6, (ast_node*)$7), $9), NULL, $11, @1.first_line);
             pc->path_var = strdup($2);
             $$ = (ast_node*)pc;
         }
-    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' rel_pattern node_pattern WHERE expr '|' expr ']'
+    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' comp_steps WHERE expr '|' expr ']'
         {
-            cypher_node_pattern *first = make_node_pattern($5, $6, (ast_node*)$7);
-            ast_list *elements = ast_list_create();
-            ast_list_append(elements, (ast_node*)first);
-            ast_list_append(elements, (ast_node*)$9);
-            ast_list_append(elements, (ast_node*)$10);
-            cypher_path *path = make_path(elements);
-
-            ast_list *pattern = ast_list_create();
-            ast_list_append(pattern, (ast_node*)path);
-            cypher_pattern_comprehension *pc = make_pattern_comprehension(pattern, $12, $14, @1.first_line);
+            cypher_pattern_comprehension *pc = make_pattern_comprehension(
+                comp_pattern(make_node_pattern($5, $6, (ast_node*)$7), $9), $11, $13, @1.first_line);
             pc->path_var = strdup($2);
             $$ = (ast_node*)pc;
+        }
+    ;
+
+/* The relationship-node steps of a pattern comprehension, one or more
+ * (GQLITE-T-0460: two hops were a syntax error). */
+comp_steps:
+    rel_pattern node_pattern
+        {
+            $$ = ast_list_create();
+            ast_list_append($$, (ast_node*)$1);
+            ast_list_append($$, (ast_node*)$2);
+        }
+    | comp_steps rel_pattern node_pattern
+        {
+            $$ = $1;
+            ast_list_append($$, (ast_node*)$2);
+            ast_list_append($$, (ast_node*)$3);
         }
     ;
 

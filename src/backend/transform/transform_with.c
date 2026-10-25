@@ -640,7 +640,11 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
             } else {
                 dbuf_append(&col_buf, id->name);
             }
-        } else if (item->expr->type == AST_NODE_PROPERTY) {
+        } else if (item->expr->type == AST_NODE_PROPERTY &&
+                   ((cypher_property*)item->expr)->expr->type == AST_NODE_IDENTIFIER) {
+            /* A property of a variable. Any other base (`{x: 1}.x`,
+             * `startNode(r).k`) takes the general expression path below; it
+             * was dropped here, leaving an empty column (GQLITE-T-0451). */
             cypher_property *prop = (cypher_property*)item->expr;
             if (prop->expr->type == AST_NODE_IDENTIFIER) {
                 cypher_identifier *id = (cypher_identifier*)prop->expr;

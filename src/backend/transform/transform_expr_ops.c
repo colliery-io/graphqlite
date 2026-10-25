@@ -1138,9 +1138,8 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
             append_sql(ctx, "))");
             return 0;
         }
-        ctx->has_error = true;
-        ctx->error_message = strdup("Property access on function call not supported for this function");
-        return -1;
+        /* Any other function (properties(n).k, a map-valued call): read the
+         * key from its value, as for a map base below (GQLITE-T-0460). */
     }
 
     /* Any other base (a map literal, CASE, a parameter...): read the key
