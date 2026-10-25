@@ -420,6 +420,57 @@ jobs:
           retention-days: 14
 
   # =============================================================================
+  # Newest SQLite (GQLITE-T-0453)
+  # SQLite 3.54.1 drops value subtypes at a scalar subquery, which broke
+  # booleans and lists on runners that update SQLite first. Builds a pinned
+  # recent SQLite from the amalgamation and runs the functional tests (its
+  # shell) and the TCK (Python loading its library). Raise the pin when a
+  # new SQLite is released.
+  # =============================================================================
+
+  sqlite-latest:
+    needs: [build-and-test]
+    runs-on: ubuntu-latest
+    env:
+      SQLITE_YEAR: "2026"
+      SQLITE_VER: "3540100"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build SQLite from the amalgamation
+        run: |
+          mkdir -p /tmp/sqlite && cd /tmp/sqlite
+          curl -sSfL -o a.zip "https://sqlite.org/${SQLITE_YEAR}/sqlite-amalgamation-${SQLITE_VER}.zip"
+          unzip -q a.zip && cd "sqlite-amalgamation-${SQLITE_VER}"
+          FLAGS="-O2 -DSQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_ENABLE_MATH_FUNCTIONS -DSQLITE_ENABLE_COLUMN_METADATA"
+          gcc $FLAGS -o /tmp/sqlite/sqlite3 shell.c sqlite3.c -lm -ldl -lpthread
+          gcc $FLAGS -shared -fPIC -Wl,-soname,libsqlite3.so.0 -o /tmp/sqlite/libsqlite3.so.0 sqlite3.c -lm -ldl -lpthread
+          /tmp/sqlite/sqlite3 --version
+
+      - name: Build extension
+        run: make extension
+
+      - name: Functional tests on the newest SQLite
+        run: make test-functional SQLITE=/tmp/sqlite/sqlite3
+
+      - name: TCK on the newest SQLite
+        run: |
+          export LD_LIBRARY_PATH=/tmp/sqlite
+          python -c "import sqlite3, sys; print(sqlite3.sqlite_version); sys.exit(sqlite3.sqlite_version_info < (3, 54, 1))"
+          python -m tests.tck --backend extension --out build/tck-results-sqlite-latest.json
+          scripts/check-tck-baseline.sh build/tck-results-sqlite-latest.json
+
+  # =============================================================================
   # Semantic Coverage Matrix - PR discipline (GQLITE-T-0204)
   # Fails when a PR touches src/backend/transform/ or src/backend/executor/
   # without updating tests/functional/*.sql or the matrix doc. Override by

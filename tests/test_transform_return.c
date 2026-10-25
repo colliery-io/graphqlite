@@ -845,8 +845,10 @@ static void test_return_node_object(void)
     char *sql = transform_to_sql("MATCH (n:Test) RETURN n");
     CU_ASSERT_PTR_NOT_NULL(sql);
     if (sql) {
-        /* Should generate node rendering SQL */
-        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "json_object"));
+        /* Node rendering SQL: entity JSON text tagged as JSON outside any
+         * subquery (GQLITE-A-0007, GQLITE-T-0453) */
+        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "_gql_retag('{\"id\":'"));
+        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "\"labels\":"));
         free(sql);
     }
 }
@@ -857,8 +859,9 @@ static void test_return_edge_object(void)
     char *sql = transform_to_sql("MATCH ()-[r:KNOWS]->() RETURN r");
     CU_ASSERT_PTR_NOT_NULL(sql);
     if (sql) {
-        /* Should generate edge rendering SQL */
-        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "json_object"));
+        /* Edge rendering SQL, tagged as JSON outside any subquery */
+        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "_gql_retag('{\"id\":'"));
+        CU_ASSERT_PTR_NOT_NULL(strstr(sql, "\"startNode\":"));
         free(sql);
     }
 }

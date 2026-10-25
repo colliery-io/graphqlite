@@ -997,11 +997,16 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
 /* Perf review F6: one typed-table lookup branch of a property access.
  * With a resolved key id the branch is a single (id, key_id) primary-key
  * probe; otherwise it keeps the property_keys name join. */
-static void append_prop_branch(cypher_transform_context *ctx, const char *gprefix,
-                               const char *table, const char *ab, const char *id_col,
-                               const char *id_expr, const char *value_expr,
-                               const char *key, int key_id)
+/* One branch of a property read: `(SELECT value_expr FROM table ...)`.
+ * `wrap` (json, _gql_bool_str) is applied around the subquery, not inside:
+ * from SQLite 3.54.1 a subtype does not cross a scalar subquery
+ * (GQLITE-A-0007, GQLITE-T-0453). */
+static void append_prop_branch_w(cypher_transform_context *ctx, const char *gprefix,
+                                 const char *table, const char *ab, const char *id_col,
+                                 const char *id_expr, const char *value_expr, const char *wrap,
+                                 const char *key, int key_id)
 {
+    if (wrap) append_sql(ctx, "%s(", wrap);
     if (key_id >= 0) {
         append_sql(ctx, "(SELECT %s FROM %s%s %s WHERE %s.%s = %s AND %s.key_id = %d)",
                    value_expr, gprefix, table, ab, ab, id_col, id_expr, ab, key_id);
@@ -1011,6 +1016,15 @@ static void append_prop_branch(cypher_transform_context *ctx, const char *gprefi
         append_string_literal(ctx, key);
         append_sql(ctx, ")");
     }
+    if (wrap) append_sql(ctx, ")");
+}
+
+static void append_prop_branch(cypher_transform_context *ctx, const char *gprefix,
+                               const char *table, const char *ab, const char *id_col,
+                               const char *id_expr, const char *value_expr,
+                               const char *key, int key_id)
+{
+    append_prop_branch_w(ctx, gprefix, table, ab, id_col, id_expr, value_expr, NULL, key, key_id);
 }
 
 char *transform_property_tag_sql(cypher_transform_context *ctx, cypher_property *prop)
@@ -1101,10 +1115,12 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
             int fkey_id = cypher_transform_property_key_id(ctx, "", prop->property_name);
             static const char *ftbls[5] = {"node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json"};
             static const char *fabs[5]  = {"npt", "npi", "npr", "npb", "npj"};
-            static const char *fvals[5] = {"npt.value", "npi.value", "npr.value", "_gql_bool_str(npb.value)", "npj.value"};
-            append_sql(ctx, "(SELECT COALESCE(");
+            static const char *fvals[5] = {"npt.value", "npi.value", "npr.value", "npb.value", "npj.value"};
+            static const char *fwrap[5] = {NULL, NULL, NULL, "_gql_bool_str", "json"};
+            append_sql(ctx, "(COALESCE(");
             for (int fi = 0; fi < 5; fi++) {
                 if (fi > 0) append_sql(ctx, ", ");
+                if (fwrap[fi]) append_sql(ctx, "%s(", fwrap[fi]);
                 if (fkey_id >= 0) {
                     append_sql(ctx, "(SELECT %s FROM %s %s WHERE %s.node_id = ", fvals[fi], ftbls[fi], fabs[fi], fabs[fi]);
                     if (transform_endpoint_node_id(ctx, func) < 0) return -1;
@@ -1117,6 +1133,7 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
                     append_string_literal(ctx, prop->property_name);
                     append_sql(ctx, ")");
                 }
+                if (fwrap[fi]) append_sql(ctx, ")");
             }
             append_sql(ctx, "))");
             return 0;
@@ -1234,9 +1251,11 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         return 0;
     }
 
-    append_sql(ctx, "(SELECT COALESCE(");
+    /* COALESCE keeps subtypes; a scalar subquery around it would not. */
+    append_sql(ctx, "(COALESCE(");
     if (is_edge) {
-        const char *bool_expr = ctx->in_comparison ? "CAST(epb.value AS INTEGER)" : "_gql_bool_str(epb.value)";
+        const char *bool_expr = ctx->in_comparison ? "CAST(epb.value AS INTEGER)" : "epb.value";
+        const char *bool_wrap = ctx->in_comparison ? NULL : "_gql_bool_str";
         /* GQLITE-T-0386: typed values, as for nodes. A CAST to TEXT made
          * r.w + 1 concatenate (11) and [r.w] a list of strings. */
         const char *int_expr  = "epi.value";
@@ -1247,24 +1266,25 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "edge_props_real", "epr", "edge_id", id_expr, real_expr, key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "edge_props_bool", "epb", "edge_id", id_expr, bool_expr, key, key_id);
+        append_prop_branch_w(ctx, gprefix, "edge_props_bool", "epb", "edge_id", id_expr, bool_expr, bool_wrap, key, key_id);
         append_sql(ctx, ", ");
         /* json() tags a list value with the JSON subtype, so the result
          * reader can tell it from text that looks like JSON (GQLITE-T-0394). */
-        append_prop_branch(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr,
-                           ctx->in_comparison ? "epj.value" : "json(epj.value)", key, key_id);
+        append_prop_branch_w(ctx, gprefix, "edge_props_json", "epj", "edge_id", id_expr,
+                             "epj.value", ctx->in_comparison ? NULL : "json", key, key_id);
     } else {
-        const char *bool_expr = ctx->in_comparison ? "CAST(npb.value AS INTEGER)" : "_gql_bool_str(npb.value)";
+        const char *bool_expr = ctx->in_comparison ? "CAST(npb.value AS INTEGER)" : "npb.value";
+        const char *bool_wrap = ctx->in_comparison ? NULL : "_gql_bool_str";
         append_prop_branch(ctx, gprefix, "node_props_text", "npt", "node_id", id_expr, "npt.value", key, key_id);
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "node_props_int", "npi", "node_id", id_expr, "npi.value", key, key_id);
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, "node_props_real", "npr", "node_id", id_expr, "npr.value", key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "node_props_bool", "npb", "node_id", id_expr, bool_expr, key, key_id);
+        append_prop_branch_w(ctx, gprefix, "node_props_bool", "npb", "node_id", id_expr, bool_expr, bool_wrap, key, key_id);
         append_sql(ctx, ", ");
-        append_prop_branch(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr,
-                           ctx->in_comparison ? "npj.value" : "json(npj.value)", key, key_id);
+        append_prop_branch_w(ctx, gprefix, "node_props_json", "npj", "node_id", id_expr,
+                             "npj.value", ctx->in_comparison ? NULL : "json", key, key_id);
     }
     append_sql(ctx, "))");
 

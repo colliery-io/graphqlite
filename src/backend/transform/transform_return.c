@@ -1483,9 +1483,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                     if (!ej) return -1;
                                     append_sql(ctx,
                                       "(CASE WHEN %s.elem_ids IS NULL THEN NULL ELSE "
-                                      "(SELECT json_group_array(%s ORDER BY je.key) "
+                                      "json((SELECT json_group_array(%s ORDER BY je.key) "
                                       "FROM json_each('[' || %s.elem_ids || ']') je "
-                                      "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1) END)",
+                                      "JOIN edges e ON e.id = je.value WHERE (je.key %% 2) = 1)) END)",
                                       alias, ej, alias);
                                     free(ej);
                                 }
@@ -1607,7 +1607,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     if (!has_start && !has_end) append_sql(ctx, "0");
                     append_sql(ctx, " THEN NULL ELSE ");
 
-                    append_sql(ctx, "(SELECT json_group_array(" JSON_EACH_ELEMENT ") FROM json_each(");
+                    /* json() outside the subquery keeps the list subtype
+                     * (SQLite 3.54.1, GQLITE-A-0007). */
+                    append_sql(ctx, "json((SELECT json_group_array(" JSON_EACH_ELEMENT ") FROM json_each(");
                     if (transform_expression(ctx, subscript->expr) < 0) return -1;
                     append_sql(ctx, ")");
                     if (has_start || has_end) {
@@ -1636,7 +1638,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             append_sql(ctx, ") END)");
                         }
                     }
-                    append_sql(ctx, ") END)");
+                    append_sql(ctx, ")) END)");
                     break;
                 }
 
@@ -2028,8 +2030,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     "(CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' "
                     "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END)");
 
-                /* Build the subquery */
-                append_sql(ctx, "(SELECT json_group_array(");
+                /* Build the subquery; json() outside it keeps the list
+                 * subtype (SQLite 3.54.1, GQLITE-A-0007). */
+                append_sql(ctx, "json((SELECT json_group_array(");
 
                 /* The result expression - either the transform or the element itself */
                 if (comp->transform_expr &&
@@ -2070,7 +2073,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     }
                 }
 
-                append_sql(ctx, ")");
+                append_sql(ctx, "))");
 
                 /* Restore the old alias if there was one, otherwise remove the variable */
                 transform_var_set_tag(ctx->var_ctx, comp_var, saved_tag);
@@ -2135,8 +2138,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 bool node_is_outer[10];
                 int node_count = 0;
 
-                /* First pass: collect nodes and generate FROM clause */
-                append_sql(ctx, "(SELECT json_group_array(");
+                /* First pass: collect nodes and generate FROM clause.
+                 * json() outside the subquery keeps the list subtype. */
+                append_sql(ctx, "json((SELECT json_group_array(");
 
                 /* We'll add the collect expression after setting up variables */
                 size_t collect_expr_pos = ctx->sql_size;
@@ -2361,7 +2365,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     append_sql(ctx, ")");
                 }
 
-                append_sql(ctx, ")");
+                append_sql(ctx, "))");
 
                 /* Now we need to go back and fill in the collect expression */
                 /* Create a new buffer for the collect expression */
