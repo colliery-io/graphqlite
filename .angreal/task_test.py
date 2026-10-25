@@ -359,6 +359,65 @@ def test_tck(backend: str = "extension", filter: str = "", limit: int = 0,
     return result.returncode
 
 
+@test()
+@angreal.command(
+    name="metamorphic",
+    about="Run metamorphic query tests (generated queries, equivalent rewrites)",
+    tool=angreal.ToolDescription(
+        """
+Run the metamorphic query harness (tests/metamorphic, GQLITE-T-0448).
+
+Each case is a random small graph and query variants that must give the
+same result: a pass-through WITH *, renamed variables, an alias that
+reuses a variable name, collect(DISTINCT) against WITH DISTINCT, :A|B
+against OR, OPTIONAL MATCH filtered against MATCH, a write expression
+inline against computed in a WITH. A variant that errors, or results that
+differ, is a failure. Failures of open bugs are listed in
+tests/metamorphic/known.json with their Kairos task and do not fail the run.
+
+## When to use
+- After a change to the transform or executor
+- To look for new wrong-result bugs: raise --count or change --seed
+
+## Examples
+```
+angreal test metamorphic
+angreal test metamorphic --seed 1000 --count 20000
+angreal test metamorphic --relation optional
+```
+
+## Output
+- Stdout: known and new failure signatures; each new one with its seed, a
+  shrunk graph and the query variants with their results.
+- `build/metamorphic-results.json`
+
+## Exit code
+1 when there is a new (not known) failure signature, else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="seed", long="seed", python_type="int", help="First seed (default 1)")
+@angreal.argument(name="count", long="count", python_type="int", help="Number of cases (default 500)")
+@angreal.argument(name="relation", long="relation", help="Only relations whose name contains this")
+def test_metamorphic(seed: int = 1, count: int = 500, relation: str = "") -> int:
+    """Run the metamorphic query harness."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    cmd = [python, "-m", "tests.metamorphic", "--seed", str(seed or 1),
+           "--count", str(count or 500)]
+    if relation:
+        cmd += ["--relation", relation]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
 def _pick_python_with_extension_support(verbose: bool = False) -> str | None:
     """Return path to a python3 whose sqlite3 supports load_extension, else None."""
     import shutil
