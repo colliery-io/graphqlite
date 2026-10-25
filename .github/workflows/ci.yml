@@ -401,6 +401,9 @@ jobs:
       - name: Compare against baseline
         run: scripts/check-tck-baseline.sh
 
+      - name: Run metamorphic query tests
+        run: python -m tests.metamorphic --seed 1 --count 3000
+
       - name: Upload TCK results
         if: always()
         uses: actions/upload-artifact@v4
@@ -409,6 +412,7 @@ jobs:
           path: |
             build/tck-results.json
             build/tck-debug.log
+            build/metamorphic-results.json
           if-no-files-found: warn
           retention-days: 14
 
