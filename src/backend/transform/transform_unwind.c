@@ -432,7 +432,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
 
         /* Transform the function call expression */
         if (transform_expression(ctx, unwind->expr) < 0) {
-            free(temp_buffer);
+            free(ctx->sql_buffer);      /* may have been realloc'd */
             ctx->sql_buffer = saved_buffer;
             ctx->sql_size = saved_size;
             ctx->sql_capacity = saved_capacity;
@@ -444,8 +444,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         /* Capture the transformed function SQL */
         char *func_sql = strdup(ctx->sql_buffer);
 
-        /* Restore original buffer */
-        free(temp_buffer);
+        /* Restore original buffer. append_sql may realloc; free what
+         * ctx->sql_buffer now points to, not the original temp_buffer. */
+        free(ctx->sql_buffer);
         ctx->sql_buffer = saved_buffer;
         ctx->sql_size = saved_size;
         ctx->sql_capacity = saved_capacity;
