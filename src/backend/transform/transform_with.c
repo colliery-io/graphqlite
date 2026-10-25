@@ -319,8 +319,9 @@ static char *transform_expression_to_string(cypher_transform_context *ctx, ast_n
         output = strdup(ctx->sql_buffer);
     }
 
-    /* Restore original buffer */
-    free(temp_buffer);
+    /* Restore original buffer. append_sql may realloc; free what
+     * ctx->sql_buffer now points to, not the original temp_buffer. */
+    free(ctx->sql_buffer);
     ctx->sql_buffer = saved_buffer;
     ctx->sql_size = saved_size;
     ctx->sql_capacity = saved_capacity;
