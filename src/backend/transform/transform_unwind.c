@@ -33,6 +33,30 @@ extern char *serialize_ast_to_json(ast_node *expr);
  * WITH _unwind_0 AS (SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3)
  * SELECT _unwind_0.value AS x FROM _unwind_0
  */
+/* The top-level " WHERE " of a SELECT: outside parentheses and quotes.
+ * The FROM can hold subqueries with their own WHERE (an OPTIONAL MATCH
+ * with an anonymous relationship joins ON EXISTS (SELECT ... WHERE ...)),
+ * so strstr finds the wrong one (GQLITE-T-0457). */
+static const char *top_level_where(const char *sql)
+{
+    int depth = 0;
+    char quote = 0;
+    for (const char *p = sql; *p; p++) {
+        if (quote) {
+            if (*p == quote) quote = 0;
+        } else if (*p == '\'' || *p == '"') {
+            quote = *p;
+        } else if (*p == '(') {
+            depth++;
+        } else if (*p == ')') {
+            if (depth > 0) depth--;
+        } else if (depth == 0 && strncmp(p, " WHERE ", 7) == 0) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind)
 {
     CYPHER_DEBUG("Transforming UNWIND clause");
@@ -205,13 +229,38 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         }
     }
 
-    /* UNWIND null AS x → zero rows (openCypher spec). Emit an empty
-     * CTE; the common tail below handles var registration and FROM. */
-    if (unwind->expr->type == AST_NODE_LITERAL &&
-        ((cypher_literal *)unwind->expr)->literal_type == LITERAL_NULL) {
+    /* UNWIND null / UNWIND [] → zero rows (openCypher spec). The CTE still
+     * carries the prior variables, as a non-empty list does, so later
+     * clauses can name them (GQLITE-T-0457): splice the prior FROM tables
+     * when it is a plain SELECT, else source the carried columns from
+     * _prev. A false condition keeps it empty. */
+    bool no_rows =
+        (unwind->expr->type == AST_NODE_LITERAL &&
+         ((cypher_literal *)unwind->expr)->literal_type == LITERAL_NULL) ||
+        (unwind->expr->type == AST_NODE_LIST &&
+         (!((cypher_list *)unwind->expr)->items ||
+          ((cypher_list *)unwind->expr)->items->count == 0));
+    if (no_rows) {
+        bool splicable = (inner_sql && strlen(inner_sql) > 0 &&
+                          strncmp(inner_sql, "SELECT * FROM ", 14) == 0);
         dbuf_append(&cte_query, "SELECT NULL AS value, NULL AS " UNWIND_TAG_COL);
-        if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
-        dbuf_append(&cte_query, " WHERE 0");
+        if (splicable) {
+            const char *where = top_level_where(inner_sql);
+            used_splice = true;
+            if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols_orig));
+            dbuf_append(&cte_query, " FROM ");
+            if (where) {
+                dbuf_appendf(&cte_query, "%.*s", (int)(where - (inner_sql + 14)), inner_sql + 14);
+                dbuf_appendf(&cte_query, " WHERE 0 AND (%s)", where + 7);
+            } else {
+                dbuf_appendf(&cte_query, "%s WHERE 0", inner_sql + 14);
+            }
+        } else if (has_carry) {
+            dbuf_append(&cte_query, dbuf_get(&carry_cols));
+            dbuf_appendf(&cte_query, " FROM (%s) AS _prev WHERE 0", inner_sql);
+        } else {
+            dbuf_append(&cte_query, " WHERE 0");
+        }
     } else if (unwind->expr->type == AST_NODE_LIST) {
         /* List literal: use UNION ALL approach */
         cypher_list *list = (cypher_list*)unwind->expr;
@@ -223,14 +272,9 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
          * scope). Mirrors the function-call branch's splice handling. */
         bool list_splicable = (inner_sql && strlen(inner_sql) > 0 &&
                                strncmp(inner_sql, "SELECT * FROM ", 14) == 0);
-        const char *list_where = list_splicable ? strstr(inner_sql, " WHERE ") : NULL;
+        const char *list_where = list_splicable ? top_level_where(inner_sql) : NULL;
 
-        if (!list->items || list->items->count == 0) {
-            /* Empty list: return no rows using impossible condition */
-            dbuf_append(&cte_query, "SELECT NULL AS value, NULL AS " UNWIND_TAG_COL);
-            if (has_carry) dbuf_append(&cte_query, dbuf_get(&carry_cols));
-            dbuf_append(&cte_query, " WHERE 0");
-        } else {
+        {   /* the empty list is handled above (no_rows) */
             for (int i = 0; i < list->items->count; i++) {
                 if (i > 0) {
                     dbuf_append(&cte_query, " UNION ALL ");
@@ -465,7 +509,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
          * misplaces the comma. */
         const char *where_in_inner = NULL;
         if (splicable) {
-            where_in_inner = strstr(inner_sql, " WHERE ");
+            where_in_inner = top_level_where(inner_sql);
         }
         dbuf_append(&cte_query, "SELECT json_each.value AS value" UNWIND_JSON_EACH_TAG);
         if (splicable) used_splice = true;
