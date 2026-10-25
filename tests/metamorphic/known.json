@@ -1,7 +1,6 @@
 [
   {"relation": ".", "kind": "error", "error": "function argument must be a relationship variable", "task": "GQLITE-T-0468"},
   {"relation": ".", "kind": "error", "error": "write pipeline: SyntaxError: UndefinedVariable", "task": "GQLITE-T-0461"},
-  {"relation": ".", "kind": "error", "error": "no such column: _(with|unwind)_\\d+\\.\\w+\\.id", "task": "GQLITE-T-0450"},
   {"relation": ".", "kind": "error", "error": "no such column: _prev\\.|no such column: json_each\\.value|UndefinedVariable: (property access: |label expression: |aggregation: |\\w+\\(\\) function: )?`", "task": "GQLITE-T-0457"},
   {"relation": ".", "kind": "error", "error": "near \"\\.\": syntax error", "task": "GQLITE-T-0436"},
   {"relation": ".", "kind": "error", "error": "no such column: _gql_default_alias_\\d+", "task": "GQLITE-T-0436"},

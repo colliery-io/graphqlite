@@ -167,8 +167,10 @@ int transform_aggregate_with_property(cypher_transform_context *ctx,
         return -1;
     }
 
-    /* Check if this is a projected variable from WITH */
-    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name);
+    /* The alias is the id itself for a projected variable, or for a node
+     * carried through WITH / UNWIND (GQLITE-T-0450). */
+    bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name) ||
+                        transform_var_alias_is_id(ctx->var_ctx, id->name);
     const char *node_id_ref = is_projected ? alias : NULL;
     char node_id_buf[256];
     if (!is_projected) {
