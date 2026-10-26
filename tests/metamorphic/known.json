@@ -6,7 +6,6 @@
   {"relation": ".", "kind": "error", "error": "SET value must be|SET value property access|Failed to evaluate function '[^']*' in SET", "task": "GQLITE-T-0456"},
   {"relation": "^keyword_name/", "kind": "error", "error": "unexpected [A-Z]+", "task": "GQLITE-T-0440"},
   {"relation": "^alias_shadow$", "task": "GQLITE-T-0434"},
-  {"relation": "^distinct_agg$", "kind": "mismatch", "task": "GQLITE-T-0435"},
   {"relation": "^tlp_count$", "kind": "mismatch", "task": "GQLITE-T-0455"},
   {"relation": ".", "kind": "mismatch", "query": ":(A\\|B|B\\|C)\\) \\|", "task": "GQLITE-T-0439"},
   {"relation": "^label_disjunction/(predicate|comprehension)$", "kind": "mismatch", "task": "GQLITE-T-0439"},
