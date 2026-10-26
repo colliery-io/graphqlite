@@ -5,7 +5,6 @@
   {"relation": ".", "kind": "error", "error": "ORDER BY clause should come after UNION|SELECT \\* pattern should not occur|ORDER BY term does not match any column", "task": "GQLITE-T-0458"},
   {"relation": ".", "kind": "error", "error": "SET value must be|SET value property access|Failed to evaluate function '[^']*' in SET", "task": "GQLITE-T-0456"},
   {"relation": "^keyword_name/", "kind": "error", "error": "unexpected [A-Z]+", "task": "GQLITE-T-0440"},
-  {"relation": "^alias_shadow$", "task": "GQLITE-T-0434"},
   {"relation": "^tlp_count$", "kind": "mismatch", "task": "GQLITE-T-0455"},
   {"relation": ".", "kind": "mismatch", "query": ":(A\\|B|B\\|C)\\) \\|", "task": "GQLITE-T-0439"},
   {"relation": "^label_disjunction/(predicate|comprehension)$", "kind": "mismatch", "task": "GQLITE-T-0439"},
