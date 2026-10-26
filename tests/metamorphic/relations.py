@@ -546,7 +546,7 @@ def merge_idempotent(ch: Chooser) -> Case:
     if shape == "create":
         pre, nodes, scope = "UNWIND [1, 2, 2] AS ⟨i⟩", [], ["i"]
     e = write_expr(ch, nodes, "i" in scope)
-    q = render(f"{pre} WITH * WHERE {e} IS NOT NULL MERGE (:New {{k: {e}}})")
+    q = render(f"{pre} WITH * WHERE ({e}) IS NOT NULL MERGE (:New {{k: {e}}})")
     return Case(f"merge_idempotent/{ch.used['w.kind']}", [
         Variant("once", q, mode="write"),
         Variant("twice", q, mode="write", repeat=2),
