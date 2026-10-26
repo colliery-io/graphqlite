@@ -563,6 +563,35 @@ static char *transform_expression_to_string(cypher_transform_context *ctx, ast_n
 }
 
 /* Transform a RETURN clause */
+/* Implicit GROUP BY: when RETURN mixes aggregating and non-aggregating
+ * items, the non-aggregating expressions become grouping keys (Cypher 9
+ * spec). Aggregates may be nested inside map/list/binary-op expressions
+ * (e.g. `{kids: collect(x)}` or `collect(x) + [1]`), hence the recursive
+ * walker: the grouped-empty case `MATCH ... RETURN n.name, {kids:
+ * collect(x)}` returns 0 rows on empty input instead of 1. (Return6
+ * [6]/[18]/[19], With6 [6]/[7].) Call it before the RETURN aliases are
+ * registered, so the keys see the original bindings. */
+static void return_implicit_group_by(cypher_transform_context *ctx, cypher_return *ret)
+{
+    if (!ret->items || ret->items->count == 0) return;
+    bool has_agg = false, has_non_agg = false;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+        bool is_agg = it && it->expr && ast_contains_aggregate_func(it->expr);
+        if (is_agg) has_agg = true; else has_non_agg = true;
+    }
+    if (!has_agg || !has_non_agg) return;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
+        if (it && it->expr && ast_contains_aggregate_func(it->expr)) continue;
+        char *gb_expr = transform_expression_to_string(ctx, it->expr);
+        if (gb_expr) {
+            sql_group_by(ctx->unified_builder, gb_expr);
+            free(gb_expr);
+        }
+    }
+}
+
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
 {
     CYPHER_DEBUG("Transforming RETURN clause");
@@ -661,6 +690,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             goto return_star_done;
         }
 
+        bool group_by_done = false;
         /* Defer registration of explicit aliases until after all items are
          * transformed so an alias name like `RETURN n.num AS n, count(n)`
          * doesn't shadow the original binding of `n` mid-projection. */
@@ -815,47 +845,19 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             }
         }
         return_append_tags(ctx, item_tags, ret->items->count);
+        /* The grouping keys are translated before the aliases are
+         * registered: `RETURN d.id AS d, count(r)` grouped by the output
+         * column d, and `RETURN a.id % 2 AS k, count(a) AS a` by COUNT
+         * ("misuse of aggregate") (GQLITE-T-0434, #151). */
+        return_implicit_group_by(ctx, ret);
+        group_by_done = true;
         for (int i = 0; i < deferred_count; i++) {
             { char rb[256]; transform_var_register_projected(ctx->var_ctx, deferred_aliases[i], sql_ident(rb, sizeof(rb), deferred_aliases[i])); }
         }
         free(deferred_aliases);
 
 return_star_done:
-        /* Implicit GROUP BY: when RETURN mixes aggregating and
-         * non-aggregating items, the non-aggregating expressions
-         * become grouping keys (Cypher 9 spec). Detect by walking
-         * items: count names like count/sum/avg/min/max/collect/
-         * stdev/stdevp/percentilecont/percentiledisc as aggregating;
-         * emit GROUP BY for the non-aggregating ones.
-         *
-         * Aggregates may be nested inside map/list/binary-op
-         * expressions (e.g. `{kids: collect(x)}` or
-         * `collect(x) + [1]`). Recursive walker required so the
-         * grouped-empty case `MATCH ... RETURN n.name, {kids:
-         * collect(x)}` returns 0 rows on empty input instead of 1.
-         * (Return6 [6]/[18]/[19], With6 [6]/[7].) */
-        if (ret->items && ret->items->count > 0) {
-            bool has_agg = false;
-            bool has_non_agg = false;
-            for (int i = 0; i < ret->items->count; i++) {
-                cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
-                bool is_agg = it && it->expr && ast_contains_aggregate_func(it->expr);
-                if (is_agg) has_agg = true; else has_non_agg = true;
-            }
-            if (has_agg && has_non_agg) {
-                for (int i = 0; i < ret->items->count; i++) {
-                    cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
-                    bool is_agg = it && it->expr && ast_contains_aggregate_func(it->expr);
-                    if (!is_agg) {
-                        char *gb_expr = transform_expression_to_string(ctx, it->expr);
-                        if (gb_expr) {
-                            sql_group_by(ctx->unified_builder, gb_expr);
-                            free(gb_expr);
-                        }
-                    }
-                }
-            }
-        }
+        if (!group_by_done) return_implicit_group_by(ctx, ret);
 
         /* Add ORDER BY */
         if (ret->order_by && ret->order_by->count > 0) {
