@@ -3017,47 +3017,46 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                     bound_endpoint_col = "source_id";
                     deferred_endpoint_col = "target_id";
                 }
-                /* Build the EXISTS subquery condition. */
+                /* The deferred node's id among the far ends of the bound
+                 * node's edges: `c.id IN (SELECT target_id FROM edges WHERE
+                 * source_id = <bound> ...)`. Same rows as the former
+                 * EXISTS (SELECT 1 FROM edges WHERE source_id = <bound> AND
+                 * target_id = c.id), but SQLite drives it from the edge
+                 * index and probes c by id, instead of testing every node
+                 * for every outer row (GQLITE-T-0437, #154). */
+                dynamic_buffer type_cond; dbuf_init(&type_cond);
+                if (rel->type) {
+                    char *esc = escape_sql_string(rel->type);
+                    dbuf_appendf(&type_cond, " AND _e.type = '%s'", esc ? esc : rel->type);
+                    free(esc);
+                } else if (rel->types && rel->types->count > 0) {
+                    dbuf_append(&type_cond, " AND _e.type IN (");
+                    for (int t = 0; t < rel->types->count; t++) {
+                        if (t > 0) dbuf_append(&type_cond, ", ");
+                        cypher_literal *tl = (cypher_literal*)rel->types->items[t];
+                        char *esc = escape_sql_string(tl->value.string);
+                        dbuf_appendf(&type_cond, "'%s'", esc ? esc : tl->value.string);
+                        free(esc);
+                    }
+                    dbuf_append(&type_cond, ")");
+                }
+                const char *type_sql = dbuf_is_empty(&type_cond) ? "" : dbuf_get(&type_cond);
                 dynamic_buffer on_cond; dbuf_init(&on_cond);
                 const char *graph_p = ctx->current_graph ? ctx->current_graph : "";
                 dbuf_appendf(&on_cond,
-                    "EXISTS (SELECT 1 FROM %sedges _e WHERE _e.%s = %s AND _e.%s = %s.id",
-                    graph_p, bound_endpoint_col, bound_id_ref,
-                    deferred_endpoint_col, deferred_alias);
-                /* Type filter on the rel. */
-                if (rel->type) {
-                    char *esc = escape_sql_string(rel->type);
-                    dbuf_appendf(&on_cond, " AND _e.type = '%s'",
-                                 esc ? esc : rel->type);
-                    free(esc);
-                } else if (rel->types && rel->types->count > 0) {
-                    dbuf_append(&on_cond, " AND _e.type IN (");
-                    for (int t = 0; t < rel->types->count; t++) {
-                        if (t > 0) dbuf_append(&on_cond, ", ");
-                        cypher_literal *tl = (cypher_literal*)rel->types->items[t];
-                        char *esc = escape_sql_string(tl->value.string);
-                        dbuf_appendf(&on_cond, "'%s'", esc ? esc : tl->value.string);
-                        free(esc);
-                    }
-                    dbuf_append(&on_cond, ")");
-                }
-                /* Honor direction. For undirected (no arrows), use OR of both directions. */
+                    "%s.id IN (SELECT _e.%s FROM %sedges _e WHERE _e.%s = %s%s",
+                    deferred_alias, deferred_endpoint_col, graph_p,
+                    bound_endpoint_col, bound_id_ref, type_sql);
                 if (!rel->left_arrow && !rel->right_arrow) {
-                    /* Undirected: also allow swapped endpoints. */
+                    /* Undirected: the edges the other way round too (with the
+                     * same type filter; a type list was dropped here). */
                     dbuf_appendf(&on_cond,
-                        " OR (_e.%s = %s AND _e.%s = %s.id",
-                        deferred_endpoint_col, bound_id_ref,
-                        bound_endpoint_col, deferred_alias);
-                    if (rel->type) {
-                        char *esc = escape_sql_string(rel->type);
-                        dbuf_appendf(&on_cond, " AND _e.type = '%s'",
-                                     esc ? esc : rel->type);
-                        free(esc);
-                    }
-                    dbuf_append(&on_cond, "))");
-                } else {
-                    dbuf_append(&on_cond, ")");
+                        " UNION ALL SELECT _e.%s FROM %sedges _e WHERE _e.%s = %s%s",
+                        bound_endpoint_col, graph_p,
+                        deferred_endpoint_col, bound_id_ref, type_sql);
                 }
+                dbuf_append(&on_cond, ")");
+                dbuf_free(&type_cond);
                 /* Label filter on the deferred node. */
                 { char idx[160]; snprintf(idx, sizeof(idx), "%s.id", deferred_alias);
                   char *alt = label_alternatives_cond(ctx, deferred_node, idx);
