@@ -847,8 +847,11 @@ handle_where_clause:
                     char needle[80];
                     snprintf(needle, sizeof(needle), "%s.id", def_alias);
                     size_t nlen = strlen(needle);
-                    char repl[80];
-                    snprintf(repl, sizeof(repl), "%s.%s", edge_a, col);
+                    /* An endpoint given as an expression `(…)` (an
+                     * undirected far end) replaces the id as is. */
+                    char repl[600];
+                    if (col[0] == '(') snprintf(repl, sizeof(repl), "%s", col);
+                    else snprintf(repl, sizeof(repl), "%s.%s", edge_a, col);
                     size_t rlen = strlen(repl);
                     const char *src_buf = ctx->sql_buffer;
                     size_t src_len = strlen(src_buf);
@@ -857,7 +860,15 @@ handle_where_clause:
                     for (const char *p = src_buf; (p = strstr(p, needle)) != NULL; p += nlen) {
                         n_occ++;
                     }
-                    if (n_occ == 0) continue;
+                    /* A WHERE on the relationship itself (`r <> r2`) must
+                     * filter the edge join too, or a rejected edge leaves a
+                     * null row (Match7 [11], once undirected edges are read
+                     * both ways, GQLITE-T-0449). */
+                    if (n_occ == 0) {
+                        char edge_ref[96];
+                        snprintf(edge_ref, sizeof(edge_ref), "%s.", edge_a);
+                        if (!strstr(src_buf, edge_ref)) continue;
+                    }
                     size_t out_cap = src_len + n_occ * (rlen - nlen) + 1;
                     char *rewritten = malloc(out_cap);
                     if (!rewritten) continue;
@@ -3145,11 +3156,30 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 }
             }
             bool effective_src_defer = src_deferred && !src_alias_already_in_scope;
+            /* An undirected relationship from a bound source to a new
+             * target matches an edge either way round: the far end is
+             * whichever end is not the source (GQLITE-T-0449; the target
+             * was always read as target_id, so only outgoing edges were
+             * found). `far_end` stands for `<edge>.target_id` below. */
+            bool undirected_far = !rel->left_arrow && !rel->right_arrow &&
+                                  !effective_src_defer && !target_already_added;
+            char far_end[512];
+            if (undirected_far) {
+                snprintf(far_end, sizeof(far_end),
+                         "(CASE WHEN %s.source_id = %s THEN %s.target_id ELSE %s.source_id END)",
+                         edge_alias, source_id, edge_alias, edge_alias);
+            } else {
+                snprintf(far_end, sizeof(far_end), "%s.target_id", edge_alias);
+            }
             dynamic_buffer edge_cond;
             dbuf_init(&edge_cond);
             bool first_cond = true;
             if (!effective_src_defer) {
-                dbuf_appendf(&edge_cond, "%s.source_id = %s", edge_alias, source_id);
+                if (undirected_far)
+                    dbuf_appendf(&edge_cond, "(%s.source_id = %s OR %s.target_id = %s)",
+                                 edge_alias, source_id, edge_alias, source_id);
+                else
+                    dbuf_appendf(&edge_cond, "%s.source_id = %s", edge_alias, source_id);
                 first_cond = false;
             }
             if (target_already_added) {
@@ -3195,8 +3225,7 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
              * r non-null when the pattern shouldn't match. */
             const char *graph_prefix = ctx->current_graph ? ctx->current_graph : "";
             if (!target_already_added) {
-                char idx[160]; snprintf(idx, sizeof(idx), "%s.target_id", edge_alias);
-                char *alt = label_alternatives_cond(ctx, target_node, idx);
+                char *alt = label_alternatives_cond(ctx, target_node, far_end);
                 if (alt) { dbuf_append(&edge_cond, alt); free(alt); }
             }
             if (!target_already_added && has_labels(target_node)) {
@@ -3205,8 +3234,8 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                     if (!label) continue;
                     char *esc_label = escape_sql_string(label);
                     dbuf_appendf(&edge_cond,
-                        " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s.target_id AND label = '%s')",
-                        graph_prefix, edge_alias, esc_label ? esc_label : label);
+                        " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s AND label = '%s')",
+                        graph_prefix, far_end, esc_label ? esc_label : label);
                     free(esc_label);
                 }
             }
@@ -3272,7 +3301,8 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                  * can push predicates into the edge JOIN's ON via a
                  * rewritten copy (target_alias.id → edge.target_id). */
                 if (tgt_deferred) {
-                    cypher_transform_record_defer_pair(ctx, edge_alias, target_alias, "target_id");
+                    cypher_transform_record_defer_pair(ctx, edge_alias, target_alias,
+                                                       undirected_far ? far_end : "target_id");
                 }
                 /* For OPTIONAL MATCH with labels on the target, fold the label
                  * condition into the target node's LEFT JOIN ON clause so that
@@ -3280,7 +3310,7 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 if (has_labels(target_node)) {
                     dynamic_buffer target_cond;
                     dbuf_init(&target_cond);
-                    dbuf_appendf(&target_cond, "%s.id = %s.target_id", target_alias, edge_alias);
+                    dbuf_appendf(&target_cond, "%s.id = %s", target_alias, far_end);
                     { char idx[160]; snprintf(idx, sizeof(idx), "%s.id", target_alias);
                       char *alt = label_alternatives_cond(ctx, target_node, idx);
                       if (alt) { dbuf_append(&target_cond, alt); free(alt); } }
@@ -3301,8 +3331,8 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                              get_graph_table(ctx, "nodes"), target_alias, dbuf_get(&target_cond));
                     dbuf_free(&target_cond);
                 } else {
-                    char target_cond[256];
-                    snprintf(target_cond, sizeof(target_cond), "%s.id = %s.target_id", target_alias, edge_alias);
+                    char target_cond[768];
+                    snprintf(target_cond, sizeof(target_cond), "%s.id = %s", target_alias, far_end);
                     sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), target_alias, target_cond);
                 }
             }

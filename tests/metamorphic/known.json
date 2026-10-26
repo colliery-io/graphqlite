@@ -7,7 +7,6 @@
   {"relation": "^keyword_name/", "kind": "error", "error": "unexpected [A-Z]+", "task": "GQLITE-T-0440"},
   {"relation": ".", "kind": "mismatch", "query": ":(A\\|B|B\\|C)\\) \\|", "task": "GQLITE-T-0439"},
   {"relation": "^label_disjunction/(predicate|comprehension)$", "kind": "mismatch", "task": "GQLITE-T-0439"},
-  {"relation": "^(optional_filter|optional_null/.*|reverse_pattern/optional)$", "kind": "mismatch", "query": "OPTIONAL MATCH (?:(?!\\b(?:WITH|RETURN|MATCH)\\b).)*?(?<!<)-\\[\\w+[^\\]]*\\]-(?!>)", "task": "GQLITE-T-0449"},
   {"relation": "^reverse_pattern/optional$", "kind": "error", "error": "no such column: _gql_default_alias_\\d+", "task": "GQLITE-T-0462"},
   {"relation": "^reverse_pattern/optional$", "kind": "mismatch", "task": "GQLITE-T-0462"},
   {"relation": ".", "kind": "error", "error": "ON clause references tables to its right", "task": "GQLITE-T-0462"},
