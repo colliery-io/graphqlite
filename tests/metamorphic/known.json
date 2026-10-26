@@ -16,7 +16,6 @@
   {"relation": "^optional_null/count$", "kind": "mismatch", "task": "GQLITE-T-0465"},
   {"relation": "^optional_filter$", "kind": "mismatch", "query": "OPTIONAL MATCH \\S*-\\[:", "task": "GQLITE-T-0465"},
   {"relation": ".", "kind": "mismatch", "query": "WITH [^|]*ORDER BY", "output": "\"(true|false)\"", "task": "GQLITE-T-0466"},
-  {"relation": "^limit_slice/", "kind": "mismatch", "task": "GQLITE-T-0464"},
   {"relation": "^varlen/", "kind": "mismatch", "task": "GQLITE-T-0459"},
   {"relation": "^union/distinct$", "kind": "mismatch", "task": "GQLITE-T-0458"},
   {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"}

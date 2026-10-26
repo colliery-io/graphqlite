@@ -859,8 +859,11 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
 return_star_done:
         if (!group_by_done) return_implicit_group_by(ctx, ret);
 
-        /* Add ORDER BY */
+        /* Add ORDER BY. It defines the final order: an order a WITH carried
+         * forward (`WITH ... ORDER BY ... LIMIT n MATCH ...`) is dropped,
+         * or its keys sorted first (GQLITE-T-0464). */
         if (ret->order_by && ret->order_by->count > 0) {
+            sql_order_by_clear(ctx->unified_builder);
             for (int i = 0; i < ret->order_by->count; i++) {
                 cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
                 char *order_expr = transform_order_by_term(ctx, ret, order_item->expr);
@@ -1075,8 +1078,10 @@ return_star_done:
             }
             return_append_tags(ctx, item_tags2, ret->items->count);
 
-            /* Add ORDER BY */
+            /* Add ORDER BY: it replaces an order carried from a WITH
+             * (GQLITE-T-0464). */
             if (ret->order_by && ret->order_by->count > 0) {
+                sql_order_by_clear(ctx->unified_builder);
                 for (int i = 0; i < ret->order_by->count; i++) {
                     cypher_order_by_item *order_item = (cypher_order_by_item*)ret->order_by->items[i];
                     char *order_expr = transform_order_by_term(ctx, ret, order_item->expr);

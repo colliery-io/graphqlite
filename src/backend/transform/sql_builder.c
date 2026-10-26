@@ -583,6 +583,13 @@ void sql_group_by(sql_builder *b, const char *expr)
 /*
  * Add an ORDER BY expression.
  */
+void sql_order_by_clear(sql_builder *b)
+{
+    if (!b) return;
+    dbuf_clear(&b->order_by);
+    b->order_count = 0;
+}
+
 void sql_order_by(sql_builder *b, const char *expr, bool desc)
 {
     if (!b || !expr) return;
