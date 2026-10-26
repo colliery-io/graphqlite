@@ -224,8 +224,11 @@ int transform_collect_function(cypher_transform_context *ctx, cypher_function_ca
     }
 
     /* collect() filters out NULL values per Cypher spec. SQLite's
-     * FILTER clause does this cleanly without changing the aggregate. */
-    append_sql(ctx, "json_group_array(");
+     * FILTER clause does this cleanly without changing the aggregate.
+     * collect(DISTINCT x) keeps each value once: the element expression is
+     * compared as SQLite values (entities as their JSON text, by id), and
+     * json_group_array keeps the JSON subtype of each element (GQLITE-T-0435). */
+    append_sql(ctx, func_call->distinct ? "json_group_array(DISTINCT " : "json_group_array(");
     if (func_call->args->items[0] == NULL) {
         /* collect(*) - not really valid but handle gracefully */
         append_sql(ctx, "*");
