@@ -21,6 +21,5 @@
   {"relation": "^limit_slice/", "kind": "mismatch", "task": "GQLITE-T-0464"},
   {"relation": "^varlen/", "kind": "mismatch", "task": "GQLITE-T-0459"},
   {"relation": "^union/distinct$", "kind": "mismatch", "task": "GQLITE-T-0458"},
-  {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"},
-  {"relation": "^(write_expression|merge_idempotent)/", "kind": "mismatch", "task": "GQLITE-T-0438"}
+  {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"}
 ]

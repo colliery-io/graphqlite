@@ -2508,10 +2508,81 @@ static int handle_match_merge(cypher_executor *executor, cypher_query *query,
     return rc;
 }
 
+/* A value the fast CREATE paths evaluate correctly: a literal, a
+ * parameter, a variable, `var.key`, or a list / map / function call over
+ * constants only. Any other expression (CASE, a list holding a variable,
+ * toString(n.v), ...) needs the row's values, which only the row pipeline
+ * has; the fast paths wrote null (GQLITE-T-0438). */
+static bool create_value_is_simple(ast_node *v, bool constant_only)
+{
+    if (!v) return true;
+    switch (v->type) {
+        case AST_NODE_LITERAL: case AST_NODE_PARAMETER: return true;
+        case AST_NODE_IDENTIFIER: return !constant_only;
+        case AST_NODE_PROPERTY:
+            return !constant_only && ((cypher_property *)v)->expr &&
+                   ((cypher_property *)v)->expr->type == AST_NODE_IDENTIFIER;
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list *)v)->items;
+            for (int i = 0; a && i < a->count; i++)
+                if (!create_value_is_simple(a->items[i], true)) return false;
+            return true;
+        }
+        case AST_NODE_MAP: {
+            ast_list *a = ((cypher_map *)v)->pairs;
+            for (int i = 0; a && i < a->count; i++)
+                if (!create_value_is_simple(((cypher_map_pair *)a->items[i])->value, true)) return false;
+            return true;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            ast_list *a = ((cypher_function_call *)v)->args;
+            for (int i = 0; a && i < a->count; i++)
+                if (!create_value_is_simple(a->items[i], true)) return false;
+            return true;
+        }
+        default: return false;
+    }
+}
+
+static bool create_props_simple(ast_node *props)
+{
+    if (!props) return true;
+    if (props->type != AST_NODE_MAP) return props->type == AST_NODE_PARAMETER;
+    ast_list *a = ((cypher_map *)props)->pairs;
+    for (int i = 0; a && i < a->count; i++)
+        if (!create_value_is_simple(((cypher_map_pair *)a->items[i])->value, false)) return false;
+    return true;
+}
+
+/* Does a CREATE of the query set a property the fast paths cannot evaluate? */
+static bool create_props_need_pipeline(cypher_query *query)
+{
+    for (int c = 0; query->clauses && c < query->clauses->count; c++) {
+        ast_node *cl = query->clauses->items[c];
+        if (!cl || cl->type != AST_NODE_CREATE) continue;
+        ast_list *pat = ((cypher_create *)cl)->pattern;
+        for (int i = 0; pat && i < pat->count; i++) {
+            ast_node *pn = pat->items[i];
+            if (!pn || pn->type != AST_NODE_PATH) continue;
+            ast_list *el = ((cypher_path *)pn)->elements;
+            for (int j = 0; el && j < el->count; j++) {
+                ast_node *e = el->items[j];
+                if (!e) continue;
+                if (e->type == AST_NODE_NODE_PATTERN &&
+                    !create_props_simple(((cypher_node_pattern *)e)->properties)) return true;
+                if (e->type == AST_NODE_REL_PATTERN &&
+                    !create_props_simple(((cypher_rel_pattern *)e)->properties)) return true;
+            }
+        }
+    }
+    return false;
+}
+
 static int handle_match_create(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags)
 {
-    if (unwind_before_create(query)) return handle_rowwise_write(executor, query, result, flags);
+    if (unwind_before_create(query) || create_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_create *create = find_create_clause(query);
     cypher_set *set = find_set_clause(query);
@@ -2592,7 +2663,8 @@ static const char *projectable_base_var(ast_node *expr)
 static int handle_match_create_return(cypher_executor *executor, cypher_query *query,
                                       cypher_result *result, clause_flags flags)
 {
-    if (unwind_before_create(query)) return handle_rowwise_write(executor, query, result, flags);
+    if (unwind_before_create(query) || create_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_match *match = find_match_clause(query);
     cypher_create *create = find_create_clause(query);
@@ -2943,7 +3015,8 @@ static bool unwind_create_needs_pipeline(cypher_query *query)
 static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
-    if (unwind_create_needs_pipeline(query)) return handle_rowwise_write(executor, query, result, flags);
+    if (unwind_create_needs_pipeline(query) || create_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_unwind *unwind = find_unwind_clause(query);
     cypher_create *create = find_create_clause(query);
@@ -3823,7 +3896,8 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
 static int handle_unwind_create_return(cypher_executor *executor, cypher_query *query,
                                        cypher_result *result, clause_flags flags)
 {
-    if (unwind_create_needs_pipeline(query)) return handle_rowwise_write(executor, query, result, flags);
+    if (unwind_create_needs_pipeline(query) || create_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_unwind *unwind = find_unwind_clause(query);
     cypher_create *create = find_create_clause(query);
@@ -4564,8 +4638,58 @@ static bool rw_expr_scalar_only(ast_node *expr, const rw_row *row)
             return rw_expr_scalar_only(s->expr, row) && rw_expr_scalar_only(s->index, row) &&
                    rw_expr_scalar_only(s->slice_start, row) && rw_expr_scalar_only(s->slice_end, row);
         }
+        /* CASE, NOT, IS NULL and map literals over the row's values: they
+         * were left to the write executor, which has no row values, so
+         * `CREATE (:S {f: CASE WHEN i = 1 ...})` wrote null (GQLITE-T-0438). */
+        case AST_NODE_NOT_EXPR: return rw_expr_scalar_only(((cypher_not_expr*)expr)->expr, row);
+        case AST_NODE_NULL_CHECK: return rw_expr_scalar_only(((cypher_null_check*)expr)->expr, row);
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr*)expr;
+            if (!rw_expr_scalar_only(c->operand, row) || !rw_expr_scalar_only(c->else_expr, row)) return false;
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause*)c->when_clauses->items[i];
+                if (!rw_expr_scalar_only(w->condition, row) || !rw_expr_scalar_only(w->result, row)) return false;
+            }
+            return true;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map*)expr;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (!rw_expr_scalar_only(((cypher_map_pair*)m->pairs->items[i])->value, row)) return false;
+            return true;
+        }
         default: return false;
     }
+}
+
+/* Is expr a boolean by its shape: a boolean expression, or a CASE whose
+ * results are all booleans or null (`CASE WHEN i = 1 THEN a.s IS NULL
+ * END` gave 1 / 0, GQLITE-T-0438)? */
+static bool rw_expr_yields_boolean(const ast_node *expr)
+{
+    if (!expr) return false;
+    if (ast_is_boolean_expr(expr)) return true;
+    if (expr->type != AST_NODE_CASE_EXPR) return false;
+    const cypher_case_expr *c = (const cypher_case_expr *)expr;
+    bool any = false;
+    for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+        const ast_node *r = ((const cypher_when_clause *)c->when_clauses->items[i])->result;
+        bool is_null = r && r->type == AST_NODE_LITERAL &&
+                       ((const cypher_literal *)r)->literal_type == LITERAL_NULL;
+        if (is_null) continue;
+        if (!rw_expr_yields_boolean(r)) return false;
+        any = true;
+    }
+    if (c->else_expr) {
+        const ast_node *e = c->else_expr;
+        bool is_null = e->type == AST_NODE_LITERAL &&
+                       ((const cypher_literal *)e)->literal_type == LITERAL_NULL;
+        if (!is_null) {
+            if (!rw_expr_yields_boolean(e)) return false;
+            any = true;
+        }
+    }
+    return any;
 }
 
 /* Evaluate a scalar-only expression for a row. Returns the SQLite type;
@@ -4616,7 +4740,7 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
             sqlite3_value *cv = sqlite3_column_value(st, 0);
             if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) type = GQL_COL_TYPE_BOOLEAN;
             const char *v = (const char*)sqlite3_column_text(st, 0);
-            if (type == SQLITE_INTEGER && ast_is_boolean_expr(expr)) {
+            if (type == SQLITE_INTEGER && rw_expr_yields_boolean(expr)) {
                 /* a comparison is 1 / 0 in SQL: keep it a boolean
                  * (`MERGE (:C {k: i % 2 = 0})` stored 0 / 1) */
                 type = GQL_COL_TYPE_BOOLEAN;
@@ -4757,6 +4881,28 @@ static bool rw_expr_bound(ast_node *expr, const rw_row *row)
             for (int i = 0; a && i < a->count; i++) if (!rw_expr_bound(a->items[i], row)) return false;
             return true;
         }
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list*)expr)->items;
+            for (int i = 0; a && i < a->count; i++) if (!rw_expr_bound(a->items[i], row)) return false;
+            return true;
+        }
+        case AST_NODE_NOT_EXPR: return rw_expr_bound(((cypher_not_expr*)expr)->expr, row);
+        case AST_NODE_NULL_CHECK: return rw_expr_bound(((cypher_null_check*)expr)->expr, row);
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr*)expr;
+            if (!rw_expr_bound(c->operand, row) || !rw_expr_bound(c->else_expr, row)) return false;
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause*)c->when_clauses->items[i];
+                if (!rw_expr_bound(w->condition, row) || !rw_expr_bound(w->result, row)) return false;
+            }
+            return true;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map*)expr;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (!rw_expr_bound(((cypher_map_pair*)m->pairs->items[i])->value, row)) return false;
+            return true;
+        }
         default: return false;
     }
 }
@@ -4793,6 +4939,24 @@ static void rw_find_entity_props(ast_node **slot, const rw_row *row, ast_node **
         case AST_NODE_LIST: {
             ast_list *a = ((cypher_list*)e)->items;
             for (int i = 0; a && i < a->count; i++) rw_find_entity_props(&a->items[i], row, slots, n);
+            return;
+        }
+        case AST_NODE_NULL_CHECK: rw_find_entity_props(&((cypher_null_check*)e)->expr, row, slots, n); return;
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr*)e;
+            rw_find_entity_props(&c->operand, row, slots, n);
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause*)c->when_clauses->items[i];
+                rw_find_entity_props(&w->condition, row, slots, n);
+                rw_find_entity_props(&w->result, row, slots, n);
+            }
+            rw_find_entity_props(&c->else_expr, row, slots, n);
+            return;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map*)e;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                rw_find_entity_props(&((cypher_map_pair*)m->pairs->items[i])->value, row, slots, n);
             return;
         }
         default: return;

@@ -250,8 +250,13 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                                 continue;
                                         }
                                     }
-                                } else if (pair->value->type == AST_NODE_PROPERTY) {
-                                    /* T-0322: inter-pattern variable reference
+                                } else if (pair->value->type == AST_NODE_PROPERTY &&
+                                           ((cypher_property *)pair->value)->expr &&
+                                           ((cypher_property *)pair->value)->expr->type == AST_NODE_IDENTIFIER) {
+                                    /* A property of another base (`{x: 2}.x`) takes
+                                     * the general evaluation below; it was dropped
+                                     * here (GQLITE-T-0438).
+                                     * T-0322: inter-pattern variable reference
                                      * in CREATE — e.g. `CREATE (a:End {id: 0}),
                                      * (:Begin {num: a.id})`. The base variable
                                      * is bound by an EARLIER pattern in this
