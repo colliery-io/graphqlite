@@ -2351,6 +2351,16 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     }
                 }
 
+                /* Relationship uniqueness: the edges of one pattern are
+                 * distinct, as in MATCH (multi-hop comprehensions, GQLITE-T-0460). */
+                for (int ea = 0; ea < rel_index; ea++) {
+                    for (int eb = ea + 1; eb < rel_index; eb++) {
+                        append_sql(ctx, "%s_pc_e%d.id <> _pc_e%d.id",
+                                   first_condition ? "" : " AND ", ea, eb);
+                        first_condition = false;
+                    }
+                }
+
                 /* If there were no constraints (e.g., just a node pattern), add TRUE */
                 if (first_condition) {
                     append_sql(ctx, "1=1");
