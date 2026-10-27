@@ -85,8 +85,22 @@ int transform_count_function(cypher_transform_context *ctx, cypher_function_call
     return -1;
 }
 
-/* Transform other aggregate functions (MIN, MAX, AVG, SUM) */
+static int transform_aggregate_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call);
+
+/* Transform other aggregate functions (MIN, MAX, AVG, SUM). sum() of no
+ * rows, or of only nulls, is 0 in Cypher; SQLite's SUM gives NULL
+ * (GQLITE-T-0455). */
 int transform_aggregate_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    bool is_sum = func_call && func_call->function_name &&
+                  strcasecmp(func_call->function_name, "sum") == 0;
+    if (is_sum) append_sql(ctx, "COALESCE(");
+    int rc = transform_aggregate_function_inner(ctx, func_call);
+    if (is_sum && rc == 0) append_sql(ctx, ", 0)");
+    return rc;
+}
+
+static int transform_aggregate_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming aggregate function: %s", func_call->function_name);
 
