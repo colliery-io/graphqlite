@@ -838,54 +838,67 @@ handle_where_clause:
                  * inner rows don't multiply outer rows.
                  * MatchWhere6 [1]/[2]/[3] family. */
                 for (int dp = 0; dp < ctx->optional_defer_pairs_count; dp++) {
-                    const char *def_alias = ctx->optional_defer_pairs[dp].deferred_alias;
                     const char *edge_a = ctx->optional_defer_pairs[dp].edge_alias;
-                    const char *col = ctx->optional_defer_pairs[dp].endpoint_col;
-                    /* Build needle `<def_alias>.id` and replacement
-                     * `<edge_a>.<col>`. Scan the WHERE SQL and
-                     * produce a rewritten copy. */
-                    char needle[80];
-                    snprintf(needle, sizeof(needle), "%s.id", def_alias);
-                    size_t nlen = strlen(needle);
-                    /* An endpoint given as an expression `(…)` (an
-                     * undirected far end) replaces the id as is. */
-                    char repl[600];
-                    if (col[0] == '(') snprintf(repl, sizeof(repl), "%s", col);
-                    else snprintf(repl, sizeof(repl), "%s.%s", edge_a, col);
-                    size_t rlen = strlen(repl);
-                    const char *src_buf = ctx->sql_buffer;
-                    size_t src_len = strlen(src_buf);
-                    /* Count occurrences for sizing. */
+                    /* One rewritten copy per join: every deferred alias of
+                     * that join is replaced in the same copy, so a WHERE over
+                     * two of them (`q.n = 'q' AND o.n = 'o'`, or a node and a
+                     * relationship) does not name a table joined later
+                     * ("ON clause references tables to its right",
+                     * GQLITE-T-0463). */
+                    bool seen = false;
+                    for (int dq = 0; dq < dp && !seen; dq++)
+                        seen = strcmp(ctx->optional_defer_pairs[dq].edge_alias, edge_a) == 0;
+                    if (seen) continue;
+                    char *rewritten = strdup(ctx->sql_buffer);
+                    if (!rewritten) continue;
                     int n_occ = 0;
-                    for (const char *p = src_buf; (p = strstr(p, needle)) != NULL; p += nlen) {
-                        n_occ++;
+                    for (int dq = dp; dq < ctx->optional_defer_pairs_count; dq++) {
+                        if (strcmp(ctx->optional_defer_pairs[dq].edge_alias, edge_a) != 0) continue;
+                        const char *def_alias = ctx->optional_defer_pairs[dq].deferred_alias;
+                        const char *col = ctx->optional_defer_pairs[dq].endpoint_col;
+                        /* `<def_alias>.id` becomes `<edge_a>.<col>`, or the
+                         * expression itself when the endpoint is one. */
+                        char needle[80];
+                        snprintf(needle, sizeof(needle), "%s.id", def_alias);
+                        size_t nlen = strlen(needle);
+                        char repl[600];
+                        if (col[0] == '(') snprintf(repl, sizeof(repl), "%s", col);
+                        else snprintf(repl, sizeof(repl), "%s.%s", edge_a, col);
+                        size_t rlen = strlen(repl);
+                        int occ = 0;
+                        for (const char *q = rewritten; (q = strstr(q, needle)) != NULL; q += nlen) {
+                            /* whole alias only: `_gql_default_alias_1.id` is not
+                             * `_gql_default_alias_11.id` */
+                            if (q > rewritten && (isalnum((unsigned char)q[-1]) || q[-1] == '_')) continue;
+                            occ++;
+                        }
+                        if (occ == 0) continue;
+                        n_occ += occ;
+                        size_t cap = strlen(rewritten) + (size_t)occ * (rlen > nlen ? rlen - nlen : 0) + 1;
+                        char *out = malloc(cap);
+                        if (!out) continue;
+                        char *op = out;
+                        const char *cur = rewritten;
+                        for (;;) {
+                            const char *hit = strstr(cur, needle);
+                            while (hit && hit > rewritten &&
+                                   (isalnum((unsigned char)hit[-1]) || hit[-1] == '_'))
+                                hit = strstr(hit + nlen, needle);
+                            if (!hit) { strcpy(op, cur); break; }
+                            memcpy(op, cur, (size_t)(hit - cur)); op += hit - cur;
+                            memcpy(op, repl, rlen); op += rlen;
+                            cur = hit + nlen;
+                        }
+                        free(rewritten);
+                        rewritten = out;
                     }
                     /* A WHERE on the relationship itself (`r <> r2`) must
                      * filter the edge join too, or a rejected edge leaves a
-                     * null row (Match7 [11], once undirected edges are read
-                     * both ways, GQLITE-T-0449). */
+                     * null row (Match7 [11], GQLITE-T-0449). */
                     if (n_occ == 0) {
                         char edge_ref[96];
                         snprintf(edge_ref, sizeof(edge_ref), "%s.", edge_a);
-                        if (!strstr(src_buf, edge_ref)) continue;
-                    }
-                    size_t out_cap = src_len + n_occ * (rlen - nlen) + 1;
-                    char *rewritten = malloc(out_cap);
-                    if (!rewritten) continue;
-                    char *out_p = rewritten;
-                    const char *cur = src_buf;
-                    while (1) {
-                        const char *hit = strstr(cur, needle);
-                        if (!hit) {
-                            strcpy(out_p, cur);
-                            break;
-                        }
-                        size_t prefix_len = hit - cur;
-                        memcpy(out_p, cur, prefix_len);
-                        out_p += prefix_len;
-                        memcpy(out_p, repl, rlen);
-                        out_p += rlen;
-                        cur = hit + nlen;
+                        if (!strstr(rewritten, edge_ref)) { free(rewritten); continue; }
                     }
                     /* Inject into the edge JOIN's ON. Find ` AS
                      * <edge_a> ` in the joins buffer; the end of
@@ -1063,6 +1076,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
      * EXISTS even when rel2 doesn't match — wrong per Cypher
      * 'all-or-none' OPTIONAL semantics. */
     bool path_combined_exists = false;
+    bool path_has_user_rel_var = false;
     if (optional && path->elements && path->elements->count >= 5) {
         int n_rels = 0;
         bool all_eligible = true;
@@ -1072,10 +1086,12 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             if (el->type != AST_NODE_REL_PATTERN) continue;
             cypher_rel_pattern *r = (cypher_rel_pattern *)el;
             if (r->varlen) { all_eligible = false; break; }
+            /* A named relationship is bound back from the derived table
+             * below (GQLITE-T-0463); the legacy EXISTS form cannot, and
+             * falls back to per-relationship emission. */
             if (r->variable &&
                 strncmp(r->variable, "_gql_default_alias_", 19) != 0) {
                 has_user_rel_var = true;
-                break;
             }
             n_rels++;
         }
@@ -1102,9 +1118,9 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 break;
             }
         }
-        if (all_eligible && !has_user_rel_var && !has_path_var &&
-            n_rels >= 2 && intermediates_named) {
+        if (all_eligible && !has_path_var && n_rels >= 2 && intermediates_named) {
             path_combined_exists = true;
+            path_has_user_rel_var = has_user_rel_var;
         }
     }
     /* GQLITE-T-0336 (P3, MatchWhere6 [5]): a single BOUND relationship
@@ -1329,6 +1345,21 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                         char *esc = escape_sql_string(r->type);
                         dbuf_appendf(&dt, " AND _ce%d.type = '%s'", ri, esc ? esc : r->type);
                         free(esc);
+                    } else if (r->types && r->types->count > 0) {
+                        dbuf_appendf(&dt, " AND _ce%d.type IN (", ri);
+                        for (int t = 0; t < r->types->count; t++) {
+                            cypher_literal *tl = (cypher_literal *)r->types->items[t];
+                            char *esc = escape_sql_string(tl->value.string);
+                            dbuf_appendf(&dt, "%s'%s'", t ? ", " : "", esc ? esc : tl->value.string);
+                            free(esc);
+                        }
+                        dbuf_append(&dt, ")");
+                    }
+                    if (r->variable && !transform_var_alias_is_id(ctx->var_ctx, r->variable) &&
+                        strncmp(r->variable, "_gql_default_alias_", 19) != 0) {
+                        /* A named, new relationship: its edge id comes out of
+                         * the derived table and is joined back below. */
+                        dbuf_appendf(&dt_extra_sel, ", _ce%d.id AS _ce%d_id", ri, ri);
                     }
                     if (r->variable && transform_var_alias_is_id(ctx->var_ctx, r->variable)) {
                         /* Bound relationship: pin the edge to the bound id.
@@ -1405,6 +1436,33 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 }
                 if (first_on) dbuf_append(&on, "1=1");
                 sql_join(ctx->unified_builder, SQL_JOIN_LEFT, dbuf_get(&dt), dt_alias, dbuf_get(&on));
+                /* Each named, new relationship hangs off its edge id. */
+                {
+                    int rj = 0;
+                    for (int j = 0; j < path->elements->count; j++) {
+                        ast_node *el = path->elements->items[j];
+                        if (el->type != AST_NODE_REL_PATTERN) continue;
+                        cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+                        if (r->variable && !transform_var_alias_is_id(ctx->var_ctx, r->variable) &&
+                            strncmp(r->variable, "_gql_default_alias_", 19) != 0) {
+                            char *ea = get_next_default_alias(ctx);
+                            if (ea) {
+                                char on_e[160];
+                                snprintf(on_e, sizeof(on_e), "%s.id = %s._ce%d_id", ea, dt_alias, rj);
+                                sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
+                                         get_graph_table(ctx, "edges"), ea, on_e);
+                                transform_var_register_edge(ctx->var_ctx, r->variable, ea, r->type);
+                                /* An OPTIONAL WHERE on it filters the derived
+                                 * table (all-or-none), as for the nodes. */
+                                char col[24];
+                                snprintf(col, sizeof(col), "_ce%d_id", rj);
+                                cypher_transform_record_defer_pair(ctx, dt_alias, ea, col);
+                                free(ea);
+                            }
+                        }
+                        rj++;
+                    }
+                }
                 dbuf_free(&on);
                 dbuf_free(&dt);
                 dbuf_free(&bound_rel_on);
@@ -1430,6 +1488,14 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             }
         }
 
+        if (path_has_user_rel_var) {
+            /* The EXISTS form cannot bind a named relationship: emit the
+             * relationships one by one (GQLITE-T-0463). */
+            free(combined_node_skip);
+            combined_node_skip = NULL;
+            path_combined_exists = false;
+            goto skip_combined_exists;
+        }
         /* Build combined EXISTS body:
          *   SELECT 1 FROM edges e_0, edges e_1, ...
          *   WHERE e_k.src/tgt = node_aliases AND pairwise e_i.id <> e_j.id.
@@ -1456,9 +1522,10 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             const char *tgt_a = node_alias[j + 1];
             if (!src_a || !tgt_a) {
                 dbuf_free(&ec);
+                /* Degrade: fall back to per-rel emission. The loop below
+                 * reads both buffers: keep defer_to_rel, drop the skips. */
                 free(combined_node_skip);
-                free(defer_to_rel);
-                /* Degrade: fall back to per-rel emission. */
+                combined_node_skip = NULL;
                 path_combined_exists = false;
                 goto skip_combined_exists;
             }
@@ -1810,9 +1877,16 @@ skip_combined_exists:
         }
         for (int i = 0; i < n_edges; i++) {
             for (int j = i + 1; j < n_edges; j++) {
-                char where_buf[160];
-                snprintf(where_buf, sizeof(where_buf), "%s.id <> %s.id",
-                         edge_aliases[i], edge_aliases[j]);
+                char where_buf[320];
+                if (optional)
+                    /* An OPTIONAL path that did not match has null edges:
+                     * keep its row (GQLITE-T-0463). */
+                    snprintf(where_buf, sizeof(where_buf),
+                             "(%s.id IS NULL OR %s.id IS NULL OR %s.id <> %s.id)",
+                             edge_aliases[i], edge_aliases[j], edge_aliases[i], edge_aliases[j]);
+                else
+                    snprintf(where_buf, sizeof(where_buf), "%s.id <> %s.id",
+                             edge_aliases[i], edge_aliases[j]);
                 sql_where(ctx->unified_builder, where_buf);
             }
         }
@@ -3237,6 +3311,25 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                         " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s AND label = '%s')",
                         graph_prefix, far_end, esc_label ? esc_label : label);
                     free(esc_label);
+                }
+            }
+            /* Likewise for a new source node (a left arrow puts the new node
+             * there): an edge from a node without the label must not match,
+             * or each such edge leaves its own null row (GQLITE-T-0463). */
+            if (effective_src_defer) {
+                char sidx[160]; snprintf(sidx, sizeof(sidx), "%s.source_id", edge_alias);
+                char *salt = label_alternatives_cond(ctx, source_node, sidx);
+                if (salt) { dbuf_append(&edge_cond, salt); free(salt); }
+                if (has_labels(source_node)) {
+                    for (int li = 0; li < source_node->labels->count; li++) {
+                        const char *label = get_label_string(source_node->labels->items[li]);
+                        if (!label) continue;
+                        char *esc_label = escape_sql_string(label);
+                        dbuf_appendf(&edge_cond,
+                            " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s.source_id AND label = '%s')",
+                            graph_prefix, edge_alias, esc_label ? esc_label : label);
+                        free(esc_label);
+                    }
                 }
             }
 
