@@ -4,9 +4,10 @@
 -- PURPOSE: the target joined ON EXISTS (SELECT 1 FROM edges WHERE source_id
 --          = <bound> AND target_id = c.id): every node was tested for every
 --          outer row, so the query slowed down with the size of the graph.
---          It now joins ON c.id IN (SELECT target_id FROM edges WHERE
---          source_id = <bound>), driven by the edge index. The undirected
---          form also dropped a type list on its reversed side.
+--          It now joins the edge ON source_id = <bound>, driven by the
+--          edge index, then the target by id (one row per edge,
+--          GQLITE-T-0465). The undirected form also dropped a type list on
+--          its reversed side.
 -- NOTE:    Assertions are hard: _assert has CHECK (ok = 1), so under
 --          `sqlite3 -bail` any failed expectation aborts the run.
 -- ========================================================================
@@ -31,7 +32,7 @@ INSERT INTO _assert SELECT 'undirected, type list, reversed side only',
 INSERT INTO _assert SELECT 'label on the optional node',
     json(cypher('MATCH (n:H76) OPTIONAL MATCH (n)-[]-(m:X76) RETURN m.n AS m')) = json('[{"m":null}]');
 INSERT INTO _assert SELECT 'the edge lookup drives the join',
-    json_extract(cypher('EXPLAIN MATCH (n:A76) OPTIONAL MATCH (n)-[:S76]->(m) RETURN m.n'), '$[0].column_0') LIKE '%.id IN (SELECT _e.target_id FROM edges _e WHERE _e.source_id = %';
+    json_extract(cypher('EXPLAIN MATCH (n:A76) OPTIONAL MATCH (n)-[:S76]->(m) RETURN m.n'), '$[0].column_0') LIKE '%LEFT JOIN edges AS % ON %.source_id = %';
 
 SELECT name, ok FROM _assert;
 SELECT '=== Test 76 Complete ===' as test_section;
