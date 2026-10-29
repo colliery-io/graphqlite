@@ -3019,158 +3019,10 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 bool td = src_deferred; src_deferred = tgt_deferred; tgt_deferred = td;
             }
 
-            /* T-0320: when the rel has no user-visible variable AND we
-             * have exactly one bound + one deferred endpoint AND no
-             * named-path captures the rel, use an EXISTS-based LEFT
-             * JOIN nodes shape so we get 1 row per outer binding
-             * (matching c) or 1 row with c=NULL (no match). This is
-             * the correct Cypher OPTIONAL MATCH semantics — WHERE
-             * filters inner matches; outer rows are preserved per
-             * (a, b, ...) NOT per outer×edge.
-             *
-             * The existing edge+node LEFT JOIN cascade multiplied rows
-             * by the number of candidate edges, which produced extra
-             * rows even when WHERE filtered out c. MatchWhere6 family.
-             *
-             * Named paths (e.g. `MATCH p = (a)-[:X]->(b)`) need the
-             * edge as a real binding so the path projector can
-             * recover it — skip the EXISTS shortcut in that case. */
-            bool synthetic_rel = (rel->variable && strncmp(rel->variable, "_gql_default_alias_", 19) == 0);
-            bool no_user_rel_var = (synthetic_rel || !rel->variable);
-            bool path_is_named = transform_var_lookup(ctx->var_ctx, NULL) != NULL;
-            /* The above is wrong placeholder — actually check if any
-             * path var references this rel. Use a simpler heuristic:
-             * check whether the rel's variable (if synthetic-generated)
-             * is captured as path element. For simplicity, opt out of
-             * the EXISTS shortcut whenever ANY VAR_KIND_PATH exists
-             * in the var context (path is named somewhere). */
-            (void)path_is_named;
-            bool has_path_var = false;
-            for (int vi = 0; vi < ctx->var_ctx->count; vi++) {
-                if (ctx->var_ctx->vars[vi].kind == VAR_KIND_PATH) {
-                    has_path_var = true;
-                    break;
-                }
-            }
-            /* Check if the deferred endpoint is already in scope (e.g.
-             * a previous rel handler already emitted it). In that case
-             * the EXISTS shortcut would double-emit the node JOIN.
-             * Fall through to the standard path which correctly
-             * handles the in-scope case. */
-            bool exists_deferred_in_scope = false;
-            if (no_user_rel_var && !has_path_var &&
-                ((src_deferred && !tgt_deferred) || (!src_deferred && tgt_deferred))) {
-                const char *def_alias_chk = src_deferred ? source_alias : target_alias;
-                const char *fs0 = dbuf_get(&ctx->unified_builder->from);
-                const char *js0 = dbuf_get(&ctx->unified_builder->joins);
-                char needle[80], suffix[80];
-                snprintf(needle, sizeof(needle), " AS %s ", def_alias_chk);
-                snprintf(suffix, sizeof(suffix), " AS %s", def_alias_chk);
-                size_t slen = strlen(suffix);
-                if (fs0 && (strstr(fs0, needle) ||
-                            (strlen(fs0) >= slen &&
-                             strcmp(fs0 + strlen(fs0) - slen, suffix) == 0))) {
-                    exists_deferred_in_scope = true;
-                }
-                if (!exists_deferred_in_scope && js0 &&
-                    (strstr(js0, needle) ||
-                     (strlen(js0) >= slen &&
-                      strcmp(js0 + strlen(js0) - slen, suffix) == 0))) {
-                    exists_deferred_in_scope = true;
-                }
-            }
-            if (no_user_rel_var && !has_path_var && !exists_deferred_in_scope &&
-                ((src_deferred && !tgt_deferred) || (!src_deferred && tgt_deferred))) {
-                /* Determine the deferred-endpoint alias and direction. */
-                const char *deferred_alias;
-                cypher_node_pattern *deferred_node;
-                const char *bound_id_ref;
-                const char *bound_endpoint_col;  /* edges column the bound side maps to */
-                const char *deferred_endpoint_col;
-                if (src_deferred) {
-                    /* Source is deferred; target is bound. */
-                    deferred_alias = source_alias;
-                    deferred_node = source_node;
-                    bound_id_ref = get_node_id_ref(ctx, target_alias, target_node->variable);
-                    bound_endpoint_col = "target_id";
-                    deferred_endpoint_col = "source_id";
-                } else {
-                    /* Target is deferred; source is bound. */
-                    deferred_alias = target_alias;
-                    deferred_node = target_node;
-                    bound_id_ref = get_node_id_ref(ctx, source_alias, source_node->variable);
-                    bound_endpoint_col = "source_id";
-                    deferred_endpoint_col = "target_id";
-                }
-                /* The deferred node's id among the far ends of the bound
-                 * node's edges: `c.id IN (SELECT target_id FROM edges WHERE
-                 * source_id = <bound> ...)`. Same rows as the former
-                 * EXISTS (SELECT 1 FROM edges WHERE source_id = <bound> AND
-                 * target_id = c.id), but SQLite drives it from the edge
-                 * index and probes c by id, instead of testing every node
-                 * for every outer row (GQLITE-T-0437, #154). */
-                dynamic_buffer type_cond; dbuf_init(&type_cond);
-                if (rel->type) {
-                    char *esc = escape_sql_string(rel->type);
-                    dbuf_appendf(&type_cond, " AND _e.type = '%s'", esc ? esc : rel->type);
-                    free(esc);
-                } else if (rel->types && rel->types->count > 0) {
-                    dbuf_append(&type_cond, " AND _e.type IN (");
-                    for (int t = 0; t < rel->types->count; t++) {
-                        if (t > 0) dbuf_append(&type_cond, ", ");
-                        cypher_literal *tl = (cypher_literal*)rel->types->items[t];
-                        char *esc = escape_sql_string(tl->value.string);
-                        dbuf_appendf(&type_cond, "'%s'", esc ? esc : tl->value.string);
-                        free(esc);
-                    }
-                    dbuf_append(&type_cond, ")");
-                }
-                const char *type_sql = dbuf_is_empty(&type_cond) ? "" : dbuf_get(&type_cond);
-                dynamic_buffer on_cond; dbuf_init(&on_cond);
-                const char *graph_p = ctx->current_graph ? ctx->current_graph : "";
-                dbuf_appendf(&on_cond,
-                    "%s.id IN (SELECT _e.%s FROM %sedges _e WHERE _e.%s = %s%s",
-                    deferred_alias, deferred_endpoint_col, graph_p,
-                    bound_endpoint_col, bound_id_ref, type_sql);
-                if (!rel->left_arrow && !rel->right_arrow) {
-                    /* Undirected: the edges the other way round too (with the
-                     * same type filter; a type list was dropped here). */
-                    dbuf_appendf(&on_cond,
-                        " UNION ALL SELECT _e.%s FROM %sedges _e WHERE _e.%s = %s%s",
-                        bound_endpoint_col, graph_p,
-                        deferred_endpoint_col, bound_id_ref, type_sql);
-                }
-                dbuf_append(&on_cond, ")");
-                dbuf_free(&type_cond);
-                /* Label filter on the deferred node. */
-                { char idx[160]; snprintf(idx, sizeof(idx), "%s.id", deferred_alias);
-                  char *alt = label_alternatives_cond(ctx, deferred_node, idx);
-                  if (alt) { dbuf_append(&on_cond, alt); free(alt); } }
-                if (has_labels(deferred_node)) {
-                    for (int li = 0; li < deferred_node->labels->count; li++) {
-                        const char *label = get_label_string(deferred_node->labels->items[li]);
-                        if (!label) continue;
-                        char *esc = escape_sql_string(label);
-                        dbuf_appendf(&on_cond,
-                            " AND EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s.id AND label = '%s')",
-                            graph_p, deferred_alias, esc ? esc : label);
-                        free(esc);
-                    }
-                }
-                sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
-                         get_graph_table(ctx, "nodes"), deferred_alias,
-                         dbuf_get(&on_cond));
-                dbuf_free(&on_cond);
-                /* Register the rel variable (even if synthetic). */
-                if (rel->variable) {
-                    transform_var_register_edge(ctx->var_ctx, rel->variable, edge_alias, rel->type);
-                } else {
-                    char synthetic_var[32];
-                    snprintf(synthetic_var, sizeof(synthetic_var), "__unnamed_rel_%d", rel_index);
-                    transform_var_register_edge(ctx->var_ctx, synthetic_var, edge_alias, rel->type);
-                }
-                return 0;
-            }
+            /* An anonymous relationship takes the same edge join as a named
+             * one: one row per matching edge. A `c.id IN (SELECT ...)`
+             * shortcut gave one row per node pair, so parallel edges
+             * collapsed (GQLITE-T-0465). */
 
             /* Get proper source id reference (handles projected variables from WITH) */
             const char *source_id = get_node_id_ref(ctx, source_alias, source_node->variable);
@@ -3249,10 +3101,15 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
             dbuf_init(&edge_cond);
             bool first_cond = true;
             if (!effective_src_defer) {
-                if (undirected_far)
-                    dbuf_appendf(&edge_cond, "(%s.source_id = %s OR %s.target_id = %s)",
-                                 edge_alias, source_id, edge_alias, source_id);
-                else
+                if (undirected_far) {
+                    /* Edge ids from each index: SQLite does not use an index
+                     * for `source_id = S OR target_id = S` here. */
+                    const char *edges_tbl = get_graph_table(ctx, "edges");
+                    dbuf_appendf(&edge_cond,
+                                 "%s.id IN (SELECT _ue.id FROM %s _ue WHERE _ue.source_id = %s"
+                                 " UNION ALL SELECT _ue.id FROM %s _ue WHERE _ue.target_id = %s)",
+                                 edge_alias, edges_tbl, source_id, edges_tbl, source_id);
+                } else
                     dbuf_appendf(&edge_cond, "%s.source_id = %s", edge_alias, source_id);
                 first_cond = false;
             }
