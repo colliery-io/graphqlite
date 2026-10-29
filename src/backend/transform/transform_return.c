@@ -372,6 +372,9 @@ static bool return_uses_sorter(cypher_transform_context *ctx, cypher_return *ret
 {
     if (ret->distinct || ctx->in_union) return true;
     if (ret->order_by && ret->order_by->count > 0) return true;
+    /* The ORDER BY of a WITH before the RETURN is carried onto this
+     * SELECT (GQLITE-T-0466). */
+    if (ctx->unified_builder && ctx->unified_builder->order_count > 0) return true;
     for (int i = 0; ret->items && i < ret->items->count; i++) {
         cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
         if (it && expr_has_aggregate(it->expr)) return true;
