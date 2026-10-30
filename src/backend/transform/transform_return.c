@@ -2378,6 +2378,17 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                 }
                             }
                         }
+                        /* `:A|B` (GQLITE-T-0439). */
+                        {
+                            int alt_node = (i == 0) ? 0 : i / 2;
+                            char *alt = label_alternatives_cond(ctx, node, node_ids[alt_node]);
+                            if (alt) {
+                                /* alt starts with " AND " */
+                                append_sql(ctx, "%s", first_condition ? alt + 5 : alt);
+                                first_condition = false;
+                                free(alt);
+                            }
+                        }
                     }
                 }
 
