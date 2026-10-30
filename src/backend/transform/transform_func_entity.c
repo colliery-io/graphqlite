@@ -163,11 +163,19 @@ int transform_labels_function(cypher_transform_context *ctx, cypher_function_cal
      * UNWIND (GQLITE-T-0450), as in id(). */
     bool is_projected = transform_var_is_projected(ctx->var_ctx, id->name) ||
                         transform_var_alias_is_id(ctx->var_ctx, id->name);
+    /* A projected value can be the node itself (a list comprehension over
+     * nodes(p)): read its labels from the value (GQLITE-T-0474). */
+    bool value_ok = transform_var_is_projected(ctx->var_ctx, id->name) &&
+                    !transform_var_alias_is_id(ctx->var_ctx, id->name);
+    if (value_ok)
+        append_sql(ctx, "(CASE WHEN typeof(%s) = 'text' AND json_valid(%s) THEN _gql_labels(%s) ELSE ",
+                   alias, alias, alias);
     append_sql(ctx,
         "(CASE WHEN %s%s IS NULL THEN NULL ELSE "
         "COALESCE(json((SELECT json_group_array(label) FROM %snode_labels WHERE node_id = %s%s)), json('[]')) END)",
         alias, is_projected ? "" : ".id",
         gprefix, alias, is_projected ? "" : ".id");
+    if (value_ok) append_sql(ctx, " END)");
 
     return 0;
 }
