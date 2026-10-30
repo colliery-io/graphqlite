@@ -615,6 +615,22 @@ def merge_idempotent(ch: Chooser) -> Case:
         write=True, readback="MATCH (n:New) RETURN n.k AS k")
 
 
+def merge_direct(ch: Chooser) -> Case:
+    """MERGE right after the read part (no WITH), once or twice, leaves one
+    node per distinct value; coalesce keeps the value non-null
+    (GQLITE-T-0461: a computed value was written as nothing)."""
+    shape, pre, nodes, scope = _write_prefix(ch, exclude_new=True)
+    if shape == "create":
+        pre, nodes, scope = "UNWIND [1, 2, 2] AS ⟨i⟩", [], ["i"]
+    e = f"coalesce({write_expr(ch, nodes, 'i' in scope)}, 'none')"
+    q = render(f"{pre} MERGE (:New {{k: {e}}})")
+    return Case(f"merge_direct/{ch.used['w.kind']}", [
+        Variant("once", q, mode="write"),
+        Variant("twice", q, mode="write", repeat=2),
+        Variant("distinct values", render(f"{pre} RETURN DISTINCT {e} AS k"))],
+        write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
 def set_readback(ch: Chooser) -> Case:
     """SET a.k = e stores the value of e for each matched node."""
     lab = label_text(ch.pick("c1.label"), ch)
@@ -670,6 +686,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "optional_null": (optional_null, G + ["c1.label"] + C2_FORCED + ["om.form"]),
     "write_expression": (write_expression, G + C1 + ["w.shape", "w.kind"]),
     "merge_idempotent": (merge_idempotent, G + C1 + ["w.shape", "w.kind"]),
+    "merge_direct": (merge_direct, G + C1 + ["w.shape", "w.kind"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
 }
