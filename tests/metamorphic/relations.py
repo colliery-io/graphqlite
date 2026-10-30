@@ -31,7 +31,7 @@ PLAIN_NAMES = ["n", "m", "x0", "foo", "bar", "node1", "zz", "p1", "q1", "k",
 
 DOMAINS.update({
     "ld.form": ["match", "predicate", "comprehension"],
-    "w.shape": ["create", "match", "match_unwind", "unwind", "match_with"],
+    "w.shape": ["create", "match", "match_unwind", "unwind", "match_with", "match_match"],
     "w.kind": ["prop", "arith", "case", "func", "list", "map_value", "nullcheck", "string"],
     "vl.range": ["*1..1", "*1..2", "*2..2", "*1..3"],
     "rp.clause": ["match", "optional"],
@@ -533,6 +533,12 @@ def _write_prefix(ch: Chooser, exclude_new: bool = False):
         return shape, m, nodes, nodes + rels
     if shape == "match_unwind":
         return shape, f"{m} UNWIND [1, 2] AS ⟨i⟩", nodes, nodes + rels + ["i"]
+    if shape == "match_match":
+        # A second MATCH whose WHERE reads the first one (GQLITE-T-0469).
+        m2 = f"{m} MATCH (⟨c⟩) WHERE ⟨c⟩.v = {v(nodes[0])}.v"
+        if exclude_new:
+            m2 += " AND NOT ⟨c⟩:New"
+        return shape, m2, nodes + ["c"], nodes + rels + ["c"]
     keep = ", ".join(v(x) for x in nodes + rels)
     return shape, f"{m} WITH {keep}", nodes, nodes + rels
 
@@ -549,9 +555,12 @@ def write_expression(ch: Chooser) -> Case:
             write=True, readback="MATCH (n:New) RETURN n.k AS k")
     e = write_expr(ch, nodes, "i" in scope)
     keep = ", ".join(v(x) for x in scope)
+    # After two MATCH clauses the new node hangs off a matched one, so the
+    # CREATE reads the bound variables (GQLITE-T-0469).
+    link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
     return Case(f"write_expression/{ch.used['w.kind']}/{shape}", [
-        Variant("inline", render(f"{pre} CREATE (:New {{k: {e}}})"), mode="write"),
-        Variant("with", render(f"{pre} WITH {keep}, {e} AS ⟨val⟩ CREATE (:New {{k: ⟨val⟩}})"),
+        Variant("inline", render(f"{pre} CREATE {link}(:New {{k: {e}}})"), mode="write"),
+        Variant("with", render(f"{pre} WITH {keep}, {e} AS ⟨val⟩ CREATE {link}(:New {{k: ⟨val⟩}})"),
                 mode="write"),
         Variant("return", render(f"{pre} RETURN {e} AS k"))],
         write=True, readback="MATCH (n:New) RETURN n.k AS k")

@@ -795,15 +795,18 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
     if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
         return false;
     if (!query->clauses || query->clauses->count < 2) return false;
-    int writes = 0;
+    int writes = 0, matches = 0;
     bool merge = false, read_before_merge = false, read_after_write = false, read_seen = false;
     bool only_unwind_read = true;   /* every read clause before the writes is an UNWIND */
+    bool later_match_where = false; /* a WHERE on a second MATCH before the writes */
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
         switch (c->type) {
             case AST_NODE_MATCH: case AST_NODE_WITH: case AST_NODE_UNWIND:
                 if (writes > 0 && c->type == AST_NODE_MATCH) read_after_write = true;
+                if (writes == 0 && c->type == AST_NODE_MATCH &&
+                    matches++ > 0 && ((cypher_match *)c)->where) later_match_where = true;
                 if (c->type != AST_NODE_UNWIND) only_unwind_read = false;
                 read_seen = true;
                 break;
@@ -826,6 +829,9 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
      * batch handler: it is correct there, and 28x faster than row by row
      * (GQLITE-T-0431). */
     if (writes == 1 && merge && only_unwind_read && !read_after_write) return false;
+    /* The MATCH + write handlers bind each MATCH on its own: a second
+     * MATCH's WHERE did not see the first one's variables (GQLITE-T-0469). */
+    if (later_match_where) return true;
     return (merge && (read_before_merge || writes >= 2)) || read_after_write;
 }
 
