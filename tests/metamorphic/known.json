@@ -3,6 +3,5 @@
   {"relation": ".", "kind": "error", "error": "SET value must be|SET value property access|Failed to evaluate function '[^']*' in SET", "task": "GQLITE-T-0456"},
   {"relation": "^keyword_name/", "kind": "error", "error": "unexpected [A-Z]+", "task": "GQLITE-T-0440"},
   {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"},
-  {"relation": "^union/", "kind": "mismatch", "output": "\\b(true|false)\\b", "task": "GQLITE-T-0473"},
-  {"relation": "^union/", "kind": "mismatch", "query": "RETURN [^U]*\\b\\w+ AS c0, (max|min)\\(", "task": "GQLITE-T-0475"}
+  {"relation": "^union/", "kind": "mismatch", "output": "\\b(true|false)\\b", "task": "GQLITE-T-0473"}
 ]
