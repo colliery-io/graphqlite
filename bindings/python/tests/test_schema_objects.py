@@ -74,3 +74,33 @@ def test_relationship_index_unsupported(conn):
     with pytest.raises(graphqlite.CypherError) as ei:
         conn.cypher("CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.since)")
     assert "UnsupportedFeature" in str(ei.value)
+
+
+def test_unique_tells_large_integers_apart(conn):
+    """GQLITE-T-0441: the key read numbers as REAL, so ints above 2^53
+    that differ collided; a whole-number float is still the same int."""
+    conn.cypher("CREATE CONSTRAINT FOR (p:Big) REQUIRE p.id IS UNIQUE")
+    conn.cypher("CREATE (:Big {id: 9007199254740992}), (:Big {id: 9007199254740993})")
+    assert count(conn, "Big") == 2
+    with pytest.raises(graphqlite.CypherError):
+        conn.cypher("CREATE (:Big {id: 9007199254740992.0})")
+    assert count(conn, "Big") == 2
+
+
+def test_failed_store_is_an_error(tmp_path):
+    """GQLITE-T-0441: on a read-only database CREATE / DROP CONSTRAINT said
+    it was done; the constraint was not stored."""
+    path = tmp_path / "ro.db"
+    c = connect(str(path), extension_path=get_extension_path())
+    c.cypher("CREATE CONSTRAINT a FOR (p:Q) REQUIRE p.id IS UNIQUE")
+    c.close()
+    ro = connect(f"file:{path}?mode=ro", extension_path=get_extension_path(), uri=True)
+    try:
+        with pytest.raises(graphqlite.CypherError) as ei:
+            ro.cypher("CREATE CONSTRAINT b FOR (p:P) REQUIRE p.id IS UNIQUE")
+        assert "Failed to store" in str(ei.value)
+        with pytest.raises(graphqlite.CypherError) as ei:
+            ro.cypher("DROP CONSTRAINT a")
+        assert "Failed to drop" in str(ei.value)
+    finally:
+        ro.close()
