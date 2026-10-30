@@ -99,8 +99,8 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
  * parser can't immediately distinguish a node pattern from a parenthesized
  * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 13
-%expect-rr 3  /* IDENTIFIER, BQIDENT, END_P in variable_opt */
+%expect 9
+%expect-rr 8  /* a name in parentheses: an expression or a node variable (IDENTIFIER, soft_kw, BQIDENT, END_P); GLR picks the parse that completes */
 
 %union {
     int64_t integer;
@@ -204,7 +204,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 
 %type <list> label_opt label_list label_alt_list
 %type <string> label_name
-%type <string> variable_opt from_graph_opt non_reserved_kw
+%type <string> variable_opt from_graph_opt non_reserved_kw soft_kw var_name
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list rel_type_list
 %type <node> skip_opt limit_opt where_opt
@@ -369,7 +369,7 @@ with_clause:
 
 /* UNWIND clause - expands list into rows */
 unwind_clause:
-    UNWIND expr AS IDENTIFIER
+    UNWIND expr AS var_name
         {
             $$ = (ast_node*)make_cypher_unwind($2, $4, @1.first_line);
             free($4);
@@ -384,7 +384,7 @@ unwind_clause:
 
 /* FOREACH clause - iterate over list and apply update clauses */
 foreach_clause:
-    FOREACH '(' IDENTIFIER IN expr '|' foreach_update_list ')'
+    FOREACH '(' var_name IN expr '|' foreach_update_list ')'
         {
             $$ = (ast_node*)make_cypher_foreach($3, $5, $7, @1.first_line);
             free($3);
@@ -453,12 +453,12 @@ yield_item_list:
     ;
 
 yield_item:
-    IDENTIFIER
+    var_name
         {
             $$ = make_return_item((ast_node*)make_identifier($1, @1.first_line), $1);
             free($1);
         }
-    | IDENTIFIER AS IDENTIFIER
+    | var_name AS var_name
         {
             $$ = make_return_item((ast_node*)make_identifier($1, @1.first_line), $3);
             free($1);
@@ -481,26 +481,26 @@ procedure_name:
 
 /* LOAD CSV clause - import data from CSV files */
 load_csv_clause:
-    LOAD CSV FROM STRING AS IDENTIFIER
+    LOAD CSV FROM STRING AS var_name
         {
             $$ = (ast_node*)make_cypher_load_csv($4, $6, false, NULL, @1.first_line);
             free($4);
             free($6);
         }
-    | LOAD CSV WITH HEADERS FROM STRING AS IDENTIFIER
+    | LOAD CSV WITH HEADERS FROM STRING AS var_name
         {
             $$ = (ast_node*)make_cypher_load_csv($6, $8, true, NULL, @1.first_line);
             free($6);
             free($8);
         }
-    | LOAD CSV FROM STRING AS IDENTIFIER FIELDTERMINATOR STRING
+    | LOAD CSV FROM STRING AS var_name FIELDTERMINATOR STRING
         {
             $$ = (ast_node*)make_cypher_load_csv($4, $6, false, $8, @1.first_line);
             free($4);
             free($6);
             free($8);
         }
-    | LOAD CSV WITH HEADERS FROM STRING AS IDENTIFIER FIELDTERMINATOR STRING
+    | LOAD CSV WITH HEADERS FROM STRING AS var_name FIELDTERMINATOR STRING
         {
             $$ = (ast_node*)make_cypher_load_csv($6, $8, true, $10, @1.first_line);
             free($6);
@@ -640,7 +640,7 @@ return_item:
             if ($$) $$->source_text = source_text_span(context, @1.first_line, @1.first_column,
                                                        @1.last_line, @1.last_column);
         }
-    | expr AS IDENTIFIER
+    | expr AS var_name
         {
             $$ = make_return_item($1, $3);
             free($3);
@@ -666,7 +666,7 @@ set_item_list:
             ast_list_append($1, (ast_node*)$3);
             $$ = $1;
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name
         {
             /* SET n:L1:L2 — produce two set_items, one per label. */
             $$ = ast_list_create();
@@ -682,7 +682,7 @@ set_item_list:
             }
             free($1);
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name ':' label_name
         {
             /* SET n:L1:L2:L3 — three labels. */
             $$ = ast_list_create();
@@ -738,7 +738,7 @@ set_item:
             /* SET n += {map} — merge properties */
             $$ = make_cypher_set_item($1, $3, true);
         }
-    | IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name
         {
             /* SET n:Label syntax */
             cypher_identifier *var = make_identifier($1, @1.first_line);
@@ -851,7 +851,7 @@ remove_item_list:
             ast_list_append($1, (ast_node*)$3);
             $$ = $1;
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name
         {
             /* REMOVE n:L1:L2 — produce two remove_items, one per label. */
             $$ = ast_list_create();
@@ -867,7 +867,7 @@ remove_item_list:
             }
             free($1);
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name ':' label_name
         {
             /* REMOVE n:L1:L2:L3 — three labels. */
             $$ = ast_list_create();
@@ -891,7 +891,7 @@ remove_item_list:
     ;
 
 remove_item:
-    IDENTIFIER '.' IDENTIFIER
+    var_name '.' IDENTIFIER
         {
             /* REMOVE n.property - property access */
             cypher_identifier *base = make_identifier($1, @1.first_line);
@@ -900,7 +900,7 @@ remove_item:
             free($1);
             free($3);
         }
-    | IDENTIFIER '.' BQIDENT
+    | var_name '.' BQIDENT
         {
             /* REMOVE n.`special-key` - backtick-quoted property */
             cypher_identifier *base = make_identifier($1, @1.first_line);
@@ -927,7 +927,7 @@ remove_item:
             free($1);
             free($3);
         }
-    | IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name
         {
             /* REMOVE n:Label syntax */
             cypher_identifier *var = make_identifier($1, @1.first_line);
@@ -994,7 +994,7 @@ path:
         {
             $$ = $1;
         }
-    | IDENTIFIER '=' simple_path
+    | var_name '=' simple_path
         {
             $$ = make_path_with_var($1, $3->elements);
             /* Free the anonymous path structure, but keep its elements */
@@ -1006,7 +1006,7 @@ path:
             $$ = make_path_with_var($1, $3->elements);
             free($3);
         }
-    | IDENTIFIER '=' SHORTESTPATH '(' simple_path ')'
+    | var_name '=' SHORTESTPATH '(' simple_path ')'
         {
             cypher_path *sp = make_shortest_path($5->elements, PATH_TYPE_SHORTEST);
             sp->var_name = $1;
@@ -1026,7 +1026,7 @@ path:
             $$ = make_shortest_path($3->elements, PATH_TYPE_SHORTEST);
             free($3);
         }
-    | IDENTIFIER '=' ALLSHORTESTPATHS '(' simple_path ')'
+    | var_name '=' ALLSHORTESTPATHS '(' simple_path ')'
         {
             cypher_path *sp = make_shortest_path($5->elements, PATH_TYPE_ALL_SHORTEST);
             sp->var_name = $1;
@@ -1195,7 +1195,7 @@ rel_pattern:
 
 variable_opt:
     /* empty */     { $$ = NULL; }
-    | IDENTIFIER    { $$ = $1; }
+    | var_name      { $$ = $1; }
     | BQIDENT       { $$ = $1; }
     | END_P         { $$ = strdup("end"); }  /* Allow 'end' as variable name */
     ;
@@ -1561,14 +1561,14 @@ primary_expr:
     | map_literal       { $$ = $1; }
     | map_projection    { $$ = $1; }
     | case_expression   { $$ = $1; }
-    | IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name
         {
             cypher_identifier *base = make_identifier($1, @1.first_line);
             $$ = (ast_node*)make_label_expr((ast_node*)base, $3, @3.first_line);
             free($1);
             free($3);
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name
         {
             /* Conjunctive label expression `n:L1:L2` — emit
              * (n:L1) AND (n:L2). */
@@ -1581,7 +1581,7 @@ primary_expr:
                                             @1.first_line);
             free($1); free($3); free($5);
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name ':' label_name
         {
             /* Three-label conjunction. */
             cypher_identifier *b1 = make_identifier($1, @1.first_line);
@@ -1598,7 +1598,7 @@ primary_expr:
                                             @1.first_line);
             free($1); free($3); free($5); free($7);
         }
-    | IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER ':' IDENTIFIER
+    | var_name ':' label_name ':' label_name ':' label_name ':' label_name
         {
             /* Four-label conjunction (Graph5 [4], e.g. `a:C:A:A:C`).
              * Repeated labels are harmless — each conjunct is an
@@ -1770,22 +1770,22 @@ function_call:
 
 /* List predicates: all(), any(), none(), single() */
 list_predicate:
-    ALL '(' IDENTIFIER IN expr WHERE expr ')'
+    ALL '(' var_name IN expr WHERE expr ')'
         {
             $$ = (ast_node*)make_list_predicate(LIST_PRED_ALL, $3, $5, $7, @1.first_line);
             free($3);
         }
-    | ANY '(' IDENTIFIER IN expr WHERE expr ')'
+    | ANY '(' var_name IN expr WHERE expr ')'
         {
             $$ = (ast_node*)make_list_predicate(LIST_PRED_ANY, $3, $5, $7, @1.first_line);
             free($3);
         }
-    | NONE '(' IDENTIFIER IN expr WHERE expr ')'
+    | NONE '(' var_name IN expr WHERE expr ')'
         {
             $$ = (ast_node*)make_list_predicate(LIST_PRED_NONE, $3, $5, $7, @1.first_line);
             free($3);
         }
-    | SINGLE '(' IDENTIFIER IN expr WHERE expr ')'
+    | SINGLE '(' var_name IN expr WHERE expr ')'
         {
             $$ = (ast_node*)make_list_predicate(LIST_PRED_SINGLE, $3, $5, $7, @1.first_line);
             free($3);
@@ -1794,7 +1794,7 @@ list_predicate:
 
 /* Reduce expression: reduce(acc = initial, x IN list | expression) */
 reduce_expr:
-    REDUCE '(' IDENTIFIER '=' expr ',' IDENTIFIER IN expr '|' expr ')'
+    REDUCE '(' var_name '=' expr ',' var_name IN expr '|' expr ')'
         {
             /* reduce(acc = initial, x IN list | expression) */
             $$ = (ast_node*)make_reduce_expr($3, $5, $7, $9, $11, @1.first_line);
@@ -1840,22 +1840,22 @@ list_literal:
 
 /* List comprehension: [x IN list], [x IN list WHERE cond], [x IN list | expr], [x IN list WHERE cond | expr] */
 list_comprehension:
-    '[' IDENTIFIER IN expr ']'
+    '[' var_name IN expr ']'
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, NULL, NULL, @1.first_line);
             free($2);
         }
-    | '[' IDENTIFIER IN expr WHERE expr ']'
+    | '[' var_name IN expr WHERE expr ']'
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, $6, NULL, @1.first_line);
             free($2);
         }
-    | '[' IDENTIFIER IN expr '|' expr ']'
+    | '[' var_name IN expr '|' expr ']'
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, NULL, $6, @1.first_line);
             free($2);
         }
-    | '[' IDENTIFIER IN expr WHERE expr '|' expr ']'
+    | '[' var_name IN expr WHERE expr '|' expr ']'
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, $6, $8, @1.first_line);
             free($2);
@@ -1883,14 +1883,14 @@ pattern_comprehension:
                 comp_pattern(make_node_pattern($3, $4, (ast_node*)$5), $7), $9, $11, @1.first_line);
         }
     /* T-0332: path-assignment form `[p = (...)-->(...) | expr]` */
-    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' comp_steps '|' expr ']'
+    | '[' var_name '=' '(' variable_opt label_opt properties_opt ')' comp_steps '|' expr ']'
         {
             cypher_pattern_comprehension *pc = make_pattern_comprehension(
                 comp_pattern(make_node_pattern($5, $6, (ast_node*)$7), $9), NULL, $11, @1.first_line);
             pc->path_var = strdup($2);
             $$ = (ast_node*)pc;
         }
-    | '[' IDENTIFIER '=' '(' variable_opt label_opt properties_opt ')' comp_steps WHERE expr '|' expr ']'
+    | '[' var_name '=' '(' variable_opt label_opt properties_opt ')' comp_steps WHERE expr '|' expr ']'
         {
             cypher_pattern_comprehension *pc = make_pattern_comprehension(
                 comp_pattern(make_node_pattern($5, $6, (ast_node*)$7), $9), $11, $13, @1.first_line);
@@ -2064,6 +2064,12 @@ identifier:
             $$ = make_identifier($1, @1.first_line);
             free($1);
         }
+    | soft_kw
+        {
+            /* A non-reserved keyword used as a variable (GQLITE-T-0440). */
+            $$ = make_identifier($1, @1.first_line);
+            free($1);
+        }
     | BQIDENT
         {
             $$ = make_identifier($1, @1.first_line);
@@ -2078,6 +2084,33 @@ identifier:
 
 /* Keywords that may serve as identifiers/labels/property-keys outside their
  * reserved contexts. Returns the string form (caller frees). */
+/* Keywords openCypher does not reserve, as variable and alias names
+ * (`RETURN 1 AS yield`, `MATCH (from)`), spelled as written
+ * (GQLITE-T-0440). */
+soft_kw:
+      YIELD           { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "YIELD"); }
+    | FROM            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FROM"); }
+    | CSV             { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CSV"); }
+    | LOAD            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "LOAD"); }
+    | HEADERS         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "HEADERS"); }
+    | FIELDTERMINATOR { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FIELDTERMINATOR"); }
+    | PATTERN         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "PATTERN"); }
+    | EXPLAIN         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "EXPLAIN"); }
+    | REDUCE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "REDUCE"); }
+    | ANY             { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ANY"); }
+    | NONE            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "NONE"); }
+    | SINGLE          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SINGLE"); }
+    | CALL            { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "CALL"); }
+    | FOREACH         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FOREACH"); }
+    | SHORTESTPATH    { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SHORTESTPATH"); }
+    | ALLSHORTESTPATHS{ $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ALLSHORTESTPATHS"); }
+    ;
+
+var_name:
+    IDENTIFIER      { $$ = $1; }
+    | soft_kw       { $$ = $1; }
+    ;
+
 non_reserved_kw:
     /* A keyword used as a name (label, relationship type, property, map
      * key) keeps its spelling as written (Unwind1 [6]: `[:IN]`; Map1 [5]). */
@@ -2130,6 +2163,10 @@ non_reserved_kw:
     | UNION         { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "UNION"); }
     | FROM          { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FROM"); }
     | HEADERS       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "HEADERS"); }
+    | FIELDTERMINATOR{ $$ = keyword_text_at(context, @1.first_line, @1.first_column, "FIELDTERMINATOR"); }
+    | EXPLAIN       { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "EXPLAIN"); }
+    | SHORTESTPATH  { $$ = keyword_text_at(context, @1.first_line, @1.first_column, "SHORTESTPATH"); }
+    | ALLSHORTESTPATHS{ $$ = keyword_text_at(context, @1.first_line, @1.first_column, "ALLSHORTESTPATHS"); }
     ;
 
 parameter:
