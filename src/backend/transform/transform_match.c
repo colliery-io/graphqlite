@@ -206,8 +206,8 @@ static bool optional_path_node_is_bound(cypher_transform_context *ctx,
 
 /* " AND EXISTS (... label IN (...))" for a node written `(n:A|B)`, owned;
  * NULL when the node has no alternatives (GQLITE-T-0125). */
-static char *label_alternatives_cond(cypher_transform_context *ctx, cypher_node_pattern *node,
-                                     const char *id_expr)
+char *label_alternatives_cond(cypher_transform_context *ctx, cypher_node_pattern *node,
+                              const char *id_expr)
 {
     if (!node || !node->label_alternatives || node->label_alternatives->count == 0) return NULL;
     dynamic_buffer b;

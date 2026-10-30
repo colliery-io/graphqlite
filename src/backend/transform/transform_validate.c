@@ -1880,6 +1880,26 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
  */
 /* CREATE and MERGE make the labels they name: `(n:A|B)` names no label to
  * make (GQLITE-T-0125). */
+static int check_no_label_alternatives(ast_list *patterns, const char *kw, char **error_message);
+
+/* CREATE and MERGE inside FOREACH take no `:A|B` either (GQLITE-T-0439). */
+static int check_foreach_label_alternatives(cypher_foreach *fe, char **error_message)
+{
+    for (int i = 0; fe && fe->body && i < fe->body->count; i++) {
+        ast_node *c = fe->body->items[i];
+        if (!c) continue;
+        int rc = 0;
+        if (c->type == AST_NODE_CREATE)
+            rc = check_no_label_alternatives(((cypher_create *)c)->pattern, "CREATE", error_message);
+        else if (c->type == AST_NODE_MERGE)
+            rc = check_no_label_alternatives(((cypher_merge *)c)->pattern, "MERGE", error_message);
+        else if (c->type == AST_NODE_FOREACH)
+            rc = check_foreach_label_alternatives((cypher_foreach *)c, error_message);
+        if (rc != 0) return rc;
+    }
+    return 0;
+}
+
 static int check_no_label_alternatives(ast_list *patterns, const char *kw, char **error_message)
 {
     for (int i = 0; patterns && i < patterns->count; i++) {
@@ -2524,6 +2544,9 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 if (u->alias) nset_add(&bound, u->alias);
                 break;
             }
+            case AST_NODE_FOREACH:
+                rc = check_foreach_label_alternatives((cypher_foreach *)clause, error_message);
+                break;
             case AST_NODE_CREATE: {
                 cypher_create *c = (cypher_create *)clause;
                 rc = check_no_label_alternatives(c->pattern, "CREATE", error_message);

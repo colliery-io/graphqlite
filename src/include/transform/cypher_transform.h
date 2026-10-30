@@ -335,6 +335,11 @@ void append_var_table(cypher_transform_context *ctx, const char *var_name, const
 /* Returns static buffer - use immediately or copy */
 const char *get_graph_table(cypher_transform_context *ctx, const char *table);
 
+/* " AND EXISTS (... label IN (...))" for a node written `(n:A|B)`, owned;
+ * NULL when the node has no alternatives (GQLITE-T-0125). */
+char *label_alternatives_cond(cypher_transform_context *ctx, cypher_node_pattern *node,
+                              const char *id_expr);
+
 /* Parameter tracking */
 int register_parameter(cypher_transform_context *ctx, const char *name);
 

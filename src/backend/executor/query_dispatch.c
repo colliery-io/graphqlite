@@ -1666,6 +1666,7 @@ typedef struct {
     cypher_node_pattern *node;
     cypher_rel_pattern *rel;
     ast_list *saved_labels;
+    ast_list *saved_alts;     /* `:A|B` (GQLITE-T-0439) */
     ast_node *saved_props;
 } pinned_elem;
 
@@ -1832,8 +1833,10 @@ static cypher_match *row_pin_begin(row_pin *pin, cypher_match *match)
         pinned_elem *pe = &pin->elems[i];
         if (pe->node) {
             pe->saved_labels = pe->node->labels;
+            pe->saved_alts = pe->node->label_alternatives;
             pe->saved_props = pe->node->properties;
             pe->node->labels = NULL;
+            pe->node->label_alternatives = NULL;
             pe->node->properties = NULL;
         } else if (pe->rel) {
             pe->saved_props = pe->rel->properties;
@@ -1854,6 +1857,7 @@ static void row_pin_end(row_pin *pin, cypher_match *synth)
         pinned_elem *pe = &pin->elems[i];
         if (pe->node) {
             pe->node->labels = pe->saved_labels;
+            pe->node->label_alternatives = pe->saved_alts;
             pe->node->properties = pe->saved_props;
         } else if (pe->rel) {
             pe->rel->properties = pe->saved_props;

@@ -166,6 +166,13 @@ static bool emit_exists_varlen_path(cypher_transform_context *ctx, cypher_path *
             append_sql(ctx, ")");
         }
     }
+    /* `:A|B` on an endpoint (GQLITE-T-0439). */
+    for (int side = 0; side < 2; side++) {
+        char idx[64];
+        snprintf(idx, sizeof(idx), "%s.%s", cte, side ? "end_id" : "start_id");
+        char *alt = label_alternatives_cond(ctx, side ? rnode : lnode, idx);
+        if (alt) { append_sql(ctx, "%s", alt); free(alt); }
+    }
     return true;
 }
 
@@ -464,6 +471,17 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                             append_sql(ctx, ")");
                                             first_condition = false;
                                         }
+                                    }
+                                }
+                                /* `:A|B` (GQLITE-T-0439). */
+                                {
+                                    int alt_node = (i == 0) ? 0 : i / 2;
+                                    char *alt = label_alternatives_cond(ctx, node, node_ids[alt_node]);
+                                    if (alt) {
+                                        /* alt starts with " AND " */
+                                        append_sql(ctx, "%s", first_condition ? alt + 5 : alt);
+                                        first_condition = false;
+                                        free(alt);
                                     }
                                 }
                             }
