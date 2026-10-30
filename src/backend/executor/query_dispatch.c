@@ -2564,13 +2564,15 @@ static bool create_props_simple(ast_node *props)
     return true;
 }
 
-/* Does a CREATE of the query set a property the fast paths cannot evaluate? */
-static bool create_props_need_pipeline(cypher_query *query)
+/* Does a CREATE (or MERGE) of the query set a property the fast paths
+ * cannot evaluate? */
+static bool write_props_need_pipeline(cypher_query *query, ast_node_type kind)
 {
     for (int c = 0; query->clauses && c < query->clauses->count; c++) {
         ast_node *cl = query->clauses->items[c];
-        if (!cl || cl->type != AST_NODE_CREATE) continue;
-        ast_list *pat = ((cypher_create *)cl)->pattern;
+        if (!cl || cl->type != kind) continue;
+        ast_list *pat = kind == AST_NODE_MERGE ? ((cypher_merge *)cl)->pattern
+                                               : ((cypher_create *)cl)->pattern;
         for (int i = 0; pat && i < pat->count; i++) {
             ast_node *pn = pat->items[i];
             if (!pn || pn->type != AST_NODE_PATH) continue;
@@ -2586,6 +2588,19 @@ static bool create_props_need_pipeline(cypher_query *query)
         }
     }
     return false;
+}
+
+static bool create_props_need_pipeline(cypher_query *query)
+{
+    return write_props_need_pipeline(query, AST_NODE_CREATE);
+}
+
+/* The MERGE fast paths wrote no property for a computed value
+ * (`UNWIND [1, 2] AS i MERGE (:N {k: i * 2})` merged every row into one
+ * empty node; GQLITE-T-0461). */
+static bool merge_props_need_pipeline(cypher_query *query)
+{
+    return write_props_need_pipeline(query, AST_NODE_MERGE);
 }
 
 static int handle_match_create(cypher_executor *executor, cypher_query *query,
@@ -2900,6 +2915,8 @@ static int handle_create(cypher_executor *executor, cypher_query *query,
 static int handle_merge(cypher_executor *executor, cypher_query *query,
                         cypher_result *result, clause_flags flags)
 {
+    if (merge_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_merge *merge = find_merge_clause(query);
     cypher_set *set = find_set_clause(query);
@@ -3226,6 +3243,8 @@ static int handle_unwind_create(cypher_executor *executor, cypher_query *query,
 static int handle_unwind_merge(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags)
 {
+    if (merge_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_unwind *unwind = find_unwind_clause(query);
     cypher_merge *merge = NULL;
@@ -4167,6 +4186,8 @@ static int handle_unwind_create_return(cypher_executor *executor, cypher_query *
 static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *query,
                                       cypher_result *result, clause_flags flags)
 {
+    if (merge_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_unwind *unwind = find_unwind_clause(query);
     cypher_merge *merge = NULL;
@@ -4331,6 +4352,8 @@ static int handle_unwind_merge_return(cypher_executor *executor, cypher_query *q
 static int handle_merge_return(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags)
 {
+    if (merge_props_need_pipeline(query))
+        return handle_rowwise_write(executor, query, result, flags);
     (void)flags;
     cypher_merge *merge = find_merge_clause(query);
     cypher_return *ret = find_return_clause(query);
@@ -4617,13 +4640,39 @@ static char *rw_scalar_sql(const rw_scalar *sc)
 }
 
 /* Does `expr` reference only scalar bindings of `row` (and literals)? */
+/* Names a list comprehension, list predicate or reduce binds inside
+ * itself: neither row values nor entities (GQLITE-T-0461). */
+static GQL_THREAD_LOCAL const char *rw_local_names[16];
+static GQL_THREAD_LOCAL int rw_local_n = 0;
+
+static bool rw_is_local(const char *n)
+{
+    for (int i = 0; n && i < rw_local_n; i++)
+        if (strcmp(rw_local_names[i], n) == 0) return true;
+    return false;
+}
+
+static bool rw_push_local(const char *n)
+{
+    if (!n || rw_local_n >= 16) return false;
+    rw_local_names[rw_local_n++] = n;
+    return true;
+}
+
+static void rw_pop_local(bool pushed)
+{
+    if (pushed) rw_local_n--;
+}
+
 static bool rw_expr_scalar_only(ast_node *expr, const rw_row *row)
 {
     if (!expr) return true;
     switch (expr->type) {
         case AST_NODE_LITERAL: return true;
         case AST_NODE_PARAMETER: return true;
-        case AST_NODE_IDENTIFIER: return rw_row_scalar(row, ((cypher_identifier*)expr)->name) != NULL;
+        case AST_NODE_IDENTIFIER:
+            return rw_is_local(((cypher_identifier*)expr)->name) ||
+                   rw_row_scalar(row, ((cypher_identifier*)expr)->name) != NULL;
         case AST_NODE_PROPERTY:   /* #124: row.key on an UNWIND map */
             return rw_expr_scalar_only(((cypher_property*)expr)->expr, row);
         case AST_NODE_BINARY_OP: {
@@ -4667,6 +4716,30 @@ static bool rw_expr_scalar_only(ast_node *expr, const rw_row *row)
             for (int i = 0; m->pairs && i < m->pairs->count; i++)
                 if (!rw_expr_scalar_only(((cypher_map_pair*)m->pairs->items[i])->value, row)) return false;
             return true;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension*)expr;
+            if (!rw_expr_scalar_only(lc->list_expr, row)) return false;
+            bool p = rw_push_local(lc->variable);
+            bool ok = rw_expr_scalar_only(lc->where_expr, row) && rw_expr_scalar_only(lc->transform_expr, row);
+            rw_pop_local(p);
+            return ok;
+        }
+        case AST_NODE_LIST_PREDICATE: {
+            cypher_list_predicate *lp = (cypher_list_predicate*)expr;
+            if (!rw_expr_scalar_only(lp->list_expr, row)) return false;
+            bool p = rw_push_local(lp->variable);
+            bool ok = rw_expr_scalar_only(lp->predicate, row);
+            rw_pop_local(p);
+            return ok;
+        }
+        case AST_NODE_REDUCE_EXPR: {
+            cypher_reduce_expr *r = (cypher_reduce_expr*)expr;
+            if (!rw_expr_scalar_only(r->initial_value, row) || !rw_expr_scalar_only(r->list_expr, row)) return false;
+            bool p1 = rw_push_local(r->accumulator), p2 = rw_push_local(r->variable);
+            bool ok = rw_expr_scalar_only(r->expression, row);
+            rw_pop_local(p2); rw_pop_local(p1);
+            return ok;
         }
         default: return false;
     }
@@ -4727,10 +4800,14 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
         transform_var_set_scalar_value(ctx->var_ctx, sc->name, true);
     }
     char *sql_expr = cypher_transform_capture_expression(ctx, expr);
+    /* The value's type tag (GQLITE-A-0007): `coalesce(a.v > 0, 'n')` is a
+     * boolean that SQL gives as 1 (GQLITE-T-0461). */
+    char *tag_sql = sql_expr ? cypher_expr_tag_sql(ctx, expr, sql_expr) : NULL;
     cypher_transform_free_context(ctx);
-    if (!sql_expr) return -1;
-    char *sql = sqlite3_mprintf("SELECT %s", sql_expr);
+    if (!sql_expr) { free(tag_sql); return -1; }
+    char *sql = sqlite3_mprintf("SELECT %s, %s", sql_expr, tag_sql ? tag_sql : "NULL");
     free(sql_expr);
+    free(tag_sql);
     sqlite3_stmt *st = sql ? cypher_executor_helper_stmt(executor, sql) : NULL;
     int type = -1;
     if (st) {
@@ -4750,7 +4827,12 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
             sqlite3_value *cv = sqlite3_column_value(st, 0);
             if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) type = GQL_COL_TYPE_BOOLEAN;
             const char *v = (const char*)sqlite3_column_text(st, 0);
-            if (type == SQLITE_INTEGER && rw_expr_yields_boolean(expr)) {
+            const char *tag = (const char *)sqlite3_column_text(st, 1);
+            bool tag_bool = tag && strcmp(tag, "bool") == 0;
+            if (tag_bool && type == SQLITE_TEXT && v &&
+                (strcmp(v, "true") == 0 || strcmp(v, "false") == 0)) {
+                type = GQL_COL_TYPE_BOOLEAN;
+            } else if (type == SQLITE_INTEGER && (tag_bool || rw_expr_yields_boolean(expr))) {
                 /* a comparison is 1 / 0 in SQL: keep it a boolean
                  * (`MERGE (:C {k: i % 2 = 0})` stored 0 / 1) */
                 type = GQL_COL_TYPE_BOOLEAN;
@@ -4880,7 +4962,8 @@ static bool rw_expr_bound(ast_node *expr, const rw_row *row)
         case AST_NODE_LITERAL: case AST_NODE_PARAMETER: return true;
         case AST_NODE_IDENTIFIER: {
             const char *n = ((cypher_identifier*)expr)->name;
-            return rw_row_scalar(row, n) || get_variable_node_id(row->vm, n) >= 0 || is_variable_edge(row->vm, n);
+            return rw_is_local(n) || rw_row_scalar(row, n) ||
+                   get_variable_node_id(row->vm, n) >= 0 || is_variable_edge(row->vm, n);
         }
         case AST_NODE_PROPERTY: return rw_expr_bound(((cypher_property*)expr)->expr, row);
         case AST_NODE_BINARY_OP:
@@ -4913,6 +4996,35 @@ static bool rw_expr_bound(ast_node *expr, const rw_row *row)
                 if (!rw_expr_bound(((cypher_map_pair*)m->pairs->items[i])->value, row)) return false;
             return true;
         }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *ss = (cypher_subscript*)expr;
+            return rw_expr_bound(ss->expr, row) && rw_expr_bound(ss->index, row) &&
+                   rw_expr_bound(ss->slice_start, row) && rw_expr_bound(ss->slice_end, row);
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension*)expr;
+            if (!rw_expr_bound(lc->list_expr, row)) return false;
+            bool p = rw_push_local(lc->variable);
+            bool ok = rw_expr_bound(lc->where_expr, row) && rw_expr_bound(lc->transform_expr, row);
+            rw_pop_local(p);
+            return ok;
+        }
+        case AST_NODE_LIST_PREDICATE: {
+            cypher_list_predicate *lp = (cypher_list_predicate*)expr;
+            if (!rw_expr_bound(lp->list_expr, row)) return false;
+            bool p = rw_push_local(lp->variable);
+            bool ok = rw_expr_bound(lp->predicate, row);
+            rw_pop_local(p);
+            return ok;
+        }
+        case AST_NODE_REDUCE_EXPR: {
+            cypher_reduce_expr *r = (cypher_reduce_expr*)expr;
+            if (!rw_expr_bound(r->initial_value, row) || !rw_expr_bound(r->list_expr, row)) return false;
+            bool p1 = rw_push_local(r->accumulator), p2 = rw_push_local(r->variable);
+            bool ok = rw_expr_bound(r->expression, row);
+            rw_pop_local(p2); rw_pop_local(p1);
+            return ok;
+        }
         default: return false;
     }
 }
@@ -4927,7 +5039,8 @@ static void rw_find_entity_props(ast_node **slot, const rw_row *row, ast_node **
             cypher_property *p = (cypher_property*)e;
             if (p->expr && p->expr->type == AST_NODE_IDENTIFIER) {
                 const char *b = ((cypher_identifier*)p->expr)->name;
-                if (!rw_row_scalar(row, b) && (get_variable_node_id(row->vm, b) >= 0 || is_variable_edge(row->vm, b))) {
+                if (!rw_is_local(b) && !rw_row_scalar(row, b) &&
+                    (get_variable_node_id(row->vm, b) >= 0 || is_variable_edge(row->vm, b))) {
                     ast_node ***grown = realloc(*slots, (size_t)(*n + 1) * sizeof(ast_node**));
                     if (grown) { *slots = grown; (*slots)[(*n)++] = slot; }
                 }
@@ -4967,6 +5080,40 @@ static void rw_find_entity_props(ast_node **slot, const rw_row *row, ast_node **
             cypher_map *m = (cypher_map*)e;
             for (int i = 0; m->pairs && i < m->pairs->count; i++)
                 rw_find_entity_props(&((cypher_map_pair*)m->pairs->items[i])->value, row, slots, n);
+            return;
+        }
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *ss = (cypher_subscript*)e;
+            rw_find_entity_props(&ss->expr, row, slots, n);
+            rw_find_entity_props(&ss->index, row, slots, n);
+            rw_find_entity_props(&ss->slice_start, row, slots, n);
+            rw_find_entity_props(&ss->slice_end, row, slots, n);
+            return;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension*)e;
+            rw_find_entity_props(&lc->list_expr, row, slots, n);
+            bool p = rw_push_local(lc->variable);
+            rw_find_entity_props(&lc->where_expr, row, slots, n);
+            rw_find_entity_props(&lc->transform_expr, row, slots, n);
+            rw_pop_local(p);
+            return;
+        }
+        case AST_NODE_LIST_PREDICATE: {
+            cypher_list_predicate *lp = (cypher_list_predicate*)e;
+            rw_find_entity_props(&lp->list_expr, row, slots, n);
+            bool p = rw_push_local(lp->variable);
+            rw_find_entity_props(&lp->predicate, row, slots, n);
+            rw_pop_local(p);
+            return;
+        }
+        case AST_NODE_REDUCE_EXPR: {
+            cypher_reduce_expr *r = (cypher_reduce_expr*)e;
+            rw_find_entity_props(&r->initial_value, row, slots, n);
+            rw_find_entity_props(&r->list_expr, row, slots, n);
+            bool p1 = rw_push_local(r->accumulator), p2 = rw_push_local(r->variable);
+            rw_find_entity_props(&r->expression, row, slots, n);
+            rw_pop_local(p2); rw_pop_local(p1);
             return;
         }
         default: return;
