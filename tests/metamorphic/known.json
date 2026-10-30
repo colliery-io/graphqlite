@@ -5,9 +5,6 @@
   {"relation": ".", "kind": "mismatch", "query": ":(A\\|B|B\\|C)\\) \\|", "task": "GQLITE-T-0439"},
   {"relation": ".", "kind": "mismatch", "query": "\\[\\((?:(?! \\| ).)*:(A\\|B|B\\|C)\\b", "task": "GQLITE-T-0439"},
   {"relation": "^label_disjunction/(predicate|comprehension)$", "kind": "mismatch", "task": "GQLITE-T-0439"},
-  {"relation": "^reverse_pattern/optional$", "kind": "error", "error": "no such column: _gql_default_alias_\\d+", "task": "GQLITE-T-0462"},
-  {"relation": "^reverse_pattern/optional$", "kind": "mismatch", "task": "GQLITE-T-0462"},
-  {"relation": ".", "kind": "error", "error": "ON clause references tables to its right", "task": "GQLITE-T-0462"},
   {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"},
   {"relation": "^union/", "kind": "mismatch", "output": "\\b(true|false)\\b", "task": "GQLITE-T-0473"},
   {"relation": "^union/", "kind": "mismatch", "query": "RETURN [^U]*\\b\\w+ AS c0, (max|min)\\(", "task": "GQLITE-T-0475"}
