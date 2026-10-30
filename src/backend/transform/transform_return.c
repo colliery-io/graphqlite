@@ -891,6 +891,10 @@ return_star_done:
                 }
             }
         }
+        /* In a UNION branch an order carried from a WITH means nothing (its
+         * LIMIT is applied inside the WITH), and SQLite refuses an ORDER BY
+         * before UNION (GQLITE-T-0458). */
+        else if (ctx->in_union) sql_order_by_clear(ctx->unified_builder);
 
         /* Add LIMIT/OFFSET */
         if (ret->limit || ret->skip) {
@@ -957,6 +961,13 @@ return_star_done:
      * the standalone RETURN handler (below).
      */
     char *select_pos = strstr(ctx->sql_buffer, "SELECT *");
+    /* After UNION the buffer holds the earlier branches, whose SQL can read
+     * a WITH through `(SELECT * FROM _with_0 ORDER BY ... LIMIT n)`
+     * (GQLITE-T-0458). */
+    if (select_pos && ctx->sql_size >= 7 &&
+        (strcmp(ctx->sql_buffer + ctx->sql_size - 7, " UNION ") == 0 ||
+         (ctx->sql_size >= 11 && strcmp(ctx->sql_buffer + ctx->sql_size - 11, " UNION ALL ") == 0)))
+        select_pos = NULL;
     if (!select_pos) {
         /* No SELECT * - check if this is a standalone RETURN (no MATCH clause) */
         /* This happens for UNION queries or simple RETURN queries without MATCH */
@@ -1109,6 +1120,7 @@ return_star_done:
                     }
                 }
             }
+            else if (ctx->in_union) sql_order_by_clear(ctx->unified_builder);
 
             /* Add LIMIT/OFFSET */
             if (ret->limit || ret->skip) {
