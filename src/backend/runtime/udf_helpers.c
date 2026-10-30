@@ -811,16 +811,13 @@ void gql_dyn_prop_func(sqlite3_context *context, int argc, sqlite3_value **argv)
     if (*vw != '{') { sqlite3_result_null(context); return; }  /* not a map/entity */
     sqlite3 *db = sqlite3_context_db_handle(context);
     sqlite3_stmt *st = NULL;
-    /* An entity's properties live under $.properties (its meta keys at the
-     * top); a plain map uses its own keys. The key is looked up with
-     * json_each, so any key text works (GQLITE-T-0414). */
-    static const char *const meta[] = {"id", "labels", "type", "startNode", "endNode", "start", "end", NULL};
-    const char *k = (const char *)sqlite3_value_text(argv[1]);
-    bool is_meta = false;
-    for (int i = 0; k && meta[i]; i++) if (strcmp(k, meta[i]) == 0) is_meta = true;
+    /* An entity's properties live under $.properties, also a property named
+     * id, labels or type: `x.id` is the property, never the entity's own id
+     * (GQLITE-T-0474). A plain map uses its own keys. The key is looked up
+     * with json_each, so any key text works (GQLITE-T-0414). */
     sqlite3_value *obj = argv[0];
     sqlite3_value *props = NULL;
-    if (!is_meta && sqlite3_prepare_v2(db, "SELECT json_extract(?1, '$.properties')", -1, &st, NULL) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT json_extract(?1, '$.properties')", -1, &st, NULL) == SQLITE_OK) {
         sqlite3_bind_value(st, 1, argv[0]);
         if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st, 0) != SQLITE_NULL)
             props = sqlite3_value_dup(sqlite3_column_value(st, 0));
