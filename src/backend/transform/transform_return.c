@@ -1243,6 +1243,85 @@ return_star_done:
     "WHEN 'null' THEN 'null' WHEN 'text' THEN json_quote(json_each.value) " \
     "ELSE json_each.value END)"
 
+/* " AND <e>.type IN (...)" for a relationship's type or type list, owned;
+ * "" when it has none. */
+static char *pc_rel_type_cond(cypher_rel_pattern *rel, const char *e)
+{
+    dynamic_buffer b;
+    dbuf_init(&b);
+    if (rel->type) {
+        char *esc = escape_sql_string(rel->type);
+        dbuf_appendf(&b, " AND %s.type = '%s'", e, esc ? esc : rel->type);
+        free(esc);
+    } else if (rel->types && rel->types->count > 0) {
+        dbuf_appendf(&b, " AND %s.type IN (", e);
+        for (int t = 0; t < rel->types->count; t++) {
+            cypher_literal *tl = (cypher_literal *)rel->types->items[t];
+            char *esc = escape_sql_string(tl->value.string);
+            dbuf_appendf(&b, "%s'%s'", t ? ", " : "", esc ? esc : tl->value.string);
+            free(esc);
+        }
+        dbuf_append(&b, ")");
+    }
+    char *out = strdup(dbuf_is_empty(&b) ? "" : dbuf_get(&b));
+    dbuf_free(&b);
+    return out;
+}
+
+/* A variable-length relationship of a pattern comprehension as a table of
+ * (start_id, end_id) walks with distinct edges, in the pattern's direction;
+ * `anchor` (the start node's id, when it is an outer variable) or NULL.
+ * It was matched as one hop (GQLITE-T-0472). Owned. */
+static char *pc_varlen_table(cypher_transform_context *ctx, cypher_rel_pattern *rel, const char *anchor)
+{
+    cypher_varlen_range *vr = (cypher_varlen_range *)rel->varlen;
+    int min_hops = vr && vr->min_hops >= 0 ? vr->min_hops : 1;
+    int max_hops = vr ? vr->max_hops : -1;
+    bool left = rel->left_arrow && !rel->right_arrow;
+    bool undirected = !rel->left_arrow && !rel->right_arrow;
+    const char *S = left ? "target_id" : "source_id";
+    const char *T = left ? "source_id" : "target_id";
+    char cte[32];
+    snprintf(cte, sizeof(cte), "_pcv%d", ctx->cte_count++);
+    char *tc = pc_rel_type_cond(rel, "e");
+    dynamic_buffer b;
+    dbuf_init(&b);
+    /* elem_ids is node,edge,...,node, as in the MATCH walk, for the path
+     * functions. */
+    dbuf_appendf(&b, "(WITH RECURSIVE %s(start_id, end_id, depth, visited, node_ids, edge_ids, elem_ids) AS (", cte);
+    dbuf_appendf(&b, "SELECT e.%s, e.%s, 1, ',' || e.id || ',', json_array(e.%s, e.%s), json_array(e.id), "
+                     "e.%s || ',' || e.id || ',' || e.%s FROM edges e WHERE 1=1%s", S, T, S, T, S, T, tc);
+    if (anchor) dbuf_appendf(&b, " AND e.%s = %s", S, anchor);
+    if (undirected) {
+        /* the other way round; a self-loop reads the same both ways */
+        dbuf_appendf(&b, " UNION ALL SELECT e.%s, e.%s, 1, ',' || e.id || ',', json_array(e.%s, e.%s), "
+                         "json_array(e.id), e.%s || ',' || e.id || ',' || e.%s FROM edges e WHERE e.%s <> e.%s%s",
+                     T, S, T, S, T, S, S, T, tc);
+        if (anchor) dbuf_appendf(&b, " AND e.%s = %s", T, anchor);
+    }
+    const char *next = undirected ? "(CASE WHEN e.source_id = c.end_id THEN e.target_id ELSE e.source_id END)"
+                                  : (left ? "e.source_id" : "e.target_id");
+    const char *join = undirected ? "(e.source_id = c.end_id OR e.target_id = c.end_id)"
+                                  : (left ? "e.target_id = c.end_id" : "e.source_id = c.end_id");
+    dbuf_appendf(&b, " UNION ALL SELECT c.start_id, %s, c.depth + 1, c.visited || e.id || ',', "
+                     "json_insert(c.node_ids, '$[#]', %s), json_insert(c.edge_ids, '$[#]', e.id), "
+                     "c.elem_ids || ',' || e.id || ',' || %s "
+                     "FROM %s c JOIN edges e ON %s WHERE instr(c.visited, ',' || e.id || ',') = 0%s",
+                 next, next, next, cte, join, tc);
+    if (max_hops >= 0) dbuf_appendf(&b, " AND c.depth < %d", max_hops);
+    dbuf_appendf(&b, ") SELECT start_id, end_id, node_ids, edge_ids, elem_ids FROM %s WHERE depth >= %d",
+                 cte, min_hops > 0 ? min_hops : 1);
+    if (min_hops == 0) {
+        dbuf_append(&b, " UNION ALL SELECT n.id, n.id, json_array(n.id), json_array(), CAST(n.id AS TEXT) FROM nodes n");
+        if (anchor) dbuf_appendf(&b, " WHERE n.id = %s", anchor);
+    }
+    dbuf_append(&b, ")");
+    free(tc);
+    char *out = strdup(dbuf_get(&b));
+    dbuf_free(&b);
+    return out;
+}
+
 /* Transform an expression */
 static int transform_expression_inner(cypher_transform_context *ctx, ast_node *expr);
 
@@ -1396,6 +1475,28 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                  * SQLite quotes/escapes correctly.
                                  * GQLITE-T-0340 sub-C: also used for a path as a list element
                                  * under UNWIND, where executor elem_ids hydration can't reach. */
+                                /* `p = (a)-[*]->(b)` in a pattern comprehension: the
+                                 * nodes and relationships of the walk (GQLITE-T-0472). */
+                                cypher_rel_pattern *vrp = path_var->path_elements->count == 3 &&
+                                    path_var->path_elements->items[1]->type == AST_NODE_REL_PATTERN
+                                    ? (cypher_rel_pattern *)path_var->path_elements->items[1] : NULL;
+                                const char *walk = vrp && vrp->varlen && vrp->variable
+                                    ? transform_var_get_alias(ctx->var_ctx, vrp->variable) : NULL;
+                                if (path_var->path_type == VAR_PATH_COMPREHENSION && walk) {
+                                    char *nj = gql_sql_node_json_expr("", "_wn.value");
+                                    char *ej = gql_sql_edge_json_expr("", "_we.id", "_we.type", "_we.source_id", "_we.target_id");
+                                    if (!nj || !ej) { free(nj); free(ej); return -1; }
+                                    /* json() outside each subquery keeps the
+                                     * subtype (SQLite 3.54.1, GQLITE-A-0007). */
+                                    append_sql(ctx, "json_object('nodes', json((SELECT json_group_array(json(x)) FROM "
+                                                    "(SELECT %s AS x FROM json_each(%s.node_ids) _wn ORDER BY _wn.key))), "
+                                                    "'rels', json((SELECT json_group_array(json(x)) FROM "
+                                                    "(SELECT %s AS x FROM json_each(%s.edge_ids) _wj JOIN edges _we "
+                                                    "ON _we.id = _wj.value ORDER BY _wj.key))))",
+                                               nj, walk, ej, walk);
+                                    free(nj); free(ej);
+                                    break;
+                                }
                                 append_sql(ctx, "json_object('nodes', json_array(");
                                 bool first_n = true;
                                 for (int i = 0; i < path_var->path_elements->count; i++) {
@@ -2187,6 +2288,18 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     return -1;
                 }
 
+                if (comp->path_var && path->elements->count != 3) {
+                    for (int i = 0; i < path->elements->count; i++) {
+                        ast_node *el = path->elements->items[i];
+                        if (el->type == AST_NODE_REL_PATTERN && ((cypher_rel_pattern *)el)->varlen) {
+                            ctx->has_error = true;
+                            ctx->error_message = strdup("a named path with a variable-length relationship "
+                                                        "in a pattern comprehension is not supported");
+                            return -1;
+                        }
+                    }
+                }
+
                 /* Save current variable count to restore later */
                 int saved_var_count = transform_var_count(ctx->var_ctx);
 
@@ -2274,7 +2387,18 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         if (!first_table) {
                             append_sql(ctx, ", ");
                         }
-                        append_sql(ctx, "edges AS _pc_e%d", i/2);
+                        cypher_rel_pattern *vrel = (cypher_rel_pattern *)element;
+                        if (vrel->varlen) {
+                            /* anchored at the start node when it is outer */
+                            const char *anc = node_count > 0 && node_is_outer[node_count - 1]
+                                              ? node_ids[node_count - 1] : NULL;
+                            char *vt = pc_varlen_table(ctx, vrel, anc);
+                            if (!vt) return -1;
+                            append_sql(ctx, "%s AS _pc_e%d", vt, i/2);
+                            free(vt);
+                        } else {
+                            append_sql(ctx, "edges AS _pc_e%d", i/2);
+                        }
                         first_table = false;
                     }
                 }
@@ -2308,7 +2432,10 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                     rel->variable = strdup(gen);
                                 }
                             }
-                            if (rel->variable && rel->variable[0]) {
+                            /* A var-length relationship is a list of
+                             * relationships, not one: not bound here. */
+                            if (rel->variable && rel->variable[0] &&
+                                (!rel->varlen || (comp->path_var && strncmp(rel->variable, "_pc_relv", 8) == 0))) {
                                 char alias[32];
                                 snprintf(alias, sizeof(alias), "_pc_e%d", rel_i);
                                 transform_var_register_edge(ctx->var_ctx, rel->variable, alias, NULL);
@@ -2362,7 +2489,12 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         int target_node = source_node + 1;
 
                         /* Handle direction */
-                        if (rel->left_arrow && !rel->right_arrow) {
+                        if (rel->varlen) {
+                            /* the walk table is in the pattern's direction */
+                            append_sql(ctx, "_pc_e%d.start_id = %s AND _pc_e%d.end_id = %s",
+                                      rel_index, node_ids[source_node],
+                                      rel_index, node_ids[target_node]);
+                        } else if (rel->left_arrow && !rel->right_arrow) {
                             /* <-[r]- means target->source */
                             append_sql(ctx, "_pc_e%d.target_id = %s AND _pc_e%d.source_id = %s",
                                       rel_index, node_ids[source_node],
@@ -2383,10 +2515,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                       rel_index, node_ids[target_node]);
                         }
 
-                        /* Add relationship type constraint if specified */
-                        if (rel->type) {
-                            append_sql(ctx, " AND _pc_e%d.type = ", rel_index);
-                            append_string_literal(ctx, rel->type);
+                        /* Relationship type or type list (a type list was
+                         * ignored, GQLITE-T-0472); a var-length walk has it
+                         * inside. */
+                        if (!rel->varlen) {
+                            char ealias[32];
+                            snprintf(ealias, sizeof(ealias), "_pc_e%d", rel_index);
+                            char *tc = pc_rel_type_cond(rel, ealias);
+                            if (tc) { append_sql(ctx, "%s", tc); free(tc); }
                         }
 
                         rel_index++;
