@@ -9,5 +9,6 @@
   {"relation": "^reverse_pattern/optional$", "kind": "mismatch", "task": "GQLITE-T-0462"},
   {"relation": ".", "kind": "error", "error": "ON clause references tables to its right", "task": "GQLITE-T-0462"},
   {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"},
-  {"relation": "^union/", "kind": "mismatch", "output": "\\b(true|false)\\b", "task": "GQLITE-T-0473"}
+  {"relation": "^union/", "kind": "mismatch", "output": "\\b(true|false)\\b", "task": "GQLITE-T-0473"},
+  {"relation": "^union/", "kind": "mismatch", "query": "RETURN [^U]*\\b\\w+ AS c0, (max|min)\\(", "task": "GQLITE-T-0475"}
 ]
