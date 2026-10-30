@@ -541,6 +541,22 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                 dbuf_append(&group_buf, ", ");
             }
 
+            /* A path has no table alias: carry its path value, as `WITH p`
+             * does (GQLITE-T-0471). */
+            if (var->kind == VAR_KIND_PATH) {
+                cypher_identifier *pid = make_identifier(var->name, 0);
+                char *psql = pid ? transform_expression_to_string(ctx, (ast_node *)pid) : NULL;
+                if (pid) ast_node_free((ast_node *)pid);
+                char idbuf[128];
+                dbuf_appendf(&col_buf, "%s AS %s", psql && psql[0] ? psql : "'[]'",
+                             sql_ident(idbuf, sizeof(idbuf), var->name));
+                dbuf_append(&group_buf, psql && psql[0] ? psql : "'[]'");
+                free(psql);
+                group_count++;
+                added++;
+                continue;
+            }
+
             bool is_projected = (var->kind == VAR_KIND_PROJECTED);
             bool skip_id = var->alias_is_id || is_projected;
             const char *id_suffix = skip_id ? "" : ".id";
@@ -1018,12 +1034,18 @@ with_star_columns_done:
         int total_vars = transform_var_count(ctx->var_ctx);
         saved_var_names = calloc(total_vars, sizeof(char*));
         saved_var_kinds = calloc(total_vars, sizeof(var_kind));
+        saved_path_elems = calloc(total_vars ? total_vars : 1, sizeof(ast_list*));
+        saved_path_types = calloc(total_vars ? total_vars : 1, sizeof(var_path_type));
         if (saved_var_names && saved_var_kinds) {
             for (int vi = 0; vi < total_vars; vi++) {
                 transform_var *var = transform_var_at(ctx->var_ctx, vi);
                 if (var && var->is_visible && var->name) {
                     saved_var_names[saved_var_count] = strdup(var->name);
                     saved_var_kinds[saved_var_count] = var->kind;
+                    if (var->kind == VAR_KIND_PATH && saved_path_elems && saved_path_types) {
+                        saved_path_elems[saved_var_count] = var->path_elements;
+                        saved_path_types[saved_var_count] = var->path_type;
+                    }
                     saved_var_count++;
                 }
             }
@@ -1116,7 +1138,11 @@ with_star_columns_done:
                        sql_ident(_idbuf, sizeof(_idbuf), saved_var_names[i])); }
 
             var_kind kind = saved_var_kinds[i];
-            if (kind == VAR_KIND_NODE) {
+            if (kind == VAR_KIND_PATH) {
+                transform_var_register_path(ctx->var_ctx, saved_var_names[i], select_expr,
+                                            saved_path_elems ? saved_path_elems[i] : NULL,
+                                            saved_path_types ? saved_path_types[i] : VAR_PATH_NORMAL);
+            } else if (kind == VAR_KIND_NODE) {
                 transform_var_register_node(ctx->var_ctx, saved_var_names[i], select_expr, NULL);
                 transform_var_set_alias_is_id(ctx->var_ctx, saved_var_names[i], true);
             } else if (kind == VAR_KIND_EDGE) {

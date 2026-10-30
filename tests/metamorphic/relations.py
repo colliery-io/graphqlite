@@ -35,6 +35,7 @@ DOMAINS.update({
     "w.kind": ["prop", "arith", "case", "func", "list", "map_value", "nullcheck", "string"],
     "vl.range": ["*1..1", "*1..2", "*2..2", "*1..3"],
     "rp.clause": ["match", "optional"],
+    "np.carry": ["none", "star", "with_p"],
     "del.form": ["node", "rel"],
     "om.form": ["null_rows", "count", "outer_where"],
 })
@@ -214,6 +215,24 @@ def _arrow(d: str, body: str) -> str:
 
 
 # ---------------------------------------------------------- query structure
+
+def named_path(ch: Chooser) -> Case:
+    """A named path gives the nodes and relationships of its pattern, also
+    carried through `WITH *` or `WITH p` (GQLITE-T-0471)."""
+    p = _named(pattern(ch, "c1", ["a", "b", "c"], ["r", "q"], hops=ch.pick("c1.hops", [1, 2])))
+    carry = ch.pick("np.carry")
+    keep = ", ".join(v(x) for x in ["pp"] + p.node_vars)
+    mid = {"none": "", "star": " WITH *", "with_p": f" WITH {keep}"}[carry]
+    hops = len(p.steps)
+    node_vs = ", ".join(f"{v(x)}.v" for x in p.node_vars)
+    rel_ws = ", ".join(f"{v(x)}.w" for x in p.rel_vars)
+    return Case(f"named_path/{carry}", [
+        Variant("path", render(f"MATCH ⟨pp⟩ = {p.text()}{mid} RETURN length(⟨pp⟩) AS c0, "
+                               f"[⟨x⟩ IN nodes(⟨pp⟩) | ⟨x⟩.v] AS c1, "
+                               f"[⟨x⟩ IN relationships(⟨pp⟩) | ⟨x⟩.w] AS c2, {v(p.node_vars[0])}.id AS c3")),
+        Variant("variables", render(f"MATCH {p.text()} RETURN {hops} AS c0, [{node_vs}] AS c1, "
+                                    f"[{rel_ws}] AS c2, {v(p.node_vars[0])}.id AS c3"))])
+
 
 def with_star(ch: Chooser) -> Case:
     """A pass-through `WITH *` between two clauses changes nothing."""
@@ -631,6 +650,7 @@ def delete_count(ch: Chooser) -> Case:
 
 RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "with_star": (with_star, CHAIN),
+    "named_path": (named_path, G + ["c1.hops", "c1.label", "c1.dir", "c1.type", "np.carry"]),
     "rename": (rename, CHAIN),
     "keyword_name": (keyword_name, CHAIN),
     "predicate_move": (predicate_move, G + C1 + C2_FORCED + ["pred.kind", "expr.kind"]),
