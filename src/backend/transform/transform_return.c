@@ -756,8 +756,16 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
             /* Boolean-producing expressions: wrap so the output is JSON
              * true/false rather than SQLite integer 0/1. NULL stays NULL
              * for openCypher three-valued logic. */
-            if (item->expr && (
+            /* A literal or a label predicate too: under UNION and DISTINCT a
+             * boolean has one encoding, the text of _gql_bool_str
+             * (GQLITE-T-0473). */
+            if (item->expr && item->expr->type == AST_NODE_LITERAL &&
+                ((cypher_literal*)item->expr)->literal_type == LITERAL_BOOLEAN) {
+                free(expr_str);
+                expr_str = strdup(((cypher_literal*)item->expr)->value.boolean ? "_gql_bool_str(1)" : "_gql_bool_str(0)");
+            } else if (item->expr && (
                 item->expr->type == AST_NODE_NOT_EXPR ||
+                item->expr->type == AST_NODE_LABEL_EXPR ||
                 item->expr->type == AST_NODE_NULL_CHECK ||
                 item->expr->type == AST_NODE_LIST_PREDICATE ||
                 item->expr->type == AST_NODE_EXISTS_EXPR ||
@@ -1026,8 +1034,16 @@ return_star_done:
                 }
 
                 /* Boolean-producing expressions: emit JSON true/false. */
-                if (item->expr && (
+                /* A literal or a label predicate too: under UNION and DISTINCT a
+                 * boolean has one encoding, the text of _gql_bool_str
+                 * (GQLITE-T-0473). */
+                if (item->expr && item->expr->type == AST_NODE_LITERAL &&
+                    ((cypher_literal*)item->expr)->literal_type == LITERAL_BOOLEAN) {
+                    free(expr_str);
+                    expr_str = strdup(((cypher_literal*)item->expr)->value.boolean ? "_gql_bool_str(1)" : "_gql_bool_str(0)");
+                } else if (item->expr && (
                     item->expr->type == AST_NODE_NOT_EXPR ||
+                    item->expr->type == AST_NODE_LABEL_EXPR ||
                     item->expr->type == AST_NODE_NULL_CHECK ||
                     item->expr->type == AST_NODE_LIST_PREDICATE ||
                     item->expr->type == AST_NODE_EXISTS_EXPR ||

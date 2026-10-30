@@ -374,6 +374,13 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                         tag = "'text'";
                     }
                     char *dyn_tag = NULL;
+                    /* A comparison or other boolean expression gives 1 / 0:
+                     * tag it, or `UNWIND [1 > 0] AS x` was 1 (GQLITE-T-0473). */
+                    if (item_sql && ast_is_boolean_expr(item)) {
+                        tag = "'bool'";
+                        free(item_sql);
+                        item_sql = NULL;
+                    }
                     if (item_sql) {
                         /* An expression item: its tag while the subtype is
                          * still there (a property read: two key probes). */
