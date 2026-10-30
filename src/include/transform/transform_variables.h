@@ -184,6 +184,12 @@ transform_var *transform_var_at(transform_var_context *ctx, int index);
 /* Truncate to saved count (for pattern comprehension save/restore) */
 void transform_var_truncate_to(transform_var_context *ctx, int count);
 
+/* A scope that rebinds a name (a list comprehension variable): save the
+ * binding (a copy, NULL when the name is unbound), and put it back after;
+ * restoring NULL removes the name (GQLITE-T-0468). */
+transform_var *transform_var_save(transform_var_context *ctx, const char *name);
+void transform_var_restore(transform_var_context *ctx, const char *name, transform_var *saved);
+
 /* Debug helper */
 void transform_var_dump(transform_var_context *ctx);
 
