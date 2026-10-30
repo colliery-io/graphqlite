@@ -328,6 +328,8 @@ static int generate_property_update(cypher_transform_context *ctx,
         /* Fallback for non-builder mode - shouldn't happen after migration */
         sql_raw(ctx->unified_builder, " FROM nodes AS %s", table_alias);
     }
+    /* _gql_typetag gives no tag for null: a null removes the property. */
+    sql_raw(ctx->unified_builder, "; UPDATE temp._gql_set_stage SET t = 'null' WHERE v IS NULL");
 
     static const struct { const char *suffix; const char *tag; const char *value; } typed[] = {
         { "int",  "int",  "v" },

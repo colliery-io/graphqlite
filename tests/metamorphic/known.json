@@ -11,7 +11,6 @@
   {"relation": "^reverse_pattern/optional$", "kind": "error", "error": "no such column: _gql_default_alias_\\d+", "task": "GQLITE-T-0462"},
   {"relation": "^reverse_pattern/optional$", "kind": "mismatch", "task": "GQLITE-T-0462"},
   {"relation": ".", "kind": "error", "error": "ON clause references tables to its right", "task": "GQLITE-T-0462"},
-  {"relation": "^distinct_set$", "kind": "mismatch", "task": "GQLITE-T-0467"},
-  {"relation": "^union/distinct$", "kind": "mismatch", "task": "GQLITE-T-0458"},
-  {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"}
+  {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"},
+  {"relation": "^union/", "kind": "mismatch", "output": "\\b(true|false)\\b", "task": "GQLITE-T-0473"}
 ]

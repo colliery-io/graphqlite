@@ -389,7 +389,22 @@ static char *return_item_tag_sql(cypher_transform_context *ctx, cypher_return *r
      * the way, and the reader takes its TEXT as a string: the tag (two key
      * probes per row) is needed only with a sorter. */
     if (expr && expr->type == AST_NODE_PROPERTY && !return_uses_sorter(ctx, ret)) return NULL;
-    return cypher_expr_tag_sql(ctx, expr, expr_sql);
+    char *tag = cypher_expr_tag_sql(ctx, expr, expr_sql);
+    /* UNION compares the tag column too: a constant tag on a null would
+     * keep it apart from a null of another branch (GQLITE-T-0467). Within
+     * one RETURN DISTINCT a constant tag is the same on every row. */
+    if (tag && tag[0] == '\'' && expr_sql && expr_sql[0] && ctx->in_union) {
+        char *w = str_printf("(CASE WHEN (%s) IS NOT NULL THEN %s END)", expr_sql, tag);
+        free(tag);
+        tag = w;
+    } else if (tag && (ret->distinct || ctx->in_union)) {
+        /* The reader reads a number by its SQL type: an 'int' or 'real'
+         * tag would keep 0 apart from an untagged 0. */
+        char *w = str_printf("NULLIF(NULLIF(%s, 'int'), 'real')", tag, NULL);
+        free(tag);
+        tag = w;
+    }
+    return tag;
 }
 
 /* Append the hidden tag columns __gqlt_0 .. __gqlt_<n-1> (NULL when an item
