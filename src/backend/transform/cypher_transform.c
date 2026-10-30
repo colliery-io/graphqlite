@@ -1482,17 +1482,17 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             "CAST(e.%s || ',' || e.%s AS TEXT), "
             "',' || e.id || ',', "
             "e.%s || ',' || e.id || ',' || e.%s "
-            "FROM edges e",
+            "FROM edges e "
+            /* A self-loop reads the same both ways: once (GQLITE-T-0459). */
+            "WHERE e.%s <> e.%s",
             tgt_col, src_col,
             tgt_col, src_col,
-            tgt_col, src_col);
-        {
-            bool need_where = true;
-            if (have_tpred) { dbuf_appendf(&cte_query, " WHERE %s", dbuf_get(&tpred)); need_where = false; }
-            if (anchor_ids_sql) {
-                /* Reverse orientation: the walk starts at the edge's other end. */
-                dbuf_appendf(&cte_query, "%s e.%s IN (%s)", need_where ? " WHERE" : " AND", tgt_col, anchor_ids_sql);
-            }
+            tgt_col, src_col,
+            src_col, tgt_col);
+        if (have_tpred) dbuf_appendf(&cte_query, " AND %s", dbuf_get(&tpred));
+        if (anchor_ids_sql) {
+            /* Reverse orientation: the walk starts at the edge's other end. */
+            dbuf_appendf(&cte_query, " AND e.%s IN (%s)", tgt_col, anchor_ids_sql);
         }
     }
 
