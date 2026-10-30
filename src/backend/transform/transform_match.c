@@ -3049,6 +3049,13 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 cypher_node_pattern *tn = source_node; source_node = target_node; target_node = tn;
                 const char *ta = source_alias; source_alias = target_alias; target_alias = ta;
                 bool td = src_deferred; src_deferred = tgt_deferred; tgt_deferred = td;
+            } else if (!rel->left_arrow && !rel->right_arrow && src_deferred && !tgt_deferred) {
+                /* An undirected relationship written with its bound end on
+                 * the right: read it from that end, so both edge directions
+                 * are tried (GQLITE-T-0462; it was read as `(d)-->(a)`). */
+                cypher_node_pattern *tn = source_node; source_node = target_node; target_node = tn;
+                const char *ta = source_alias; source_alias = target_alias; target_alias = ta;
+                src_deferred = false; tgt_deferred = true;
             }
 
             /* An anonymous relationship takes the same edge join as a named
