@@ -292,6 +292,25 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
                     }
                 }
                 if (!strcasecmp(n, "collect")) return strdup("'json'");
+                /* max() and min() have the type of their input: a string
+                 * is text even when it looks like a number, which a
+                 * grouped RETURN showed as one (GQLITE-T-0475). */
+                if (!strcasecmp(n, "max") || !strcasecmp(n, "min")) {
+                    if (fc->args && fc->args->count == 1 && ast_is_boolean_expr(fc->args->items[0]))
+                        return strdup("'bool'");
+                    char *v = value_sql ? NULL : transform_expression_to_string(ctx, expr);
+                    const char *vs = value_sql ? value_sql : v;
+                    char *out = NULL;
+                    if (vs) {
+                        size_t sz = 4 * strlen(vs) + 200;
+                        out = malloc(sz);
+                        if (out) snprintf(out, sz,
+                            "COALESCE(_gql_typetag(%s), CASE WHEN typeof(%s) = 'text' AND "
+                            "substr(%s, 1, 1) NOT IN ('[', '{') THEN 'text' END)", vs, vs, vs);
+                    }
+                    free(v);
+                    return out;
+                }
                 if (!strcasecmp(n, "count") || !strcasecmp(n, "sum") || !strcasecmp(n, "avg") ||
                     !strncasecmp(n, "stDev", 5) || !strncasecmp(n, "percentile", 10)) return NULL;
             }
