@@ -1,6 +1,4 @@
 [
-  {"relation": ".", "kind": "error", "error": "function argument must be a relationship variable", "task": "GQLITE-T-0468"},
-  {"relation": ".", "kind": "error", "error": "no such column: _gql_default_alias_\\d+\\b(?!\\.)", "query": "\\[x IN .*-\\[x[\\]:]|-\\[x[\\]:].*\\[x IN", "task": "GQLITE-T-0468"},
   {"relation": ".", "kind": "error", "error": "write pipeline: SyntaxError: UndefinedVariable|write pipeline: no such column: json_each\\.value", "task": "GQLITE-T-0461"},
   {"relation": ".", "kind": "error", "error": "SET value must be|SET value property access|Failed to evaluate function '[^']*' in SET", "task": "GQLITE-T-0456"},
   {"relation": "^keyword_name/", "kind": "error", "error": "unexpected [A-Z]+", "task": "GQLITE-T-0440"},

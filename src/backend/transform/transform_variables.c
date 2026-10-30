@@ -485,6 +485,46 @@ transform_var *transform_var_at(transform_var_context *ctx, int index)
 }
 
 /* Truncate to saved count (for pattern comprehension save/restore) */
+static char *dup_or_null(const char *s)
+{
+    return s ? strdup(s) : NULL;
+}
+
+transform_var *transform_var_save(transform_var_context *ctx, const char *name)
+{
+    int idx = find_var_index(ctx, name);
+    if (idx < 0) return NULL;
+    transform_var *copy = malloc(sizeof(*copy));
+    if (!copy) return NULL;
+    *copy = ctx->vars[idx];
+    copy->name = dup_or_null(ctx->vars[idx].name);
+    copy->table_alias = dup_or_null(ctx->vars[idx].table_alias);
+    copy->label = dup_or_null(ctx->vars[idx].label);
+    copy->cte_name = dup_or_null(ctx->vars[idx].cte_name);
+    copy->source_expr = dup_or_null(ctx->vars[idx].source_expr);
+    copy->tag_expr = dup_or_null(ctx->vars[idx].tag_expr);
+    copy->graph = dup_or_null(ctx->vars[idx].graph);
+    return copy;
+}
+
+void transform_var_restore(transform_var_context *ctx, const char *name, transform_var *saved)
+{
+    int idx = find_var_index(ctx, name);
+    if (idx >= 0) {
+        free_var(&ctx->vars[idx]);
+        if (saved) {
+            ctx->vars[idx] = *saved;
+        } else {
+            memmove(&ctx->vars[idx], &ctx->vars[idx + 1],
+                    (size_t)(ctx->count - idx - 1) * sizeof(ctx->vars[0]));
+            ctx->count--;
+        }
+    } else if (saved) {
+        free_var(saved);
+    }
+    free(saved);
+}
+
 void transform_var_truncate_to(transform_var_context *ctx, int count)
 {
     if (!ctx || count < 0 || count > ctx->count) return;
