@@ -36,7 +36,7 @@ DOMAINS.update({
     "vl.range": ["*1..1", "*1..2", "*2..2", "*1..3"],
     "rp.clause": ["match", "optional"],
     "del.form": ["node", "rel"],
-    "om.form": ["null_rows", "count"],
+    "om.form": ["null_rows", "count", "outer_where"],
 })
 
 
@@ -478,6 +478,21 @@ def optional_null(ch: Chooser) -> Case:
     and as many rows as matches otherwise."""
     form = ch.pick("om.form")
     p1 = pattern(ch, "c1", ["a"], [], hops=0)
+    if form == "outer_where":
+        # A WHERE on the outer variable only: a failing row is one null row,
+        # whatever the matches, anchored at ⟨a⟩ or not (GQLITE-T-0470).
+        anchored = ch.random() < 0.5
+        p2 = (pattern(ch, "c2", ["d", "e"], ["p", "t"], start="a") if anchored else
+              pattern(ch, "c2", ["d", "e", "f"], ["p", "t"], hops=ch.choice([1, 2])))
+        x = v(p2.node_vars[-1])
+        pred = f"coalesce(⟨a⟩.v > 1, false)"
+        return Case(f"optional_null/outer_where/{'anchored' if anchored else 'free'}", [
+            Variant("where", render(f"MATCH {p1.text()} OPTIONAL MATCH {p2.text()} WHERE {pred} "
+                                    f"RETURN ⟨a⟩.id AS c0, count({x}) AS c1, count(*) AS c2")),
+            Variant("after", render(f"MATCH {p1.text()} OPTIONAL MATCH {p2.text()} "
+                                    f"WITH ⟨a⟩, count({x}) AS ⟨n⟩ "
+                                    f"RETURN ⟨a⟩.id AS c0, CASE WHEN {pred} THEN ⟨n⟩ ELSE 0 END AS c1, "
+                                    f"CASE WHEN {pred} AND ⟨n⟩ > 0 THEN ⟨n⟩ ELSE 1 END AS c2"))])
     p2 = pattern(ch, "c2", ["d", "e"], ["p", "t"], start="a")
     x = v(p2.node_vars[-1])
     if form == "null_rows":

@@ -892,14 +892,6 @@ handle_where_clause:
                         free(rewritten);
                         rewritten = out;
                     }
-                    /* A WHERE on the relationship itself (`r <> r2`) must
-                     * filter the edge join too, or a rejected edge leaves a
-                     * null row (Match7 [11], GQLITE-T-0449). */
-                    if (n_occ == 0) {
-                        char edge_ref[96];
-                        snprintf(edge_ref, sizeof(edge_ref), "%s.", edge_a);
-                        if (!strstr(rewritten, edge_ref)) { free(rewritten); continue; }
-                    }
                     /* Inject into the edge JOIN's ON. Find ` AS
                      * <edge_a> ` in the joins buffer; the end of
                      * that JOIN's ON is the position of the next
@@ -926,6 +918,31 @@ handle_where_clause:
                     if (next_left) insertion = next_left;
                     if (next_inner && (!insertion || next_inner < insertion)) insertion = next_inner;
                     if (next_cross && (!insertion || next_cross < insertion)) insertion = next_cross;
+                    if (n_occ == 0) {
+                        /* A WHERE on the relationship itself (`r <> r2`)
+                         * must filter the edge join too, or a rejected edge
+                         * leaves a null row (Match7 [11], GQLITE-T-0449).
+                         * So must a WHERE on outer variables only: else each
+                         * edge gave its own null row, and a named
+                         * relationship stayed bound (GQLITE-T-0470). It
+                         * cannot name a table joined after this one. */
+                        char edge_ref[96];
+                        snprintf(edge_ref, sizeof(edge_ref), "%s.", edge_a);
+                        bool later_ref = false;
+                        for (const char *p = insertion; p && !later_ref && (p = strstr(p, " AS ")) != NULL; p += 4) {
+                            const char *nm = p + 4;
+                            size_t nl = strcspn(nm, " ");
+                            if (nl == 0 || nl > 70) continue;
+                            char ref[80];
+                            snprintf(ref, sizeof(ref), "%.*s.", (int)nl, nm);
+                            for (const char *q = rewritten; (q = strstr(q, ref)) != NULL; q++) {
+                                if (q > rewritten && (isalnum((unsigned char)q[-1]) || q[-1] == '_')) continue;
+                                later_ref = true;
+                                break;
+                            }
+                        }
+                        if (later_ref && !strstr(rewritten, edge_ref)) { free(rewritten); continue; }
+                    }
                     if (!insertion) {
                         /* End of buffer — just append. */
                         dbuf_appendf(&b->joins, " AND %s", rewritten);
@@ -1148,6 +1165,21 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
         if (rel_bound && s0_fresh && s2_fresh && !has_path_var &&
             !s0->properties && !s2->properties) {
             path_combined_exists = true;
+        }
+        /* A relationship with both endpoints fresh and nothing bound: no
+         * outer row anchors the path, so each start node that failed the
+         * WHERE gave its own null row. The derived table matches the whole
+         * path, then joins it to the outer row (GQLITE-T-0470). */
+        bool rel_fresh = !r->varlen &&
+                         (!r->variable || !transform_var_lookup(ctx->var_ctx, r->variable));
+        bool s0_new = !s0->variable || !transform_var_lookup(ctx->var_ctx, s0->variable);
+        bool s2_new = !s2->variable || !transform_var_lookup(ctx->var_ctx, s2->variable);
+        bool outer_rows = ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from);
+        if (!path_combined_exists && outer_rows && rel_fresh && s0_new && s2_new && !has_path_var &&
+            !s0->properties && !s2->properties) {
+            path_combined_exists = true;
+            path_has_user_rel_var = r->variable &&
+                strncmp(r->variable, "_gql_default_alias_", 19) != 0;
         }
     }
 
