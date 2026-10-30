@@ -1238,15 +1238,19 @@ int transform_property_access(cypher_transform_context *ctx, cypher_property *pr
     const char *key = prop->property_name;
 
     if (ctx->prop_tag_mode) {
-        /* Booleans and lists need a tag (two key probes); 'text' tells a
-         * TEXT value from text that looks like JSON. */
+        /* Booleans and lists need a tag; 'text' tells a TEXT value from
+         * text that looks like JSON. A number needs none, and a missing
+         * property gets none, as any null (GQLITE-T-0467). */
         append_sql(ctx, "(SELECT COALESCE(");
         append_prop_branch(ctx, gprefix, is_edge ? "edge_props_bool" : "node_props_bool",
                            "tb", is_edge ? "edge_id" : "node_id", id_expr, "'bool'", key, key_id);
         append_sql(ctx, ", ");
         append_prop_branch(ctx, gprefix, is_edge ? "edge_props_json" : "node_props_json",
                            "tj", is_edge ? "edge_id" : "node_id", id_expr, "'json'", key, key_id);
-        append_sql(ctx, ", 'text'))");
+        append_sql(ctx, ", ");
+        append_prop_branch(ctx, gprefix, is_edge ? "edge_props_text" : "node_props_text",
+                           "tt", is_edge ? "edge_id" : "node_id", id_expr, "'text'", key, key_id);
+        append_sql(ctx, "))");
         return 0;
     }
 

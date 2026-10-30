@@ -80,9 +80,26 @@ def sum_columns(parts: list[list]) -> list:
     return [out]
 
 
+def _equiv(v):
+    """Cypher equivalence for DISTINCT and UNION: 1 and 1.0 are one value."""
+    if isinstance(v, list):
+        return [_equiv(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _equiv(x) for k, x in v.items()}
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return v
+
+
+def equiv(rows: list) -> list:
+    return [_equiv(r) for r in rows]
+
+
 def dedupe(rows: list) -> list:
+    """Rows once, under Cypher equivalence (numbers as equiv() gives them:
+    which of 1 and 1.0 a DISTINCT keeps is not specified)."""
     seen, out = set(), []
-    for r in rows:
+    for r in equiv(rows):
         k = json.dumps(r, sort_keys=True)
         if k not in seen:
             seen.add(k)
@@ -345,7 +362,7 @@ def distinct_set(ch: Chooser) -> Case:
     c = chain(ch, ret_kinds=["scalar"])
     return Case("distinct_set", [
         Variant("deduped", render(c.query(distinct=False)), post=dedupe),
-        Variant("distinct", render(c.query(distinct=True)))])
+        Variant("distinct", render(c.query(distinct=True)), post=equiv)])
 
 
 def union(ch: Chooser) -> Case:
@@ -356,7 +373,7 @@ def union(ch: Chooser) -> Case:
         return Case("union/all", [Variant("concat", parts=[q1, q2], combine=concat),
                                   Variant("union all", f"{q1} UNION ALL {q2}")])
     return Case("union/distinct", [Variant("concat", parts=[q1, q2], combine=concat, post=dedupe),
-                                   Variant("union", f"{q1} UNION {q2}")])
+                                   Variant("union", f"{q1} UNION {q2}", post=equiv)])
 
 
 def distinct_agg(ch: Chooser) -> Case:

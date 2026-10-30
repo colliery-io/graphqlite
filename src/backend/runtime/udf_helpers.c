@@ -1108,8 +1108,10 @@ void gql_typetag_func(sqlite3_context *context, int argc, sqlite3_value **argv)
     int t = sqlite3_value_type(argv[0]);
     unsigned int sub = sqlite3_value_subtype(argv[0]);
     const char *tag;
-    if (t == SQLITE_NULL) tag = "null";
-    else if (sub == GQL_SUBTYPE_BOOLEAN) tag = "bool";
+    /* No tag for null: every null is one value to DISTINCT and UNION
+     * (GQLITE-T-0467). */
+    if (t == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    if (sub == GQL_SUBTYPE_BOOLEAN) tag = "bool";
     else if (sub == GQL_SUBTYPE_JSON && t == SQLITE_TEXT) tag = "json";
     else if (t == SQLITE_INTEGER) tag = "int";
     else if (t == SQLITE_FLOAT) tag = "real";
