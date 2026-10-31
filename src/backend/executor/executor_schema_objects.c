@@ -346,8 +346,22 @@ static char *sch_check_one(sqlite3 *db, const char *name, const char *type, cons
     sqlite3_free(el);
     char *err = NULL;
     sqlite3_stmt *st = NULL;
-    if (sql && sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK) {
-        if (sqlite3_step(st) == SQLITE_ROW) {
+    int src = sql ? sqlite3_prepare_v2(db, sql, -1, &st, NULL) : SQLITE_NOMEM;
+    if (src != SQLITE_OK) {
+        /* a check that cannot run fails the write; it passed (GQLITE-T-0445) */
+        char buf[700];
+        snprintf(buf, sizeof(buf), "ConstraintVerificationFailed: could not check constraint %s: %s",
+                 name, sql ? sqlite3_errmsg(db) : "out of memory");
+        err = strdup(buf);
+    } else {
+        int step = sqlite3_step(st);
+        if (step != SQLITE_ROW && step != SQLITE_DONE) {
+            char buf[700];
+            snprintf(buf, sizeof(buf), "ConstraintVerificationFailed: could not check constraint %s: %s",
+                     name, sqlite3_errmsg(db));
+            err = strdup(buf);
+        }
+        if (step == SQLITE_ROW) {
             char buf[700];
             if (strcmp(type, "NOT_NULL") == 0) {
                 snprintf(buf, sizeof(buf),
@@ -375,7 +389,12 @@ char *schema_check_constraints(cypher_executor *executor)
     char *err = NULL;
     if (sqlite3_prepare_v2(executor->db,
             "SELECT name, type, label, properties FROM " SCHEMA_TABLE " WHERE kind = 'constraint'",
-            -1, &st, NULL) != SQLITE_OK) return NULL;
+            -1, &st, NULL) != SQLITE_OK) {
+        char buf[600];
+        snprintf(buf, sizeof(buf), "ConstraintVerificationFailed: could not read the constraints: %s",
+                 sqlite3_errmsg(executor->db));
+        return strdup(buf);
+    }
     while (!err && sqlite3_step(st) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(st, 0);
         const char *type = (const char *)sqlite3_column_text(st, 1);
