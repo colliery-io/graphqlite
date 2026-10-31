@@ -277,7 +277,7 @@ static cypher_result *stmt_cache_execute(cypher_executor *ex, stmt_cache_entry *
     sqlite3_reset(e->stmt);
     sqlite3_clear_bindings(e->stmt);
     if (ex->params_json && bind_params_from_json(e->stmt, ex->params_json) < 0) {
-        set_result_error(result, "Failed to bind query parameters");
+        { char bm[300]; snprintf(bm, sizeof(bm), "Failed to bind query parameters: %s", sqlite3_errmsg(ex->db)); set_result_error(result, bm); }
         e->in_use = false;
         return result;
     }
@@ -729,7 +729,7 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                     /* Bind parameters if provided */
                     if (executor->params_json) {
                         if (bind_params_from_json(transform_result->stmt, executor->params_json) < 0) {
-                            set_result_error(result, "Failed to bind query parameters");
+                            { char bm[300]; snprintf(bm, sizeof(bm), "Failed to bind query parameters: %s", sqlite3_errmsg(executor->db)); set_result_error(result, bm); }
                             free(transform_result);
                             cypher_transform_free_context(ctx);
                             return result;
