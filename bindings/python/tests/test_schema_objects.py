@@ -104,3 +104,16 @@ def test_failed_store_is_an_error(tmp_path):
         assert "Failed to drop" in str(ei.value)
     finally:
         ro.close()
+
+
+def test_a_check_that_cannot_run_fails_the_write(conn):
+    """GQLITE-T-0445: a constraint check that failed to prepare passed, and
+    the duplicate was written."""
+    conn.cypher("CREATE CONSTRAINT FOR (p:P) REQUIRE p.id IS UNIQUE")
+    conn.cypher("CREATE (:P {id: 1})")
+    conn._conn.execute("ALTER TABLE node_props_real RENAME TO node_props_real_gone")
+    with pytest.raises(graphqlite.CypherError) as ei:
+        conn.cypher("CREATE (:P {id: 1})")
+    assert "could not check constraint" in str(ei.value)
+    conn._conn.execute("ALTER TABLE node_props_real_gone RENAME TO node_props_real")
+    assert count(conn, "P") == 1

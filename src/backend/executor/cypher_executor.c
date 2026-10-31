@@ -980,9 +980,11 @@ static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *a
     bool saved_bypass = kc ? kc->bypass : false;
     if (kc) kc->bypass = !sqlite3_get_autocommit(executor->db);
 
-    bool guarded = ast_may_write(ast) &&
+    bool may_write = ast_may_write(ast);
+    bool guarded = may_write &&
         sqlite3_exec(executor->db, "SAVEPOINT graphqlite_query", NULL, NULL, NULL) == SQLITE_OK;
     long keys_before = kc ? kc->key_insertions : 0;
+
 
     cypher_result *result = cypher_executor_execute_ast(executor, ast);
 
@@ -992,6 +994,17 @@ static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *a
         char *violation = schema_check_constraints(executor);
         if (violation) {
             set_result_error(result, violation);
+            free(violation);
+        }
+    } else if (may_write && result && result->success) {
+        /* No savepoint (cypher() called inside another statement): the
+         * check was skipped. It runs now; a violation cannot be undone
+         * here, so the error says so (GQLITE-T-0445). */
+        char *violation = schema_check_constraints(executor);
+        if (violation) {
+            char *msg = sqlite3_mprintf("%s; the write could not be undone (no savepoint)", violation);
+            set_result_error(result, msg ? msg : violation);
+            sqlite3_free(msg);
             free(violation);
         }
     }
