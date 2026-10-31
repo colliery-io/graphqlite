@@ -143,8 +143,10 @@ jobs:
         run: |
           # Use Homebrew Python which supports extension loading
           brew install python@3.12
-          $(brew --prefix python@3.12)/libexec/bin/python -m pip install -e "./bindings/python[dev]"
-          DYLD_LIBRARY_PATH="$SQLITE_PREFIX/lib:$DYLD_LIBRARY_PATH" $(brew --prefix python@3.12)/libexec/bin/python -m pytest bindings/python/tests/ -v
+          # a venv: Homebrew's Python refuses a system pip install (PEP 668)
+          "$(brew --prefix python@3.12)/libexec/bin/python3" -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -e "./bindings/python[dev]"
+          DYLD_LIBRARY_PATH="$SQLITE_PREFIX/lib:$DYLD_LIBRARY_PATH" "$RUNNER_TEMP/venv/bin/python" -m pytest bindings/python/tests/ -v
 
       - name: Install and test Python bindings (Windows)
         if: runner.os == 'Windows'
