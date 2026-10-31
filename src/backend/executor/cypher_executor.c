@@ -469,13 +469,20 @@ static void execute_profile(cypher_executor *executor, cypher_query *query, cyph
                                   "nodes_created", "nodes_deleted", "relationships_created",
                                   "relationships_deleted", "properties_set"};
     int nc = (int)(sizeof(names) / sizeof(names[0]));
+    result->column_names = calloc((size_t)nc, sizeof(char *));
+    result->data = calloc(1, sizeof(char **));
+    result->data_types = calloc(1, sizeof(int *));
+    if (result->data) result->data[0] = calloc((size_t)nc, sizeof(char *));
+    if (result->data_types) result->data_types[0] = calloc((size_t)nc, sizeof(int));
+    if (!result->column_names || !result->data || !result->data[0] ||
+        !result->data_types || !result->data_types[0]) {
+        set_result_error(result, "PROFILE: out of memory");
+        cypher_result_free(run);
+        free(sql); free(flags_str); jbuf_free(&plan);
+        return;
+    }
     result->column_count = nc;
     result->row_count = 1;
-    result->column_names = calloc((size_t)nc, sizeof(char *));
-    result->data = malloc(sizeof(char **));
-    result->data_types = malloc(sizeof(int *));
-    result->data[0] = calloc((size_t)nc, sizeof(char *));
-    result->data_types[0] = calloc((size_t)nc, sizeof(int));
     for (int i = 0; i < nc; i++) result->column_names[i] = strdup(names[i]);
     char buf[64];
     result->data[0][0] = strdup(pattern_name);           result->data_types[0][0] = GQL_COL_TYPE_STRING;
@@ -493,6 +500,13 @@ static void execute_profile(cypher_executor *executor, cypher_query *query, cyph
         result->data[0][6 + i] = strdup(buf);
         result->data_types[0][6 + i] = SQLITE_INTEGER;
     }
+    /* The writes count as writes: note_write reads these, and the cached
+     * algorithm graph stayed stale after PROFILE CREATE (GQLITE-T-0444). */
+    result->nodes_created = run->nodes_created;
+    result->nodes_deleted = run->nodes_deleted;
+    result->relationships_created = run->relationships_created;
+    result->relationships_deleted = run->relationships_deleted;
+    result->properties_set = run->properties_set;
     result->success = true;
     cypher_result_free(run);
 }
