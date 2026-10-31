@@ -333,6 +333,21 @@ def varlen(ch: Chooser) -> Case:
         Variant("fixed", parts=[render(x) for x in parts], combine=concat)])
 
 
+def varlen_comprehension(ch: Chooser) -> Case:
+    """A pattern comprehension with a variable-length relationship has one
+    element per walk of the OPTIONAL MATCH (GQLITE-T-0472)."""
+    rng_ = ch.pick("vl.range")
+    p = pattern(ch, "c1", ["a", "b"], ["r"], hops=1)
+    (a, la), (b, lb) = p.nodes
+    s = p.steps[0]
+    walk = f"({v(a)}){_arrow(s.dir, s.type + rng_)}({v(b)}{lb})"
+    return Case(f"varlen_comprehension/{rng_}", [
+        Variant("comprehension", render(f"MATCH ({v(a)}{la}) RETURN {v(a)}.id AS c0, "
+                                        f"size([{walk} | 1]) AS c1")),
+        Variant("optional", render(f"MATCH ({v(a)}{la}) OPTIONAL MATCH {walk} "
+                                   f"RETURN {v(a)}.id AS c0, count({v(b)}) AS c1"))])
+
+
 # ---------------------------------------------------------------- partition
 
 def tlp_where(ch: Chooser) -> Case:
@@ -673,6 +688,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "reverse_pattern": (reverse_pattern, G + C1 + C2_FORCED + ["rp.clause", "expr.kind"]),
     "split_path": (split_path, G + ["c1.dir", "c1.type", "c1.label", "expr.kind"]),
     "varlen": (varlen, G + ["c1.dir", "c1.type", "c1.label", "vl.range", "expr.kind"]),
+    "varlen_comprehension": (varlen_comprehension, G + ["c1.dir", "c1.type", "c1.label", "vl.range"]),
     "tlp_where": (tlp_where, [d for d in CHAIN if d != "ret.kind"] + ["pred.kind"]),
     "tlp_count": (tlp_count, [d for d in CHAIN if d != "ret.kind"] + ["pred.kind"]),
     "limit_slice": (limit_slice, [d for d in CHAIN if d not in ("ret.kind", "agg.kind")]),
