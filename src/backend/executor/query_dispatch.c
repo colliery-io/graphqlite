@@ -1285,27 +1285,39 @@ typedef struct { char *text; size_t len; bool quoted; } csv_field;
 
 /* One record from text at *pos. Returns the field count (fields owned),
  * -1 at end of input. */
+/* The next record of t from *pos: its field count, -1 at the end, -2 for
+ * a quote that is not closed (GQLITE-T-0443: the rest of the file became
+ * one field), -3 when out of memory. */
 static int csv_next_record(const char *t, size_t n, size_t *pos, char sep, csv_field **out)
 {
     if (*pos >= n) return -1;
     int count = 0, cap = 8;
     csv_field *f = calloc((size_t)cap, sizeof(csv_field));
+    if (!f) return -3;
     size_t i = *pos;
     for (;;) {
         dynamic_buffer v; dbuf_init(&v);
         bool quoted = false;
         if (i < n && t[i] == '"') {
             quoted = true;
+            bool closed = false;
             i++;
             while (i < n) {
                 if (t[i] == '"') {
                     if (i + 1 < n && t[i + 1] == '"') { dbuf_append(&v, "\""); i += 2; continue; }
                     i++;
+                    closed = true;
                     break;
                 }
                 char c[2] = {t[i], 0};
                 dbuf_append(&v, c);
                 i++;
+            }
+            if (!closed) {
+                dbuf_free(&v);
+                for (int k = 0; k < count; k++) free(f[k].text);
+                free(f);
+                return -2;
             }
         }
         while (i < n && t[i] != sep && t[i] != '\n' && t[i] != '\r') {
@@ -1313,9 +1325,25 @@ static int csv_next_record(const char *t, size_t n, size_t *pos, char sep, csv_f
             dbuf_append(&v, c);
             i++;
         }
-        if (count == cap) { cap *= 2; f = realloc(f, (size_t)cap * sizeof(csv_field)); }
+        if (count == cap) {
+            csv_field *grown = realloc(f, (size_t)cap * 2 * sizeof(csv_field));
+            if (!grown) {
+                dbuf_free(&v);
+                for (int k = 0; k < count; k++) free(f[k].text);
+                free(f);
+                return -3;
+            }
+            f = grown;
+            cap *= 2;
+        }
         const char *got = dbuf_get(&v);
         f[count].text = strdup(got ? got : "");
+        if (!f[count].text) {
+            dbuf_free(&v);
+            for (int k = 0; k < count; k++) free(f[k].text);
+            free(f);
+            return -3;
+        }
         f[count].len = dbuf_len(&v);
         f[count].quoted = quoted;
         count++;
@@ -1348,6 +1376,11 @@ static int handle_load_csv(cypher_executor *executor, cypher_query *query, cyphe
     }
     char sep = lc->fieldterminator && lc->fieldterminator[0] ? lc->fieldterminator[0] : ',';
     if (lc->fieldterminator && strcmp(lc->fieldterminator, "\\t") == 0) sep = '\t';
+    else if (lc->fieldterminator && strlen(lc->fieldterminator) != 1) {
+        /* only its first character was used (GQLITE-T-0443) */
+        set_result_error(result, "LOAD CSV: FIELDTERMINATOR must be one character");
+        return -1;
+    }
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         char msg[600];
@@ -1358,23 +1391,38 @@ static int handle_load_csv(cypher_executor *executor, cypher_query *query, cyphe
     dynamic_buffer text; dbuf_init(&text);
     char chunk[65536];
     size_t got;
-    while ((got = fread(chunk, 1, sizeof(chunk) - 1, fp)) > 0) { chunk[got] = 0; dbuf_append(&text, chunk); }
+    bool has_nul = false;
+    while ((got = fread(chunk, 1, sizeof(chunk) - 1, fp)) > 0) {
+        /* a NUL byte cut the data short (GQLITE-T-0443) */
+        if (memchr(chunk, 0, got)) { has_nul = true; break; }
+        chunk[got] = 0;
+        dbuf_append(&text, chunk);
+    }
     fclose(fp);
+    if (has_nul) {
+        dbuf_free(&text);
+        char msg[600];
+        snprintf(msg, sizeof(msg), "LOAD CSV: %s contains a NUL byte", path);
+        set_result_error(result, msg);
+        return -1;
+    }
     const char *t = dbuf_get(&text);
     size_t n = dbuf_len(&text);
     size_t pos = 0;
     if (n >= 3 && (unsigned char)t[0] == 0xEF && (unsigned char)t[1] == 0xBB && (unsigned char)t[2] == 0xBF) pos = 3;  /* BOM */
 
     csv_field *hdr = NULL; int nh = 0;
+    int bad = 0, bad_line = 0;     /* -2 an unclosed quote, -3 out of memory */
     if (lc->with_headers) {
         nh = csv_next_record(t ? t : "", n, &pos, sep, &hdr);
-        if (nh < 0) nh = 0;
+        if (nh < -1) { bad = nh; bad_line = 1; }
+        if (nh < 0) { nh = 0; hdr = NULL; }
     }
     dynamic_buffer rows; dbuf_init(&rows);
     dbuf_append(&rows, "[");
     int line = lc->with_headers ? 1 : 0, nrows = 0;
     csv_field *rec = NULL; int nf;
-    while ((nf = csv_next_record(t ? t : "", n, &pos, sep, &rec)) >= 0) {
+    while (!bad && (nf = csv_next_record(t ? t : "", n, &pos, sep, &rec)) >= 0) {
         line++;
         if (nf == 1 && rec[0].len == 0 && !rec[0].quoted) { csv_free_record(rec, nf); continue; }  /* blank line */
         dbuf_append(&rows, nrows++ ? ",{\"line\":" : "{\"line\":");
@@ -1402,9 +1450,20 @@ static int handle_load_csv(cypher_executor *executor, cypher_query *query, cyphe
         dbuf_append(&rows, "}");
         csv_free_record(rec, nf);
     }
+    if (!bad && nf < -1) { bad = nf; bad_line = line + 1; }
     dbuf_append(&rows, "]");
     if (hdr) csv_free_record(hdr, nh);
     dbuf_free(&text);
+    if (bad) {
+        dbuf_free(&rows);
+        char msg[600];
+        if (bad == -2)
+            snprintf(msg, sizeof(msg), "LOAD CSV: a quoted field is not closed (record %d of %s)", bad_line, path);
+        else
+            snprintf(msg, sizeof(msg), "LOAD CSV: out of memory reading %s", path);
+        set_result_error(result, msg);
+        return -1;
+    }
 
     /* the rest of the query over the rows */
     ast_list *with_items = ast_list_create();
@@ -1426,7 +1485,19 @@ static int handle_load_csv(cypher_executor *executor, cypher_query *query, cyphe
     sink.json = sqlite3_mprintf("\"__gql_csv_rows\":%s", dbuf_get(&rows));
     dbuf_free(&rows);
     const char *user_params = executor->params_json;
-    char *merged = rw_params_merged(user_params, &sink);
+    char *merged = sink.json ? rw_params_merged(user_params, &sink) : NULL;
+    if (!merged) {
+        /* rows over SQLite's string limit: zero rows and success before
+         * (GQLITE-T-0443) */
+        sqlite3_free(sink.json);
+        for (int i = 0; i < made->count; i++) ast_node_free(made->items[i]);
+        free(made->items); free(made);
+        free(all->items); free(all); free(q);
+        char msg[600];
+        snprintf(msg, sizeof(msg), "LOAD CSV: %s is too large to load", path);
+        set_result_error(result, msg);
+        return -1;
+    }
     executor->params_json = merged;
     executor->stmt_capture = false;
     cypher_result *ir = cypher_executor_execute_ast(executor, (ast_node*)q);

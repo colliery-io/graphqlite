@@ -383,8 +383,11 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
             }
             *out = '\0';
             if (*p) p++;  /* Skip closing quote */
-            sqlite3_bind_text(stmt, idx, unescaped, -1, SQLITE_TRANSIENT);
+            int brc = sqlite3_bind_text(stmt, idx, unescaped, -1, SQLITE_TRANSIENT);
             free(unescaped);
+            /* a value over SQLite's length limit was bound as nothing: the
+             * query ran on null (GQLITE-T-0443) */
+            if (idx > 0 && brc != SQLITE_OK) return -1;
         } else if (*p == 't') {
             /* true */
             sqlite3_bind_int(stmt, idx, 1);
@@ -435,8 +438,9 @@ int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json)
             if (!json_val) return -1;
             memcpy(json_val, json_start, json_len);
             json_val[json_len] = '\0';
-            sqlite3_bind_text(stmt, idx, json_val, -1, SQLITE_TRANSIENT);
+            int brc = sqlite3_bind_text(stmt, idx, json_val, -1, SQLITE_TRANSIENT);
             free(json_val);
+            if (idx > 0 && brc != SQLITE_OK) return -1;
         } else {
             return -1;  /* Unknown value type */
         }

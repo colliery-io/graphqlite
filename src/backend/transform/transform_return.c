@@ -677,7 +677,9 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 if (strncmp(var->name, "_gql_default_alias_", 19) == 0 ||
                     strncmp(var->name, "__unnamed_rel_", 14) == 0 ||
                     strncmp(var->name, "_pv_n", 5) == 0 ||
-                    strncmp(var->name, "_pv_e", 5) == 0) continue;
+                    strncmp(var->name, "_pv_e", 5) == 0 ||
+                    /* LOAD CSV's __gql_linenumber / __gql_file (GQLITE-T-0443) */
+                    strncmp(var->name, "__gql_", 6) == 0) continue;
 
                 /* Build expression for this variable based on its kind */
                 if (var->kind == VAR_KIND_NODE) {
