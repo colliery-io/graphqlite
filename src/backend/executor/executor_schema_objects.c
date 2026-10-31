@@ -288,15 +288,19 @@ static char *sch_props_json(const sch_stmt *s)
 }
 
 /* The SQL key of a node's property `k` (`node_id` column of alias a):
- * a typed text, numbers as REAL so 1 = 1.0; NULL when absent. */
+ * a typed text; NULL when absent. An integer is its exact value, and a
+ * whole-number float the same integer, so 1 = 1.0; a REAL key made ints
+ * above 2^53 collide (GQLITE-T-0441). */
 static char *sch_key_expr(const char *a, const char *k)
 {
     char *ek = sqlite3_mprintf("%q", k);
     char *e = sqlite3_mprintf(
         "COALESCE("
         "(SELECT 't:' || p.value FROM node_props_text p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')),"
-        "(SELECT 'n:' || CAST(p.value AS REAL) FROM node_props_int p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')),"
-        "(SELECT 'n:' || CAST(p.value AS REAL) FROM node_props_real p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')),"
+        "(SELECT 'n:' || CAST(p.value AS INTEGER) FROM node_props_int p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')),"
+        "(SELECT 'n:' || CASE WHEN abs(p.value) < 9.0e18 AND p.value = CAST(p.value AS INTEGER) "
+        "THEN CAST(CAST(p.value AS INTEGER) AS TEXT) ELSE CAST(p.value AS TEXT) END "
+        "FROM node_props_real p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')),"
         "(SELECT 'b:' || p.value FROM node_props_bool p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')),"
         "(SELECT 'j:' || p.value FROM node_props_json p WHERE p.node_id = %s.node_id AND p.key_id = (SELECT id FROM property_keys WHERE key = '%s')))",
         a, ek, a, ek, a, ek, a, ek, a, ek);
@@ -453,17 +457,26 @@ static int sch_create(cypher_executor *ex, sch_stmt *s, cypher_result *r)
             return -1;
         }
     }
-    if (sqlite3_prepare_v2(ex->db, "INSERT INTO " SCHEMA_TABLE " (name, kind, type, label, properties) VALUES (?, ?, ?, ?, ?)",
-                           -1, &st, NULL) == SQLITE_OK) {
+    /* A store that fails (a read-only or busy database) is an error: the
+     * schema object would not exist and never be enforced (GQLITE-T-0441). */
+    int rc = sqlite3_prepare_v2(ex->db, "INSERT INTO " SCHEMA_TABLE " (name, kind, type, label, properties) VALUES (?, ?, ?, ?, ?)",
+                                -1, &st, NULL);
+    if (rc == SQLITE_OK) {
         sqlite3_bind_text(st, 1, s->name, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(st, 2, kind, -1, SQLITE_STATIC);
         sqlite3_bind_text(st, 3, type, -1, SQLITE_STATIC);
         sqlite3_bind_text(st, 4, s->label, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(st, 5, pj, -1, SQLITE_TRANSIENT);
-        sqlite3_step(st);
+        rc = sqlite3_step(st) == SQLITE_DONE ? SQLITE_OK : SQLITE_ERROR;
     }
     sqlite3_finalize(st);
     free(pj);
+    if (rc != SQLITE_OK) {
+        char msg[600];
+        snprintf(msg, sizeof(msg), "Failed to store the %s: %s", kind, sqlite3_errmsg(ex->db));
+        set_result_error(r, msg);
+        return -1;
+    }
     r->success = true;
     return 0;
 }
@@ -471,6 +484,7 @@ static int sch_create(cypher_executor *ex, sch_stmt *s, cypher_result *r)
 static int sch_drop(cypher_executor *ex, sch_stmt *s, cypher_result *r)
 {
     int changed = 0;
+    int drop_rc = SQLITE_OK;
     if (sch_table_exists(ex->db)) {
         sqlite3_stmt *st = NULL;
         const char *kind = s->constraint ? "constraint" : "index";
@@ -478,7 +492,9 @@ static int sch_drop(cypher_executor *ex, sch_stmt *s, cypher_result *r)
             if (sqlite3_prepare_v2(ex->db, "DELETE FROM " SCHEMA_TABLE " WHERE name = ?1 AND kind = ?2", -1, &st, NULL) == SQLITE_OK) {
                 sqlite3_bind_text(st, 1, s->name, -1, SQLITE_TRANSIENT);
                 sqlite3_bind_text(st, 2, kind, -1, SQLITE_STATIC);
-                sqlite3_step(st);
+                if (sqlite3_step(st) != SQLITE_DONE) drop_rc = SQLITE_ERROR;
+            } else {
+                drop_rc = SQLITE_ERROR;
             }
         } else {
             /* old form: by its definition */
@@ -490,11 +506,19 @@ static int sch_drop(cypher_executor *ex, sch_stmt *s, cypher_result *r)
                 sqlite3_bind_text(st, 3, pj, -1, SQLITE_TRANSIENT);
                 if (s->constraint) sqlite3_bind_text(st, 4, s->ctype, -1, SQLITE_TRANSIENT);
                 else sqlite3_bind_null(st, 4);
-                sqlite3_step(st);
+                if (sqlite3_step(st) != SQLITE_DONE) drop_rc = SQLITE_ERROR;
+            } else {
+                drop_rc = SQLITE_ERROR;
             }
             free(pj);
         }
         sqlite3_finalize(st);
+        if (drop_rc != SQLITE_OK) {
+            char msg[600];
+            snprintf(msg, sizeof(msg), "Failed to drop the %s: %s", kind, sqlite3_errmsg(ex->db));
+            set_result_error(r, msg);
+            return -1;
+        }
         changed = sqlite3_changes(ex->db);
     }
     if (!changed && !s->if_flag) {
