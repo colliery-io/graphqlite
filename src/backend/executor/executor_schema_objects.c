@@ -173,6 +173,16 @@ static int sch_parse(const char *q, sch_stmt *st, char *msg, size_t msglen)
         sch_word(&ts, "RANGE");
         if (sch_word(&ts, "INDEX") || sch_word(&ts, "INDEXES")) { st->verb = SCH_SHOW; rc = 1; }
         else if (sch_word(&ts, "CONSTRAINT") || sch_word(&ts, "CONSTRAINTS")) { st->verb = SCH_SHOW; st->constraint = true; rc = 1; }
+        /* words after it were ignored (`SHOW INDEXES YIELD name WHERE ...`
+         * ran as a plain SHOW, GQLITE-T-0447) */
+        if (rc == 1) {
+            sch_sym(&ts, ';');
+            if (ts.i < ts.n) {
+                snprintf(msg, msglen, "SyntaxError: UnexpectedSyntax: SHOW %s takes nothing after it",
+                         st->constraint ? "CONSTRAINTS" : "INDEXES");
+                rc = -1;
+            }
+        }
         goto done;
     }
     bool create = sch_word(&ts, "CREATE");
@@ -536,8 +546,9 @@ static int sch_drop(cypher_executor *ex, sch_stmt *s, cypher_result *r)
 static int sch_show(cypher_executor *ex, sch_stmt *s, cypher_result *r)
 {
     static const char *cols[] = {"name", "type", "entityType", "labelsOrTypes", "properties"};
-    r->column_count = 5;
     r->column_names = calloc(5, sizeof(char *));
+    if (!r->column_names) { set_result_error(r, "SHOW: out of memory"); return -1; }
+    r->column_count = 5;
     for (int i = 0; i < 5; i++) r->column_names[i] = strdup(cols[i]);
     r->success = true;
     if (!sch_table_exists(ex->db)) return 0;
@@ -550,14 +561,19 @@ static int sch_show(cypher_executor *ex, sch_stmt *s, cypher_result *r)
     int cap = 8;
     r->data = calloc((size_t)cap, sizeof(char **));
     r->data_types = calloc((size_t)cap, sizeof(int *));
-    while (sqlite3_step(st) == SQLITE_ROW) {
+    bool oom = !r->data || !r->data_types;
+    while (!oom && sqlite3_step(st) == SQLITE_ROW) {
         if (r->row_count == cap) {
+            char ***gd = realloc(r->data, (size_t)cap * 2 * sizeof(char **));
+            if (gd) r->data = gd;
+            int **gt = realloc(r->data_types, (size_t)cap * 2 * sizeof(int *));
+            if (gt) r->data_types = gt;
+            if (!gd || !gt) { oom = true; break; }
             cap *= 2;
-            r->data = realloc(r->data, (size_t)cap * sizeof(char **));
-            r->data_types = realloc(r->data_types, (size_t)cap * sizeof(int *));
         }
         char **row = calloc(5, sizeof(char *));
         int *ty = calloc(5, sizeof(int));
+        if (!row || !ty) { free(row); free(ty); oom = true; break; }
         row[0] = strdup((const char *)sqlite3_column_text(st, 0)); ty[0] = GQL_COL_TYPE_STRING;
         row[1] = strdup((const char *)sqlite3_column_text(st, 1)); ty[1] = GQL_COL_TYPE_STRING;
         row[2] = strdup("NODE");                                   ty[2] = GQL_COL_TYPE_STRING;
@@ -568,6 +584,7 @@ static int sch_show(cypher_executor *ex, sch_stmt *s, cypher_result *r)
         r->row_count++;
     }
     sqlite3_finalize(st);
+    if (oom) { set_result_error(r, "SHOW: out of memory"); return -1; }
     return 0;
 }
 
