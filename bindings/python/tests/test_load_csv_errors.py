@@ -45,6 +45,8 @@ def test_long_field_terminator(conn, tmp_path):
     assert "one character" in str(ei.value)
 
 
+@pytest.mark.skipif(not hasattr(sqlite3.Connection, "setlimit"),
+                    reason="Connection.setlimit needs Python 3.11")
 def test_too_large_is_an_error(tmp_path):
     p = tmp_path / "big.csv"
     p.write_bytes(b"a\n" + b"x" * 4000 + b"\n")
