@@ -1071,6 +1071,38 @@ static graph_algo_result *run_graph_algorithm(cypher_executor *executor, graph_a
  *   UNWIND $__gql_algo_rows AS __gql_algo_row
  *   WITH __gql_algo_row.k AS a, ... [WHERE ...]
  * followed by the rest of the query (or a RETURN of the yielded names). */
+/* The outputs of each algorithm, in order: YIELD is checked against them,
+ * and YIELD * on an empty result still names them (GQLITE-T-0442). */
+static const char *const *algo_outputs(graph_algo_type t)
+{
+    static const char *const node_score[] = {"node_id", "user_id", "score", NULL};
+    static const char *const community[] = {"node_id", "user_id", "community", NULL};
+    static const char *const component[] = {"node_id", "user_id", "component", NULL};
+    static const char *const degree[] = {"node_id", "user_id", "in_degree", "out_degree", "degree", NULL};
+    static const char *const triangles[] = {"node_id", "user_id", "triangles", "clustering_coefficient", NULL};
+    static const char *const path[] = {"path", "distance", "found", NULL};
+    static const char *const astar[] = {"path", "distance", "found", "nodes_explored", NULL};
+    static const char *const search[] = {"node_id", "user_id", "depth", "order", NULL};
+    static const char *const similarity[] = {"node1", "node2", "similarity", NULL};
+    static const char *const knn[] = {"neighbor", "similarity", "rank", NULL};
+    static const char *const apsp[] = {"source", "target", "distance", NULL};
+    switch (t) {
+        case GRAPH_ALGO_PAGERANK: case GRAPH_ALGO_BETWEENNESS_CENTRALITY:
+        case GRAPH_ALGO_CLOSENESS_CENTRALITY: case GRAPH_ALGO_EIGENVECTOR_CENTRALITY: return node_score;
+        case GRAPH_ALGO_LABEL_PROPAGATION: case GRAPH_ALGO_LOUVAIN: return community;
+        case GRAPH_ALGO_WCC: case GRAPH_ALGO_SCC: return component;
+        case GRAPH_ALGO_DEGREE_CENTRALITY: return degree;
+        case GRAPH_ALGO_TRIANGLE_COUNT: return triangles;
+        case GRAPH_ALGO_DIJKSTRA: return path;
+        case GRAPH_ALGO_ASTAR: return astar;
+        case GRAPH_ALGO_BFS: case GRAPH_ALGO_DFS: return search;
+        case GRAPH_ALGO_NODE_SIMILARITY: return similarity;
+        case GRAPH_ALGO_KNN: return knn;
+        case GRAPH_ALGO_APSP: return apsp;
+        default: return NULL;
+    }
+}
+
 static int handle_call_procedure(cypher_executor *executor, cypher_query *query, cypher_result *result)
 {
     ast_list *clauses = query->clauses;
@@ -1125,6 +1157,17 @@ static int handle_call_procedure(cypher_executor *executor, cypher_query *query,
         }
         sqlite3_finalize(st);
     }
+    /* The algorithm's declared outputs, whether or not there are rows. */
+    const char *const *decl = algo_outputs(params.type);
+    if (decl) {
+        for (int k = 0; k < nk; k++) free(keys[k]);
+        free(keys);
+        keys = NULL; nk = 0;
+        for (int k = 0; decl[k]; k++) {
+            keys = realloc(keys, (size_t)(nk + 1) * sizeof(char*));
+            keys[nk++] = strdup(decl[k]);
+        }
+    }
     int rc = 0;
     /* outputs: the YIELD items, or every key */
     ast_list *with_items = ast_list_create();
@@ -1133,7 +1176,7 @@ static int handle_call_procedure(cypher_executor *executor, cypher_query *query,
         for (int i = 0; i < cp->yields->count && rc == 0; i++) {
             cypher_return_item *y = (cypher_return_item*)cp->yields->items[i];
             const char *out = ((cypher_identifier*)y->expr)->name;
-            bool known = nk == 0;          /* no rows: nothing to check */
+            bool known = false;
             for (int k = 0; k < nk && !known; k++) known = strcmp(keys[k], out) == 0;
             if (!known) {
                 char msg[300];
