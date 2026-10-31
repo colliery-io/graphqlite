@@ -136,7 +136,7 @@ sqlite3 :memory: < tests/functional/01_create_match.sql
 make test python
 ```
 
-Requires Python 3.8+ and `pip install graphqlite[dev]` (or install the dev dependencies from `requirements-dev.txt`).
+Requires Python 3.12+ and `pip install graphqlite[dev]` (or install the dev dependencies from `requirements-dev.txt`).
 
 ### Rust Tests
 
@@ -233,7 +233,7 @@ This copies `build/graphqlite.{dylib,so,dll}` into the correct location inside `
 ### Windows (MSYS2)
 
 - All commands must be run from the **MSYS2 MinGW 64-bit** shell, not the default MSYS shell. The MinGW shell sets the correct compiler paths.
-- Python tests require a Windows Python 3.8+ installation accessible from the MSYS2 PATH.
+- Python tests require a Windows Python 3.12+ installation accessible from the MSYS2 PATH.
 - The extension output is `build/graphqlite.dll`.
 
 ## Build Directory Layout

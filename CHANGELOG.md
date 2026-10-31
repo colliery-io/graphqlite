@@ -4,6 +4,13 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Upgrade notes
+
+- **Python 3.12 or later** is required for the Python bindings (was 3.8).
+  CI tests 3.12 and 3.13.
+
 ## [0.12.0] — 2026-10-17
 
 New Cypher: `LOAD CSV`, `PROFILE`, `CALL algorithm() YIELD`, label

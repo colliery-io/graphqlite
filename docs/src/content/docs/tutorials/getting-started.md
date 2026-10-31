@@ -15,7 +15,7 @@ This tutorial walks you through installing GraphQLite and building a small socia
 
 ## Prerequisites
 
-- Python 3.8 or later
+- Python 3.12 or later
 - `pip` package manager
 
 ## Step 1: Install GraphQLite
