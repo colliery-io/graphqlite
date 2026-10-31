@@ -2087,12 +2087,19 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 if (has_all_props && base_alias) {
                     char *base_sql = NULL;
                     if (is_projected) {
-                        /* a map value (`WITH {a: 1} AS m RETURN m {.*}`) */
-                        size_t n = strlen(base_alias) * 3 + 96;
+                        /* a map value (`WITH {a: 1} AS m RETURN m {.*}`), or a
+                         * node or relationship held as a value (a list
+                         * comprehension variable): its properties, not the
+                         * entity object (GQLITE-T-0447) */
+                        size_t n = strlen(base_alias) * 9 + 320;
                         base_sql = malloc(n);
                         if (base_sql)
-                            snprintf(base_sql, n, "(CASE WHEN json_valid(%s) AND json_type(%s) = 'object' THEN json(%s) END)",
-                                     base_alias, base_alias, base_alias);
+                            snprintf(base_sql, n,
+                                     "(CASE WHEN json_valid(%s) AND json_type(%s) = 'object' THEN "
+                                     "(CASE WHEN json_type(%s, '$.properties') = 'object' AND "
+                                     "(json_type(%s, '$.labels') = 'array' OR json_type(%s, '$.type') = 'text') "
+                                     "THEN json(json_extract(%s, '$.properties')) ELSE json(%s) END) END)",
+                                     base_alias, base_alias, base_alias, base_alias, base_alias, base_alias, base_alias);
                     } else {
                         bool proj_edge = base_name && transform_var_is_edge(ctx->var_ctx, base_name);
                         base_sql = proj_edge ? gql_sql_props_expr("edge", "edge_id", "", base_ref)

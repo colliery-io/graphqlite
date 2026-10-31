@@ -1152,8 +1152,11 @@ static int handle_call_procedure(cypher_executor *executor, cypher_query *query,
     if (sqlite3_prepare_v2(executor->db, "SELECT key FROM json_each(json_extract(?1, '$[0]'))", -1, &st, NULL) == SQLITE_OK) {
         sqlite3_bind_text(st, 1, rows, -1, SQLITE_TRANSIENT);
         while (sqlite3_step(st) == SQLITE_ROW) {
-            keys = realloc(keys, (size_t)(nk + 1) * sizeof(char*));
-            keys[nk++] = strdup((const char*)sqlite3_column_text(st, 0));
+            char **grown = realloc(keys, (size_t)(nk + 1) * sizeof(char*));
+            char *k = grown ? strdup((const char*)sqlite3_column_text(st, 0)) : NULL;
+            if (grown) keys = grown;
+            if (!k) break;
+            keys[nk++] = k;
         }
         sqlite3_finalize(st);
     }
@@ -1164,8 +1167,11 @@ static int handle_call_procedure(cypher_executor *executor, cypher_query *query,
         free(keys);
         keys = NULL; nk = 0;
         for (int k = 0; decl[k]; k++) {
-            keys = realloc(keys, (size_t)(nk + 1) * sizeof(char*));
-            keys[nk++] = strdup(decl[k]);
+            char **grown = realloc(keys, (size_t)(nk + 1) * sizeof(char*));
+            char *dk = grown ? strdup(decl[k]) : NULL;
+            if (grown) keys = grown;
+            if (!dk) break;
+            keys[nk++] = dk;
         }
     }
     int rc = 0;
@@ -1555,6 +1561,15 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
     /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
      * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
      * `row` as unbound) or the UNWIND itself (every node was updated). */
+    /* A procedure CALL after other clauses fell through to the generic path
+     * and failed with "`x` is not defined" for its YIELD (GQLITE-T-0447). */
+    for (int i = 1; query->clauses && i < query->clauses->count; i++) {
+        if (query->clauses->items[i] && query->clauses->items[i]->type == AST_NODE_CALL_PROCEDURE) {
+            set_result_error(result, "SyntaxError: InvalidClauseComposition: a procedure CALL must be the first clause");
+            return -1;
+        }
+    }
+
     if (call_in_rows(query, flags)) {
         CYPHER_DEBUG("Matched shape: CALL { } in the row pipeline");
         executor->stmt_capture = false;
@@ -3540,9 +3555,6 @@ static graph_algo_result *run_graph_algorithm(cypher_executor *executor, graph_a
                                            algo_params.source_id,
                                            algo_params.target_id,
                                            algo_params.weight_prop);
-            free(algo_params.source_id);
-            free(algo_params.target_id);
-            free(algo_params.weight_prop);
             break;
         case GRAPH_ALGO_DEGREE_CENTRALITY:
             CYPHER_DEBUG("Executing C-based Degree Centrality");
@@ -3615,6 +3627,13 @@ static graph_algo_result *run_graph_algorithm(cypher_executor *executor, graph_a
             break;
     }
 
+    /* the string parameters are ours: they were freed for Dijkstra only
+     * (A*, BFS, DFS, similarity and KNN leaked them, GQLITE-T-0447) */
+    free(algo_params.source_id);
+    free(algo_params.target_id);
+    free(algo_params.weight_prop);
+    free(algo_params.lat_prop);
+    free(algo_params.lon_prop);
     return algo_result;
 }
 
