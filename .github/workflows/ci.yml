@@ -75,7 +75,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
@@ -223,7 +223,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.12', '3.13']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -293,10 +293,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install bison flex sqlite python@3.11
+          brew install bison flex sqlite python@3.12
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
-          echo "$(brew --prefix python@3.11)/libexec/bin" >> $GITHUB_PATH
+          # Homebrew's Python refuses a system pip install (PEP 668): use a
+          # venv, which keeps its sqlite3 with extension loading.
+          "$(brew --prefix python@3.12)/libexec/bin/python3" -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> $GITHUB_PATH
 
       - name: Build extension
         run: make extension
@@ -348,7 +351,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install and test Python bindings
         shell: bash
@@ -390,7 +393,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Build extension
         run: make extension
@@ -445,7 +448,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Build SQLite from the amalgamation
         run: |
