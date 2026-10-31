@@ -1898,9 +1898,64 @@ static void row_pin_release(row_pin *pin)
  * Pattern-specific handlers - wrap existing executor functions
  */
 
+/* A SET value the MATCH + SET path evaluates itself: a literal, a
+ * parameter, a variable, `n.key`, or a list / map of those. */
+static bool set_value_plain(ast_node *v)
+{
+    if (!v) return true;
+    switch (v->type) {
+        case AST_NODE_LITERAL: case AST_NODE_PARAMETER: case AST_NODE_IDENTIFIER: return true;
+        case AST_NODE_PROPERTY:
+            return ((cypher_property *)v)->expr &&
+                   ((cypher_property *)v)->expr->type == AST_NODE_IDENTIFIER;
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list *)v)->items;
+            for (int i = 0; a && i < a->count; i++) if (!set_value_plain(a->items[i])) return false;
+            return true;
+        }
+        case AST_NODE_MAP: {
+            ast_list *a = ((cypher_map *)v)->pairs;
+            for (int i = 0; a && i < a->count; i++)
+                if (!set_value_plain(((cypher_map_pair *)a->items[i])->value)) return false;
+            return true;
+        }
+        default: return false;
+    }
+}
+
+/* Does a SET of the query take a value MATCH + SET cannot evaluate? It
+ * refused CASE and `properties(n).s`, and stored nothing for `+=` maps
+ * that read the node or for reverse() (GQLITE-T-0456). */
+static bool set_values_need_pipeline(cypher_query *query)
+{
+    for (int c = 0; query->clauses && c < query->clauses->count; c++) {
+        ast_node *cl = query->clauses->items[c];
+        if (!cl || cl->type != AST_NODE_SET) continue;
+        ast_list *items = ((cypher_set *)cl)->items;
+        for (int i = 0; items && i < items->count; i++) {
+            cypher_set_item *it = (cypher_set_item *)items->items[i];
+            if (!it || !it->property || it->property->type == AST_NODE_LABEL_EXPR) continue;
+            if (!set_value_plain(it->expr)) return true;
+            /* `SET a += {k: a.s}` reads the node it writes */
+            if (it->is_merge && it->expr && it->expr->type == AST_NODE_MAP) {
+                ast_list *a = ((cypher_map *)it->expr)->pairs;
+                for (int k = 0; a && k < a->count; k++) {
+                    ast_node *pv = ((cypher_map_pair *)a->items[k])->value;
+                    if (pv && pv->type != AST_NODE_LITERAL && pv->type != AST_NODE_PARAMETER) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 static int handle_match_set(cypher_executor *executor, cypher_query *query,
                             cypher_result *result, clause_flags flags)
 {
+    if (set_values_need_pipeline(query)) {
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
     cypher_match *match = find_match_clause(query);
     cypher_set *set = find_set_clause(query);
 
@@ -5298,9 +5353,13 @@ static void rw_literalize_set(cypher_executor *executor, cypher_set *set, const 
             rw_literalize_props(executor, it->expr, row, subs, n_subs);
             continue;
         }
-        /* A value over entities (`SET n.p = n.q`) is read by SET itself,
-         * which keeps a string that looks like JSON a string. */
-        if (!rw_expr_scalar_only(it->expr, row)) continue;
+        /* A plain `n.q` is read by SET itself, which keeps a string that
+         * looks like JSON a string; any other value over entities (CASE,
+         * IS NULL, properties(n).s, ...) is computed for the row: SET
+         * refused it or stored nothing (GQLITE-T-0456). */
+        if (!rw_expr_scalar_only(it->expr, row) && it->expr->type == AST_NODE_PROPERTY &&
+            ((cypher_property *)it->expr)->expr &&
+            ((cypher_property *)it->expr)->expr->type == AST_NODE_IDENTIFIER) continue;
         ast_node *lit = rw_value_literal(executor, it->expr, row);
         if (lit) rw_subst_add(subs, n_subs, &it->expr, lit);
     }

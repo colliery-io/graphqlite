@@ -1,4 +1,3 @@
 [
-  {"relation": ".", "kind": "error", "error": "SET value must be|SET value property access|Failed to evaluate function '[^']*' in SET", "task": "GQLITE-T-0456"},
-  {"relation": "^set_readback/", "kind": "mismatch", "task": "GQLITE-T-0456"}
+
 ]
