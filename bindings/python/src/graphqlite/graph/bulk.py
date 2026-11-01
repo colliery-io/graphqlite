@@ -21,9 +21,11 @@ Example:
 """
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ..connection import CypherError
 from ._base import BaseMixin
 from ..utils import sanitize_rel_type
 
@@ -117,6 +119,9 @@ class BulkMixin(BaseMixin):
 
                     # Determine value type and insert
                     self._insert_property(conn, "node", node_id, key_id, value)
+
+            # Constraints hold for bulk writes too (GQLITE-T-0445)
+            self._check_constraints(conn)
 
             # Commit transaction
             conn.execute("COMMIT")
@@ -218,6 +223,9 @@ class BulkMixin(BaseMixin):
 
                     # Determine value type and insert
                     self._insert_property(conn, "edge", edge_id, key_id, value)
+
+            # Constraints hold for bulk writes too (GQLITE-T-0445)
+            self._check_constraints(conn)
 
             # Commit transaction
             conn.execute("COMMIT")
@@ -321,6 +329,13 @@ class BulkMixin(BaseMixin):
         return result
 
     # Helper methods
+
+    def _check_constraints(self, conn) -> None:
+        """Raise CypherError when the data breaks a constraint."""
+        try:
+            conn.execute("SELECT gql_check_constraints()").fetchone()
+        except sqlite3.Error as e:
+            raise CypherError(str(e), code="EXECUTION_ERROR") from e
 
     def _ensure_property_key(self, conn, key: str) -> int:
         """Ensure a property key exists and return its ID."""

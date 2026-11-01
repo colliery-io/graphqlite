@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import graphqlite
-from graphqlite import Graph, graph, escape_string, sanitize_rel_type, CYPHER_RESERVED
+from graphqlite import Graph, graph, escape_string, sanitize_rel_type, CYPHER_RESERVED, CypherError
 
 
 def get_extension_path():
@@ -2098,3 +2098,21 @@ def test_graph_validate_forwards():
         assert v.diagnostic.code == "PARSE_ERROR"
     finally:
         g.close()
+
+
+def test_bulk_insert_checks_constraints(g):
+    """GQLITE-T-0445: the bulk importers wrote the tables directly and a
+    constraint never saw their rows."""
+    g.query("CREATE CONSTRAINT FOR (p:Person) REQUIRE p.email IS UNIQUE")
+    g.insert_nodes_bulk([("c1", {"email": "a@example.com"}, "Person")])
+    with pytest.raises(CypherError) as ei:
+        g.insert_nodes_bulk([
+            ("c2", {"email": "b@example.com"}, "Person"),
+            ("c3", {"email": "a@example.com"}, "Person"),
+        ])
+    assert "ConstraintValidationFailed" in str(ei.value)
+    # the whole batch was rolled back
+    assert g.query("MATCH (p:Person) RETURN count(p) AS c")[0]["c"] == 1
+    # and the connection is usable afterwards
+    g.insert_nodes_bulk([("c4", {"email": "d@example.com"}, "Person")])
+    assert g.query("MATCH (p:Person) RETURN count(p) AS c")[0]["c"] == 2

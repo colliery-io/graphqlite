@@ -129,6 +129,7 @@ cypher_result* create_empty_result(void);
 cypher_result *schema_command_try(cypher_executor *executor, const char *query);
 /* NULL when the data meets every constraint, else the error (owned). */
 char *schema_check_constraints(cypher_executor *executor);
+char *schema_check_constraints_db(sqlite3 *db);
 /* 1 when query is a valid schema statement, -1 with msg when it is an
  * invalid one, 0 when it is not one. */
 int schema_command_check(const char *query, char *msg, size_t msglen);

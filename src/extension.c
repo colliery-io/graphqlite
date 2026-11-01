@@ -527,6 +527,22 @@ static int create_schema(sqlite3 *db) {
  */
 
 /* gql_load_graph() - Build CSR from SQLite and cache in connection memory */
+char *schema_check_constraints_db(sqlite3 *db);
+
+/* gql_check_constraints(): NULL when the data meets the constraints, else
+ * an error naming the violation. For writers outside cypher(), such as the
+ * bulk importers, which check before they commit (GQLITE-T-0445). */
+static void gql_check_constraints_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    (void)argc; (void)argv;
+    char *err = schema_check_constraints_db(sqlite3_context_db_handle(context));
+    if (err) {
+        sqlite3_result_error(context, err, -1);
+        free(err);
+        return;
+    }
+    sqlite3_result_null(context);
+}
+
 static void gql_load_graph_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
     (void)argc;
     (void)argv;
@@ -712,6 +728,10 @@ int sqlite3_graphqlite_init(
 
   rc = sqlite3_create_function(db, "gql_load_graph", 0, SQLITE_UTF8, cache,
                          gql_load_graph_func, 0, 0);
+  if (rc != SQLITE_OK) { free(cache); return rc; }
+
+  rc = sqlite3_create_function(db, "gql_check_constraints", 0, SQLITE_UTF8, NULL,
+                         gql_check_constraints_func, 0, 0);
   if (rc != SQLITE_OK) { free(cache); return rc; }
 
   rc = sqlite3_create_function(db, "gql_unload_graph", 0, SQLITE_UTF8, cache,

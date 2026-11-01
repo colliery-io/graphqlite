@@ -392,17 +392,20 @@ static char *sch_check_one(sqlite3 *db, const char *name, const char *type, cons
     return err;
 }
 
-char *schema_check_constraints(cypher_executor *executor)
+/* The violation of the database's constraints, or NULL when the data meets
+ * them (owned). Also the SQL function gql_check_constraints(), for writers
+ * outside cypher() such as the bulk importers (GQLITE-T-0445). */
+char *schema_check_constraints_db(sqlite3 *db)
 {
-    if (!executor || !executor->db || !sch_table_exists(executor->db)) return NULL;
+    if (!db || !sch_table_exists(db)) return NULL;
     sqlite3_stmt *st = NULL;
     char *err = NULL;
-    if (sqlite3_prepare_v2(executor->db,
+    if (sqlite3_prepare_v2(db,
             "SELECT name, type, label, properties FROM " SCHEMA_TABLE " WHERE kind = 'constraint'",
             -1, &st, NULL) != SQLITE_OK) {
         char buf[600];
         snprintf(buf, sizeof(buf), "ConstraintVerificationFailed: could not read the constraints: %s",
-                 sqlite3_errmsg(executor->db));
+                 sqlite3_errmsg(db));
         return strdup(buf);
     }
     while (!err && sqlite3_step(st) == SQLITE_ROW) {
@@ -413,16 +416,21 @@ char *schema_check_constraints(cypher_executor *executor)
         char props[8][256];
         int np = 0;
         sqlite3_stmt *js = NULL;
-        if (sqlite3_prepare_v2(executor->db, "SELECT value FROM json_each(?1)", -1, &js, NULL) == SQLITE_OK) {
+        if (sqlite3_prepare_v2(db, "SELECT value FROM json_each(?1)", -1, &js, NULL) == SQLITE_OK) {
             sqlite3_bind_text(js, 1, pj ? pj : "[]", -1, SQLITE_TRANSIENT);
             while (np < 8 && sqlite3_step(js) == SQLITE_ROW)
                 snprintf(props[np++], 256, "%s", (const char *)sqlite3_column_text(js, 0));
         }
         sqlite3_finalize(js);
-        err = sch_check_one(executor->db, name ? name : "", type ? type : "", label ? label : "", props, np);
+        err = sch_check_one(db, name ? name : "", type ? type : "", label ? label : "", props, np);
     }
     sqlite3_finalize(st);
     return err;
+}
+
+char *schema_check_constraints(cypher_executor *executor)
+{
+    return executor ? schema_check_constraints_db(executor->db) : NULL;
 }
 
 /* ---- the commands ------------------------------------------------------- */
