@@ -412,6 +412,8 @@ LOAD CSV [WITH HEADERS] FROM 'file:///path/to/file.csv' AS row
 
 Reads a CSV file (RFC 4180 quoting). With `WITH HEADERS`, each row is a map keyed by the header names. Without it, each row is a list. All values are strings; use `toInteger()`, `toFloat()`, or `toBoolean()` as needed. `linenumber()` gives the line of the current row, and `file()` gives the path.
 
+**File access.** `LOAD CSV` reads any file the process can read: there is no import directory and no switch to turn it off. If query text can come from someone else (an app that passes Cypher through), that person can read files such as `file:///etc/passwd`. Do not pass untrusted Cypher to `cypher()`, or check it for `LOAD CSV` first.
+
 **Example**
 
 ```cypher
@@ -434,9 +436,9 @@ Runs a graph algorithm and gives one row for each result. See [Graph algorithms]
 **Example**
 
 ```cypher
-CALL pageRank() YIELD node, score
+CALL pageRank() YIELD node_id, score
 WHERE score > 0.1
-RETURN node, score ORDER BY score DESC
+RETURN node_id, score ORDER BY score DESC
 ```
 
 ---
