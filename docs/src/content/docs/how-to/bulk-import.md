@@ -15,6 +15,8 @@ For loading large datasets into a GraphQLite graph, the bulk import API is 100â€
 
 The bulk API bypasses the Cypher parser and writes directly to the graph tables in a single transaction, eliminating per-query overhead.
 
+Constraints (`CREATE CONSTRAINT`) still hold: before it commits, each bulk call checks them with `gql_check_constraints()`. A violation raises `CypherError` (Python) or `Error::Cypher` (Rust), and the whole batch is rolled back.
+
 ## Python Bulk API
 
 ### insert_nodes_bulk

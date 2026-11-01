@@ -170,6 +170,12 @@ impl Graph {
             }
         }
 
+        // Constraints hold for bulk writes too (GQLITE-T-0445)
+        if let Err(e) = conn.query_row("SELECT gql_check_constraints()", [], |_| Ok(())) {
+            let _ = conn.execute("ROLLBACK", []);
+            return Err(Error::Cypher(e.to_string()));
+        }
+
         // Commit transaction
         conn.execute("COMMIT", [])?;
 
@@ -316,6 +322,12 @@ impl Graph {
                     }
                 }
             }
+        }
+
+        // Constraints hold for bulk writes too (GQLITE-T-0445)
+        if let Err(e) = conn.query_row("SELECT gql_check_constraints()", [], |_| Ok(())) {
+            let _ = conn.execute("ROLLBACK", []);
+            return Err(Error::Cypher(e.to_string()));
         }
 
         // Commit transaction
@@ -489,6 +501,34 @@ mod tests {
             .query("MATCH (n:Person) RETURN n.id ORDER BY n.id")
             .unwrap();
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_bulk_insert_checks_constraints() {
+        // GQLITE-T-0445: the bulk importer wrote the tables directly and a
+        // constraint never saw its rows.
+        let g = Graph::open_in_memory().unwrap();
+        g.query("CREATE CONSTRAINT FOR (p:Person) REQUIRE p.email IS UNIQUE")
+            .unwrap();
+        g.insert_nodes_bulk([("c1", vec![("email", "a@example.com")], "Person")])
+            .unwrap();
+        let err = g
+            .insert_nodes_bulk([
+                ("c2", vec![("email", "b@example.com")], "Person"),
+                ("c3", vec![("email", "a@example.com")], "Person"),
+            ])
+            .unwrap_err();
+        assert!(err.to_string().contains("ConstraintValidationFailed"), "{err}");
+        // the whole batch was rolled back, and the connection is usable
+        let count = |g: &Graph| {
+            g.query("MATCH (p:Person) RETURN count(p) AS c").unwrap()[0]
+                .get::<i64>("c")
+                .unwrap()
+        };
+        assert_eq!(count(&g), 1);
+        g.insert_nodes_bulk([("c4", vec![("email", "d@example.com")], "Person")])
+            .unwrap();
+        assert_eq!(count(&g), 2);
     }
 
     #[test]

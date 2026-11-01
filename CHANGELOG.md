@@ -8,6 +8,11 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 
 ### Upgrade notes
 
+- **Bulk import checks constraints:** `insert_nodes_bulk` / `insert_edges_bulk`
+  (Python and Rust) now fail and roll back the batch when it breaks a
+  constraint. The check is also available as the SQL function
+  `gql_check_constraints()`.
+
 - **Python 3.12 or later** is required for the Python bindings (was 3.8).
   CI tests 3.12 and 3.13.
 
