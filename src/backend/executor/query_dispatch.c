@@ -2069,8 +2069,10 @@ static bool set_values_need_pipeline(cypher_query *query)
             cypher_set_item *it = (cypher_set_item *)items->items[i];
             if (!it || !it->property || it->property->type == AST_NODE_LABEL_EXPR) continue;
             if (!set_value_plain(it->expr)) return true;
-            /* `SET a += {k: a.s}` reads the node it writes */
-            if (it->is_merge && it->expr && it->expr->type == AST_NODE_MAP) {
+            /* `SET a += {k: a.s}` reads the node it writes; `SET a = {k:
+             * a.s}` too, and bulk SET cleared a before it read the value
+             * (GQLITE-T-0479). Bulk SET stores only literal map values. */
+            if (it->expr && it->expr->type == AST_NODE_MAP) {
                 ast_list *a = ((cypher_map *)it->expr)->pairs;
                 for (int k = 0; a && k < a->count; k++) {
                     ast_node *pv = ((cypher_map_pair *)a->items[k])->value;
@@ -5174,6 +5176,8 @@ static bool rw_expr_bound(ast_node *expr, const rw_row *row)
         }
         case AST_NODE_NOT_EXPR: return rw_expr_bound(((cypher_not_expr*)expr)->expr, row);
         case AST_NODE_NULL_CHECK: return rw_expr_bound(((cypher_null_check*)expr)->expr, row);
+        /* `n:A` in a SET value was left to SET, which refused it (GQLITE-T-0479) */
+        case AST_NODE_LABEL_EXPR: return rw_expr_bound(((cypher_label_expr*)expr)->expr, row);
         case AST_NODE_CASE_EXPR: {
             cypher_case_expr *c = (cypher_case_expr*)expr;
             if (!rw_expr_bound(c->operand, row) || !rw_expr_bound(c->else_expr, row)) return false;
