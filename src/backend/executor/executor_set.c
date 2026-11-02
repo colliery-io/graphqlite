@@ -628,51 +628,80 @@ int execute_match_set_query(cypher_executor *executor, cypher_match *match, cyph
         }
     }
 
-    /* Process each matched row and apply SET operations */
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        /* Create variable map from MATCH results */
+    /* Read every matched row before the first write: SET rewrites the
+     * property rows the MATCH reads, and a row written again under a new
+     * rowid was matched again, without end (`MATCH (n {id: 1})
+     * SET n.a = 1, n.id = n.id`, GQLITE-T-0478). NULL is an OPTIONAL MATCH
+     * miss. */
+    int ncols = 0;
+    int var_total = transform_var_count(ctx->var_ctx);
+    for (int i = 0; i < var_total; i++) {
+        transform_var *var = transform_var_at(ctx->var_ctx, i);
+        if (var && (var->kind == VAR_KIND_NODE || var->kind == VAR_KIND_EDGE)) ncols++;
+    }
+    int64_t *ids = NULL;
+    size_t nrows = 0, cap = 0;
+    int step;
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (nrows == cap) {
+            cap = cap ? cap * 2 : 64;
+            int64_t *grown = realloc(ids, cap * (size_t)(ncols ? ncols : 1) * sizeof(int64_t));
+            if (!grown) {
+                free(ids);
+                set_result_error(result, "Out of memory reading the MATCH rows");
+                sqlite3_finalize(stmt);
+                cypher_transform_free_context(ctx);
+                return -1;
+            }
+            ids = grown;
+        }
+        for (int c = 0; c < ncols; c++) {
+            ids[nrows * ncols + c] = sqlite3_column_type(stmt, c) == SQLITE_NULL
+                ? GQL_NULL_ENTITY_ID : sqlite3_column_int64(stmt, c);
+        }
+        nrows++;
+    }
+    sqlite3_finalize(stmt);
+    if (step != SQLITE_DONE) {
+        char error[512];
+        snprintf(error, sizeof(error), "MATCH failed: %s", sqlite3_errmsg(executor->db));
+        set_result_error(result, error);
+        free(ids);
+        cypher_transform_free_context(ctx);
+        return -1;
+    }
+
+    /* Apply the SET operations to each matched row */
+    for (size_t r = 0; r < nrows; r++) {
         variable_map *var_map = create_variable_map();
         if (!var_map) {
             set_result_error(result, "Failed to create variable map");
-            sqlite3_finalize(stmt);
+            free(ids);
             cypher_transform_free_context(ctx);
             return -1;
         }
 
-        /* Bind variables to matched node and edge IDs */
         int col = 0;
-        int var_count2 = transform_var_count(ctx->var_ctx);
-        for (int i = 0; i < var_count2; i++) {
+        for (int i = 0; i < var_total; i++) {
             transform_var *var = transform_var_at(ctx->var_ctx, i);
-            if (var && var->kind == VAR_KIND_NODE) {
-                int64_t node_id = sqlite3_column_int64(stmt, col);
-                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
-                set_variable_node_id(var_map, var->name,
-                                     sqlite3_column_type(stmt, col) == SQLITE_NULL ? GQL_NULL_ENTITY_ID : (int)node_id);
-                CYPHER_DEBUG("Bound variable '%s' to node %lld", var->name, (long long)node_id);
-                col++;
-            } else if (var && var->kind == VAR_KIND_EDGE) {
-                int64_t edge_id = sqlite3_column_int64(stmt, col);
-                /* an OPTIONAL MATCH miss stays unbound, not id 0 */
-                set_variable_edge_id(var_map, var->name,
-                                     sqlite3_column_type(stmt, col) == SQLITE_NULL ? GQL_NULL_ENTITY_ID : (int)edge_id);
-                CYPHER_DEBUG("Bound variable '%s' to edge %lld", var->name, (long long)edge_id);
-                col++;
-            }
+            if (!var || (var->kind != VAR_KIND_NODE && var->kind != VAR_KIND_EDGE)) continue;
+            int64_t id = ids[r * ncols + col++];
+            int bound = id == GQL_NULL_ENTITY_ID ? GQL_NULL_ENTITY_ID : (int)id;
+            if (var->kind == VAR_KIND_NODE) set_variable_node_id(var_map, var->name, bound);
+            else set_variable_edge_id(var_map, var->name, bound);
+            CYPHER_DEBUG("Bound variable '%s' to %lld", var->name, (long long)id);
         }
 
-        /* Execute SET operations for this matched row */
         if (execute_set_operations(executor, set, var_map, result) < 0) {
             free_variable_map(var_map);
-            sqlite3_finalize(stmt);
+            free(ids);
             cypher_transform_free_context(ctx);
             return -1;
         }
-
         free_variable_map(var_map);
     }
 
-    sqlite3_finalize(stmt);
+    free(ids);
     cypher_transform_free_context(ctx);
     return 0;
 }
