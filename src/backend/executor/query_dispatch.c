@@ -2874,7 +2874,6 @@ static int handle_match_create_return(cypher_executor *executor, cypher_query *q
 {
     if (unwind_before_create(query) || create_props_need_pipeline(query))
         return handle_rowwise_write(executor, query, result, flags);
-    (void)flags;
     cypher_match *match = find_match_clause(query);
     cypher_create *create = find_create_clause(query);
     cypher_return *ret = find_return_clause(query);
@@ -3014,11 +3013,13 @@ static int handle_match_create_return(cypher_executor *executor, cypher_query *q
         return 0;
     }
 
-    int rc = execute_match_create_return_query(executor, match, create, ret, result);
-    if (rc >= 0) {
-        result->success = true;
-    }
-    return rc;
+    /* The legacy path ran MATCH + CREATE, then the MATCH again for the
+     * RETURN: the RETURN saw the new nodes, and a CREATE that bound no
+     * matched variable ran once for every row, or for no row
+     * (GQLITE-T-0488). The row pipeline runs the CREATE once per row and
+     * returns those rows. */
+    (void)match;
+    return handle_rowwise_write(executor, query, result, flags);
 }
 
 static int handle_match_return(cypher_executor *executor, cypher_query *query,
