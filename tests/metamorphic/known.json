@@ -1,6 +1,5 @@
 [
   {"relation": ".", "kind": "error", "error": "invalid JSON result", "task": "GQLITE-T-0484"},
-  {"relation": "set_forms/inline_key|write_return/set_forms/inline_key", "task": "GQLITE-T-0478"},
   {"relation": "set_forms/replace", "kind": "mismatch", "task": "GQLITE-T-0479"},
   {"relation": "write_optional/", "task": "GQLITE-T-0477"},
   {"relation": "^expr_context/call/", "kind": "error", "error": "is not defined", "task": "GQLITE-T-0487"},
