@@ -62,9 +62,13 @@ there) is not required. A case id rebuilds the case exactly:
 | merge_idempotent | MERGE twice = MERGE once = one node per distinct value |
 | set_readback | After SET a.k = e, a.k = e |
 | delete_count | DETACH DELETE removes exactly the matched nodes or relationships |
+| expr_context | An expression gives the same value in RETURN, WITH, UNWIND, `[e][0]`, `{y: e}.y`, CASE, a comprehension, head(), reduce(), CALL {}, after ORDER BY or LIMIT, and in a UNION branch |
+| write_optional | A write after OPTIONAL MATCH uses the rows of the whole chain; a null row writes nothing through the null variable |
+| set_forms | `SET a = map`, `SET a += map`, SET items and an inline MATCH key rewritten by SET agree |
+| write_return | A write leaves the same graph with a trailing `RETURN count(*)` as without |
 
 Every query is valid Cypher on any generated graph, so any error is a
-finding.
+finding. A result that is not valid JSON (Infinity, NaN) is an error too.
 
 ## Running at scale
 

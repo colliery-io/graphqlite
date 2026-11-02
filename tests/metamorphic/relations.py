@@ -38,6 +38,14 @@ DOMAINS.update({
     "np.carry": ["none", "star", "with_p"],
     "del.form": ["node", "rel"],
     "om.form": ["null_rows", "count", "outer_where"],
+    "ec.ctx": ["with", "unwind", "unwind_var", "listidx", "map", "case", "comp", "head",
+               "reduce", "call", "order", "limit", "union"],
+    "ec.kind": ["prop", "arith", "case", "func", "list", "map", "nullcheck", "entity", "string",
+                "bool", "nested", "strconv", "float", "literal"],
+    "wo.write": ["set_m", "set_a", "create", "create_rel", "set_label"],
+    "sf.form": ["replace", "merge_map", "items", "inline_key"],
+    "wr.base": ["write_expression", "set_readback", "set_forms", "write_optional",
+                "merge_direct", "delete_count"],
 })
 
 
@@ -679,6 +687,151 @@ def delete_count(ch: Chooser) -> Case:
         write=True, readback="MATCH ()-[r]->() RETURN r.w AS w")
 
 
+# -------------------------------------------------------- expression context
+
+# Values that must keep their type wherever they go (GQLITE-T-0481/0482).
+LITERALS = ["'1'", "'1.5'", "'true'", "'[1]'", "'{\"a\": 1}'", "''", "true", "false", "null",
+            "[1, 'a']", "['1', '2']", "[true, null]", "[[1], []]", "{a: 1}", "{a: '1', b: [true]}",
+            "1.5", "-7", "toString(12)", "'1' + '2'"]
+
+
+def context_expr(ch: Chooser, nodes: list[str], rels: list[str]) -> str:
+    """An expression of the kind chosen for ec.kind: gen.expr's kinds plus
+    booleans, nested lists and maps, number-like strings, floats and
+    literals."""
+    kind = ch.pick("ec.kind")
+    if kind in EXPR_KINDS:
+        return expr(ch, nodes, rels, kind=kind)
+    n, m = v(ch.choice(nodes)), v(ch.choice(nodes))
+    if kind == "bool":
+        return ch.choice([predicate(ch, nodes, rels, k) for k in ("cmp", "null", "bool", "in", "string", "label")]
+                         + [f"{n}.b", f"any(x IN [1, 2] WHERE x = {n}.v)"])
+    if kind == "nested":
+        return ch.choice([f"[reverse([{n}.id, 1])]", f"{{a: {n}.v, b: [{n}.s]}}", f"[{{a: {n}.v}}]",
+                          f"{{l: reverse([{n}.id, {m}.id])}}", f"[[{n}.v], [{n}.s, {m}.b]]",
+                          f"{n} {{.v, .s}}", f"[tail([{n}.id, 2])]"])
+    if kind == "strconv":
+        return ch.choice([f"toString({n}.v)", f"toString({n}.id) + {m}.s", f"toString({n}.b)",
+                          f"reduce(acc = '', x IN [{n}.id, 1] | acc + toString(x))",
+                          f"{n}.s + toString({n}.v)", f"toString({n}.v * 1.5)"])
+    if kind == "float":
+        return ch.choice([f"{n}.v * 1.5", f"toFloat({n}.v) / 2", f"{n}.v / 0.0", f"{n}.v ^ 0.5",
+                          f"-{n}.v / 0.0", f"(0.0 * {n}.v) / 0.0", f"toFloat({n}.id) - 0.5"])
+    return ch.choice(LITERALS)
+
+
+def expr_context(ch: Chooser) -> Case:
+    """An expression gives the same value in RETURN as in a WITH, an UNWIND
+    of a one-item list, a list index, a map key, a CASE, a comprehension,
+    head(), reduce(), CALL {}, and after ORDER BY, LIMIT or a UNION branch
+    with no rows."""
+    p = pattern(ch, "c1", ["a", "b", "c"], ["r", "q"])
+    nodes, rels = p.node_vars, p.rel_vars
+    e = context_expr(ch, nodes, rels)
+    ctx = ch.pick("ec.ctx")
+    keys = ", ".join(f"{v(x)}.id AS k{i}" for i, x in enumerate(nodes))
+    keep = ", ".join(v(x) for x in nodes + rels)
+    m = f"MATCH {p.text()}"
+    base = f"{m} RETURN {keys}, {e} AS x"
+    alt = {
+        "with": f"{m} WITH {keep}, {e} AS ⟨x⟩ RETURN {keys}, ⟨x⟩ AS x",
+        "unwind": f"{m} UNWIND [{e}] AS ⟨x⟩ RETURN {keys}, ⟨x⟩ AS x",
+        "unwind_var": f"{m} WITH {keep}, {e} AS ⟨y⟩ UNWIND [⟨y⟩] AS ⟨x⟩ RETURN {keys}, ⟨x⟩ AS x",
+        "listidx": f"{m} RETURN {keys}, [{e}][0] AS x",
+        "map": f"{m} RETURN {keys}, {{y: {e}}}.y AS x",
+        "case": f"{m} RETURN {keys}, CASE WHEN true THEN {e} END AS x",
+        "comp": f"{m} RETURN {keys}, [⟨z⟩ IN [1] | {e}][0] AS x",
+        "head": f"{m} RETURN {keys}, head([{e}]) AS x",
+        "reduce": f"{m} RETURN {keys}, reduce(⟨acc⟩ = null, ⟨z⟩ IN [1] | {e}) AS x",
+        "call": f"{m} CALL {{ WITH {keep} RETURN {e} AS ⟨x⟩ }} RETURN {keys}, ⟨x⟩ AS x",
+        "order": f"{m} WITH {keep} ORDER BY {v(nodes[0])}.id DESC RETURN {keys}, {e} AS x",
+        "limit": f"{m} WITH {keep} LIMIT 1000 RETURN {keys}, {e} AS x",
+        "union": (f"{base} UNION ALL MATCH (⟨u⟩) WHERE false RETURN "
+                  + ", ".join(f"null AS k{i}" for i in range(len(nodes))) + ", null AS x"),
+    }[ctx]
+    return Case(f"expr_context/{ctx}/{ch.used['ec.kind']}",
+                [Variant("return", render(base)), Variant(ctx, render(alt))])
+
+
+# ------------------------------------------------- writes after OPTIONAL MATCH
+
+def write_optional(ch: Chooser) -> Case:
+    """A write after OPTIONAL MATCH sees the rows of the whole chain: a null
+    row writes nothing through the null variable (GQLITE-T-0477)."""
+    lab = label_text(ch.pick("c1.label"), ch)
+    p2 = pattern(ch, "c2", ["b", "c"], ["r", "q"], start="a")
+    mvar = p2.node_vars[-1]
+    pre = f"MATCH (⟨a⟩{lab})"
+    opt = f"{pre} OPTIONAL MATCH {p2.text()}"
+    inner = f"{pre} MATCH {p2.text()}"
+    form = ch.pick("wo.write")
+    m = v(mvar)
+    if form == "set_m":
+        w, rb = f"SET {m}.z = 1", "MATCH (n) RETURN n.id AS id, n.z AS z"
+        variants = [Variant("inner", render(f"{inner} {w}"), mode="write")]
+    elif form == "set_label":
+        w, rb = f"SET {m}:Hit", "MATCH (n:Hit) RETURN n.id AS id"
+        variants = [Variant("inner", render(f"{inner} {w}"), mode="write")]
+    elif form == "set_a":
+        w, rb = "SET ⟨a⟩.z = 1", "MATCH (n) RETURN n.id AS id, n.z AS z"
+        variants = [Variant("match", render(f"{pre} {w}"), mode="write")]
+    elif form == "create":
+        w, rb = f"CREATE (:New {{a: ⟨a⟩.id, m: {m}.id}})", "MATCH (n:New) RETURN n.a AS a, n.m AS m"
+        variants = [Variant("rows", render(f"{opt} RETURN ⟨a⟩.id AS a, {m}.id AS m"))]
+    else:
+        w = f"CREATE (⟨a⟩)-[:T {{m: {m}.id}}]->(:New)"
+        rb = "MATCH (x)-[t:T]->(:New) RETURN x.id AS a, t.m AS m"
+        variants = [Variant("rows", render(f"{opt} RETURN ⟨a⟩.id AS a, {m}.id AS m"))]
+    return Case(f"write_optional/{form}",
+                [Variant("optional", render(f"{opt} {w}"), mode="write")] + variants
+                + [Variant("optional+return", render(f"{opt} {w} RETURN count(*) AS cnt"), mode="write")],
+                write=True, readback=rb)
+
+
+# ------------------------------------------------------------- SET forms
+
+def set_forms(ch: Chooser) -> Case:
+    """SET a = map equals REMOVE then SET; SET a += map equals SET of items;
+    one SET of two items equals two SET clauses; an inline MATCH key that a
+    later item rewrites equals a WHERE (GQLITE-T-0478/0479)."""
+    lab = label_text(ch.pick("c1.label"), ch)
+    e = write_expr(ch, ["a"], False)
+    form = ch.pick("sf.form")
+    a = "⟨a⟩"
+    rb = "MATCH (n) RETURN n.id AS id, properties(n) AS p"
+    if form == "replace":
+        writes = [f"MATCH ({a}{lab}) SET {a} = {{id: {a}.id, k: {e}}}",
+                  f"MATCH ({a}{lab}) WITH {a}, {e} AS ⟨val⟩ REMOVE {a}.v, {a}.s, {a}.b SET {a}.k = ⟨val⟩"]
+    elif form == "merge_map":
+        writes = [f"MATCH ({a}{lab}) SET {a} += {{k: {e}, v2: {a}.v}}",
+                  f"MATCH ({a}{lab}) SET {a}.k = {e}, {a}.v2 = {a}.v"]
+    elif form == "items":
+        writes = [f"MATCH ({a}{lab}) SET {a}.k = {e}, {a}.v2 = {a}.v",
+                  f"MATCH ({a}{lab}) SET {a}.k = {e} SET {a}.v2 = {a}.v"]
+    else:   # inline match key rewritten by a later item
+        writes = [f"MATCH ({a}{lab} {{id: 0}}) SET {a}.k = {e}, {a}.id = {a}.id",
+                  f"MATCH ({a}{lab}) WHERE {a}.id = 0 SET {a}.k = {e}"]
+    variants = [Variant(f"w{i}", render(q), mode="write") for i, q in enumerate(writes)]
+    variants.append(Variant("w0+return", render(writes[0] + " RETURN count(*) AS cnt"), mode="write"))
+    return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
+
+
+# ---------------------------------------------------- write with RETURN
+
+def write_return(ch: Chooser) -> Case:
+    """A write leaves the same graph with a trailing RETURN as without one:
+    the two take different paths through the engine."""
+    base = ch.pick("wr.base")
+    case = RELATIONS[base][0](ch)
+    extra = [Variant(var.label + "+return", query=var.query and var.query + " RETURN count(*) AS cnt",
+                     parts=var.parts, mode="write", repeat=var.repeat)
+             for var in case.variants if var.mode == "write" and "RETURN" not in (var.query or "")]
+    case.variants = [v_ for v_ in case.variants if v_.mode == "write"
+                     and "RETURN" not in (v_.query or "")][:1] + extra[:1]
+    case.relation = "write_return/" + case.relation
+    return case
+
+
 RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "with_star": (with_star, CHAIN),
     "named_path": (named_path, G + ["c1.hops", "c1.label", "c1.dir", "c1.type", "np.carry"]),
@@ -705,4 +858,8 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "merge_direct": (merge_direct, G + C1 + ["w.shape", "w.kind"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
+    "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
+    "write_optional": (write_optional, G + ["c1.label"] + C2_FORCED + ["wo.write"]),
+    "set_forms": (set_forms, G + ["c1.label", "w.kind", "sf.form"]),
+    "write_return": (write_return, G + C1 + ["c1.label", "w.shape", "w.kind", "wr.base"]),
 }

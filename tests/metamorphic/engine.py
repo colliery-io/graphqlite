@@ -37,6 +37,11 @@ def canon_row(row: dict) -> str:
     return json.dumps(_canon(row), sort_keys=True)
 
 
+def _reject_constant(name: str):
+    """Infinity and NaN are not JSON; a result holding them breaks clients."""
+    raise ValueError(f"{name} is not JSON")
+
+
 class Engine:
     def __init__(self, ext: Path):
         self.ext = str(ext)
@@ -61,7 +66,10 @@ class Engine:
             return Outcome(False, error=msg)
         if raw is None:
             return Outcome(True, rows=[])
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw, parse_constant=_reject_constant)
+        except ValueError as e:
+            return Outcome(False, error=f"invalid JSON result: {e}: {raw[:200]}")
         if isinstance(data, dict):          # write statistics
             return Outcome(True, rows=[])
         return Outcome(True, rows=data)
