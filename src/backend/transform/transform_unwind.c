@@ -17,6 +17,25 @@
  * gives a JSON boolean as 1/0 and a list as text; the tag keeps the type
  * so a read of the variable restores it (_gql_retag). */
 #define UNWIND_TAG_COL "value__gqlt"
+
+/* A list or map of literals only (nested lists and maps too). */
+static bool unwind_ast_is_constant(ast_node *n)
+{
+    if (!n) return true;
+    if (n->type == AST_NODE_LITERAL) return true;
+    if (n->type == AST_NODE_LIST) {
+        ast_list *a = ((cypher_list *)n)->items;
+        for (int i = 0; a && i < a->count; i++) if (!unwind_ast_is_constant(a->items[i])) return false;
+        return true;
+    }
+    if (n->type == AST_NODE_MAP) {
+        ast_list *a = ((cypher_map *)n)->pairs;
+        for (int i = 0; a && i < a->count; i++)
+            if (!unwind_ast_is_constant(((cypher_map_pair *)a->items[i])->value)) return false;
+        return true;
+    }
+    return false;
+}
 #define UNWIND_JSON_EACH_TAG \
     ", (CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' " \
     "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END) AS " UNWIND_TAG_COL
@@ -309,10 +328,14 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_append(&cte_query, "NULL");
                             break;
                     }
-                } else if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
-                    /* Nested map/list item — serialize to JSON and emit as a
-                     * JSON literal so downstream property access can use
-                     * json_extract(_unwind_N.value, '$.key') (GQLITE-T-0185). */
+                } else if ((item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) &&
+                           unwind_ast_is_constant(item)) {
+                    /* Nested map/list item of literals — serialize to JSON and
+                     * emit as a JSON literal so downstream property access can
+                     * use json_extract(_unwind_N.value, '$.key')
+                     * (GQLITE-T-0185). One that reads a variable is an
+                     * expression below: serialized, `{a: n.v}` was
+                     * {a: null} (GQLITE-T-0483). */
                     char *json_str = serialize_ast_to_json(item);
                     if (json_str) {
                         dbuf_append(&cte_query, "json('");

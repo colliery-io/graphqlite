@@ -60,7 +60,10 @@ static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_valu
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 const char *out = (const char*)sqlite3_column_text(stmt, 0);
                 if (out) {
+                    /* a list, with the JSON subtype: inside a list or a map
+                     * it was the string "[2,1]" (GQLITE-T-0483) */
                     sqlite3_result_text(context, out, -1, SQLITE_TRANSIENT);
+                    sqlite3_result_subtype(context, GQL_SUBTYPE_JSON);
                 } else {
                     sqlite3_result_null(context);
                 }
@@ -96,7 +99,10 @@ static void sqlite_reverse_func(sqlite3_context *context, int argc, sqlite3_valu
 /* Register custom SQLite functions needed for Cypher execution */
 static int register_custom_functions(sqlite3 *db)
 {
-    int rc = sqlite3_create_function(db, "REVERSE", 1, SQLITE_UTF8, NULL,
+#ifndef SQLITE_RESULT_SUBTYPE
+#define SQLITE_RESULT_SUBTYPE 0x001000000
+#endif
+    int rc = sqlite3_create_function(db, "REVERSE", 1, SQLITE_UTF8 | SQLITE_RESULT_SUBTYPE, NULL,
                                       sqlite_reverse_func, NULL, NULL);
     if (rc != SQLITE_OK) {
         return -1;
