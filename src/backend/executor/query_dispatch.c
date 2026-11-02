@@ -830,8 +830,12 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
      * (GQLITE-T-0431). */
     if (writes == 1 && merge && only_unwind_read && !read_after_write) return false;
     /* The MATCH + write handlers bind each MATCH on its own: a second
-     * MATCH's WHERE did not see the first one's variables (GQLITE-T-0469). */
-    if (later_match_where) return true;
+     * MATCH's WHERE did not see the first one's variables (GQLITE-T-0469),
+     * and they kept the first row of each MATCH: `MATCH (a) MATCH
+     * (a)-->(b) SET b.x = 1` set one node, DELETE and REMOVE did nothing,
+     * and after OPTIONAL MATCH the write reached nodes the first MATCH
+     * never matched (GQLITE-T-0477). */
+    if (later_match_where || matches >= 2) return true;
     return (merge && (read_before_merge || writes >= 2)) || read_after_write;
 }
 
@@ -5539,6 +5543,25 @@ static void rw_fold_map(variable_map *into, variable_map *from)
     }
 }
 
+/* The row's variables for SET and REMOVE: a null value (an OPTIONAL MATCH
+ * miss) is bound as the null entity, which SET and REMOVE skip; unbound it
+ * was "Unbound variable in SET" (GQLITE-T-0477). The caller frees it. */
+static variable_map *rw_write_map(rw_row *row)
+{
+    variable_map *vm = create_variable_map();
+    if (!vm) return NULL;
+    rw_fold_map(vm, row->vm);
+    for (int i = 0; i < row->n_scalars; i++) {
+        rw_scalar *sc = &row->scalars[i];
+        if (sc->text || sc->type != SQLITE_NULL) continue;
+        bool bound = false;
+        for (int k = 0; k < vm->count && !bound; k++)
+            bound = strcmp(vm->mappings[k].variable, sc->name) == 0;
+        if (!bound) set_variable_node_id(vm, sc->name, GQL_NULL_ENTITY_ID);
+    }
+    return vm;
+}
+
 /* Apply a tail WITH to a row: rename / drop entities and scalars, evaluate
  * scalar-only expressions. */
 static void rw_eval_cell(cypher_executor *executor, ast_node *expr, rw_row *row, char **text, int *type);
@@ -7034,13 +7057,18 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 case AST_NODE_SET: {
                     rw_subst *subs = NULL; int n_subs = 0;
                     rw_literalize_set(executor, (cypher_set*)c, &rows[r], &subs, &n_subs);
-                    rc = execute_set_operations(executor, (cypher_set*)c, rows[r].vm, result);
+                    variable_map *wm = rw_write_map(&rows[r]);
+                    rc = execute_set_operations(executor, (cypher_set*)c, wm ? wm : rows[r].vm, result);
+                    if (wm) free_variable_map(wm);
                     rw_restore_subs(subs, n_subs);
                     break;
                 }
-                case AST_NODE_REMOVE:
-                    rc = execute_remove_operations(executor, (cypher_remove*)c, rows[r].vm, result);
+                case AST_NODE_REMOVE: {
+                    variable_map *wm = rw_write_map(&rows[r]);
+                    rc = execute_remove_operations(executor, (cypher_remove*)c, wm ? wm : rows[r].vm, result);
+                    if (wm) free_variable_map(wm);
                     break;
+                }
                 case AST_NODE_FOREACH: {
                     /* #135: FOREACH after MATCH / UNWIND / WITH runs once per
                      * row, with the row's entities and values in scope. */
