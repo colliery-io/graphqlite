@@ -11,5 +11,5 @@
   {"relation": "^expr_context/.*/nested", "kind": "mismatch", "task": "GQLITE-T-0483"},
   {"relation": "^expr_context/", "kind": "mismatch", "query": "reverse\\(", "task": "GQLITE-T-0483"},
   {"relation": "^expr_context/", "kind": "mismatch", "query": "reduce\\(acc = ''", "task": "GQLITE-T-0481"},
-  {"relation": "^write_return/", "kind": "mismatch", "output": "^\\[\\[\\], \\[\\{", "task": "GQLITE-T-0488"}
+  {"relation": "^write_return/", "kind": "mismatch", "query": "CREATE (\\(\\w+\\)-\\[:\\w+[^\\]]*\\]->)?\\(:New", "task": "GQLITE-T-0488"}
 ]
