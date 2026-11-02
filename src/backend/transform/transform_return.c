@@ -2235,9 +2235,15 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                      * json_group_array only keeps its own JSON subtype
                      * (GQLITE-T-0387). */
                     bool as_bool = ast_yields_boolean(comp->transform_expr);
+                    /* The value reads the element's row: an aggregate whose
+                     * argument reads only outer columns is an aggregate of
+                     * the outer query in SQLite, and `[y IN [1] | n.v]`
+                     * folded every row into one (GQLITE-T-0480). */
+                    append_sql(ctx, "CASE WHEN %s.id IS NULL THEN NULL ELSE ", je);
                     if (as_bool) append_sql(ctx, "json(CASE _gql_bool(");
                     if (transform_expression(ctx, comp->transform_expr) < 0) comp_rc = -1;
                     if (as_bool) append_sql(ctx, ") WHEN 1 THEN 'true' WHEN 0 THEN 'false' END)");
+                    append_sql(ctx, " END");
                 } else {
                     /* The element itself ([x IN l] or [x IN l | x]); JSON true/false stay booleans
                      * (json_each.value gives 1/0, GQLITE-T-0387) */
@@ -2328,6 +2334,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 /* First pass: collect nodes and generate FROM clause.
                  * json() outside the subquery keeps the list subtype. */
                 append_sql(ctx, "json((SELECT json_group_array(");
+                /* A column of the comprehension's own FROM, for the collect
+                 * expression (GQLITE-T-0480). */
+                char inner_anchor[48] = "";
 
                 /* We'll add the collect expression after setting up variables */
                 size_t collect_expr_pos = ctx->sql_size;
@@ -2377,6 +2386,8 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             snprintf(node_aliases[node_count], sizeof(node_aliases[node_count]),
                                     "_pc_n%d", node_count);
                             append_sql(ctx, "nodes AS %s", node_aliases[node_count]);
+                            if (!inner_anchor[0])
+                                snprintf(inner_anchor, sizeof(inner_anchor), "%s.id", node_aliases[node_count]);
                             snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", node_aliases[node_count]);
                             first_table = false;
                         }
@@ -2405,8 +2416,12 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             if (!vt) return -1;
                             append_sql(ctx, "%s AS _pc_e%d", vt, i/2);
                             free(vt);
+                            if (!inner_anchor[0])
+                                snprintf(inner_anchor, sizeof(inner_anchor), "_pc_e%d.start_id", i/2);
                         } else {
                             append_sql(ctx, "edges AS _pc_e%d", i/2);
+                            if (!inner_anchor[0])
+                                snprintf(inner_anchor, sizeof(inner_anchor), "_pc_e%d.id", i/2);
                         }
                         first_table = false;
                     }
@@ -2633,6 +2648,21 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 ctx->sql_buffer = temp_buffer;
                 ctx->sql_size = temp_size;
                 ctx->sql_capacity = temp_capacity;
+
+                /* The collect expression reads a row of the comprehension's
+                 * own FROM: one that read only outer columns made
+                 * json_group_array an aggregate of the outer query
+                 * (`[(n)-->(m) | n.v]` folded every row into one,
+                 * GQLITE-T-0480). */
+                if (inner_anchor[0]) {
+                    size_t wlen = strlen(collect_sql) + strlen(inner_anchor) + 48;
+                    char *wrapped = malloc(wlen);
+                    if (!wrapped) { free(collect_sql); return -1; }
+                    snprintf(wrapped, wlen, "CASE WHEN %s IS NULL THEN NULL ELSE %s END",
+                             inner_anchor, collect_sql);
+                    free(collect_sql);
+                    collect_sql = wrapped;
+                }
 
                 /* Now replace the COLLECT placeholder with actual expression */
                 char *placeholder = strstr(ctx->sql_buffer + collect_expr_pos, "/*COLLECT*/");
