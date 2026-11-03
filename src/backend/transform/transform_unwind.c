@@ -106,6 +106,24 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     src->list_inner_kind == VAR_KIND_EDGE)) {
             unwind_inner_kind = src->list_inner_kind;
         }
+    } else if (unwind->expr && unwind->expr->type == AST_NODE_LIST) {
+        /* A list of node (or relationship) variables, `UNWIND [a, b] AS x`:
+         * x is an entity too. As a value, x.v read a top-level key of the
+         * entity's JSON and was null (GQLITE-T-0489). */
+        ast_list *items = ((cypher_list *)unwind->expr)->items;
+        var_kind k = VAR_KIND_PROJECTED;
+        for (int i = 0; items && i < items->count; i++) {
+            ast_node *it = items->items[i];
+            transform_var *v = (it && it->type == AST_NODE_IDENTIFIER)
+                ? transform_var_lookup(ctx->var_ctx, ((cypher_identifier *)it)->name) : NULL;
+            var_kind vk = v ? v->kind : VAR_KIND_PROJECTED;
+            if ((vk != VAR_KIND_NODE && vk != VAR_KIND_EDGE) || (i > 0 && vk != k)) {
+                k = VAR_KIND_PROJECTED;
+                break;
+            }
+            k = vk;
+        }
+        if (items && items->count > 0) unwind_inner_kind = k;
     }
 
     char *carry_names[64];
