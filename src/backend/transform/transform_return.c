@@ -292,6 +292,25 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
                     }
                 }
                 if (!strcasecmp(n, "collect")) return strdup("'json'");
+                /* head(l) and last(l) have the tag of that element: a
+                 * string that looks like JSON stays a string
+                 * (GQLITE-T-0481). */
+                if ((!strcasecmp(n, "head") || !strcasecmp(n, "last")) &&
+                    fc->args && fc->args->count == 1) {
+                    char *l = transform_expression_to_string(ctx, fc->args->items[0]);
+                    char *v = value_sql ? NULL : transform_expression_to_string(ctx, expr);
+                    const char *vs = value_sql ? value_sql : v;
+                    char *out = NULL;
+                    if (l && vs) {
+                        size_t sz = strlen(l) + strlen(vs) + 96;
+                        out = malloc(sz);
+                        if (out) snprintf(out, sz, "COALESCE(_gql_subscript_tag(%s, %d), _gql_typetag(%s))",
+                                          l, !strcasecmp(n, "head") ? 0 : -1, vs);
+                    }
+                    free(l);
+                    free(v);
+                    return out;
+                }
                 /* max() and min() have the type of their input: a string
                  * is text even when it looks like a number, which a
                  * grouped RETURN showed as one (GQLITE-T-0475). */
@@ -336,7 +355,25 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
             break;
     }
     if (ast_is_boolean_expr(expr)) return strdup("'bool'");
-    if (expr->type == AST_NODE_BINARY_OP && ((cypher_binary_op *)expr)->op_type == BINARY_OP_ADD) {
+    /* reduce(): the tag of the step expression when it is known without
+     * the step's own columns (a string literal, a boolean); a step that
+     * adds strings is text, as for + below: `reduce(a = '', x IN l |
+     * a + toString(x))` gave 12 (GQLITE-T-0481). */
+    bool reduce_add = false;
+    if (expr->type == AST_NODE_REDUCE_EXPR) {
+        ast_node *step = ((cypher_reduce_expr *)expr)->expression;
+        if (step && step->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal *)step;
+            if (lit->literal_type == LITERAL_STRING) return strdup("'text'");
+            if (lit->literal_type == LITERAL_BOOLEAN) return strdup("'bool'");
+        }
+        if (step && (step->type == AST_NODE_LIST || step->type == AST_NODE_MAP)) return strdup("'json'");
+        if (step && ast_is_boolean_expr(step)) return strdup("'bool'");
+        reduce_add = step && step->type == AST_NODE_BINARY_OP &&
+                     ((cypher_binary_op *)step)->op_type == BINARY_OP_ADD;
+    }
+    if (reduce_add ||
+        (expr->type == AST_NODE_BINARY_OP && ((cypher_binary_op *)expr)->op_type == BINARY_OP_ADD)) {
         /* GQLITE-T-0413: string + string is a string (a list from + carries
          * the JSON subtype; a duration is JSON text, so text starting with
          * [ or { is left untagged). */

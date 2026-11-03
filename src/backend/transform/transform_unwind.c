@@ -387,6 +387,11 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                         if (item->type == AST_NODE_PROPERTY) {
                             dyn_tag = transform_property_tag_sql(ctx, (cypher_property *)item);
                         }
+                        /* A variable, toString(), string + string ...: the
+                         * tag the expression knows. _gql_typetag cannot tell
+                         * a string from JSON text: `WITH '7' AS s UNWIND [s]`
+                         * gave 7 (GQLITE-T-0481). */
+                        if (!dyn_tag) dyn_tag = cypher_expr_tag_sql(ctx, item, item_sql);
                         if (!dyn_tag) {
                             size_t n = strlen(item_sql) + 32;
                             dyn_tag = malloc(n);
