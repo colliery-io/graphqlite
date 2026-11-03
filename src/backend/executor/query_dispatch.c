@@ -858,8 +858,7 @@ static bool call_in_rows(cypher_query *query, clause_flags flags)
     if (call_pos < 0 || calls > 1) return false;
     for (int i = 0; i < call_pos; i++) {
         ast_node_type t = query->clauses->items[i]->type;
-        if (t == AST_NODE_MATCH) return false;            /* the CALL handler */
-        if (t != AST_NODE_UNWIND && t != AST_NODE_WITH) return false;
+        if (t != AST_NODE_UNWIND && t != AST_NODE_WITH && t != AST_NODE_MATCH) return false;
     }
     for (int i = call_pos + 1; i < query->clauses->count; i++) {
         ast_node_type t = query->clauses->items[i]->type;
@@ -5858,8 +5857,16 @@ static void rw_project_row(cypher_executor *executor, cypher_return *ret, rw_row
     project_return_row_from_var_map(executor, ret, row->vm, &tmp, 0);
     for (int i = 0; i < cols; i++) {
         cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+        const rw_scalar *bound = it->expr && it->expr->type == AST_NODE_IDENTIFIER
+            ? rw_row_scalar(row, ((cypher_identifier *)it->expr)->name) : NULL;
         if (aggregating_call_name(it->expr)) {
             free(cells[i]); cells[i] = NULL; types[i] = SQLITE_NULL;
+        } else if (bound) {
+            /* A bound value as it is: evaluated again through SQL, a string
+             * that looks like JSON (a CALL output '[1]') became a list. */
+            free(cells[i]);
+            cells[i] = bound->text ? strdup(bound->text) : NULL;
+            types[i] = bound->text ? bound->type : SQLITE_NULL;
         } else if (it->expr && it->expr->type != AST_NODE_LITERAL && rw_expr_scalar_only(it->expr, row)) {
             char *text = NULL;
             int type = rw_eval_scalar(executor, it->expr, row, &text);
