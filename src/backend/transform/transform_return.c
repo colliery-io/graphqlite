@@ -2277,9 +2277,11 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                      * the outer query in SQLite, and `[y IN [1] | n.v]`
                      * folded every row into one (GQLITE-T-0480). */
                     append_sql(ctx, "CASE WHEN %s.id IS NULL THEN NULL ELSE ", je);
-                    if (as_bool) append_sql(ctx, "json(CASE _gql_bool(");
+                    /* A value with the boolean subtype (`n.b`) is JSON
+                     * true/false in the list, not "true" (GQLITE-T-0482). */
+                    append_sql(ctx, as_bool ? "json(CASE _gql_bool(" : "_gql_json_elem(");
                     if (transform_expression(ctx, comp->transform_expr) < 0) comp_rc = -1;
-                    if (as_bool) append_sql(ctx, ") WHEN 1 THEN 'true' WHEN 0 THEN 'false' END)");
+                    append_sql(ctx, as_bool ? ") WHEN 1 THEN 'true' WHEN 0 THEN 'false' END)" : ")");
                     append_sql(ctx, " END");
                 } else {
                     /* The element itself ([x IN l] or [x IN l | x]); JSON true/false stay booleans
@@ -2693,9 +2695,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                  * GQLITE-T-0480). */
                 if (inner_anchor[0]) {
                     size_t wlen = strlen(collect_sql) + strlen(inner_anchor) + 48;
-                    char *wrapped = malloc(wlen);
+                    char *wrapped = malloc(wlen + 64);
                     if (!wrapped) { free(collect_sql); return -1; }
-                    snprintf(wrapped, wlen, "CASE WHEN %s IS NULL THEN NULL ELSE %s END",
+                    /* _gql_json_elem: a boolean is JSON true/false in the
+                     * list, not "true" (GQLITE-T-0482) */
+                    bool cb = ast_yields_boolean(comp->collect_expr);
+                    snprintf(wrapped, wlen + 64,
+                             cb ? "CASE WHEN %s IS NULL THEN NULL ELSE json(CASE _gql_bool(%s) WHEN 1 THEN 'true' WHEN 0 THEN 'false' END) END"
+                                : "CASE WHEN %s IS NULL THEN NULL ELSE _gql_json_elem(%s) END",
                              inner_anchor, collect_sql);
                     free(collect_sql);
                     collect_sql = wrapped;
