@@ -361,6 +361,15 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
         if (inner_query && inner_query->clauses && inner_query->clauses->count > 0 &&
             inner_query->clauses->items[0]->type == AST_NODE_WITH) {
             cypher_with *with = (cypher_with*)inner_query->clauses->items[0];
+            /* WITH * imports every outer variable: it imported none, and
+             * the outputs were not defined (GQLITE-T-0487). */
+            if (with->pass_all) {
+                for (int si = 0; si < var_map->count; si++) {
+                    variable_mapping *m = &var_map->mappings[si];
+                    if (m->type == VAR_MAP_TYPE_NODE) set_variable_node_id(scoped_map, m->variable, m->entity_id);
+                    else set_variable_edge_id(scoped_map, m->variable, m->entity_id);
+                }
+            }
             if (with->items) {
                 for (int wi = 0; wi < with->items->count; wi++) {
                     cypher_return_item *item = (cypher_return_item*)with->items->items[wi];
@@ -588,8 +597,13 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                         transform_var_set_bound(ret_ctx->var_ctx, m->variable, true);
                     }
 
-                    /* Build SELECT expressions for inner RETURN items */
+                    /* Build SELECT expressions for inner RETURN items, then
+                     * one hidden tag column per item: text carries no
+                     * subtype, and a boolean comparison is 1/0, so the
+                     * outputs came back as "true", 1 or a re-read JSON
+                     * string (GQLITE-T-0482, GQLITE-A-0007). */
                     bool inner_ok = true;
+                    sqlite3_str *tag_str = sqlite3_str_new(executor->db);
                     for (int ri = 0; ri < inner_return_clause->items->count; ri++) {
                         cypher_return_item *ret_item = (cypher_return_item*)inner_return_clause->items->items[ri];
                         if (ri > 0) sqlite3_str_appendf(inner_str, ", ");
@@ -604,10 +618,18 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                             const char *col_name = ret_item->alias ? ret_item->alias : expr_sql;
                             sqlite3_str_appendf(inner_str, "%s AS \"%w\"",
                                              expr_sql, col_name);
+                            char *tag = cypher_expr_tag_sql(ret_ctx, ret_item->expr, expr_sql);
+                            sqlite3_str_appendf(tag_str, ", %s AS \"__gqlt_%d\"", tag ? tag : "NULL", ri);
+                            free(tag);
                         } else {
                             inner_ok = false;
                         }
                         free(expr_sql);
+                    }
+                    {
+                        char *tags = sqlite3_str_finish(tag_str);
+                        if (tags) sqlite3_str_appendall(inner_str, tags);
+                        sqlite3_free(tags);
                     }
 
                     /* Build FROM/WHERE to pin variables to exact entity IDs.
@@ -656,13 +678,15 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                 bind_params_from_json(inner_stmt, executor->params_json);
                             }
                             if (sqlite3_step(inner_stmt) == SQLITE_ROW) {
-                                inner_col_count = sqlite3_column_count(inner_stmt);
+                                int inner_total = sqlite3_column_count(inner_stmt);
+                                inner_col_count = inner_return_clause->items->count;
+                                if (inner_col_count > inner_total) inner_col_count = inner_total;
                                 inner_col_values = calloc(inner_col_count, sizeof(char*));
                                 inner_col_names_local = calloc(inner_col_count, sizeof(char*));
                                 inner_col_types = calloc(inner_col_count, sizeof(int));
                                 for (int ic = 0; ic < inner_col_count; ic++) {
                                     const char *cn = sqlite3_column_name(inner_stmt, ic);
-                                    if (inner_col_types) inner_col_types[ic] = sqlite3_column_type(inner_stmt, ic);
+                                    if (inner_col_types) inner_col_types[ic] = gql_result_cell_type(inner_stmt, ic, inner_col_count);
                                     const char *cv = (const char*)sqlite3_column_text(inner_stmt, ic);
                                     inner_col_names_local[ic] = cn ? strdup(cn) : strdup("");
                                     inner_col_values[ic] = cv ? strdup(cv) : NULL;
@@ -758,10 +782,17 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
 
                                     if (tb && transform_expression(eval_ctx, item->expr) == 0 && eval_ctx->sql_size > 0) {
                                         sqlite3_str_appendall(eval_str, eval_ctx->sql_buffer);
+                                        char *ev_sql = strdup(eval_ctx->sql_buffer);
                                         free(eval_ctx->sql_buffer);
                                         eval_ctx->sql_buffer = sb;
                                         eval_ctx->sql_size = ss;
                                         eval_ctx->sql_capacity = sc;
+                                        /* The tag column: a comparison is 1/0 without it
+                                         * (GQLITE-T-0482). */
+                                        char *ev_tag = ev_sql ? cypher_expr_tag_sql(eval_ctx, item->expr, ev_sql) : NULL;
+                                        sqlite3_str_appendf(eval_str, ", %s", ev_tag ? ev_tag : "NULL");
+                                        free(ev_tag);
+                                        free(ev_sql);
 
                                         /* T-0301: every source goes in one
                                          * FROM ... CROSS JOIN chain and every id
@@ -817,7 +848,8 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                                             if (sqlite3_step(ev) == SQLITE_ROW) {
                                                 const char *val = (const char*)sqlite3_column_text(ev, 0);
                                                 row[pi] = val ? strdup(val) : NULL;
-                                                if (row_types) row_types[pi] = sqlite3_column_type(ev, 0);
+                                                /* with its boolean / JSON subtype (GQLITE-T-0482) */
+                                                if (row_types) row_types[pi] = gql_result_cell_type(ev, 0, 1);
                                             }
                                             sqlite3_finalize(ev);
                                         }
@@ -890,6 +922,31 @@ int handle_call_subquery(cypher_executor *executor, cypher_query *query,
         result->row_count = accum_count;
         result->data = accum_rows;
         result->data_types = accum_types;
+        result->success = true;
+        return 0;
+    }
+
+    /* The outer rows reached no inner row: the result has no rows. The
+     * fallback below re-runs the query without the CALL, where its outputs
+     * are not defined: "`x` is not defined" over no rows (GQLITE-T-0487). */
+    if (accumulating && accum_count == 0 && post_return) {
+        free(accum_rows);
+        free(accum_types);
+        if (accum_col_names) {
+            for (int i = 0; i < accum_col_count; i++) free(accum_col_names[i]);
+            free(accum_col_names);
+        }
+        int nc = post_return->items ? post_return->items->count : 0;
+        result->column_names = nc ? calloc((size_t)nc, sizeof(char *)) : NULL;
+        result->column_count = result->column_names ? nc : 0;
+        for (int pi = 0; pi < result->column_count; pi++) {
+            cypher_return_item *item = (cypher_return_item *)post_return->items->items[pi];
+            const char *name = item->alias ? item->alias
+                : item->expr->type == AST_NODE_IDENTIFIER ? ((cypher_identifier *)item->expr)->name
+                : "?column?";
+            result->column_names[pi] = strdup(name);
+        }
+        result->row_count = 0;
         result->success = true;
         return 0;
     }
