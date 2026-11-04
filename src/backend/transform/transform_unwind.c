@@ -17,6 +17,25 @@
  * gives a JSON boolean as 1/0 and a list as text; the tag keeps the type
  * so a read of the variable restores it (_gql_retag). */
 #define UNWIND_TAG_COL "value__gqlt"
+
+/* A list or map of literals only (nested lists and maps too). */
+static bool unwind_ast_is_constant(ast_node *n)
+{
+    if (!n) return true;
+    if (n->type == AST_NODE_LITERAL) return true;
+    if (n->type == AST_NODE_LIST) {
+        ast_list *a = ((cypher_list *)n)->items;
+        for (int i = 0; a && i < a->count; i++) if (!unwind_ast_is_constant(a->items[i])) return false;
+        return true;
+    }
+    if (n->type == AST_NODE_MAP) {
+        ast_list *a = ((cypher_map *)n)->pairs;
+        for (int i = 0; a && i < a->count; i++)
+            if (!unwind_ast_is_constant(((cypher_map_pair *)a->items[i])->value)) return false;
+        return true;
+    }
+    return false;
+}
 #define UNWIND_JSON_EACH_TAG \
     ", (CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' " \
     "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END) AS " UNWIND_TAG_COL
@@ -87,6 +106,24 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                     src->list_inner_kind == VAR_KIND_EDGE)) {
             unwind_inner_kind = src->list_inner_kind;
         }
+    } else if (unwind->expr && unwind->expr->type == AST_NODE_LIST) {
+        /* A list of node (or relationship) variables, `UNWIND [a, b] AS x`:
+         * x is an entity too. As a value, x.v read a top-level key of the
+         * entity's JSON and was null (GQLITE-T-0489). */
+        ast_list *items = ((cypher_list *)unwind->expr)->items;
+        var_kind k = VAR_KIND_PROJECTED;
+        for (int i = 0; items && i < items->count; i++) {
+            ast_node *it = items->items[i];
+            transform_var *v = (it && it->type == AST_NODE_IDENTIFIER)
+                ? transform_var_lookup(ctx->var_ctx, ((cypher_identifier *)it)->name) : NULL;
+            var_kind vk = v ? v->kind : VAR_KIND_PROJECTED;
+            if ((vk != VAR_KIND_NODE && vk != VAR_KIND_EDGE) || (i > 0 && vk != k)) {
+                k = VAR_KIND_PROJECTED;
+                break;
+            }
+            k = vk;
+        }
+        if (items && items->count > 0) unwind_inner_kind = k;
     }
 
     char *carry_names[64];
@@ -309,10 +346,14 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
                             dbuf_append(&cte_query, "NULL");
                             break;
                     }
-                } else if (item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) {
-                    /* Nested map/list item — serialize to JSON and emit as a
-                     * JSON literal so downstream property access can use
-                     * json_extract(_unwind_N.value, '$.key') (GQLITE-T-0185). */
+                } else if ((item->type == AST_NODE_MAP || item->type == AST_NODE_LIST) &&
+                           unwind_ast_is_constant(item)) {
+                    /* Nested map/list item of literals — serialize to JSON and
+                     * emit as a JSON literal so downstream property access can
+                     * use json_extract(_unwind_N.value, '$.key')
+                     * (GQLITE-T-0185). One that reads a variable is an
+                     * expression below: serialized, `{a: n.v}` was
+                     * {a: null} (GQLITE-T-0483). */
                     char *json_str = serialize_ast_to_json(item);
                     if (json_str) {
                         dbuf_append(&cte_query, "json('");
