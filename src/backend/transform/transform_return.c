@@ -191,6 +191,20 @@ static char *str_printf(const char *fmt, const char *a, const char *b)
     return out;
 }
 
+/* GQLITE-T-0413: functions that return a string; their text is a string
+ * even when it looks like a number or JSON. */
+static bool is_string_function(const char *name)
+{
+    static const char *const string_fns[] = {
+        "toString", "toStringOrNull", "substring", "left", "right",
+        "trim", "ltrim", "rtrim", "btrim", "toUpper", "toLower",
+        "upper", "lower", "replace", "type", "valueType", NULL
+    };
+    for (int k = 0; name && string_fns[k]; k++)
+        if (!strcasecmp(name, string_fns[k])) return true;
+    return false;
+}
+
 /* GQLITE-A-0007: SQL of the type tag of an expression ('bool', 'json',
  * 'text', ...), or NULL when none is needed or known (a node, edge or path;
  * an int or real keeps its SQLite type; text of unknown origin keeps the old
@@ -275,21 +289,12 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
              * numbers. No second evaluation of the aggregate. */
             if (fc->function_name) {
                 const char *n = fc->function_name;
-                /* GQLITE-T-0413: functions that return a string; their text
-                 * is a string even when it looks like a number or JSON. */
-                static const char *const string_fns[] = {
-                    "toString", "toStringOrNull", "substring", "left", "right",
-                    "trim", "ltrim", "rtrim", "btrim", "toUpper", "toLower",
-                    "upper", "lower", "replace", "type", "valueType", NULL
-                };
-                for (int k = 0; string_fns[k]; k++) {
-                    if (!strcasecmp(n, string_fns[k])) {
-                        char *v = value_sql ? NULL : transform_expression_to_string(ctx, expr);
-                        const char *vs = value_sql ? value_sql : v;
-                        char *out = vs ? str_printf("(CASE WHEN (%s) IS NOT NULL THEN 'text' END)", vs, NULL) : NULL;
-                        free(v);
-                        return out;
-                    }
+                if (is_string_function(n)) {
+                    char *v = value_sql ? NULL : transform_expression_to_string(ctx, expr);
+                    const char *vs = value_sql ? value_sql : v;
+                    char *out = vs ? str_printf("(CASE WHEN (%s) IS NOT NULL THEN 'text' END)", vs, NULL) : NULL;
+                    free(v);
+                    return out;
                 }
                 if (!strcasecmp(n, "collect")) return strdup("'json'");
                 /* head(l) and last(l) have the tag of that element: a
@@ -369,6 +374,16 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
         }
         if (step && (step->type == AST_NODE_LIST || step->type == AST_NODE_MAP)) return strdup("'json'");
         if (step && ast_is_boolean_expr(step)) return strdup("'bool'");
+        /* A step that calls a string function gives a string:
+         * reduce(a = null, x IN l | toString(x)) gave 12 (GQLITE-T-0482). */
+        if (step && step->type == AST_NODE_FUNCTION_CALL &&
+            is_string_function(((cypher_function_call *)step)->function_name)) {
+            char *v = value_sql ? NULL : transform_expression_to_string(ctx, expr);
+            const char *vs = value_sql ? value_sql : v;
+            char *out = vs ? str_printf("(CASE WHEN (%s) IS NOT NULL THEN 'text' END)", vs, NULL) : NULL;
+            free(v);
+            return out;
+        }
         reduce_add = step && step->type == AST_NODE_BINARY_OP &&
                      ((cypher_binary_op *)step)->op_type == BINARY_OP_ADD;
     }
@@ -2277,9 +2292,11 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                      * the outer query in SQLite, and `[y IN [1] | n.v]`
                      * folded every row into one (GQLITE-T-0480). */
                     append_sql(ctx, "CASE WHEN %s.id IS NULL THEN NULL ELSE ", je);
-                    if (as_bool) append_sql(ctx, "json(CASE _gql_bool(");
+                    /* A value with the boolean subtype (`n.b`) is JSON
+                     * true/false in the list, not "true" (GQLITE-T-0482). */
+                    append_sql(ctx, as_bool ? "json(CASE _gql_bool(" : "_gql_json_elem(");
                     if (transform_expression(ctx, comp->transform_expr) < 0) comp_rc = -1;
-                    if (as_bool) append_sql(ctx, ") WHEN 1 THEN 'true' WHEN 0 THEN 'false' END)");
+                    append_sql(ctx, as_bool ? ") WHEN 1 THEN 'true' WHEN 0 THEN 'false' END)" : ")");
                     append_sql(ctx, " END");
                 } else {
                     /* The element itself ([x IN l] or [x IN l | x]); JSON true/false stay booleans
@@ -2693,9 +2710,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                  * GQLITE-T-0480). */
                 if (inner_anchor[0]) {
                     size_t wlen = strlen(collect_sql) + strlen(inner_anchor) + 48;
-                    char *wrapped = malloc(wlen);
+                    char *wrapped = malloc(wlen + 64);
                     if (!wrapped) { free(collect_sql); return -1; }
-                    snprintf(wrapped, wlen, "CASE WHEN %s IS NULL THEN NULL ELSE %s END",
+                    /* _gql_json_elem: a boolean is JSON true/false in the
+                     * list, not "true" (GQLITE-T-0482) */
+                    bool cb = ast_yields_boolean(comp->collect_expr);
+                    snprintf(wrapped, wlen + 64,
+                             cb ? "CASE WHEN %s IS NULL THEN NULL ELSE json(CASE _gql_bool(%s) WHEN 1 THEN 'true' WHEN 0 THEN 'false' END) END"
+                                : "CASE WHEN %s IS NULL THEN NULL ELSE _gql_json_elem(%s) END",
                              inner_anchor, collect_sql);
                     free(collect_sql);
                     collect_sql = wrapped;

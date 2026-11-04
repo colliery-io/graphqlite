@@ -1,8 +1,5 @@
 [
   {"relation": ".", "kind": "error", "error": "invalid JSON result", "task": "GQLITE-T-0484"},
-  {"relation": "^expr_context/call/", "kind": "error", "error": "is not defined", "task": "GQLITE-T-0487"},
-  {"relation": "^expr_context/(head|reduce|call)/", "kind": "mismatch", "task": "GQLITE-T-0482"},
-  {"relation": "^expr_context/comp/(bool|nullcheck|string|entity)", "kind": "mismatch", "task": "GQLITE-T-0482"},
   {"relation": "^expr_context/.*/nested", "kind": "mismatch", "task": "GQLITE-T-0483"},
   {"relation": "^expr_context/(unwind|unwind_var)/(list|map)", "kind": "mismatch", "task": "GQLITE-T-0483"},
   {"relation": "^expr_context/", "kind": "mismatch", "query": "reverse\\(", "task": "GQLITE-T-0483"}
