@@ -33,5 +33,8 @@ INSERT INTO _assert SELECT 'CALL over no rows gives no rows',
 INSERT INTO _assert SELECT 'CALL { WITH * } imports every variable',
     json(cypher('MATCH (a:A113)-->(b) CALL { WITH * RETURN a.v AS x } RETURN x'))
     = json('[{"x":1}]');
+INSERT INTO _assert SELECT 'reduce() with a string function step gives a string',
+    json(cypher('MATCH (a:A113) RETURN a.v AS k, reduce(acc = null, z IN [1] | toString(a.v)) AS x, reduce(acc = null, z IN [1] | toString(a.b)) AS y'))
+    = json('[{"k":1,"x":"1","y":"true"}]');
 
 SELECT 'Test 113 passed: ' || count(*) || ' assertions' AS result FROM _assert;
