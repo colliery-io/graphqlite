@@ -367,6 +367,11 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
     bool reduce_add = false;
     if (expr->type == AST_NODE_REDUCE_EXPR) {
         ast_node *step = ((cypher_reduce_expr *)expr)->expression;
+        /* A reduce() gives the value of its last step, so a step that is
+         * itself a reduce() gives that one's last step: look through
+         * (GQLITE-T-0491). */
+        while (step && step->type == AST_NODE_REDUCE_EXPR)
+            step = ((cypher_reduce_expr *)step)->expression;
         if (step && step->type == AST_NODE_LITERAL) {
             cypher_literal *lit = (cypher_literal *)step;
             if (lit->literal_type == LITERAL_STRING) return strdup("'text'");
