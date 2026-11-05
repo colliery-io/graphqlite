@@ -177,6 +177,123 @@ static bool emit_exists_varlen_path(cypher_transform_context *ctx, cypher_path *
 }
 
 /* Transform EXISTS expression */
+/* The SQL of a subquery EXISTS { <query> } in `wrap` (a format with one
+ * %s): "EXISTS (%s)" for EXISTS, "(SELECT count(*) FROM (%s))" for COUNT
+ * { } (GQLITE-T-0485). */
+static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr *exists_expr,
+                               const char *wrap)
+{
+    /* GQLITE-T-0139: EXISTS { <read-only query> }. Transform the
+     * body in a CHILD context whose variable scope is seeded with
+     * every outer variable, bound to its outer alias, so the body's
+     * pattern references to outer variables become correlated
+     * references. Counters continue from the outer values so inner
+     * aliases and CTE names cannot shadow outer ones. The result
+     * is embedded as EXISTS (<sql>). Nested EXISTS { } recurse. */
+    cypher_query *q = (cypher_query*)exists_expr->expr.query;
+    if (!q || !q->clauses || q->clauses->count == 0) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("EXISTS subquery is empty");
+        return -1;
+    }
+    cypher_transform_context *sub = cypher_transform_create_context_ex(ctx->db, false);
+    if (!sub) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Out of memory in EXISTS subquery");
+        return -1;
+    }
+    sub->global_alias_counter = ctx->global_alias_counter + 1;
+    sub->with_cte_counter = ctx->with_cte_counter + 100;
+    sub->anon_node_base = ctx->anon_node_base + 1000;
+    sub->current_graph = ctx->current_graph;   /* borrowed, not owned */
+    int n_outer = transform_var_count(ctx->var_ctx);
+    char **outer_tokens = calloc((size_t)(n_outer > 0 ? n_outer : 1), sizeof(char*));
+    int outer_token_count = 0;
+    for (int vi = 0; vi < n_outer; vi++) {
+        transform_var *v = transform_var_at(ctx->var_ctx, vi);
+        if (!v || !v->name) continue;
+        if (transform_var_is_path(ctx->var_ctx, v->name)) continue;
+        const char *alias = transform_var_get_alias(ctx->var_ctx, v->name);
+        if (!alias) continue;
+        if (transform_var_is_projected(ctx->var_ctx, v->name)) {
+            transform_var_register_projected(sub->var_ctx, v->name, alias);
+            transform_var_set_bound(sub->var_ctx, v->name, true);
+            if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
+                transform_var_set_scalar_value(sub->var_ctx, v->name, true);
+            }
+            continue;
+        }
+        /* Register the outer entity the way a WITH does: the
+         * "alias" IS its id expression (`<alias>.id`, or the alias
+         * itself when the outer var is already a post-WITH id
+         * column). generate_node_match then JOINs the inner table
+         * on that id instead of re-emitting FROM nodes AS <alias>,
+         * which would shadow the outer alias and break the
+         * correlation. */
+        char id_expr[300];
+        if (transform_var_alias_is_id(ctx->var_ctx, v->name)) {
+            snprintf(id_expr, sizeof(id_expr), "%s", alias);
+        } else {
+            snprintf(id_expr, sizeof(id_expr), "%s.id", alias);
+        }
+        if (transform_var_is_edge(ctx->var_ctx, v->name)) {
+            transform_var_register_edge(sub->var_ctx, v->name, id_expr, NULL);
+        } else {
+            transform_var_register_node(sub->var_ctx, v->name, id_expr, NULL);
+        }
+        transform_var_set_bound(sub->var_ctx, v->name, true);
+        transform_var_set_alias_is_id(sub->var_ctx, v->name, true);
+        /* Remember the outer table token so the body never adds it to FROM. */
+        if (outer_tokens) {
+            const char *dot = strchr(id_expr, '.');
+            const char *start = dot ? dot : id_expr + strlen(id_expr);
+            while (start > id_expr && (isalnum((unsigned char)start[-1]) || start[-1] == '_')) start--;
+            size_t tl = (size_t)((dot ? dot : id_expr + strlen(id_expr)) - start);
+            char *tok = malloc(tl + 1);
+            if (tok) { memcpy(tok, start, tl); tok[tl] = '\0'; outer_tokens[outer_token_count++] = tok; }
+        }
+        if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
+            transform_var_set_scalar_value(sub->var_ctx, v->name, true);
+        }
+    }
+    /* Outer variables behave like bindings from a previous clause. */
+    transform_var_mark_inherited(sub->var_ctx);
+    sub->correlated_outer_aliases = (const char **)outer_tokens;
+    sub->correlated_outer_count = outer_token_count;
+    int rc = cypher_transform_read_query_sql(sub, q);
+    sub->correlated_outer_aliases = NULL;
+    sub->correlated_outer_count = 0;
+    for (int ti = 0; ti < outer_token_count; ti++) free(outer_tokens[ti]);
+    free(outer_tokens);
+    if (rc < 0 || sub->sql_size == 0) {
+        ctx->has_error = true;
+        free(ctx->error_message);
+        ctx->error_message = strdup(sub->error_message ? sub->error_message
+                                                       : "Failed to transform EXISTS subquery");
+        cypher_transform_free_context(sub);
+        return -1;
+    }
+    ctx->global_alias_counter = sub->global_alias_counter + 1;
+    append_sql(ctx, wrap, sub->sql_buffer);
+    cypher_transform_free_context(sub);
+    return 0;
+}
+
+/* COUNT { ... }: the parser's __gql_count_subquery(EXISTS { query })
+ * (GQLITE-T-0485). */
+int transform_count_subquery(cypher_transform_context *ctx, cypher_function_call *fc)
+{
+    if (!fc || !fc->args || fc->args->count != 1 || !fc->args->items[0] ||
+        fc->args->items[0]->type != AST_NODE_EXISTS_EXPR ||
+        ((cypher_exists_expr *)fc->args->items[0])->expr_type != EXISTS_TYPE_QUERY) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Invalid COUNT subquery");
+        return -1;
+    }
+    return emit_query_subquery(ctx, (cypher_exists_expr *)fc->args->items[0],
+                               "(SELECT count(*) FROM (%s))");
+}
+
 int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
 {
     CYPHER_DEBUG("Transforming EXISTS expression");
@@ -189,102 +306,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
     switch (exists_expr->expr_type) {
         case EXISTS_TYPE_QUERY:
-            {
-                /* GQLITE-T-0139: EXISTS { <read-only query> }. Transform the
-                 * body in a CHILD context whose variable scope is seeded with
-                 * every outer variable, bound to its outer alias, so the body's
-                 * pattern references to outer variables become correlated
-                 * references. Counters continue from the outer values so inner
-                 * aliases and CTE names cannot shadow outer ones. The result
-                 * is embedded as EXISTS (<sql>). Nested EXISTS { } recurse. */
-                cypher_query *q = (cypher_query*)exists_expr->expr.query;
-                if (!q || !q->clauses || q->clauses->count == 0) {
-                    ctx->has_error = true;
-                    ctx->error_message = strdup("EXISTS subquery is empty");
-                    return -1;
-                }
-                cypher_transform_context *sub = cypher_transform_create_context_ex(ctx->db, false);
-                if (!sub) {
-                    ctx->has_error = true;
-                    ctx->error_message = strdup("Out of memory in EXISTS subquery");
-                    return -1;
-                }
-                sub->global_alias_counter = ctx->global_alias_counter + 1;
-                sub->with_cte_counter = ctx->with_cte_counter + 100;
-                sub->anon_node_base = ctx->anon_node_base + 1000;
-                sub->current_graph = ctx->current_graph;   /* borrowed, not owned */
-                int n_outer = transform_var_count(ctx->var_ctx);
-                char **outer_tokens = calloc((size_t)(n_outer > 0 ? n_outer : 1), sizeof(char*));
-                int outer_token_count = 0;
-                for (int vi = 0; vi < n_outer; vi++) {
-                    transform_var *v = transform_var_at(ctx->var_ctx, vi);
-                    if (!v || !v->name) continue;
-                    if (transform_var_is_path(ctx->var_ctx, v->name)) continue;
-                    const char *alias = transform_var_get_alias(ctx->var_ctx, v->name);
-                    if (!alias) continue;
-                    if (transform_var_is_projected(ctx->var_ctx, v->name)) {
-                        transform_var_register_projected(sub->var_ctx, v->name, alias);
-                        transform_var_set_bound(sub->var_ctx, v->name, true);
-                        if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
-                            transform_var_set_scalar_value(sub->var_ctx, v->name, true);
-                        }
-                        continue;
-                    }
-                    /* Register the outer entity the way a WITH does: the
-                     * "alias" IS its id expression (`<alias>.id`, or the alias
-                     * itself when the outer var is already a post-WITH id
-                     * column). generate_node_match then JOINs the inner table
-                     * on that id instead of re-emitting FROM nodes AS <alias>,
-                     * which would shadow the outer alias and break the
-                     * correlation. */
-                    char id_expr[300];
-                    if (transform_var_alias_is_id(ctx->var_ctx, v->name)) {
-                        snprintf(id_expr, sizeof(id_expr), "%s", alias);
-                    } else {
-                        snprintf(id_expr, sizeof(id_expr), "%s.id", alias);
-                    }
-                    if (transform_var_is_edge(ctx->var_ctx, v->name)) {
-                        transform_var_register_edge(sub->var_ctx, v->name, id_expr, NULL);
-                    } else {
-                        transform_var_register_node(sub->var_ctx, v->name, id_expr, NULL);
-                    }
-                    transform_var_set_bound(sub->var_ctx, v->name, true);
-                    transform_var_set_alias_is_id(sub->var_ctx, v->name, true);
-                    /* Remember the outer table token so the body never adds it to FROM. */
-                    if (outer_tokens) {
-                        const char *dot = strchr(id_expr, '.');
-                        const char *start = dot ? dot : id_expr + strlen(id_expr);
-                        while (start > id_expr && (isalnum((unsigned char)start[-1]) || start[-1] == '_')) start--;
-                        size_t tl = (size_t)((dot ? dot : id_expr + strlen(id_expr)) - start);
-                        char *tok = malloc(tl + 1);
-                        if (tok) { memcpy(tok, start, tl); tok[tl] = '\0'; outer_tokens[outer_token_count++] = tok; }
-                    }
-                    if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
-                        transform_var_set_scalar_value(sub->var_ctx, v->name, true);
-                    }
-                }
-                /* Outer variables behave like bindings from a previous clause. */
-                transform_var_mark_inherited(sub->var_ctx);
-                sub->correlated_outer_aliases = (const char **)outer_tokens;
-                sub->correlated_outer_count = outer_token_count;
-                int rc = cypher_transform_read_query_sql(sub, q);
-                sub->correlated_outer_aliases = NULL;
-                sub->correlated_outer_count = 0;
-                for (int ti = 0; ti < outer_token_count; ti++) free(outer_tokens[ti]);
-                free(outer_tokens);
-                if (rc < 0 || sub->sql_size == 0) {
-                    ctx->has_error = true;
-                    free(ctx->error_message);
-                    ctx->error_message = strdup(sub->error_message ? sub->error_message
-                                                                   : "Failed to transform EXISTS subquery");
-                    cypher_transform_free_context(sub);
-                    return -1;
-                }
-                ctx->global_alias_counter = sub->global_alias_counter + 1;
-                append_sql(ctx, "EXISTS (%s)", sub->sql_buffer);
-                cypher_transform_free_context(sub);
-                return 0;
-            }
+            return emit_query_subquery(ctx, exists_expr, "EXISTS (%s)");
         case EXISTS_TYPE_PATTERN:
             {
                 CYPHER_DEBUG("Transforming EXISTS pattern expression");

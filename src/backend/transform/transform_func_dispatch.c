@@ -12,6 +12,7 @@
 #include "transform/transform_func_dispatch.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
+#include "transform/transform_expr_predicate.h"
 #include "transform/transform_func_entity.h"
 #include "transform/transform_func_path.h"
 #include "transform/transform_func_list.h"
@@ -122,6 +123,9 @@ static const transform_func_entry dispatch_table[] = {
     {"degrees",         transform_math_function},
     {"radians",         transform_math_function},
     {"haversin",        transform_math_function},
+    /* COUNT { ... } subquery (GQLITE-T-0485) */
+    {"__gql_count_subquery", transform_count_subquery},
+
     {"isNaN",           transform_math_function},
     {"isnan",           transform_math_function},
     {"sinh",            transform_math_function},

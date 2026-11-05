@@ -383,6 +383,13 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
     if (!ctx || !with) {
         return -1;
     }
+    /* WITH *, items is expanded by the validator; one it did not see (in a
+     * subquery body) would drop the variables (GQLITE-T-0485). */
+    if (with->star_plus) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("SyntaxError: WITH *, ... is not supported here; name the variables");
+        return -1;
+    }
 
     /* Discard any deferred property JOINs left over from an earlier
      * clause; this WITH starts with an empty deferred section. */

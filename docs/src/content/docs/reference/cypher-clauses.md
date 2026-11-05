@@ -265,6 +265,7 @@ MATCH (n) RETURN *
 
 ```
 WITH [DISTINCT] expr [AS alias] [, ...]
+WITH * [, expr AS alias, ...]
 [ORDER BY expr [ASC|DESC] [, ...]]
 [SKIP expr]
 [LIMIT expr]
@@ -272,6 +273,8 @@ WITH [DISTINCT] expr [AS alias] [, ...]
 ```
 
 Pipelines intermediate results between query parts. Variables not listed in `WITH` go out of scope. Aggregation in `WITH` collapses rows; `WHERE` after `WITH` filters the aggregated result.
+
+`WITH *` keeps every variable in scope; `WITH *, a.v AS x` keeps them and adds `x`. After `CALL { }`, `WITH *, ...` is not supported: name the variables.
 
 **Examples**
 

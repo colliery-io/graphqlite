@@ -145,6 +145,8 @@ Aggregation functions collapse multiple rows into one. They are valid in `RETURN
 | `collect(expr)` | List | List of non-null values |
 | `stdev(expr)` | Float | Sample standard deviation |
 | `stdevp(expr)` | Float | Population standard deviation |
+| `percentileCont(expr, p)` | Float | Percentile `p` (0 to 1), interpolated between values |
+| `percentileDisc(expr, p)` | Number | Percentile `p` (0 to 1): a value of the input, so an integer for integer input |
 
 **Examples**
 
@@ -262,6 +264,7 @@ RETURN point.withinBBox(
 |-----------|---------|-------------|
 | `exists(expr)` | Boolean | `true` if the property or pattern exists and is not `null` |
 | `exists{pattern}` | Boolean | `true` if the pattern matches at least one result (full pattern syntax) |
+| `COUNT { pattern }` | Integer | Number of matches of the pattern, with an optional `WHERE`; `COUNT { MATCH ... }` counts the rows of the subquery |
 | `coalesce(v1, v2, ...)` | Any | First non-null argument; `null` if all arguments are `null` |
 | `nullIf(v1, v2)` | Any \| null | Returns `null` if `v1 = v2`; otherwise returns `v1` |
 
@@ -270,6 +273,9 @@ RETURN point.withinBBox(
 ```cypher
 MATCH (n:Person) WHERE exists(n.email) RETURN n.name
 MATCH (n:Person) WHERE exists{(n)-[:KNOWS]->(:Person)} RETURN n.name
+MATCH (n:Person) RETURN n.name, EXISTS { (n)-[:KNOWS]->() } AS knows_someone
+MATCH (n:Person) RETURN n.name, COUNT { (n)-[:KNOWS]->(m) WHERE m.age > 30 } AS older_friends
+MATCH (n) RETURN n:Person|Company AS is_party   -- a label disjunction as an expression
 RETURN coalesce(null, null, 'default')   -- 'default'
 RETURN nullIf(5, 5)                      -- null
 RETURN nullIf(5, 6)                      -- 5

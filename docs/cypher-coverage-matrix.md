@@ -61,7 +61,7 @@ Generated 2026-03-17 from parser grammar, transform layer, and test analysis.
 - [x] `(n)` -- bound variable
 - [x] `(n:Label)` -- single label
 - [x] `(n:Label1:Label2)` -- multiple labels (AND)
-- [ ] `(n:Label1|Label2)` -- label disjunction (OR)
+- [x] `(n:Label1|Label2)` -- label disjunction (OR)
 - [ ] `(!Label)` -- label negation
 - [x] `(n {prop: value})` -- inline properties
 - [x] `(n:Label {prop: value})` -- label + properties
@@ -180,7 +180,7 @@ Generated 2026-03-17 from parser grammar, transform layer, and test analysis.
 
 ### 6.5 Subquery Expressions
 - [x] `EXISTS { (n)-[r]->(m) }` -- pattern existence (via EXISTS)
-- [ ] `COUNT { MATCH pattern }` -- count subquery
+- [x] `COUNT { MATCH pattern }` -- count subquery (also `COUNT { pattern [WHERE ...] }`)
 - [ ] `COLLECT { MATCH pattern RETURN expr }` -- collect subquery
 
 ### 6.6 Literals
@@ -247,7 +247,7 @@ Generated 2026-03-17 from parser grammar, transform layer, and test analysis.
 - [x] `max(expr)`
 - [x] `collect(expr)` / `collect(DISTINCT expr)`
 - [ ] `stDev(expr)` / `stDevP(expr)`
-- [ ] `percentileCont(expr, pct)` / `percentileDisc(expr, pct)`
+- [x] `percentileCont(expr, pct)` / `percentileDisc(expr, pct)`
 
 ### 7.5 List Functions
 - [x] `range(start, end [, step])`

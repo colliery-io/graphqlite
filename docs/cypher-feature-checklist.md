@@ -61,7 +61,7 @@ comparison purposes.
 - [ ] `(n)` -- bound node variable
 - [ ] `(n:Label)` -- node with label
 - [ ] `(n:Label1:Label2)` -- node with multiple labels (AND)
-- [ ] `(n:Label1|Label2)` -- node with label disjunction (OR)
+- [x] `(n:Label1|Label2)` -- node with label disjunction (OR)
 - [ ] `(!Label)` -- label negation
 - [ ] `(n {prop: value})` -- node with inline properties
 - [ ] `(n:Label {prop: value})` -- node with label and properties
@@ -189,8 +189,8 @@ comparison purposes.
 - [ ] `n {variable}` -- variable selector
 
 ### 6.5 Subquery Expressions
-- [ ] `EXISTS { MATCH pattern }` -- existential subquery
-- [ ] `COUNT { MATCH pattern }` -- count subquery
+- [x] `EXISTS { MATCH pattern }` -- existential subquery
+- [x] `COUNT { MATCH pattern }` -- count subquery (also `COUNT { pattern [WHERE ...] }`)
 - [ ] `COLLECT { MATCH pattern RETURN expr }` -- collect subquery
 
 ### 6.6 Literals
@@ -263,7 +263,7 @@ comparison purposes.
 - [ ] `stDev(expr)` -- sample standard deviation
 - [ ] `stDevP(expr)` -- population standard deviation
 - [ ] `percentileCont(expr, percentile)` -- percentile (continuous/interpolated)
-- [ ] `percentileDisc(expr, percentile)` -- percentile (discrete/nearest)
+- [x] `percentileDisc(expr, percentile)` -- percentile (discrete/nearest)
 
 ### 7.5 List Functions
 - [ ] `range(start, end [, step])` -- generate integer list
