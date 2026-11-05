@@ -748,3 +748,137 @@ SELECT cypher('RETURN pageRank()');
     print("All GPU tests passed!")
     print("="*50)
     return 0
+
+
+@test()
+@angreal.command(
+    name="sanitize",
+    about="Run the functional tests, TCK and metamorphic harness on an ASan + UBSan build",
+    tool=angreal.ToolDescription(
+        """
+Build the extension with AddressSanitizer and UndefinedBehaviorSanitizer
+(`make extension-asan`, into build/asan; GQLITE-T-0495) and run the
+functional tests, the TCK and the metamorphic harness on it. A memory error
+or undefined behaviour that still gives the right result shows up here.
+
+The host processes (sqlite3, python) are not built with ASan, so the ASan
+runtime is preloaded: DYLD_INSERT_LIBRARIES on macOS, LD_PRELOAD on Linux.
+On macOS this runs the framework Python.app binary directly (a launcher
+stub drops DYLD_* variables), and the runners pass the preload on to their
+workers through GQLITE_SANITIZER_PRELOAD. Leak detection is off.
+
+## When to use
+- After a change to C code that builds strings, buffers or SQL
+- Before a release
+
+## Examples
+```
+angreal test sanitize
+angreal test sanitize --part tck
+angreal test sanitize --part metamorphic --count 20000 --seed 7
+```
+
+## Output
+- One line per part; sanitizer reports in build/asan/reports/ (asan.<pid>,
+  ubsan.<pid>), the first lines of each printed.
+
+## Exit code
+1 if a part fails or any sanitizer report was written; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="part", long="part", help="functional, tck, metamorphic or all (default)")
+@angreal.argument(name="count", long="count", python_type="int", help="metamorphic: random cases (default 5000)")
+@angreal.argument(name="seed", long="seed", python_type="int", help="metamorphic: seed (default 1)")
+def test_sanitize(part: str = "", count: int = 0, seed: int = 0) -> int:
+    """Run the test suites on the sanitizer build."""
+    import glob
+    import shutil
+    import sys
+    part = part or "all"
+    root = get_project_root()
+    if run_make("extension-asan") != 0:
+        return 1
+    ext = os.path.join(root, "build", "asan", "graphqlite")
+    cc = os.environ.get("CC", "cc")
+    runtime_name = "libclang_rt.asan_osx_dynamic.dylib" if sys.platform == "darwin" else "libasan.so"
+    runtime = subprocess.run([cc, "-print-file-name=" + runtime_name],
+                             capture_output=True, text=True).stdout.strip()
+    if not runtime or not os.path.exists(runtime):
+        print(f"ERROR: ASan runtime {runtime_name} not found (via {cc} -print-file-name)", flush=True)
+        return 2
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    if sys.platform == "darwin":
+        # The python3.X launcher drops DYLD_* variables: run the framework binary.
+        real = subprocess.run([python, "-c", "import sys; print(sys.prefix)"],
+                              capture_output=True, text=True).stdout.strip()
+        app = os.path.join(real, "Resources", "Python.app", "Contents", "MacOS", "Python")
+        if os.path.exists(app):
+            python = app
+    reports = os.path.join(root, "build", "asan", "reports")
+    shutil.rmtree(reports, ignore_errors=True)
+    os.makedirs(reports)
+    env = os.environ.copy()
+    env["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = runtime
+    env["GQLITE_SANITIZER_PRELOAD"] = runtime
+    env["ASAN_OPTIONS"] = f"halt_on_error=1:abort_on_error=0:detect_leaks=0:log_path={reports}/asan"
+    env["UBSAN_OPTIONS"] = f"print_stacktrace=1:halt_on_error=1:log_path={reports}/ubsan"
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    sqlite = shutil.which(os.environ.get("SQLITE", "sqlite3")) or "sqlite3"
+    failed = []
+
+    if part in ("all", "functional"):
+        func_dir = os.path.join(root, "build", "asan", "functional")
+        os.makedirs(func_dir, exist_ok=True)
+        n = bad = 0
+        for f in sorted(glob.glob(os.path.join(root, "tests", "functional", "*.sql"))):
+            name = os.path.basename(f)
+            if "constraint" in name or "expected_failures" in name:
+                continue
+            with open(f) as src:
+                text = src.read().replace(".load ./build/graphqlite", ".load ./build/asan/graphqlite")
+            copy = os.path.join(func_dir, name)
+            with open(copy, "w") as dst:
+                dst.write(text)
+            with open(copy) as stdin:
+                r = subprocess.run([sqlite, "-bail"], stdin=stdin, cwd=root, env=env,
+                                   capture_output=True, text=True)
+            n += 1
+            if r.returncode != 0:
+                bad += 1
+                print(f"  functional: {name} failed", flush=True)
+        print(f"functional: {n - bad}/{n} passed", flush=True)
+        if bad:
+            failed.append("functional")
+
+    if part in ("all", "tck"):
+        r = subprocess.run([python, "-m", "tests.tck", "--ext", ext, "--quiet",
+                            "--out", os.path.join(root, "build", "asan", "tck-results.json"),
+                            "--parity-out", os.path.join(root, "build", "asan", "tck-parity.json")],
+                           cwd=root, env=env, capture_output=True, text=True)
+        line = [l for l in r.stdout.splitlines() if l.startswith("TCK [")]
+        print(line[-1] if line else "TCK: no summary", flush=True)
+        if r.returncode != 0 or not line or "fail=0 error=0" not in line[-1]:
+            failed.append("tck")
+
+    if part in ("all", "metamorphic"):
+        for args in (["--mode", "random", "--seed", str(seed or 1), "--count", str(count or 5000)],
+                     ["--mode", "cover", "--reps", "1"]):
+            r = subprocess.run([python, "-m", "tests.metamorphic", *args, "--ext", ext],
+                               cwd=root, env=env, capture_output=True, text=True)
+            line = [l for l in r.stdout.splitlines() if l.startswith("metamorphic ")]
+            print(line[-1] if line else "metamorphic: no summary", flush=True)
+            if r.returncode != 0:
+                failed.append("metamorphic")
+
+    found = sorted(glob.glob(os.path.join(reports, "*")))
+    for f in found[:10]:
+        with open(f, errors="replace") as fh:
+            head = [l.rstrip() for l in fh.readlines()[:6]]
+        print(f"--- {os.path.basename(f)}", *head, sep="\n", flush=True)
+    print(f"sanitizer reports: {len(found)} (in {reports})", flush=True)
+    return 1 if failed or found else 0

@@ -33,6 +33,8 @@ HERE = Path(__file__).parent
 
 
 def main(argv: list[str] | None = None) -> int:
+    from tests import sanitizer_preload
+    sanitizer_preload.apply()
     p = argparse.ArgumentParser(prog="tests.metamorphic")
     p.add_argument("--mode", choices=["random", "cover"], default="random")
     p.add_argument("--seed", type=int, default=1)
