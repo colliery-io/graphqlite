@@ -756,13 +756,19 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
 
     /* Register variables for the expression:
      * - accumulator maps to cte_name.acc
-     * - variable maps to json_each.value
+     * - variable maps to <cte_name>_e.value: each reduce() has its own
+     *   json_each alias, so an inner reduce() reads the outer variable, not
+     *   its own json_each (GQLITE-T-0493)
      */
     char acc_ref[64];
     snprintf(acc_ref, sizeof(acc_ref), "%s.acc", cte_name);
+    char each_alias[48];
+    snprintf(each_alias, sizeof(each_alias), "%s_e", cte_name);
+    char var_ref[64];
+    snprintf(var_ref, sizeof(var_ref), "%s.value", each_alias);
     /* Register in unified system */
     transform_var_register_projected(ctx->var_ctx, reduce->accumulator, acc_ref);
-    transform_var_register_projected(ctx->var_ctx, reduce->variable, "json_each.value");
+    transform_var_register_projected(ctx->var_ctx, reduce->variable, var_ref);
 
     /* Transform the expression that computes new accumulator value */
     if (transform_expression(ctx, reduce->expression) < 0) {
@@ -771,7 +777,7 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
         return -1;
     }
 
-    append_sql(ctx, "), idx + 1 FROM %s, json_each(", cte_name);
+    append_sql(ctx, "), %s.idx + 1 FROM %s, json_each(", cte_name, cte_name);
 
     /* Transform list expression */
     if (transform_expression(ctx, reduce->list_expr) < 0) {
@@ -780,8 +786,8 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
         return -1;
     }
 
-    append_sql(ctx, ") WHERE %s.idx = json_each.key) SELECT acc FROM %s WHERE idx = json_array_length(",
-               cte_name, cte_name);
+    append_sql(ctx, ") AS %s WHERE %s.idx = %s.key) SELECT acc FROM %s WHERE idx = json_array_length(",
+               each_alias, cte_name, each_alias, cte_name);
 
     /* Transform list expression again for length check */
     if (transform_expression(ctx, reduce->list_expr) < 0) {
