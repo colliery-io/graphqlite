@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .gen import (Pattern, Step, aggregate, expr, int_expr, label_text, label_where,
+from .gen import (Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where,
                   pattern, predicate, render, v, variables)
 from .space import Chooser, DOMAINS
 
@@ -257,8 +257,15 @@ def rename(ch: Chooser) -> Case:
     new ones, changes nothing."""
     base = chain(ch).query()
     vs = variables(base)
-    pool = vs if ch.random() < 0.5 else PLAIN_NAMES
-    names = dict(zip(vs, ch.sample(pool, len(vs))))
+    # A name the template uses unmarked (a comprehension or reduce variable)
+    # is taken: renaming h to x in `[x IN l WHERE x > h.v]` reads the
+    # comprehension's x (GQLITE-T-0492). A variable with such a name keeps it.
+    taken = bare_names(base)
+    keep = [s for s in vs if s in taken]
+    free = [s for s in vs if s not in taken]
+    pool = free if ch.random() < 0.5 else [n for n in PLAIN_NAMES if n not in taken]
+    names = {s: s for s in keep}
+    names.update(zip(free, ch.sample(pool, len(free))))
     return Case("rename", [Variant("base", render(base)),
                            Variant("renamed", render(base, names))])
 

@@ -33,6 +33,16 @@ def variables(template: str) -> list[str]:
     return seen
 
 
+_STRING = re.compile(r"'(?:[^'\\]|\\.)*'")
+_WORD = re.compile(r"[A-Za-z_]\w*")
+
+
+def bare_names(template: str) -> set[str]:
+    """The words a template uses outside ⟨⟩ markers and string literals: a
+    rename must not give a variable one of these names."""
+    return set(_WORD.findall(_VAR.sub(" ", _STRING.sub(" ", template))))
+
+
 def v(name: str) -> str:
     return f"⟨{name}⟩"
 
