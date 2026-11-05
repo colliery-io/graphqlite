@@ -167,6 +167,8 @@ typedef struct cypher_with {
     ast_node base;
     bool distinct;        /* WITH DISTINCT */
     bool pass_all;        /* WITH * - pass all variables through */
+    bool star_plus;       /* WITH *, items: the validator adds the bound
+                           * variables to items (GQLITE-T-0485) */
     ast_list *items;      /* List of projection items (NULL if pass_all) */
     ast_list *order_by;   /* Optional ORDER BY */
     ast_node *skip;       /* Optional SKIP */

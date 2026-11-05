@@ -4164,8 +4164,16 @@ void cypher_validate_func(sqlite3_context *context, int argc, sqlite3_value **ar
  * allocated separately with sqlite3_malloc and freed in xFinal.
  * ========================================================================= */
 
+/* A percentile input: its value, and its integer when it was one, so
+ * percentileDisc returns a value of the input (GQLITE-T-0485). */
 typedef struct {
-    double *values;
+    double d;
+    sqlite3_int64 i;
+    int is_int;
+} percentile_val;
+
+typedef struct {
+    percentile_val *values;
     int count;
     int capacity;
     double percentile;
@@ -4174,8 +4182,8 @@ typedef struct {
 } percentile_agg;
 
 static int percentile_cmp(const void *a, const void *b) {
-    double da = *(const double *)a;
-    double db = *(const double *)b;
+    double da = ((const percentile_val *)a)->d;
+    double db = ((const percentile_val *)b)->d;
     if (da < db) return -1;
     if (da > db) return  1;
     return 0;
@@ -4209,12 +4217,15 @@ static void percentile_step_common(sqlite3_context *ctx, int argc, sqlite3_value
     /* Grow buffer geometrically. */
     if (agg->count == agg->capacity) {
         int new_cap = agg->capacity ? agg->capacity * 2 : 16;
-        double *new_buf = (double*)sqlite3_realloc(agg->values, new_cap * sizeof(double));
+        percentile_val *new_buf = (percentile_val*)sqlite3_realloc(agg->values, new_cap * (int)sizeof(percentile_val));
         if (!new_buf) return; /* out of memory; result will be partial */
         agg->values = new_buf;
         agg->capacity = new_cap;
     }
-    agg->values[agg->count++] = sqlite3_value_double(argv[0]);
+    percentile_val *pv = &agg->values[agg->count++];
+    pv->d = sqlite3_value_double(argv[0]);
+    pv->is_int = (v_type == SQLITE_INTEGER);
+    pv->i = pv->is_int ? sqlite3_value_int64(argv[0]) : 0;
 }
 
 static void percentile_cont_final(sqlite3_context *ctx) {
@@ -4231,7 +4242,7 @@ static void percentile_cont_final(sqlite3_context *ctx) {
         return;
     }
     double p = agg->percentile;
-    qsort(agg->values, agg->count, sizeof(double), percentile_cmp);
+    qsort(agg->values, agg->count, sizeof(percentile_val), percentile_cmp);
     int n = agg->count;
     double idx = p * (n - 1);
     int lo = (int)idx;
@@ -4239,9 +4250,9 @@ static void percentile_cont_final(sqlite3_context *ctx) {
     double frac = idx - lo;
     double result;
     if (hi >= n) {
-        result = agg->values[n - 1];
+        result = agg->values[n - 1].d;
     } else {
-        result = agg->values[lo] + frac * (agg->values[hi] - agg->values[lo]);
+        result = agg->values[lo].d + frac * (agg->values[hi].d - agg->values[lo].d);
     }
     sqlite3_result_double(ctx, result);
     sqlite3_free(agg->values);
@@ -4261,7 +4272,7 @@ static void percentile_disc_final(sqlite3_context *ctx) {
         return;
     }
     double p = agg->percentile;
-    qsort(agg->values, agg->count, sizeof(double), percentile_cmp);
+    qsort(agg->values, agg->count, sizeof(percentile_val), percentile_cmp);
     int n = agg->count;
     /* Nearest-rank: smallest index i in [0,n-1] such that (i+1)/n >= p.
      * Equivalent to ceil(p*n) - 1, clamped to [0, n-1]. p==0 -> 0. */
@@ -4276,11 +4287,10 @@ static void percentile_disc_final(sqlite3_context *ctx) {
         if (i < 0) i = 0;
         if (i >= n) i = n - 1;
     }
-    /* Return INTEGER if the original value is integral and exact, else REAL.
-     * SQLite already preserves int-ness via storage class, but we coerced to
-     * double in xStep. Just return as double; the JSON renderer will
-     * format trailing zeros — that's fine for openCypher. */
-    sqlite3_result_double(ctx, agg->values[i]);
+    /* A value of the input: an integer input gives an integer
+     * (GQLITE-T-0485; it gave 2.0 for 2). */
+    if (agg->values[i].is_int) sqlite3_result_int64(ctx, agg->values[i].i);
+    else sqlite3_result_double(ctx, agg->values[i].d);
     sqlite3_free(agg->values);
 }
 

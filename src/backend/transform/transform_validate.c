@@ -217,7 +217,9 @@ static bool expr_contains_path_pattern(const ast_node *e)
     if (e->type == AST_NODE_PATH) return true;
     if (e->type == AST_NODE_EXISTS_EXPR) {
         const cypher_exists_expr *ee = (const cypher_exists_expr *)e;
-        if (ee->expr_type == EXISTS_TYPE_PATTERN) return true;
+        /* EXISTS { pattern } is a subquery, valid in any expression
+         * (GQLITE-T-0485); a bare pattern is not (Pattern1 [22]-[24]). */
+        if (ee->expr_type == EXISTS_TYPE_PATTERN && !ee->is_subquery) return true;
     }
     switch (e->type) {
         case AST_NODE_NOT_EXPR: {
@@ -1493,7 +1495,8 @@ static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
             if (item->expr &&
                 (item->expr->type == AST_NODE_PATH ||
                  (item->expr->type == AST_NODE_EXISTS_EXPR &&
-                  ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN))) {
+                  ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN &&
+                  !((cypher_exists_expr *)item->expr)->is_subquery))) {
                 set_error(error_message,
                           "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in RETURN");
                 nset_free(&seen);
@@ -1554,7 +1557,8 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
              * EXISTS_EXPR also triggers this. */
             if (item->expr->type == AST_NODE_PATH ||
                 (item->expr->type == AST_NODE_EXISTS_EXPR &&
-                 ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN)) {
+                 ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN &&
+                 !((cypher_exists_expr *)item->expr)->is_subquery)) {
                 set_error(error_message,
                           "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in WITH");
                 nset_free(&seen);
@@ -2426,9 +2430,11 @@ int transform_validate_query(cypher_query *query, char **error_message)
     vctx_init(&vctx);
     name_set bound; nset_init(&bound);
     int rc = 0;
+    bool saw_call_subquery = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
         if (!clause) { continue; }
+        if (clause->type == AST_NODE_CALL_SUBQUERY) saw_call_subquery = true;
         switch (clause->type) {
             case AST_NODE_RETURN: {
                 cypher_return *r = (cypher_return *)clause;
@@ -2444,6 +2450,36 @@ int transform_validate_query(cypher_query *query, char **error_message)
             }
             case AST_NODE_WITH: {
                 cypher_with *w = (cypher_with *)clause;
+                /* WITH *, items (GQLITE-T-0485): the bound variables, then
+                 * the items; an item's own name wins over a variable. The
+                 * outputs of CALL { } are not tracked here, so after one
+                 * the variables are not all known. */
+                if (w->star_plus) {
+                    if (saw_call_subquery) {
+                        set_error(error_message,
+                                  "SyntaxError: WITH *, ... after CALL { } is not supported; name the variables");
+                        rc = -1;
+                        break;
+                    }
+                    ast_list *full = ast_list_create();
+                    for (int bi = 0; full && bi < bound.count; bi++) {
+                        const char *nm = bound.names[bi];
+                        bool shadowed = false;
+                        for (int wi = 0; w->items && wi < w->items->count && !shadowed; wi++) {
+                            cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                            const char *cn = it ? column_name_of(it) : NULL;
+                            if (cn && strcmp(cn, nm) == 0) shadowed = true;
+                        }
+                        if (!shadowed)
+                            ast_list_append(full, (ast_node *)make_return_item(
+                                (ast_node *)make_identifier((char *)nm, w->base.location), NULL));
+                    }
+                    for (int wi = 0; full && w->items && wi < w->items->count; wi++)
+                        ast_list_append(full, w->items->items[wi]);
+                    if (w->items) { w->items->count = 0; ast_list_free(w->items); }
+                    w->items = full;
+                    w->star_plus = false;
+                }
                 rc = validate_with_clause(w, &vctx, error_message);
                 /* WITH projects a new scope: clear previously-bound names
                  * and add only the names this WITH carries forward. Items

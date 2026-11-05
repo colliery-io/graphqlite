@@ -41,6 +41,32 @@ static ast_list *comp_pattern(cypher_node_pattern *first, ast_list *steps)
     return pattern;
 }
 
+/* COUNT { pattern [WHERE expr] } or COUNT { query } (GQLITE-T-0485): the
+ * internal call __gql_count_subquery(EXISTS { query }), whose transform
+ * counts the rows of the subquery. A pattern becomes MATCH pattern [WHERE].
+ * `name` must be count; NULL after a syntax error. Takes `name`. */
+static ast_node *make_count_subquery(cypher_parser_context *context, char *name,
+                                     ast_list *pattern, ast_node *where,
+                                     ast_node *query, CYPHER_YYLTYPE *loc)
+{
+    if (!name || strcasecmp(name, "count") != 0) {
+        cypher_yyerror(loc, context, "a { } subquery is only valid after COUNT or EXISTS");
+        free(name);
+        return NULL;
+    }
+    free(name);
+    if (!query) {
+        ast_list *clauses = ast_list_create();
+        ast_list_append(clauses, (ast_node*)make_cypher_match(pattern, where, false, NULL));
+        query = (ast_node*)make_cypher_query(clauses, false);
+    }
+    cypher_exists_expr *ee = make_exists_query_expr(query, loc->first_line);
+    if (ee) ee->is_subquery = true;
+    ast_list *args = ast_list_create();
+    ast_list_append(args, (ast_node*)ee);
+    return (ast_node*)make_function_call(strdup("__gql_count_subquery"), args, false, loc->first_line);
+}
+
 /* The source text from (line, col) to (last_line, last_col), both
  * 1-based and inclusive, trimmed. NULL when the input cannot be read. */
 static char *source_text_span(cypher_parser_context *context, int line, int col,
@@ -99,7 +125,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
  * parser can't immediately distinguish a node pattern from a parenthesized
  * expression until it sees more context (e.g., a following rel_pattern).
  */
-%expect 9
+%expect 11  /* +2: `n:A|B` as an expression inside FOREACH (x IN … | …): the | after a label is another label or the FOREACH body; GLR picks the parse that completes (GQLITE-T-0485) */
 %expect-rr 8  /* a name in parentheses: an expression or a node variable (IDENTIFIER, soft_kw, BQIDENT, END_P); GLR picks the parse that completes */
 
 %union {
@@ -364,6 +390,13 @@ with_clause:
         {
             /* WITH * - pass all variables through */
             $$ = make_cypher_with(false, NULL, $3, $4, $5, $6);
+        }
+    | WITH '*' ',' return_item_list order_by_opt skip_opt limit_opt where_opt
+        {
+            /* WITH *, a.v AS x: every bound variable and the items; the
+             * validator adds the variables (GQLITE-T-0485). */
+            $$ = make_cypher_with(false, $4, $5, $6, $7, $8);
+            if ($$) $$->star_plus = true;
         }
     ;
 
@@ -1568,6 +1601,22 @@ primary_expr:
             free($1);
             free($3);
         }
+    | var_name ':' label_alt_list
+        {
+            /* Label disjunction as an expression `n:A|B` (GQLITE-T-0485):
+             * (n:A) OR (n:B). */
+            ast_node *acc = NULL;
+            for (int li = 0; li < $3->count; li++) {
+                cypher_literal *lit = (cypher_literal *)$3->items[li];
+                cypher_identifier *b = make_identifier($1, @1.first_line);
+                ast_node *one = (ast_node *)make_label_expr((ast_node *)b, lit->value.string, @3.first_line);
+                acc = acc ? (ast_node *)make_binary_op(BINARY_OP_OR, acc, one, @1.first_line) : one;
+            }
+            if (acc) acc->parenthesized = true;
+            ast_list_free($3);
+            free($1);
+            $$ = acc;
+        }
     | var_name ':' label_name ':' label_name
         {
             /* Conjunctive label expression `n:L1:L2` — emit
@@ -1742,6 +1791,23 @@ function_call:
             if (ee) { ee->where_clause = $5; ee->is_subquery = true; }
             $$ = (ast_node*)ee;
         }
+    | IDENTIFIER '{' pattern_list '}'
+        {
+            /* COUNT { (n)-->() } (GQLITE-T-0485): the number of matches. */
+            $$ = make_count_subquery(context, $1, $3, NULL, NULL, &@1);
+            if (!$$) YYERROR;
+        }
+    | IDENTIFIER '{' pattern_list WHERE expr '}'
+        {
+            $$ = make_count_subquery(context, $1, $3, $5, NULL, &@1);
+            if (!$$) YYERROR;
+        }
+    | IDENTIFIER '{' single_query '}'
+        {
+            /* COUNT { MATCH ... [RETURN ...] }: the number of rows. */
+            $$ = make_count_subquery(context, $1, NULL, NULL, $3, &@1);
+            if (!$$) YYERROR;
+        }
     | EXISTS '(' IDENTIFIER '.' IDENTIFIER ')'
         {
             /* EXISTS(n.property) - unambiguous property existence check */
@@ -1840,22 +1906,25 @@ list_literal:
 
 /* List comprehension: [x IN list], [x IN list WHERE cond], [x IN list | expr], [x IN list WHERE cond | expr] */
 list_comprehension:
-    '[' var_name IN expr ']'
+    /* %dprec: with `n:A|B` an expression, `[x IN l WHERE x:A | x]` also
+     * reads as a filter on x:A|x; the form with a projection wins
+     * (GQLITE-T-0485). */
+    '[' var_name IN expr ']' %dprec 1
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, NULL, NULL, @1.first_line);
             free($2);
         }
-    | '[' var_name IN expr WHERE expr ']'
+    | '[' var_name IN expr WHERE expr ']' %dprec 1
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, $6, NULL, @1.first_line);
             free($2);
         }
-    | '[' var_name IN expr '|' expr ']'
+    | '[' var_name IN expr '|' expr ']' %dprec 2
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, NULL, $6, @1.first_line);
             free($2);
         }
-    | '[' var_name IN expr WHERE expr '|' expr ']'
+    | '[' var_name IN expr WHERE expr '|' expr ']' %dprec 2
         {
             $$ = (ast_node*)make_list_comprehension($2, $4, $6, $8, @1.first_line);
             free($2);
