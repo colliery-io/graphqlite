@@ -138,12 +138,14 @@ int transform_math_function(cypher_transform_context *ctx, cypher_function_call 
         append_sql(ctx, " AS REAL)))");
         return 0;
     } else if (strcasecmp(func_name, "isNaN") == 0 || strcasecmp(func_name, "isnan") == 0) {
-        /* isNaN: IEEE 754 NaN is the only value where x != x */
-        append_sql(ctx, "(CAST(");
+        /* isNaN: a NaN is carried as the NaN sentinel text (SQLite turns a
+         * float NaN into NULL), so test for it; null stays null and a
+         * boolean result is true/false (GQLITE-T-0484). */
+        append_sql(ctx, "(CASE WHEN (");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " AS REAL) != CAST(");
+        append_sql(ctx, ") IS NULL THEN NULL WHEN (");
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " AS REAL))");
+        append_sql(ctx, ") = (CHAR(1) || 'NaN') THEN 1 ELSE 0 END)");
         return 0;
     } else {
         ctx->has_error = true;

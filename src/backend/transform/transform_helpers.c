@@ -144,7 +144,8 @@ bool ast_is_boolean_expr(const ast_node *expr)
         case AST_NODE_FUNCTION_CALL: {
             const char *fn = ((const cypher_function_call *)expr)->function_name;
             return fn && (strcasecmp(fn, "toBoolean") == 0 || strcasecmp(fn, "toBooleanOrNull") == 0 ||
-                          strcasecmp(fn, "isEmpty") == 0 || strcasecmp(fn, "exists") == 0);
+                          strcasecmp(fn, "isEmpty") == 0 || strcasecmp(fn, "exists") == 0 ||
+                          strcasecmp(fn, "isNaN") == 0);
         }
         case AST_NODE_BINARY_OP:
             switch (((const cypher_binary_op *)expr)->op_type) {

@@ -3602,7 +3602,7 @@ fn test_hyperbolic_functions() {
 fn test_isnan() {
     let conn = test_connection();
     let r = conn.cypher("RETURN isNaN(42) AS r").unwrap();
-    assert_eq!(r[0].get::<i64>("r").unwrap(), 0);
+    assert!(!r[0].get::<bool>("r").unwrap());   // a Boolean (GQLITE-T-0484)
 }
 
 // =============================================================================
