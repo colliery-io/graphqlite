@@ -27,6 +27,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <stdint.h>
+#include <ctype.h>
 
 #if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
 #  define timegm(tm) _mkgmtime(tm)
@@ -1030,9 +1031,14 @@ void gql_to_float_strict_func(
             "TypeError: InvalidArgumentValue: toFloat() does not accept Boolean", -1);
         return;
     }
+    /* The NaN sentinel, or the text "NaN", is NaN (GQLITE-T-0484). */
+    if (strcmp(s, GQL_NAN_SENTINEL) == 0 || strcmp(s, "NaN") == 0) {
+        sqlite3_result_text(context, GQL_NAN_SENTINEL, -1, SQLITE_STATIC);
+        return;
+    }
     char *end = NULL;
     double v = strtod(s, &end);
-    if (end != s && *end == 0) { sqlite3_result_double(context, v); return; }
+    if (end != s && *end == 0 && !isnan(v)) { sqlite3_result_double(context, v); return; }
     sqlite3_result_null(context);
 }
 
@@ -1063,6 +1069,10 @@ void gql_to_string_strict_func(
         }
         sqlite3_result_error(context,
             "TypeError: InvalidArgumentValue: toString() does not accept lists, maps, nodes, relationships, or paths", -1);
+        return;
+    }
+    if (t == SQLITE_TEXT && strcmp((const char*)sqlite3_value_text(argv[0]), GQL_NAN_SENTINEL) == 0) {
+        sqlite3_result_text(context, "NaN", -1, SQLITE_STATIC);   /* GQLITE-T-0484 */
         return;
     }
     if (t == SQLITE_TEXT) {
@@ -2857,6 +2867,14 @@ static void scale_duration(sqlite3_context *ctx, const char *dur, double factor)
     emit_duration_json(ctx, (long long)months_int, (long long)days_int, ns_ll);
 }
 
+/* A float result: SQLite turns a NaN result into NULL, so NaN is returned as
+ * the NaN sentinel text (GQLITE-T-0340, GQLITE-T-0484). Infinity stays a
+ * REAL. */
+static void gql_result_float(sqlite3_context *ctx, double d) {
+    if (isnan(d)) { sqlite3_result_text(ctx, GQL_NAN_SENTINEL, -1, SQLITE_STATIC); return; }
+    sqlite3_result_double(ctx, d);
+}
+
 /* `_gql_dyn_mul` / `_gql_dyn_div`: numeric * / / that also scales a Duration
  * operand (Temporal8 [7]). `op` is '*' or '/'. */
 static void gql_dyn_muldiv_func(sqlite3_context *ctx, int argc, sqlite3_value **argv, char op) {
@@ -2895,7 +2913,7 @@ static void gql_dyn_muldiv_func(sqlite3_context *ctx, int argc, sqlite3_value **
         if (t0 == SQLITE_INTEGER && t1 == SQLITE_INTEGER) {
             sqlite3_result_int64(ctx, sqlite3_value_int64(argv[0]) * sqlite3_value_int64(argv[1]));
         } else {
-            sqlite3_result_double(ctx, sqlite3_value_double(argv[0]) * sqlite3_value_double(argv[1]));
+            gql_result_float(ctx, sqlite3_value_double(argv[0]) * sqlite3_value_double(argv[1]));
         }
     } else { /* '/' — Cypher integer division truncates toward zero. */
         if (t0 == SQLITE_INTEGER && t1 == SQLITE_INTEGER) {
@@ -2903,7 +2921,9 @@ static void gql_dyn_muldiv_func(sqlite3_context *ctx, int argc, sqlite3_value **
             if (b == 0) { sqlite3_result_null(ctx); return; }
             sqlite3_result_int64(ctx, sqlite3_value_int64(argv[0]) / b);
         } else {
-            sqlite3_result_double(ctx, sqlite3_value_double(argv[0]) / sqlite3_value_double(argv[1]));
+            /* A float division by zero gives Infinity, -Infinity or NaN
+             * (openCypher); SQLite's / gives NULL (GQLITE-T-0484). */
+            gql_result_float(ctx, sqlite3_value_double(argv[0]) / sqlite3_value_double(argv[1]));
         }
     }
 }
@@ -4291,6 +4311,92 @@ void gql_percentile_disc_final(sqlite3_context *ctx) {
  * =============================================================================
  */
 
+/* See gql_error.h (GQLITE-T-0484). */
+static bool gql_word_is(const char *w, size_t n, const char *word) {
+    size_t k = strlen(word);
+    if (n == k + 2 && w[k] == '.' && w[k + 1] == '0') n = k;   /* "Inf.0" */
+    return n == k && strncasecmp(w, word, k) == 0;
+}
+
+char *gql_result_float_tokens(const char *text) {
+    if (!text) return NULL;
+    /* Fast path: nothing that can be a special float. */
+    if (!strstr(text, "e9") && !strstr(text, "E9") && !strstr(text, "e+9") &&
+        !strcasestr(text, "inf") && !strstr(text, "NaN") && !strstr(text, "nan") &&
+        !strchr(text, '\x01') && !strstr(text, "\\u0001"))
+        return NULL;
+    size_t len = strlen(text);
+    dynamic_buffer out;
+    dbuf_init(&out);
+    bool changed = false;
+    size_t i = 0;
+    while (i < len) {
+        char c = text[i];
+        if (c == '"') {
+            size_t j = i + 1;
+            while (j < len && text[j] != '"') j += (text[j] == '\\' && j + 1 < len) ? 2 : 1;
+            size_t n = (j < len ? j + 1 : j) - i;          /* with the quotes */
+            const char *body = text + i + 1;
+            size_t blen = n >= 2 ? n - 2 : 0;
+            if ((blen == 9 && strncasecmp(body, "\\u0001NaN", 9) == 0) ||
+                (blen == 4 && memcmp(body, GQL_NAN_SENTINEL, 4) == 0)) {
+                dbuf_append(&out, "NaN");
+                changed = true;
+            } else {
+                dbuf_appendf(&out, "%.*s", (int)n, text + i);
+            }
+            i += n;
+            continue;
+        }
+        bool neg = (c == '-' && i + 1 < len);
+        size_t s0 = neg ? i + 1 : i;
+        if (s0 < len && (isalpha((unsigned char)text[s0]))) {
+            size_t j = s0;
+            while (j < len && (isalnum((unsigned char)text[j]) || text[j] == '_' || text[j] == '.')) j++;
+            const char *w = text + s0;
+            size_t n = j - s0;
+            if (gql_word_is(w, n, "inf") || gql_word_is(w, n, "infinity")) {
+                dbuf_append(&out, neg ? "-Infinity" : "Infinity");
+                changed = true;
+                i = j;
+                continue;
+            }
+            if (!neg && gql_word_is(w, n, "nan")) {
+                dbuf_append(&out, "NaN");
+                changed = true;
+                i = j;
+                continue;
+            }
+            if (!neg) { dbuf_appendf(&out, "%.*s", (int)n, text + i); i = j; continue; }
+        }
+        if (s0 < len && isdigit((unsigned char)text[s0])) {
+            size_t j = s0;
+            while (j < len && (isdigit((unsigned char)text[j]) || text[j] == '.' || text[j] == 'e' ||
+                               text[j] == 'E' || ((text[j] == '+' || text[j] == '-') &&
+                               (text[j - 1] == 'e' || text[j - 1] == 'E')))) j++;
+            char num[64];
+            size_t n = j - i;
+            if (n < sizeof(num)) {
+                memcpy(num, text + i, n);
+                num[n] = '\0';
+                if (isinf(strtod(num, NULL))) {
+                    dbuf_append(&out, neg ? "-Infinity" : "Infinity");
+                    changed = true;
+                    i = j;
+                    continue;
+                }
+            }
+            dbuf_appendf(&out, "%.*s", (int)n, text + i);
+            i = j;
+            continue;
+        }
+        dbuf_append_char(&out, c);
+        i++;
+    }
+    if (!changed) { dbuf_free(&out); return NULL; }
+    return dbuf_finish(&out);
+}
+
 static bool gql_value_looks_like_json(const char *s, int subtype) {
     if (!s) return false;
     /* Strict: only embed raw when the value is explicitly JSON-tagged
@@ -4325,7 +4431,12 @@ static void gql_json_append_value(dynamic_buffer *out,
     }
     if (t == SQLITE_FLOAT) {
         char buf[40];
-        snprintf(buf, sizeof(buf), "%.17g", sqlite3_value_double(v));
+        double d = sqlite3_value_double(v);
+        /* Inside SQL, JSON holds an infinite float as 9e999 (what SQLite's
+         * JSON functions read and write); the result writer shows it as
+         * Infinity (GQLITE-T-0484). "inf.0" was not JSON. */
+        if (isinf(d)) { dbuf_append(out, d > 0 ? "9e999" : "-9e999"); return; }
+        snprintf(buf, sizeof(buf), "%.17g", d);
         dbuf_append(out, buf);
         bool has_frac = false;
         for (const char *p = buf; *p; p++) {

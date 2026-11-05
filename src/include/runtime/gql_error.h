@@ -53,6 +53,14 @@
  * orderability rank places it just after numbers (rank 8). (GQLITE-T-0340.) */
 #define GQL_NAN_SENTINEL  "\x01NaN"
 
+/* Result text with infinite and NaN floats written as the bare tokens
+ * Infinity, -Infinity and NaN, the one form in every result (GQLITE-T-0484).
+ * Rewrites, outside JSON strings: numbers out of the double range (9e999,
+ * SQLite's JSON form of Infinity), the words inf / Inf / Infinity / NaN with
+ * or without ".0", and the NaN sentinel string. Returns a malloc'd string, or
+ * NULL when the text needs no change. */
+char *gql_result_float_tokens(const char *text);
+
 void graphqlite_result_error(sqlite3_context *context,
                              const char *message,
                              const char *code);

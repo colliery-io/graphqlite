@@ -4819,9 +4819,25 @@ static int rw_scope_after_prefix(ast_list *clauses, int prefix_len, char ***out_
  * frees it with sqlite3_free. strdup memory freed that way crashed on
  * Linux, where SQLite's allocator keeps a size header ("free(): invalid
  * pointer"). */
+/* The SQL or JSON text of a float cell: an infinite float is 9e999 (both
+ * SQLite and its JSON read that as Infinity; the text "Infinity" is not SQL
+ * or JSON), NaN is the NaN sentinel (GQLITE-T-0484). NULL for a finite
+ * float, whose text is used as it is. */
+static const char *rw_float_special(const char *text, bool json)
+{
+    if (!text) return NULL;
+    double d = strtod(text, NULL);
+    if (isinf(d)) return d > 0 ? "9e999" : "-9e999";
+    if (isnan(d) || strcmp(text, GQL_NAN_SENTINEL) == 0)
+        return json ? "\"\\u0001NaN\"" : "(CHAR(1) || 'NaN')";
+    return NULL;
+}
+
 static char *rw_scalar_sql(const rw_scalar *sc)
 {
     if (!sc || !sc->text) return sqlite3_mprintf("NULL");
+    if (sc->type == SQLITE_FLOAT && rw_float_special(sc->text, false))
+        return sqlite3_mprintf("%s", rw_float_special(sc->text, false));
     if (sc->type == SQLITE_INTEGER || sc->type == SQLITE_FLOAT) return sqlite3_mprintf("%s", sc->text);
     /* GQLITE-A-0007: a boolean keeps its subtype; a known string is never
      * read as JSON. */
@@ -6026,7 +6042,8 @@ static void rw_eval_cell(cypher_executor *executor, ast_node *expr, rw_row *row,
 static void rw_json_append_cell(char **buf, const char *text, int type)
 {
     char *el;
-    if (type == SQLITE_INTEGER || type == SQLITE_FLOAT) el = sqlite3_mprintf("%s", text);
+    if (type == SQLITE_FLOAT && rw_float_special(text, true)) el = sqlite3_mprintf("%s", rw_float_special(text, true));
+    else if (type == SQLITE_INTEGER || type == SQLITE_FLOAT) el = sqlite3_mprintf("%s", text);
     else if (type == GQL_COL_TYPE_BOOLEAN)
         el = sqlite3_mprintf("%s", (strcmp(text, "true") == 0 || strcmp(text, "1") == 0) ? "true" : "false");
     else if (type != GQL_COL_TYPE_STRING && (text[0] == '[' || text[0] == '{')) el = sqlite3_mprintf("%s", text);

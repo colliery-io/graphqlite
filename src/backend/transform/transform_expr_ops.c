@@ -863,6 +863,10 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
             bool l_num = ll->literal_type == LITERAL_INTEGER || ll->literal_type == LITERAL_DECIMAL;
             bool r_num = rl->literal_type == LITERAL_INTEGER || rl->literal_type == LITERAL_DECIMAL;
             both_num_lit = l_num && r_num;
+            /* SQLite's / gives NULL for a zero divisor; the helper gives
+             * Infinity or NaN for a float division (GQLITE-T-0484). */
+            if (binary_op->op_type == BINARY_OP_DIV && is_zero_numeric_literal(binary_op->right))
+                both_num_lit = false;
         }
         if (!both_num_lit) {
             append_sql(ctx, binary_op->op_type == BINARY_OP_MUL ? "_gql_dyn_mul(" : "_gql_dyn_div(");

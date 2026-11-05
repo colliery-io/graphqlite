@@ -36,6 +36,15 @@
  */
 const sqlite3_api_routines *sqlite3_api = 0;
 
+/* The result text of cypher(), with infinite and NaN floats as Infinity,
+ * -Infinity and NaN in every form (GQLITE-T-0484). */
+static void gql_result_json_text(sqlite3_context *context, const char *json)
+{
+    char *fixed = gql_result_float_tokens(json);
+    sqlite3_result_text(context, fixed ? fixed : json, -1, SQLITE_TRANSIENT);
+    free(fixed);
+}
+
 /* Error helper + GQL_ERR_* macros: moved to runtime/gql_error.h (I-0040 M6) */
 
 /* Per-connection executor cache structure */
@@ -205,10 +214,10 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                         size_t o = (size_t)snprintf(json_result, json_size, "[{\"");
                         o = json_put_escaped(json_result, json_size, o, col_name);
                         snprintf(json_result + o, json_size - o, "\": %s}]", render);
-                        sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
+                        gql_result_json_text(context, json_result);
                         free(json_result);
                     } else {
-                        sqlite3_result_text(context, render, -1, SQLITE_TRANSIENT);
+                        gql_result_json_text(context, render);
                     }
                     free(agtype_str);
                 } else {
@@ -318,7 +327,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                 offset += snprintf(json_result + offset, buffer_size - offset, "]");
                 json_result[offset] = '\0';
 
-                sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
+                gql_result_json_text(context, json_result);
                 free(json_result);
             }
         } else if (result->row_count > 0 && result->data) {
@@ -465,7 +474,7 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
             offset += snprintf(json_result + offset, buffer_size - offset, "]");
             json_result[offset] = '\0';
 
-            sqlite3_result_text(context, json_result, -1, SQLITE_TRANSIENT);
+            gql_result_json_text(context, json_result);
             free(json_result);
         } else if (result->column_count > 0) {
             /* Query with RETURN clause but zero rows - return empty array */

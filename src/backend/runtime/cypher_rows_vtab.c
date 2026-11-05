@@ -92,12 +92,21 @@ static const char *column_name(const cypher_result *r, int col, char *tmp, size_
 }
 
 /* JSON text of one cell, mirroring the two rendering paths in extension.c. */
+/* Infinite and NaN floats as Infinity, -Infinity and NaN, as in cypher()
+ * (GQLITE-T-0484). */
+static int gb_puts_floats(gbuf *b, const char *s) {
+    char *fixed = gql_result_float_tokens(s);
+    int rc = gb_puts(b, fixed ? fixed : s);
+    free(fixed);
+    return rc;
+}
+
 static int render_cell_json(const cypher_result *r, int row, int col, gbuf *b) {
     agtype_value *ag = (r->use_agtype && r->agtype_data && r->agtype_data[row]) ? r->agtype_data[row][col] : NULL;
     const char *val = (r->data && r->data[row]) ? r->data[row][col] : NULL;
     if (ag) {
         char *s = agtype_value_to_string(ag);
-        int rc = s ? gb_puts(b, s) : gb_puts(b, "null");
+        int rc = s ? gb_puts_floats(b, s) : gb_puts(b, "null");
         free(s);
         return rc;
     }
@@ -111,9 +120,11 @@ static int render_cell_json(const cypher_result *r, int row, int col, gbuf *b) {
         if (strcmp(val, "0") == 0) return gb_puts(b, "false");
         return gb_puts(b, val);
     }
-    if (val[0] == '[' || val[0] == '{' || val[0] == '"') return gb_puts(b, val);
+    if (val[0] == '[' || val[0] == '{' || val[0] == '"') return gb_puts_floats(b, val);
     if (ct == SQLITE_INTEGER) return gb_puts(b, val);
     if (ct == SQLITE_FLOAT) {
+        char *fixed = gql_result_float_tokens(val);
+        if (fixed) { int rc = gb_puts(b, fixed); free(fixed); return rc; }
         if (gb_puts(b, val) < 0) return -1;
         if (!strpbrk(val, ".eE")) return gb_puts(b, ".0");
         return 0;

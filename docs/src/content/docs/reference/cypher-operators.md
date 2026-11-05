@@ -30,7 +30,7 @@ Use parentheses to override precedence.
 | Addition | `a + b` | Numeric addition; string concatenation | `2 + 3` | `5` |
 | Subtraction | `a - b` | Numeric subtraction | `10 - 4` | `6` |
 | Multiplication | `a * b` | Numeric multiplication | `3 * 4` | `12` |
-| Division | `a / b` | Numeric division; integer inputs yield float | `7 / 2` | `3.5` |
+| Division | `a / b` | Numeric division; two integers give an integer, truncated toward zero | `7 / 2`, `7.0 / 2` | `3`, `3.5` |
 | Modulo | `a % b` | Remainder | `10 % 3` | `1` |
 | Unary negation | `-a` | Negate a number | `-n.age` | negated |
 
@@ -40,6 +40,11 @@ Use parentheses to override precedence.
 - `Integer + Float` → Float
 - `String + String` → String concatenation
 - Any arithmetic with `null` → `null`
+- A float division by zero gives `Infinity`, `-Infinity` or `NaN` (`1 / 0.0`, `-1 / 0.0`, `0.0 / 0.0`). An integer division by zero (`1 / 0`) gives `null`.
+
+**Infinity and NaN in results**
+
+An infinite or NaN float is written as the bare token `Infinity`, `-Infinity` or `NaN`, the same in every result: a column, a list or map element, a node or relationship property, and after `WITH`, `UNWIND` or `CALL { }`. These tokens are not strict JSON. Python's `json.loads` reads them as floats; a strict parser such as `serde_json` does not. `isNaN(x)` tests for NaN; `NaN = NaN` is `false`.
 
 ---
 

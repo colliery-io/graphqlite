@@ -68,7 +68,9 @@ there) is not required. A case id rebuilds the case exactly:
 | write_return | A write leaves the same graph with a trailing `RETURN count(*)` as without |
 
 Every query is valid Cypher on any generated graph, so any error is a
-finding. A result that is not valid JSON (Infinity, NaN) is an error too.
+finding. A result that does not parse is an error too; the bare tokens
+`Infinity`, `-Infinity` and `NaN` are the one form of infinite and NaN floats
+(GQLITE-T-0484) and parse as floats.
 
 ## Running at scale
 

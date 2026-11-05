@@ -37,9 +37,12 @@ def canon_row(row: dict) -> str:
     return json.dumps(_canon(row), sort_keys=True)
 
 
-def _reject_constant(name: str):
-    """Infinity and NaN are not JSON; a result holding them breaks clients."""
-    raise ValueError(f"{name} is not JSON")
+def _float_constant(name: str) -> float:
+    """A result writes an infinite or NaN float as the bare token Infinity,
+    -Infinity or NaN (GQLITE-T-0484). json.loads calls this only for those
+    three words, so any other spelling (Inf.0, inf.0) is still an invalid
+    result."""
+    return float(name)
 
 
 class Engine:
@@ -67,7 +70,7 @@ class Engine:
         if raw is None:
             return Outcome(True, rows=[])
         try:
-            data = json.loads(raw, parse_constant=_reject_constant)
+            data = json.loads(raw, parse_constant=_float_constant)
         except ValueError as e:
             return Outcome(False, error=f"invalid JSON result: {e}: {raw[:200]}")
         if isinstance(data, dict):          # write statistics
