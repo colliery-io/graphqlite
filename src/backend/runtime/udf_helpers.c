@@ -4322,7 +4322,7 @@ char *gql_result_float_tokens(const char *text) {
     if (!text) return NULL;
     /* Fast path: nothing that can be a special float. */
     if (!strstr(text, "e9") && !strstr(text, "E9") && !strstr(text, "e+9") &&
-        !strcasestr(text, "inf") && !strstr(text, "NaN") && !strstr(text, "nan") &&
+        !strstr(text, "nf") && !strstr(text, "NF") && !strstr(text, "NaN") && !strstr(text, "nan") &&
         !strchr(text, '\x01') && !strstr(text, "\\u0001"))
         return NULL;
     size_t len = strlen(text);
