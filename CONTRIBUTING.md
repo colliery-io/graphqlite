@@ -33,6 +33,8 @@ can corrupt enum-tagged structs.
 | Python binding | `angreal test python` | Python binding surface area |
 | CLI | `angreal test cli` | `gqlite` interactive entry point |
 | Constraints (expected-fail) | `angreal test constraints` | Negative test corpus |
+| Metamorphic (generated queries) | `angreal test metamorphic` | Transform or executor changes; hunting for wrong results |
+| Sanitizers (ASan + UBSan) | `angreal test sanitize` | C code that builds strings, buffers or SQL; before a release |
 | Everything | `angreal test all` | Pre-release smoke |
 
 Backend parity (extension vs Rust vs Python) is verified post-hoc. Run

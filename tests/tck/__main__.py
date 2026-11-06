@@ -20,6 +20,8 @@ from .runner import run_feature, ScenarioOutcome
 
 
 def main(argv: list[str] | None = None) -> int:
+    from tests import sanitizer_preload
+    sanitizer_preload.apply()
     p = argparse.ArgumentParser(prog="tests.tck")
     p.add_argument("--features", default="vendor/tck/features", type=Path)
     p.add_argument("--filter", default=None, help="substring filter on feature file path")
@@ -27,6 +29,9 @@ def main(argv: list[str] | None = None) -> int:
                    choices=["extension", "python", "rust", "all"])
     p.add_argument("--out", default="build/tck-results.json", type=Path)
     p.add_argument("--parity-out", default="build/tck-parity.json", type=Path)
+    p.add_argument("--ext", default=None, type=Path,
+                   help="extension to load (default build/graphqlite); "
+                        "build/asan/graphqlite for the sanitizer build")
     p.add_argument("--debug", action="store_true",
                    help="don't redirect extension stdout/stderr to a log file")
     p.add_argument("--limit", type=int, default=None,
@@ -35,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="suppress per-feature progress lines")
     args = p.parse_args(argv)
 
-    backends = _select_backends(args.backend, debug=args.debug)
+    backends = _select_backends(args.backend, debug=args.debug, ext=args.ext)
     if not backends:
         print(f"no backend available for {args.backend!r}", file=sys.stderr)
         return 2
@@ -82,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _select_backends(name: str, debug: bool):
+def _select_backends(name: str, debug: bool, ext: Path | None = None):
     # Only opt into a debug log when --debug is passed. Default runs send
     # worker stdout/stderr to /dev/null — the GRAPHQLITE_DEBUG-compiled
     # extension emits dozens of lines per query and was producing hundreds
@@ -90,7 +95,7 @@ def _select_backends(name: str, debug: bool):
     debug_log = Path("build/tck-debug.log") if debug else None
     out = []
     if name in ("extension", "all"):
-        out.append(ExtensionBackend(debug_log=debug_log, keep_debug=debug))
+        out.append(ExtensionBackend(extension_path=ext, debug_log=debug_log, keep_debug=debug))
     if name in ("python", "all"):
         try:
             from .backends.python_binding import PythonBindingBackend
