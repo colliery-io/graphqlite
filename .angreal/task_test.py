@@ -882,3 +882,98 @@ def test_sanitize(part: str = "", count: int = 0, seed: int = 0) -> int:
         print(f"--- {os.path.basename(f)}", *head, sep="\n", flush=True)
     print(f"sanitizer reports: {len(found)} (in {reports})", flush=True)
     return 1 if failed or found else 0
+
+
+@test()
+@angreal.command(
+    name="fuzz",
+    about="Fuzz cypher() with libFuzzer on an ASan + UBSan build (Docker on macOS)",
+    tool=angreal.ToolDescription(
+        """
+Run the libFuzzer target tests/fuzz/fuzz_cypher.c (GQLITE-T-0496): each
+input is a Cypher query run through cypher() on an in-memory database with
+a small graph, in a transaction that is rolled back. The extension is built
+with AddressSanitizer, UndefinedBehaviorSanitizer and coverage
+instrumentation (`make fuzz-build`). The seed corpus is every query of the
+TCK features and the functional tests (tests/fuzz/make_corpus.py); the
+dictionary is tests/fuzz/cypher.dict.
+
+Apple clang has no libFuzzer: on macOS (or with --docker) the build and the
+run happen in the Linux image tests/fuzz/Dockerfile (built on first use as
+`graphqlite-fuzz`), into build/linux/fuzz. Elsewhere it runs natively, into
+build/fuzz.
+
+## When to use
+- After a change to the parser, transform or executor
+- To hunt for crashes: raise --minutes
+
+## Examples
+```
+angreal test fuzz --minutes 10
+angreal test fuzz --minutes 60 --jobs 6
+angreal test fuzz --reproduce build/linux/fuzz/crashes/crash-<hash>
+```
+
+## Output
+- Crash, timeout and OOM inputs in <build>/crashes/ (crash-*, timeout-*,
+  oom-*), each with the libFuzzer log in <build>/fuzz.log.
+- The grown corpus stays in <build>/corpus.
+
+## Exit code
+1 if the run saved a crash, timeout or OOM input; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="minutes", long="minutes", python_type="float", help="Time budget (default 5)")
+@angreal.argument(name="jobs", long="jobs", python_type="int", help="Parallel fuzz processes (default 1)")
+@angreal.argument(name="docker", long="docker", is_flag=True, takes_value=False, help="Build and run in the Linux Docker image")
+@angreal.argument(name="reproduce", long="reproduce", help="Run one saved input and exit")
+def test_fuzz(minutes: float = 0.0, jobs: int = 0, docker: bool = False, reproduce: str = "") -> int:
+    """Fuzz cypher() with libFuzzer."""
+    import glob
+    import sys
+    root = get_project_root()
+    use_docker = docker or sys.platform == "darwin"
+    build = "build/linux" if use_docker else "build"
+    fuzz_dir = f"{build}/fuzz"
+    seconds = int((minutes or 5) * 60)
+    flags = ["-dict=tests/fuzz/cypher.dict", "-max_len=4096", "-timeout=10",
+             "-rss_limit_mb=3072", f"-artifact_prefix={fuzz_dir}/crashes/"]
+    if reproduce:
+        run = f"./{fuzz_dir}/fuzz_cypher {' '.join(flags[1:4])} {reproduce}"
+    else:
+        par = (f"-fork={jobs} -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1"
+               if (jobs or 1) > 1 else "")
+        run = (f"python3 tests/fuzz/make_corpus.py {fuzz_dir}/corpus && mkdir -p {fuzz_dir}/crashes && "
+               f"./{fuzz_dir}/fuzz_cypher {par} {' '.join(flags)} -max_total_time={seconds} "
+               f"-print_final_stats=1 {fuzz_dir}/corpus 2>&1 | tee {fuzz_dir}/fuzz.log | "
+               f"grep -E 'INITED|DONE|ERROR|SUMMARY|Test unit written|stat::number_of_executed_units'")
+    script = (f"mkdir -p {fuzz_dir} && make fuzz-build BUILD_DIR={build} > {fuzz_dir}/build.log 2>&1 "
+              f"|| {{ tail -20 {fuzz_dir}/build.log; exit 2; }}; {run}")
+    env = os.environ.copy()
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=1")
+    env.setdefault("UBSAN_OPTIONS", "print_stacktrace=1:halt_on_error=1")
+    env["GQLITE_FUZZ_EXT"] = f"{fuzz_dir}/graphqlite"
+    if use_docker:
+        img = subprocess.run(["docker", "image", "inspect", "graphqlite-fuzz"], capture_output=True)
+        if img.returncode != 0:
+            print("Building the Docker image graphqlite-fuzz (tests/fuzz/Dockerfile)...", flush=True)
+            if subprocess.run(["docker", "build", "-t", "graphqlite-fuzz", "tests/fuzz"], cwd=root).returncode != 0:
+                return 2
+        cmd = ["docker", "run", "--rm", "-v", f"{root}:/src",
+               "-e", f"GQLITE_FUZZ_EXT={env['GQLITE_FUZZ_EXT']}",
+               "-e", f"ASAN_OPTIONS={env['ASAN_OPTIONS']}",
+               "-e", f"UBSAN_OPTIONS={env['UBSAN_OPTIONS']}",
+               "graphqlite-fuzz", "sh", "-c", script]
+    else:
+        cmd = ["sh", "-c", script]
+    before = set(glob.glob(os.path.join(root, fuzz_dir, "crashes", "*")))
+    rc = subprocess.run(cmd, cwd=root, env=env).returncode
+    if reproduce:
+        return rc
+    found = sorted(set(glob.glob(os.path.join(root, fuzz_dir, "crashes", "*"))) - before)
+    for f in found:
+        print(f"saved: {os.path.relpath(f, root)}", flush=True)
+    print(f"new crash/timeout/oom inputs: {len(found)}", flush=True)
+    return 1 if found else (0 if rc in (0, 1) else rc)

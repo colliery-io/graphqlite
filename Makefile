@@ -68,6 +68,10 @@ LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3 -lm
 # host (sqlite3, python) must preload the ASan runtime (angreal test sanitize).
 ifdef SANITIZE
 SANITIZE_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+ifdef FUZZ
+# libFuzzer coverage instrumentation of the extension (GQLITE-T-0496).
+SANITIZE_FLAGS += -fsanitize=fuzzer-no-link
+endif
 EXTENSION_CFLAGS_BASE += $(SANITIZE_FLAGS)
 CFLAGS += $(SANITIZE_FLAGS)
 endif
@@ -305,6 +309,15 @@ extension: $(EXTENSION_LIB)
 # The extension with ASan + UBSan, in $(BUILD_DIR)/asan (GQLITE-T-0495).
 extension-asan:
 	$(MAKE) SANITIZE=1 BUILD_DIR=$(BUILD_DIR)/asan extension
+
+# libFuzzer target (GQLITE-T-0496): the extension with ASan + UBSan and
+# coverage instrumentation, and the fuzz driver, in $(BUILD_DIR)/fuzz. Needs
+# a clang with libFuzzer (Linux clang; not Apple clang). `angreal test fuzz`.
+FUZZ_CC ?= clang
+fuzz-build:
+	$(MAKE) SANITIZE=1 FUZZ=1 CC=$(FUZZ_CC) BUILD_DIR=$(BUILD_DIR)/fuzz extension
+	$(FUZZ_CC) -g -O1 -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined $(EXTRA_INCLUDES) \
+		tests/fuzz/fuzz_cypher.c -o $(BUILD_DIR)/fuzz/fuzz_cypher $(EXTRA_LIBS) -lsqlite3
 
 # Copy extension to Rust bindings libs/ directory for bundled builds
 # Note: macOS uses "arm64", Linux uses "aarch64" for ARM64
@@ -647,4 +660,4 @@ clean:
 	find . -name "*.gcno" -delete
 	find . -name "*.gcov" -delete
 
-.PHONY: all help dirs extension-asan test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable
+.PHONY: all help dirs extension-asan fuzz-build test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable
