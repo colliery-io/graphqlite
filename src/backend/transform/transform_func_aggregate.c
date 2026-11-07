@@ -113,19 +113,22 @@ static int transform_aggregate_function_inner(cypher_transform_context *ctx, cyp
         return -1;
     }
 
-    /* Check if argument is a property access - optimize with JOINs instead of correlated subqueries */
-    ast_node *arg = func_call->args->items[0];
-    if (arg->type == AST_NODE_PROPERTY) {
-        cypher_property *prop = (cypher_property *)arg;
-        return transform_aggregate_with_property(ctx, func_call, prop);
-    }
-
     /* min()/max() use Cypher orderability (object < list < text < bool <
      * number < null), not SQLite's storage-class MIN/MAX — route to the
      * custom aggregates _gql_min / _gql_max (Aggregation2 [9]/[11]/[12]). */
     const char *fn = func_call->function_name;
     bool is_min = (strcasecmp(fn, "min") == 0);
     bool is_max = (strcasecmp(fn, "max") == 0);
+
+    /* A property argument of sum / avg takes the JOIN shortcut, which reads
+     * the value as a number. min / max must not: it gave 0.0 for strings
+     * (text cast to REAL) and null for booleans (their table was not read).
+     * Found by the differential test against Neo4j (GQLITE-T-0529). */
+    ast_node *arg = func_call->args->items[0];
+    if (arg->type == AST_NODE_PROPERTY && !is_min && !is_max) {
+        cypher_property *prop = (cypher_property *)arg;
+        return transform_aggregate_with_property(ctx, func_call, prop);
+    }
 
     char upper_func[64];
     if (is_min || is_max) {

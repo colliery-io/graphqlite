@@ -2017,18 +2017,8 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                          * (1 / 2 = 0 instead of 1 / 2.0 = 0.5). Force a
                          * decimal point by appending '.0' in that case. */
                         char buf[64];
-                        snprintf(buf, sizeof(buf), "%.17g", lit->value.decimal);
-                        bool has_dot = false;
-                        for (char *p = buf; *p; p++) {
-                            if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n') { /* 'n' for nan/inf */
-                                has_dot = true; break;
-                            }
-                        }
-                        if (!has_dot) {
-                            size_t l = strlen(buf);
-                            if (l + 2 < sizeof(buf)) { buf[l] = '.'; buf[l+1] = '0'; buf[l+2] = 0; }
-                        }
-                        append_sql(ctx, "%s", buf);
+                        /* ".0" kept; exact on every SQLite (GQLITE-T-0531) */
+                        append_sql(ctx, "%s", gql_sql_real(buf, sizeof(buf), lit->value.decimal));
                         break;
                     }
                     case LITERAL_STRING:
@@ -2469,7 +2459,16 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* First pass: collect nodes and generate FROM clause.
                  * json() outside the subquery keeps the list subtype. */
-                append_sql(ctx, "json((SELECT json_group_array(");
+                /* Each element is made a one-item JSON array in a derived
+                 * table and the arrays are joined as text. A json_group_array
+                 * over the pattern's own FROM, whose argument also reads an
+                 * outer column, is an aggregate of the OUTER query in SQLite
+                 * 3.45 (Ubuntu 24.04): `[(n)-->(m) | n.v]` folded every row
+                 * into one (GQLITE-T-0531, the SQLite version matrix). The
+                 * text join keeps each element's JSON form, which a subtype
+                 * would lose through the derived table. */
+                append_sql(ctx, "json((SELECT COALESCE('[' || group_concat(substr(_pcv%d, 2, length(_pcv%d) - 2), ',') || ']', '[]') "
+                                "FROM (SELECT json_array(", pcb, pcb);
                 /* A column of the comprehension's own FROM, for the collect
                  * expression (GQLITE-T-0480). */
                 char inner_anchor[48] = "";
@@ -2480,7 +2479,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 /* Placeholder - we'll come back to fill in the collect expression */
                 append_sql(ctx, "/*COLLECT*/");
 
-                append_sql(ctx, ") FROM ");
+                append_sql(ctx, ") AS _pcv%d FROM ", pcb);
 
                 bool first_table = true;
 
@@ -2747,7 +2746,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     append_sql(ctx, ")");
                 }
 
-                append_sql(ctx, "))");
+                append_sql(ctx, ")))");
 
                 /* Now we need to go back and fill in the collect expression */
                 /* Create a new buffer for the collect expression */

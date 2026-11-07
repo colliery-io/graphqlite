@@ -438,7 +438,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                             break;
                                         case LITERAL_DECIMAL:
                                             prop_table = "node_props_real";
-                                            snprintf(value_sql, sizeof(value_sql), "%.17g", lit->value.decimal);
+                                            gql_sql_real(value_sql, sizeof(value_sql), lit->value.decimal);
                                             break;
                                         case LITERAL_BOOLEAN:
                                             prop_table = "node_props_bool";
@@ -796,7 +796,7 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
                                 case LITERAL_INTEGER: tbl = "edge_props_int";
                                     snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
                                 case LITERAL_DECIMAL: tbl = "edge_props_real";
-                                    snprintf(val_buf, sizeof(val_buf), "%.17g", lit->value.decimal); break;
+                                    gql_sql_real(val_buf, sizeof(val_buf), lit->value.decimal); break;
                                 case LITERAL_BOOLEAN: tbl = "edge_props_bool";
                                     snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
                                 default: continue;
@@ -1970,7 +1970,7 @@ skip_combined_exists:
                     /* dup the alias substring into a small static pool so
                      * its lifetime spans the WHERE emission. */
                     static GQL_THREAD_LOCAL char pool[16][80];
-                    static int pool_idx = 0;
+                    static GQL_THREAD_LOCAL int pool_idx = 0;
                     int slot = pool_idx++ % 16;
                     size_t alen = (size_t)(end - as);
                     if (alen >= sizeof(pool[slot])) alen = sizeof(pool[slot]) - 1;
@@ -2132,7 +2132,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                             dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, sql_esc_tmp(lit->value.string));
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&on_cond, " AND %s.value = %.17g", prop_alias, lit->value.decimal);
+                            { char _rb[96]; dbuf_appendf(&on_cond, " AND %s.value = %s", prop_alias, gql_sql_real(_rb, sizeof(_rb), lit->value.decimal)); }
                             break;
                         case LITERAL_BOOLEAN:
                             dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
@@ -2200,7 +2200,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                     char val[96];
                     switch (lit->literal_type) {
                         case LITERAL_INTEGER: ptab = "node_props_int"; snprintf(val, sizeof(val), "%lld", (long long)lit->value.integer); break;
-                        case LITERAL_DECIMAL: ptab = "node_props_real"; snprintf(val, sizeof(val), "%.17g", lit->value.decimal); break;
+                        case LITERAL_DECIMAL: ptab = "node_props_real"; gql_sql_real(val, sizeof(val), lit->value.decimal); break;
                         case LITERAL_BOOLEAN: ptab = "node_props_bool"; snprintf(val, sizeof(val), "%d", lit->value.boolean ? 1 : 0); break;
                         case LITERAL_STRING:  ptab = "node_props_text"; break;
                         default: break;
@@ -2258,7 +2258,7 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                             dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, sql_esc_tmp(lit->value.string));
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&on_cond, " AND %s.value = %.17g", prop_alias, lit->value.decimal);
+                            { char _rb[96]; dbuf_appendf(&on_cond, " AND %s.value = %s", prop_alias, gql_sql_real(_rb, sizeof(_rb), lit->value.decimal)); }
                             break;
                         case LITERAL_BOOLEAN:
                             dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);
@@ -2385,7 +2385,7 @@ static bool literal_anchor_fragment(const char *key, cypher_literal *lit, dynami
         case LITERAL_INTEGER: tbl = "node_props_int";
             snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
         case LITERAL_DECIMAL: tbl = "node_props_real";
-            snprintf(val_buf, sizeof(val_buf), "%.17g", lit->value.decimal); break;
+            gql_sql_real(val_buf, sizeof(val_buf), lit->value.decimal); break;
         case LITERAL_BOOLEAN: tbl = "node_props_bool";
             snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
         default: break;
@@ -2783,7 +2783,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
                             dbuf_appendf(&on_cond, " AND %s.value = '%s'", prop_alias, sql_esc_tmp(lit->value.string));
                             break;
                         case LITERAL_DECIMAL:
-                            dbuf_appendf(&on_cond, " AND %s.value = %.17g", prop_alias, lit->value.decimal);
+                            { char _rb[96]; dbuf_appendf(&on_cond, " AND %s.value = %s", prop_alias, gql_sql_real(_rb, sizeof(_rb), lit->value.decimal)); }
                             break;
                         case LITERAL_BOOLEAN:
                             dbuf_appendf(&on_cond, " AND %s.value = %d", prop_alias, lit->value.boolean ? 1 : 0);

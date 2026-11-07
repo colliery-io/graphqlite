@@ -372,12 +372,13 @@ int delete_edge_by_id(cypher_executor *executor, int64_t edge_id)
     CYPHER_DEBUG("Deleting edge with ID %lld", edge_id);
 
     /* Delete edge properties first */
+    /* GQLITE-T-0525: the JSON table too (list and map values were left) */
     const char *prop_tables[] = {
-        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool"
+        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool", "edge_props_json"
     };
 
     char sql[256];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE edge_id = %lld", prop_tables[i], edge_id);
         char *err_msg = NULL;
         int rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);
@@ -412,6 +413,20 @@ int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach,
     CYPHER_DEBUG("Deleting node with ID %lld (detach: %s)", node_id, detach ? "true" : "false");
 
     if (detach) {
+        /* The properties of the connected edges: without PRAGMA foreign_keys
+         * (SQLite's default) the ON DELETE CASCADE does not run, and they
+         * were left behind (GQLITE-T-0525). */
+        static const char *edge_prop_tables[] = {
+            "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool", "edge_props_json"
+        };
+        for (int i = 0; i < 5; i++) {
+            char psql[256];
+            snprintf(psql, sizeof(psql),
+                     "DELETE FROM %s WHERE edge_id IN (SELECT id FROM edges WHERE source_id = %lld OR target_id = %lld)",
+                     edge_prop_tables[i], (long long)node_id, (long long)node_id);
+            sqlite3_exec(executor->db, psql, NULL, NULL, NULL);
+        }
+
         /* DETACH DELETE: First delete all connected edges */
         char delete_edges_sql[256];
         snprintf(delete_edges_sql, sizeof(delete_edges_sql),
@@ -448,12 +463,12 @@ int delete_node_by_id(cypher_executor *executor, int64_t node_id, bool detach,
 
     /* Delete node properties first */
     const char *prop_tables[] = {
-        "node_props_text", "node_props_int", "node_props_real", "node_props_bool"
+        "node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json"
     };
 
     char sql[256];
     int rc;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE node_id = %lld", prop_tables[i], node_id);
         char *err_msg = NULL;
         rc = sqlite3_exec(executor->db, sql, NULL, NULL, &err_msg);

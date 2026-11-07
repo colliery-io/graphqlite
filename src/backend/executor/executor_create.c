@@ -41,6 +41,62 @@ static bool ast_contains_function_call(ast_node *expr)
     return false;
 }
 
+/* Does a list or map refer to anything but literals and function calls: a
+ * variable, a property, a parameter, an operator? */
+static bool ast_has_reference(ast_node *expr)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_LITERAL: return false;
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list*)expr;
+            for (int i = 0; l->items && i < l->items->count; i++)
+                if (ast_has_reference(l->items->items[i])) return true;
+            return false;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map*)expr;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (ast_has_reference(((cypher_map_pair*)m->pairs->items[i])->value)) return true;
+            return false;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *f = (cypher_function_call*)expr;
+            for (int i = 0; f->args && i < f->args->count; i++)
+                if (ast_has_reference(f->args->items[i])) return true;
+            return false;
+        }
+        default: return true;
+    }
+}
+
+static char* evaluate_expr_to_json(cypher_executor *executor, ast_node *expr);
+
+/* The JSON of a list or map property value. One that refers to a variable
+ * (a FOREACH or UNWIND value, an entity created earlier in the query) is
+ * evaluated with them in scope: `FOREACH (i IN [1, 2] | CREATE ({k: [i, 1]}))`
+ * stored [null, 1] (GQLITE-T-0526, found by the write-batching relation). */
+static char *list_or_map_json(cypher_executor *executor, ast_node *value, variable_map *vm)
+{
+    if (ast_has_reference(value)) {
+        variable_map *tmp = vm ? NULL : create_variable_map();
+        property_type t = PROP_TYPE_TEXT;
+        property_value pv;
+        property_value_init(&pv);
+        char *out = NULL;
+        if (executor_eval_value(executor, value, vm ? vm : tmp, &t, &pv) == 0 &&
+            (t == PROP_TYPE_JSON || t == PROP_TYPE_TEXT) && pv.as_str) {
+            out = pv.as_str;
+            pv.as_str = NULL;
+        }
+        property_value_free(&pv);
+        if (tmp) free_variable_map(tmp);
+        if (out) return out;
+    }
+    return ast_contains_function_call(value) ? evaluate_expr_to_json(executor, value)
+                                             : serialize_ast_to_json(value);
+}
+
 /* Evaluate a list/map AST expression via SQL transform pipeline, returning
  * a JSON-text string the caller must free. Used for list/map literals that
  * embed function calls (date(), datetime(), etc.) which AST-only
@@ -178,9 +234,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                      * (e.g. [date(...), date(...)]), evaluate via SQL so
                                      * temporals get their string forms; otherwise the pure
                                      * AST-to-JSON path handles literals. */
-                                    char *json_str = ast_contains_function_call(pair->value)
-                                        ? evaluate_expr_to_json(executor, pair->value)
-                                        : serialize_ast_to_json(pair->value);
+                                    char *json_str = list_or_map_json(executor, pair->value, var_map);
                                     if (json_str) {
                                         if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, PROP_TYPE_JSON, json_str, true) == 0) {
                                             result->properties_set++;
@@ -194,9 +248,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     cypher_parameter *param = (cypher_parameter*)pair->value;
                                     property_value pv;
                                     property_value_init(&pv);
-                                    static int64_t int_buf;
-                                    static double real_buf;
-                                    static int bool_buf;
+                                    static GQL_THREAD_LOCAL int64_t int_buf;
+                                    static GQL_THREAD_LOCAL double real_buf;
+                                    static GQL_THREAD_LOCAL int bool_buf;
 
                                     int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
                                     if (rc == -2) {
@@ -287,9 +341,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                                 "edge_props_real", "edge_props_text",
                                                 "edge_props_bool", "edge_props_json", NULL};
                                             const char **tables = is_edge ? edge_t : node_t;
-                                            static int64_t int_buf;
-                                            static double real_buf;
-                                            static int bool_buf;
+                                            static GQL_THREAD_LOCAL int64_t int_buf;
+                                            static GQL_THREAD_LOCAL double real_buf;
+                                            static GQL_THREAD_LOCAL int bool_buf;
                                             /* Text of any length (a 256-byte buffer
                                              * cut longer strings). */
                                             static GQL_THREAD_LOCAL char *text_buf = NULL;
@@ -355,9 +409,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         property_value_free(&func_pv);
                                         continue;
                                     } else if (rc == 0) {
-                                        static int64_t func_int_buf;
-                                        static double func_real_buf;
-                                        static int func_bool_buf;
+                                        static GQL_THREAD_LOCAL int64_t func_int_buf;
+                                        static GQL_THREAD_LOCAL double func_real_buf;
+                                        static GQL_THREAD_LOCAL int func_bool_buf;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, func_pv.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -386,9 +440,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value_init(&gen_pv);
                                     int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv);
                                     if (erc == 0) {
-                                        static int64_t gen_int_buf;
-                                        static double gen_real_buf;
-                                        static int gen_bool_buf;
+                                        static GQL_THREAD_LOCAL int64_t gen_int_buf;
+                                        static GQL_THREAD_LOCAL double gen_real_buf;
+                                        static GQL_THREAD_LOCAL int gen_bool_buf;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, gen_pv.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -528,9 +582,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                      * (e.g. [date(...), date(...)]), evaluate via SQL so
                                      * temporals get their string forms; otherwise the pure
                                      * AST-to-JSON path handles literals. */
-                                    char *json_str = ast_contains_function_call(pair->value)
-                                        ? evaluate_expr_to_json(executor, pair->value)
-                                        : serialize_ast_to_json(pair->value);
+                                    char *json_str = list_or_map_json(executor, pair->value, var_map);
                                     if (json_str) {
                                         if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, PROP_TYPE_JSON, json_str, true) == 0) {
                                             result->properties_set++;
@@ -544,9 +596,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     cypher_parameter *param = (cypher_parameter*)pair->value;
                                     property_value pv2;
                                     property_value_init(&pv2);
-                                    static int64_t int_buf2;
-                                    static double real_buf2;
-                                    static int bool_buf2;
+                                    static GQL_THREAD_LOCAL int64_t int_buf2;
+                                    static GQL_THREAD_LOCAL double real_buf2;
+                                    static GQL_THREAD_LOCAL int bool_buf2;
 
                                     int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv2);
                                     if (rc == -2) {
@@ -582,9 +634,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         property_value_free(&func_pv2);
                                         continue;
                                     } else if (rc == 0) {
-                                        static int64_t func_int_buf2;
-                                        static double func_real_buf2;
-                                        static int func_bool_buf2;
+                                        static GQL_THREAD_LOCAL int64_t func_int_buf2;
+                                        static GQL_THREAD_LOCAL double func_real_buf2;
+                                        static GQL_THREAD_LOCAL int func_bool_buf2;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, func_pv2.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -610,9 +662,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value_init(&gen_pv2);
                                     int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv2);
                                     if (erc == 0) {
-                                        static int64_t gen_int_buf2;
-                                        static double gen_real_buf2;
-                                        static int gen_bool_buf2;
+                                        static GQL_THREAD_LOCAL int64_t gen_int_buf2;
+                                        static GQL_THREAD_LOCAL double gen_real_buf2;
+                                        static GQL_THREAD_LOCAL int gen_bool_buf2;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, gen_pv2.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -700,7 +752,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
 
                             if (pair->value->type == AST_NODE_MAP || pair->value->type == AST_NODE_LIST) {
                                 /* Map or list literal - serialize to JSON and store as JSON type */
-                                char *json_str = serialize_ast_to_json(pair->value);
+                                char *json_str = list_or_map_json(executor, pair->value, var_map);
                                 if (json_str) {
                                     if (cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, PROP_TYPE_JSON, json_str) == 0) {
                                         result->properties_set++;
@@ -734,9 +786,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 cypher_parameter *param = (cypher_parameter*)pair->value;
                                 property_value pv;
                                 property_value_init(&pv);
-                                static int64_t rel_int_buf;
-                                static double rel_real_buf;
-                                static int rel_bool_buf;
+                                static GQL_THREAD_LOCAL int64_t rel_int_buf;
+                                static GQL_THREAD_LOCAL double rel_real_buf;
+                                static GQL_THREAD_LOCAL int rel_bool_buf;
 
                                 int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
                                 if (rc == -2) {
@@ -772,9 +824,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 cypher_function_call *func = (cypher_function_call*)pair->value;
                                 property_value func_pv;
                                 property_value_init(&func_pv);
-                                static int64_t rel_func_int_buf;
-                                static double rel_func_real_buf;
-                                static int rel_func_bool_buf;
+                                static GQL_THREAD_LOCAL int64_t rel_func_int_buf;
+                                static GQL_THREAD_LOCAL double rel_func_real_buf;
+                                static GQL_THREAD_LOCAL int rel_func_bool_buf;
                                 int rc = var_map ? executor_eval_value(executor, (ast_node *)func, var_map, &prop_type, &func_pv)
                                                      : evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
                                 /* toBoolean() and other boolean functions give 1/0 (GQLITE-T-0408). */
@@ -842,9 +894,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                  * path (GQLITE-T-0339 part 2). */
                                 property_value gen_pv;
                                 property_value_init(&gen_pv);
-                                static int64_t rel_gen_int_buf;
-                                static double rel_gen_real_buf;
-                                static int rel_gen_bool_buf;
+                                static GQL_THREAD_LOCAL int64_t rel_gen_int_buf;
+                                static GQL_THREAD_LOCAL double rel_gen_real_buf;
+                                static GQL_THREAD_LOCAL int rel_gen_bool_buf;
                                 int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv);
                                 if (erc == 0) {
                                     if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {

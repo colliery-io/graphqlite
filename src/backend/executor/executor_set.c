@@ -1114,9 +1114,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
         const void *prop_value = NULL;
         property_value set_pv;
         property_value_init(&set_pv);
-        static int64_t set_int_buf;
-        static double set_real_buf;
-        static int set_bool_buf;
+        static GQL_THREAD_LOCAL int64_t set_int_buf;
+        static GQL_THREAD_LOCAL double set_real_buf;
+        static GQL_THREAD_LOCAL int set_bool_buf;
 
         if (!item->expr) {
             set_result_error(result, "SET value is missing");
@@ -1433,9 +1433,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 property_value_free(&set_pv);
                 return -1;
             }
-            static int64_t set_expr_int_buf;
-            static double  set_expr_real_buf;
-            static int     set_expr_bool_buf;
+            static GQL_THREAD_LOCAL int64_t set_expr_int_buf;
+            static GQL_THREAD_LOCAL double  set_expr_real_buf;
+            static GQL_THREAD_LOCAL int     set_expr_bool_buf;
             if (prop_type == PROP_TYPE_INTEGER) {
                 set_expr_int_buf = set_pv.as_int;
                 prop_value = &set_expr_int_buf;

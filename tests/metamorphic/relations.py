@@ -46,6 +46,10 @@ DOMAINS.update({
     "sf.form": ["replace", "merge_map", "items", "inline_key"],
     "wr.base": ["write_expression", "set_readback", "set_forms", "write_optional",
                 "merge_direct", "delete_count"],
+    # GQLITE-T-0526: relations over writes
+    "wb.form": ["create", "set"],
+    "wu.form": ["create", "set", "label", "rel"],
+    "wrb.form": ["unwind_create", "set_overflow", "merge_overflow", "rollback"],
 })
 
 
@@ -59,6 +63,7 @@ class Variant:
     keymap: dict[str, str] = field(default_factory=dict)
     mode: str = "read"                      # read | write (write: compare readback)
     repeat: int = 1
+    expect_error: bool = False              # the write must fail and leave nothing
 
     @property
     def queries(self) -> list[str]:
@@ -839,6 +844,126 @@ def write_return(ch: Chooser) -> Case:
     return case
 
 
+# ----------------------------------------------- writes: order, batching, undo
+# GQLITE-T-0526. The read-back of these is the whole graph.
+
+DUMP = ("MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN labels(n) AS l, properties(n) AS p, "
+        "type(r) AS t, properties(r) AS rp, properties(m) AS mp")
+NOOP = "MATCH (n) WHERE false SET n.zz = 1"
+
+
+def _sub_i(e: str, x) -> str:
+    return e.replace("⟨i⟩", str(x))
+
+
+def write_order(ch: Chooser) -> Case:
+    """Independent writes in two orders leave the same graph."""
+    writes = []
+    for j in range(3):
+        if ch.random() < 0.5:
+            e = _sub_i(write_expr(ch, [], False), j + 1)
+            writes.append(f"CREATE (:New {{k: {e}, j: {j}}})")
+        else:
+            e = write_expr(ch, ["a"], False)
+            writes.append(f"MATCH (⟨a⟩) WHERE ⟨a⟩.id = {j} SET ⟨a⟩.k{j} = {e}")
+    order = writes[:]
+    while order == writes:
+        ch.rng.shuffle(order)
+    return Case(f"write_order/{ch.used['w.kind']}", [
+        Variant("order1", parts=[render(q) for q in writes], mode="write"),
+        Variant("order2", parts=[render(q) for q in order], mode="write")],
+        write=True, readback=DUMP)
+
+
+def write_batching(ch: Chooser) -> Case:
+    """N one-row writes equal one UNWIND write, and one FOREACH or IN-list write."""
+    form = ch.pick("wb.form")
+    xs = sorted(ch.sample(range(0, 6), 3))
+    if form == "create":
+        e = write_expr(ch, [], False)
+        return Case(f"write_batching/create/{ch.used['w.kind']}", [
+            Variant("single", parts=[render(f"CREATE (:New {{k: {_sub_i(e, x)}}})") for x in xs], mode="write"),
+            Variant("unwind", render(f"UNWIND {xs} AS ⟨i⟩ CREATE (:New {{k: {e}}})"), mode="write"),
+            Variant("foreach", render(f"FOREACH (⟨i⟩ IN {xs} | CREATE (:New {{k: {e}}}))"), mode="write")],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    e = write_expr(ch, ["a"], False)
+    return Case(f"write_batching/set/{ch.used['w.kind']}", [
+        Variant("single", parts=[render(f"MATCH (⟨a⟩) WHERE ⟨a⟩.id = {x} SET ⟨a⟩.k = {e}") for x in xs],
+                mode="write"),
+        Variant("unwind", render(f"UNWIND {xs} AS ⟨i⟩ MATCH (⟨a⟩) WHERE ⟨a⟩.id = ⟨i⟩ SET ⟨a⟩.k = {e}"),
+                mode="write"),
+        Variant("in_list", render(f"MATCH (⟨a⟩) WHERE ⟨a⟩.id IN {xs} SET ⟨a⟩.k = {e}"), mode="write")],
+        write=True, readback="MATCH (n) RETURN n.id AS id, n.k AS k")
+
+
+def write_undo(ch: Chooser) -> Case:
+    """A write followed by its inverse leaves the graph as it was."""
+    form = ch.pick("wu.form")
+    lab = label_text(ch.pick("c1.label"), ch)
+    if form == "create":
+        shape, pre, nodes, scope = _write_prefix(ch)
+        e = write_expr(ch, nodes, "i" in scope)
+        if shape == "create":
+            e = _sub_i(e, 2)
+        link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
+        do = f"{pre} CREATE {link}(:New {{k: {e}}})"
+        undo = "MATCH (n:New) DETACH DELETE n"
+    elif form == "set":
+        e = write_expr(ch, ["a"], False)
+        do = f"MATCH (⟨a⟩{lab}) SET ⟨a⟩.k = {e}"
+        undo = "MATCH (n) REMOVE n.k"
+    elif form == "label":
+        do = f"MATCH (⟨a⟩{lab}) SET ⟨a⟩:Tmp"
+        undo = "MATCH (n:Tmp) REMOVE n:Tmp"
+    else:
+        do = (f"MATCH (⟨a⟩{lab}), (⟨b⟩) WHERE ⟨b⟩.id = 0 "
+              f"CREATE (⟨a⟩)-[:TMP {{w: ⟨a⟩.id}}]->(⟨b⟩)")
+        undo = "MATCH ()-[r:TMP]->() DELETE r"
+    return Case(f"write_undo/{form}", [
+        Variant("nothing", NOOP, mode="write"),
+        Variant("do+undo", parts=[render(do), undo], mode="write")],
+        write=True, readback=DUMP)
+
+
+def write_rollback(ch: Chooser) -> Case:
+    """A write that fails part-way, or is rolled back, leaves nothing."""
+    form = ch.pick("wrb.form")
+    big = 9223372036854775807
+    if form == "unwind_create":
+        q = f"UNWIND [1, 2, {big}] AS ⟨x⟩ CREATE (:New {{k: ⟨x⟩ + 1}})"
+    elif form == "merge_overflow":
+        q = f"UNWIND [1, {big}] AS ⟨x⟩ MERGE (:New {{k: ⟨x⟩ + 1}})"
+    elif form == "set_overflow":
+        # The UNWIND makes rows on any graph: the first row writes, the
+        # second overflows.
+        q = (f"UNWIND [0, 1] AS ⟨x⟩ OPTIONAL MATCH (⟨a⟩) WHERE ⟨a⟩.id = ⟨x⟩ SET ⟨a⟩.k = 1 "
+             f"CREATE (:New {{k: CASE WHEN ⟨x⟩ = 1 THEN {big} + ⟨x⟩ ELSE 0 END}})")
+    else:
+        e = _sub_i(write_expr(ch, [], False), 1)
+        return Case("write_rollback/rollback", [
+            Variant("nothing", NOOP, mode="write"),
+            Variant("rolled back", parts=["SQL:BEGIN", render(f"CREATE (:New {{k: {e}}})"),
+                                          "MATCH (n) SET n.k2 = 1", "SQL:ROLLBACK"], mode="write")],
+            write=True, readback=DUMP)
+    return Case(f"write_rollback/{form}", [
+        Variant("nothing", NOOP, mode="write"),
+        Variant("fails", render(q), mode="write", expect_error=True)],
+        write=True, readback=DUMP)
+
+
+def create_return(ch: Chooser) -> Case:
+    """CREATE ... RETURN gives what a MATCH of the created node reads."""
+    shape, pre, nodes, scope = _write_prefix(ch)
+    e = write_expr(ch, nodes, "i" in scope)
+    if shape == "create":
+        e = _sub_i(e, 2)
+    link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
+    return Case(f"create_return/{ch.used['w.kind']}/{shape}", [
+        Variant("write", render(f"{pre} CREATE {link}(:New {{k: {e}}})"), mode="write"),
+        Variant("returned", render(f"{pre} CREATE {link}(⟨n⟩:New {{k: {e}}}) RETURN ⟨n⟩.k AS k"))],
+        write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
 RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "with_star": (with_star, CHAIN),
     "named_path": (named_path, G + ["c1.hops", "c1.label", "c1.dir", "c1.type", "np.carry"]),
@@ -869,4 +994,9 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "write_optional": (write_optional, G + ["c1.label"] + C2_FORCED + ["wo.write"]),
     "set_forms": (set_forms, G + ["c1.label", "w.kind", "sf.form"]),
     "write_return": (write_return, G + C1 + ["c1.label", "w.shape", "w.kind", "wr.base"]),
+    "write_order": (write_order, G + ["w.kind"]),
+    "write_batching": (write_batching, G + ["wb.form", "w.kind"]),
+    "write_undo": (write_undo, G + C1 + ["wu.form", "w.shape", "w.kind"]),
+    "write_rollback": (write_rollback, G + ["wrb.form", "w.kind"]),
+    "create_return": (create_return, G + C1 + ["w.shape", "w.kind"]),
 }

@@ -16,6 +16,12 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 - **Python 3.12 or later** is required for the Python bindings (was 3.8).
   CI tests 3.12 and 3.13.
 
+- **Databases from earlier releases** open and read the same
+  (`angreal test upgrade` checks 0.9.4, 0.10.0, 0.11.0 and 0.12.0). Two
+  values those releases wrote differently read back as written: a property
+  set to `Infinity` or `-Infinity` (for example `1.0 / 0.0`) was not stored
+  up to 0.12.0, and 0.9.4 and 0.10.0 stored the property key `on` as `On`.
+
 ## [0.12.0] — 2026-10-17
 
 New Cypher: `LOAD CSV`, `PROFILE`, `CALL algorithm() YIELD`, label

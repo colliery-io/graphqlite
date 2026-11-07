@@ -110,12 +110,14 @@ static void check_aggregate_prop_joins(const char *query_str, const char *expect
 
 static void test_return_aggregate_prop_joins_deferred(void)
 {
-    /* RETURN: flushed onto the JOIN section after the MATCH joins. */
+    /* RETURN: flushed onto the JOIN section after the MATCH joins. Only
+     * sum / avg take the JOIN shortcut; min / max keep the property's type
+     * (GQLITE-T-0529). */
     check_aggregate_prop_joins(
-        "MATCH (n:Person) RETURN avg(n.age), max(n.age)",
+        "MATCH (n:Person) RETURN avg(n.age), sum(n.age)",
         " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = ");
     check_aggregate_prop_joins(
-        "MATCH (n:Person) RETURN avg(n.age), max(n.age)",
+        "MATCH (n:Person) RETURN avg(n.age), sum(n.age)",
         " LEFT JOIN node_props_text AS _prop_2_text ON _prop_2_text.node_id = ");
     /* WITH: appended to the CTE body after the borrowed joins_clause. */
     check_aggregate_prop_joins(
@@ -123,7 +125,7 @@ static void test_return_aggregate_prop_joins_deferred(void)
         " LEFT JOIN node_props_int AS _prop_1_int ON _prop_1_int.node_id = ");
     /* Edge aggregate (T-0314 tables) through the same path. */
     check_aggregate_prop_joins(
-        "MATCH (a)-[r:KNOWS]->(b) RETURN min(r.since)",
+        "MATCH (a)-[r:KNOWS]->(b) RETURN sum(r.since)",
         " LEFT JOIN edge_props_int AS _prop_1_int ON _prop_1_int.edge_id = ");
 }
 

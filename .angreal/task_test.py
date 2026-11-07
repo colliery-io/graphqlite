@@ -1092,3 +1092,269 @@ def test_neo4j_acceptance(update_baseline: bool = False) -> int:
     if update_baseline:
         cmd.append("--update-baseline")
     return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="crash",
+    about="Kill a writer at random points; check the database is whole and each write all-or-nothing",
+    tool=angreal.ToolDescription(
+        """
+Crash test (GQLITE-T-0530). Starts tests/crash/writer.py on one database
+file, kills it with SIGKILL after a random delay, reopens the file and
+checks: PRAGMA integrity_check, gql_check_storage(), and that every write is
+all there or not there (each write tags its rows with a batch id). The
+writes: UNWIND CREATE, CREATE of relationships, MERGE in FOREACH, SET,
+DETACH DELETE, BEGIN ... COMMIT of three CREATEs, and the Python bulk
+importers. Rounds alternate journal_mode WAL and DELETE; the file is kept
+across rounds.
+
+## When to use
+- After a change to a write path, the executor's transactions or the bulk
+  importers
+
+## Examples
+```
+angreal test crash
+angreal test crash --rounds 1000
+```
+
+## Output
+- One line per bad round and a summary. The database of the first bad
+  round is kept in build/crash/.
+
+## Exit code
+1 when a round finds a problem; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="rounds", long="rounds", python_type="int", help="Rounds (default 200)")
+@angreal.argument(name="seed", long="seed", python_type="int", help="Seed (default 1)")
+def test_crash(rounds: int = 0, seed: int = 0) -> int:
+    """Crash test of the write paths."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.crash.run", "--rounds", str(rounds or 200), "--seed", str(seed or 1)]
+    return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="upgrade",
+    about="Databases written by earlier releases open with this build and answer the same",
+    tool=angreal.ToolDescription(
+        """
+Upgrade test (GQLITE-T-0527). For each release (v0.9.4, v0.10.0, v0.11.0,
+v0.12.0) it exports the tag's source with git archive into
+build/upgrade/<tag>/src, builds the extension there (kept between runs),
+writes a fixture graph with every value type, an index and a constraint,
+then opens that file with this build. The answers to a fixed query set must
+equal this build's answers on a fixture it wrote itself, except values the
+old release stored differently (OLD_WRITES in tests/upgrade/run.py). Then
+it writes to the old file and checks gql_check_storage() and the
+constraints.
+
+## When to use
+- Before a release, and after a change to the schema or to how values are
+  stored or read
+
+## Examples
+```
+angreal test upgrade
+angreal test upgrade --releases v0.12.0
+```
+
+## Output
+- One line per release; each difference with both answers. The first run
+  builds the four releases (a few minutes).
+
+## Exit code
+1 when a release reads differently or a write or check fails; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="releases", long="releases", help="Comma-separated release tags")
+def test_upgrade(releases: str = "") -> int:
+    """Upgrade test from earlier releases."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.upgrade.run"]
+    if releases:
+        cmd += ["--releases", releases]
+    return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="sqlite-matrix",
+    about="Functional tests and TCK on several SQLite releases built from the amalgamation",
+    tool=angreal.ToolDescription(
+        """
+SQLite version matrix (GQLITE-T-0531). Downloads each SQLite release's
+amalgamation from sqlite.org into build/sqlite-matrix/<version> (kept),
+builds a sqlite3 shell and a shared libsqlite3, runs `make test-functional`
+with that shell and the TCK with Python loading that libsqlite3
+(DYLD_LIBRARY_PATH / LD_LIBRARY_PATH). Default versions: 3.45.1 (the
+minimum supported), 3.46.1, 3.50.4, 3.53.4, 3.54.1 and the pre-release
+snapshot.
+
+## When to use
+- Before a release; after a change to JSON, subtype or float handling
+
+## Examples
+```
+angreal test sqlite-matrix
+angreal test sqlite-matrix --versions 3.45.1 --no-tck
+```
+
+## Output
+- One line per version with the functional and TCK results; logs in
+  build/sqlite-matrix/.
+
+## Exit code
+1 when a version fails; else 0. Needs network access on the first run.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="versions", long="versions", help="Comma-separated versions")
+@angreal.argument(name="no_tck", long="no-tck", is_flag=True, takes_value=False, help="Functional tests only")
+def test_sqlite_matrix(versions: str = "", no_tck: bool = False) -> int:
+    """SQLite version matrix."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.sqlite_matrix.run"]
+    if versions:
+        cmd += ["--versions", versions]
+    if no_tck:
+        cmd.append("--no-tck")
+    return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="parity",
+    about="The same queries through cypher(), Python and Rust give the same values and types",
+    tool=angreal.ToolDescription(
+        """
+Interface parity (GQLITE-T-0532). Runs a corpus of queries that return
+every value type (integers, whole floats, NaN and Infinity, strings that
+look like numbers or JSON, control characters, booleans, lists, maps,
+nodes, relationships, paths, temporal values, parameters of each type)
+through the three TCK backends: the cypher() SQL function, the Python
+bindings and the Rust bindings (the tck_runner example, built when
+missing). Each value is compared with its type and the columns in order.
+
+## When to use
+- After a change to result rendering, value types or a binding's parsing
+
+## Examples
+```
+angreal test parity
+```
+
+## Output
+- Each differing query with the three answers, and a summary line.
+
+## Exit code
+1 when a query differs; else 0.
+""",
+        risk_level="safe"
+    )
+)
+def test_parity() -> int:
+    """Interface parity across cypher(), Python and Rust."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return subprocess.run([python, "-m", "tests.parity.run"], cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="differential",
+    about="Harness queries on Neo4j Community (Docker) and GraphQLite, results compared",
+    tool=angreal.ToolDescription(
+        """
+Differential test against Neo4j (GQLITE-T-0529). Starts Neo4j Community
+5.26 in Docker (heap 1 GB, container memory 2 GB, Bolt on 127.0.0.1:17687
+only), runs the metamorphic harness's random graphs and queries on it and
+on GraphQLite, compares the rows the way the harness does (nodes,
+relationships and paths without ids), and removes the container. The
+neo4j Python driver is installed in build/differential/venv. Known
+Neo4j-only behaviours are counted, not failed (KNOWN in
+tests/differential/run.py). Neo4j is GPL-3.0 and only run as a service.
+
+On a machine that runs other containers: check `df -h` and the Docker VM's
+memory first; the container is removed even when the run fails.
+
+## When to use
+- By hand, in batches, to look for wrong answers both forms of a query
+  share (the metamorphic relations cannot see those)
+
+## Examples
+```
+angreal test differential --count 10000 --seed 7
+```
+
+## Output
+- Each difference signature with examples; build/differential/results.json.
+
+## Exit code
+1 when a case differs outside KNOWN; else 0.
+""",
+        risk_level="moderate"
+    )
+)
+@angreal.argument(name="count", long="count", python_type="int", help="Cases (default 2000)")
+@angreal.argument(name="seed", long="seed", python_type="int", help="Seed (default 1)")
+def test_differential(count: int = 0, seed: int = 0) -> int:
+    """Differential test against Neo4j in Docker."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    venv = os.path.join(root, "build", "differential", "venv")
+    vpy = os.path.join(venv, "bin", "python")
+    if not os.path.exists(vpy):
+        python = _pick_python_with_extension_support()
+        if python is None:
+            print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+            return 2
+        if subprocess.run([python, "-m", "venv", venv]).returncode != 0:
+            return 2
+        if subprocess.run([vpy, "-m", "pip", "install", "-q", "neo4j"]).returncode != 0:
+            return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [vpy, "-m", "tests.differential.run", "--start",
+           "--count", str(count or 2000), "--seed", str(seed or 1)]
+    return subprocess.run(cmd, cwd=root, env=env).returncode

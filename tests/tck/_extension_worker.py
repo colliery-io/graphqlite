@@ -114,6 +114,17 @@ def main() -> int:
                 _write(proto, _decode_payload([r[0] for r in raw]))
             elif cmd == "state":
                 _write(proto, dict(ok=True, **_graph_state(conn)))
+            elif cmd == "storage":
+                # GQLITE-T-0525: the stored graph is consistent after the scenario
+                problems = None
+                try:
+                    v = conn.execute("SELECT gql_check_storage()").fetchone()[0]
+                    if v and v != "[]":
+                        problems = v
+                except sqlite3.OperationalError as e:
+                    if "no such function" not in str(e):
+                        problems = str(e)
+                _write(proto, {"ok": True, "problems": problems})
             elif cmd == "shutdown":
                 conn.close()
                 _write(proto, {"ok": True})

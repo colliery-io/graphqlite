@@ -14,7 +14,8 @@ include = ["src/**/*", "libs/**/*", "Cargo.toml", "README.md", "LICENSE"]
 [dependencies]
 rusqlite = { version = ">=0.31", features = ["bundled", "load_extension"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# preserve_order: result columns keep the RETURN order (GQLITE-T-0532)
+serde_json = { version = "1.0", features = ["preserve_order"] }
 thiserror = "1.0"
 
 # No build dependencies - pre-built binaries are embedded via include_bytes!()

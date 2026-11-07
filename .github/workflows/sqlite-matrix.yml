@@ -1,0 +1,45 @@
+name: SQLite matrix
+
+# GQLITE-T-0531: the functional tests and the TCK on the oldest supported
+# SQLite (3.45.1), newer releases and the pre-release snapshot, each built
+# from the amalgamation. Weekly and on demand; it does not gate a PR.
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "Comma-separated SQLite versions (or 'snapshot')"
+        default: "3.45.1,3.46.1,3.50.4,3.53.4,3.54.1,snapshot"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev python3
+
+      - name: Build extension
+        run: make extension
+
+      # The system python3 links libsqlite3 dynamically, so LD_LIBRARY_PATH
+      # can give it each version (a setup-python build may not).
+      - name: Run the matrix
+        run: |
+          /usr/bin/python3 -m tests.sqlite_matrix.run \
+            --versions "${{ github.event.inputs.versions || '3.45.1,3.46.1,3.50.4,3.53.4,3.54.1,snapshot' }}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-matrix
+          path: |
+            build/sqlite-matrix/*.log
+            build/sqlite-matrix/*.json

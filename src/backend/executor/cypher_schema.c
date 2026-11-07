@@ -895,6 +895,17 @@ int cypher_schema_delete_edge(cypher_schema_manager *manager, int edge_id)
         return -1;
     }
     
+    /* Its properties first: the ON DELETE CASCADE runs only with PRAGMA
+     * foreign_keys on (GQLITE-T-0525). */
+    static const char *edge_prop_tables[] = {
+        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool", "edge_props_json"
+    };
+    for (int i = 0; i < 5; i++) {
+        char psql[96];
+        snprintf(psql, sizeof(psql), "DELETE FROM %s WHERE edge_id = %d", edge_prop_tables[i], edge_id);
+        sqlite3_exec(manager->db, psql, NULL, NULL, NULL);
+    }
+
     const char *sql = "DELETE FROM edges WHERE id = ?";
     sqlite3_stmt *stmt;
     
@@ -1176,6 +1187,17 @@ int cypher_schema_delete_node(cypher_schema_manager *manager, int node_id)
 {
     if (!manager || !manager->db || node_id < 0) {
         return -1;
+    }
+
+    /* Its labels and properties first (GQLITE-T-0525) */
+    static const char *node_tables[] = {
+        "node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json",
+        "node_labels"
+    };
+    for (int i = 0; i < 6; i++) {
+        char psql[96];
+        snprintf(psql, sizeof(psql), "DELETE FROM %s WHERE node_id = %d", node_tables[i], node_id);
+        sqlite3_exec(manager->db, psql, NULL, NULL, NULL);
     }
 
     const char *sql = "DELETE FROM nodes WHERE id = ?";

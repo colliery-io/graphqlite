@@ -92,13 +92,21 @@ def keyfn(compare: str):
 
 def _run_variant(engine: Engine, conn, case: Case, var: Variant) -> Outcome:
     per_part = []
+    failed = False
     for q in var.queries:
         o = None
         for _ in range(var.repeat):
             o = engine.run(conn, q)
             if not o.ok:
+                if var.expect_error:      # GQLITE-T-0526: then compare what is left
+                    failed = True
+                    break
                 return o
+        if failed:
+            break
         per_part.append(o.rows)
+    if var.expect_error and not failed:
+        return Outcome(False, error="the write was expected to fail and did not")
     if var.mode == "write":
         o = engine.run(conn, case.readback)
         if not o.ok:
@@ -123,7 +131,17 @@ def check(engine: Engine, case: Case, graph: Graph) -> Failure | None:
                 s = engine.run(conn, setup)
                 if not s.ok:
                     raise RuntimeError(f"graph setup failed: {s.error}\n{setup}")
-        results.append((var.label, var.queries, _run_variant(engine, conn, case, var)))
+                bad = engine.storage_problems(conn)
+                if bad:
+                    results.append(("setup", [setup], Outcome(False, error=bad)))
+                    return Failure("error", results)
+        o = _run_variant(engine, conn, case, var)
+        if o.ok and case.write:
+            # the graph a write left behind must be consistent (GQLITE-T-0525)
+            bad = engine.storage_problems(conn)
+            if bad:
+                o = Outcome(False, error=bad)
+        results.append((var.label, var.queries, o))
     if any(not o.ok for _, _, o in results):
         return Failure("error", results)
     key = keyfn(case.compare)

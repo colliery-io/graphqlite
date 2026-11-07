@@ -11,6 +11,7 @@
  *    forward-decl pattern with a proper header (runtime/udf_register.h).
  */
 
+#include "runtime/storage_check.h"
 #include <stdbool.h>
 #include <stdlib.h>
 #include "graphqlite_sqlite.h"
@@ -262,6 +263,17 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
   rc = sqlite3_create_function(db, "_gql_to_float_strict", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_to_float_strict_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  /* GQLITE-T-0531: _gql_f64(M, E) = M * 2^E, a float literal by its exact
+   * bits (some SQLite builds parse long decimal text off by one ulp) */
+  rc = sqlite3_create_function(db, "_gql_f64", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_f64_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
+  /* GQLITE-T-0525: consistency of the stored graph, for test harnesses */
+  rc = sqlite3_create_function(db, "gql_check_storage", 0, SQLITE_UTF8, 0,
+                         gql_check_storage_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
   rc = sqlite3_create_function(db, "_gql_to_string_strict", 1,
