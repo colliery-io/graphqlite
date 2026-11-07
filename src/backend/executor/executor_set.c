@@ -1237,7 +1237,13 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             bool has_prop_arg = false;
             if (func->args) {
                 for (int fa = 0; fa < func->args->count; fa++) {
-                    if (func->args->items[fa] && func->args->items[fa]->type == AST_NODE_PROPERTY) {
+                    /* A subquery argument (COUNT { (p)-->() }) reads the row's
+                     * variables too: without them it counted for every
+                     * node (GQLITE-T-0513). */
+                    if (func->args->items[fa] &&
+                        (func->args->items[fa]->type == AST_NODE_PROPERTY ||
+                         func->args->items[fa]->type == AST_NODE_EXISTS_EXPR ||
+                         func->args->items[fa]->type == AST_NODE_IDENTIFIER)) {
                         has_prop_arg = true;
                         break;
                     }
@@ -1401,7 +1407,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                     item->expr->type == AST_NODE_NULL_CHECK ||
                     item->expr->type == AST_NODE_SUBSCRIPT ||
                     item->expr->type == AST_NODE_LIST ||
-                    item->expr->type == AST_NODE_MAP)) {
+                    item->expr->type == AST_NODE_MAP ||
+                    item->expr->type == AST_NODE_EXISTS_EXPR ||
+                    item->expr->type == AST_NODE_LABEL_EXPR)) {
             /* Arbitrary expression RHS: SET n.num = n.num + 1, etc.
              * Evaluate via SQL with the var_map's nodes joined in. */
             int rc = evaluate_ast_with_context(executor, item->expr, var_map,

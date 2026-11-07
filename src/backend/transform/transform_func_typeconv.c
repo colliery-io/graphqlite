@@ -38,7 +38,11 @@ int transform_tostring_function(cypher_transform_context *ctx, cypher_function_c
             ((cypher_literal *)arg)->literal_type == LITERAL_BOOLEAN) {
             is_bool_ast = true;
         } else if (arg->type == AST_NODE_NOT_EXPR ||
-                   arg->type == AST_NODE_NULL_CHECK) {
+                   arg->type == AST_NODE_NULL_CHECK ||
+                   arg->type == AST_NODE_EXISTS_EXPR ||
+                   arg->type == AST_NODE_LABEL_EXPR) {
+            /* EXISTS { } and a label test are booleans too: toString of
+             * them gave "1" (GQLITE-T-0513). */
             is_bool_ast = true;
         } else if (arg->type == AST_NODE_BINARY_OP) {
             binary_op_type op = ((cypher_binary_op *)arg)->op_type;

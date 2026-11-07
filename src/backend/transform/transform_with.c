@@ -376,6 +376,35 @@ static bool sql_builder_has_alias(sql_builder *b, const char *alias)
     return false;
 }
 
+/* `WITH p AS person WHERE ...`: register each renamed node or relationship
+ * of the WITH as that entity, on the same table, for the WHERE (the caller
+ * truncates the registrations away). As an unknown name or a projected
+ * value, a pattern in the WHERE (EXISTS { MATCH (person)-->() }) bound it
+ * as a fresh node, not the row's (GQLITE-T-0513). Returns true when any. */
+static bool register_entity_renames(cypher_transform_context *ctx, cypher_with *with)
+{
+    bool any = false;
+    for (int i = 0; with->items && i < with->items->count; i++) {
+        cypher_return_item *item = (cypher_return_item*)with->items->items[i];
+        if (!item || !item->alias || !item->expr || item->expr->type != AST_NODE_IDENTIFIER) continue;
+        const char *src_name = ((cypher_identifier*)item->expr)->name;
+        if (strcmp(src_name, item->alias) == 0) continue;
+        if (transform_var_lookup(ctx->var_ctx, item->alias) != NULL) continue;
+        transform_var *sv = transform_var_lookup(ctx->var_ctx, src_name);
+        const char *sa = sv ? transform_var_get_alias(ctx->var_ctx, src_name) : NULL;
+        if (!sv || !sa || (sv->kind != VAR_KIND_NODE && sv->kind != VAR_KIND_EDGE)) continue;
+        bool is_id = transform_var_alias_is_id(ctx->var_ctx, src_name);
+        int rr = sv->kind == VAR_KIND_NODE
+            ? transform_var_register_node(ctx->var_ctx, item->alias, sa, sv->label)
+            : transform_var_register_edge(ctx->var_ctx, item->alias, sa, sv->label);
+        if (rr != 0) continue;
+        transform_var_set_bound(ctx->var_ctx, item->alias, true);
+        if (is_id) transform_var_set_alias_is_id(ctx->var_ctx, item->alias, true);
+        any = true;
+    }
+    return any;
+}
+
 int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
 {
     CYPHER_DEBUG("Transforming WITH clause");
@@ -404,9 +433,12 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
      * aliases only. */
     char *with_where_pre = NULL;
     if (with->where) {
+        int pre_var_count = transform_var_count(ctx->var_ctx);
+        if (!with->pass_all) register_entity_renames(ctx, with);
         ctx->where_conjunct = true;   /* perf review F7 */
         with_where_pre = transform_expression_to_string(ctx, with->where);
         ctx->where_conjunct = false;
+        transform_var_truncate_to(ctx->var_ctx, pre_var_count);
         if (!with_where_pre && ctx->has_error) {
             /* Couldn't translate in pre-WITH scope (e.g. only projected
              * variables exist). Clear the error and try again post-projection
@@ -431,7 +463,7 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
      * registered: a filter on them belongs after grouping (the post path). */
     if (with->where && !with_where_pre && with->items && !with->pass_all) {
         int saved_var_count = transform_var_count(ctx->var_ctx);
-        bool registered_any = false;
+        bool registered_any = register_entity_renames(ctx, with);
         for (int i = 0; i < with->items->count; i++) {
             cypher_return_item *item = (cypher_return_item*)with->items->items[i];
             if (!item || !item->alias || !item->expr) continue;

@@ -209,6 +209,10 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
     int n_outer = transform_var_count(ctx->var_ctx);
     char **outer_tokens = calloc((size_t)(n_outer > 0 ? n_outer : 1), sizeof(char*));
     int outer_token_count = 0;
+    /* How each outer variable was seeded, for a WITH in the body to keep
+     * it (GQLITE-T-0513). Names and aliases are copies. */
+    struct subquery_outer_var *outer_vars = calloc((size_t)(n_outer > 0 ? n_outer : 1), sizeof(*outer_vars));
+    int outer_var_count = 0;
     for (int vi = 0; vi < n_outer; vi++) {
         transform_var *v = transform_var_at(ctx->var_ctx, vi);
         if (!v || !v->name) continue;
@@ -220,6 +224,11 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
             transform_var_set_bound(sub->var_ctx, v->name, true);
             if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
                 transform_var_set_scalar_value(sub->var_ctx, v->name, true);
+            }
+            if (outer_vars) {
+                struct subquery_outer_var *o = &outer_vars[outer_var_count++];
+                o->name = strdup(v->name); o->alias = strdup(alias); o->projected = true;
+                o->scalar = transform_var_is_scalar_value(ctx->var_ctx, v->name);
             }
             continue;
         }
@@ -243,6 +252,12 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
         }
         transform_var_set_bound(sub->var_ctx, v->name, true);
         transform_var_set_alias_is_id(sub->var_ctx, v->name, true);
+        if (outer_vars) {
+            struct subquery_outer_var *o = &outer_vars[outer_var_count++];
+            o->name = strdup(v->name); o->alias = strdup(id_expr);
+            o->edge = transform_var_is_edge(ctx->var_ctx, v->name);
+            o->scalar = transform_var_is_scalar_value(ctx->var_ctx, v->name);
+        }
         /* Remember the outer table token so the body never adds it to FROM. */
         if (outer_tokens) {
             const char *dot = strchr(id_expr, '.');
@@ -260,11 +275,20 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
     transform_var_mark_inherited(sub->var_ctx);
     sub->correlated_outer_aliases = (const char **)outer_tokens;
     sub->correlated_outer_count = outer_token_count;
+    sub->outer_vars = outer_vars;
+    sub->outer_var_count = outer_var_count;
     int rc = cypher_transform_read_query_sql(sub, q);
     sub->correlated_outer_aliases = NULL;
     sub->correlated_outer_count = 0;
+    sub->outer_vars = NULL;
+    sub->outer_var_count = 0;
     for (int ti = 0; ti < outer_token_count; ti++) free(outer_tokens[ti]);
     free(outer_tokens);
+    for (int oi = 0; oi < outer_var_count; oi++) {
+        free((char *)outer_vars[oi].name);
+        free((char *)outer_vars[oi].alias);
+    }
+    free(outer_vars);
     if (rc < 0 || sub->sql_size == 0) {
         ctx->has_error = true;
         free(ctx->error_message);
