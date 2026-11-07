@@ -251,8 +251,14 @@ def _inline_background(feature: Feature) -> None:
     if background is None:
         feature.scenarios = keep
         return
+    # A scenario's own "Given an empty graph" / "Given any graph" after a
+    # Background does not wipe the Background's setup: the Neo4j acceptance
+    # features open each scenario with one and expect the Background's data
+    # (GQLITE-T-0501). Each scenario starts from a reset anyway.
+    graph_init = ("an empty graph", "any graph")
     for sc in keep:
-        sc.steps = list(background.steps) + sc.steps
+        own = [st for st in sc.steps if not (st.keyword in ("Given", "And") and st.text in graph_init)]
+        sc.steps = list(background.steps) + own
     feature.scenarios = keep
 
 

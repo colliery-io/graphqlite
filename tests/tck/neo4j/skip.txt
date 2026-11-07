@@ -1,0 +1,35 @@
+# Neo4j acceptance feature files not run against GraphQLite (GQLITE-T-0501):
+# Neo4j-only or GQL-only features, by file name without .feature. Survey:
+# GQLITE-D-0003. One file per line; text after the name is the reason.
+PathSelectorAcceptance                    GQL path selectors (SHORTEST k, ANY, ALL)
+GpmSyntaxMixingAcceptance                 GQL pattern matching syntax mixing
+GpmSyntaxMixingAllowedAcceptance          GQL pattern matching syntax mixing
+QuantifiedPathPatternAcceptance           GQL quantified path patterns
+QuantifiedPathPatternGpmTests             GQL quantified path patterns
+DynamicLabelsAcceptance                   Neo4j dynamic labels ($(expr))
+DynamicPropertiesAcceptance               Neo4j dynamic property keys
+CallInTransactionsErrorHandling           CALL { } IN TRANSACTIONS
+CallInTransactionsErrorHandlingWithReturn CALL { } IN TRANSACTIONS
+CallInTransactions                        CALL { } IN TRANSACTIONS
+CypherTransactionsAcceptance              Neo4j transaction API
+CypherConcurrentTransactionsAcceptance    Neo4j concurrent transactions
+Finish                                    GQL FINISH
+InsertAcceptance                          GQL INSERT
+OrderByAndPageStatementAcceptance         GQL ORDER BY / page statements
+IndexAcceptance                           Neo4j index syntax and procedures
+ConstraintAcceptance                      Neo4j constraint syntax
+ShortestPathAcceptance                    Neo4j shortestPath() semantics
+GraphPatternAcceptance                    GQL graph patterns
+NodePatternPredicatesAcceptance           Neo4j 5 inline WHERE in node patterns
+RelationshipPatternPredicatesAcceptance   Neo4j 5 inline WHERE in relationship patterns
+LabelExpressionAcceptance                 GQL label expressions (&, !, %)
+CollectExpressionAcceptance               COLLECT { } subquery expression
+SimilarityFunctionAcceptance              Neo4j vector similarity functions
+NormalizeFunctionAcceptance               Neo4j normalize()
+GQLAliasFunctionNameAcceptance            GQL function aliases
+ValueTypeFunctionAcceptance               Neo4j valueType() type names
+ExplainAcceptance                         Neo4j EXPLAIN plans
+BuiltInProcedureAcceptance                Neo4j db.* procedures
+ProcedureAcceptance                       Neo4j procedures
+SelfReferenceInCreate                     Cypher 25 semantics
+SelfReferenceInMerge                      Cypher 25 semantics

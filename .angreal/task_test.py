@@ -1039,3 +1039,56 @@ def test_harness_coverage(count: int = 0, reps: int = 0, top: int = 0) -> int:
                            "--build", os.path.join(root, "build", "cov"), "--top", str(top or 40),
                            "--out", os.path.join(root, "build", "cov", "harness-coverage.txt")],
                           cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="neo4j-acceptance",
+    about="Run Neo4j's acceptance features (fetched at test time) against the baseline",
+    tool=angreal.ToolDescription(
+        """
+Run Neo4j's Cypher acceptance features (neo4j/neo4j release/5.26.32, pinned
+commit; GQLITE-T-0501) through the TCK runner. They are GPL-3.0, so they are
+fetched at test time into build/neo4j-acceptance (a sparse checkout, kept
+between runs) and never committed. Files of Neo4j- or GQL-only features
+(tests/tck/neo4j/skip.txt) are left out. The result is compared with
+tests/tck/neo4j/baseline.txt, the scenarios that passed when it was recorded.
+
+## When to use
+- After a change to the parser, transform or executor, with the TCK
+- After fixing one of the bugs these features found: record the baseline
+
+## Examples
+```
+angreal test neo4j-acceptance
+angreal test neo4j-acceptance --update-baseline
+```
+
+## Output
+- Pass/fail counts, each baseline scenario that no longer passes, and how
+  many newly pass. Per-scenario results in build/neo4j-results.json.
+
+## Exit code
+1 when a baseline scenario no longer passes; else 0. Needs network access
+on the first run (git fetch from GitHub).
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="update_baseline", long="update-baseline", is_flag=True, takes_value=False,
+                  help="Record the passing scenarios as the new baseline")
+def test_neo4j_acceptance(update_baseline: bool = False) -> int:
+    """Neo4j acceptance features against the baseline."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.tck.neo4j.run"]
+    if update_baseline:
+        cmd.append("--update-baseline")
+    return subprocess.run(cmd, cwd=root, env=env).returncode

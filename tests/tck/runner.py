@@ -65,7 +65,10 @@ class _State:
 # Step matchers ordered by specificity.
 _STEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^an empty graph$"), "given_empty_graph"),
-    (re.compile(r"^any graph$"), "given_empty_graph"),
+    # "any graph": the scenario does not depend on the graph. Each scenario
+    # starts from an empty graph already; resetting here wiped a
+    # Background's setup (Neo4j acceptance features, GQLITE-T-0501).
+    (re.compile(r"^any graph$"), "given_any_graph"),
     (re.compile(r"^the (?P<name>[\w-]+) graph$"), "given_named_graph"),
     (re.compile(r"^having executed$"), "having_executed"),
     (re.compile(r"^parameters are$"), "parameters_are"),
@@ -224,6 +227,9 @@ def _dispatch(step: Step):
 
 def _h_empty_graph(step, state, backend, m):
     backend.reset()
+
+def _h_any_graph(step, state, backend, m):
+    pass
 
 def _h_named_graph(step, state, backend, m):
     backend.reset()
@@ -713,6 +719,7 @@ def _h_side_effects_table(step, state, backend, m):
 
 _HANDLERS = {
     "given_empty_graph": _h_empty_graph,
+    "given_any_graph":   _h_any_graph,
     "given_named_graph": _h_named_graph,
     "having_executed":  _h_having_executed,
     "parameters_are":   _h_parameters,
