@@ -1252,3 +1252,48 @@ def test_sqlite_matrix(versions: str = "", no_tck: bool = False) -> int:
     if no_tck:
         cmd.append("--no-tck")
     return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="parity",
+    about="The same queries through cypher(), Python and Rust give the same values and types",
+    tool=angreal.ToolDescription(
+        """
+Interface parity (GQLITE-T-0532). Runs a corpus of queries that return
+every value type (integers, whole floats, NaN and Infinity, strings that
+look like numbers or JSON, control characters, booleans, lists, maps,
+nodes, relationships, paths, temporal values, parameters of each type)
+through the three TCK backends: the cypher() SQL function, the Python
+bindings and the Rust bindings (the tck_runner example, built when
+missing). Each value is compared with its type and the columns in order.
+
+## When to use
+- After a change to result rendering, value types or a binding's parsing
+
+## Examples
+```
+angreal test parity
+```
+
+## Output
+- Each differing query with the three answers, and a summary line.
+
+## Exit code
+1 when a query differs; else 0.
+""",
+        risk_level="safe"
+    )
+)
+def test_parity() -> int:
+    """Interface parity across cypher(), Python and Rust."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return subprocess.run([python, "-m", "tests.parity.run"], cwd=root, env=env).returncode

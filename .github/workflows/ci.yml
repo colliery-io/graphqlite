@@ -218,6 +218,12 @@ jobs:
         working-directory: bindings/rust
         run: cargo test --lib --test integration -- --test-threads=1
 
+      # GQLITE-T-0532: the same queries through cypher(), Python and Rust
+      # give the same values and types.
+      - name: Interface parity
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 -m tests.parity.run
+
   full-python-tests-linux:
     needs: [build-and-test, rust-check, python-check, windows-build]
     strategy:

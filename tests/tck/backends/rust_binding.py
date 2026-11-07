@@ -59,10 +59,11 @@ class RustBindingBackend(Backend):
                 self.execute(stmt)
 
     def execute(self, query: str, parameters: dict[str, Any] | None = None) -> QueryResult:
-        # parameters are currently dropped; see TCK-06 triage. v1 contract is
-        # equivalent to the extension backend.
+        msg: dict[str, Any] = {"cmd": "execute", "query": query}
+        if parameters:
+            msg["parameters"] = parameters      # GQLITE-T-0532: the runner passes them on
         try:
-            resp = self._send({"cmd": "execute", "query": query}, timeout=self._execute_timeout)
+            resp = self._send(msg, timeout=self._execute_timeout)
         except _Timeout as e:
             self._spawn()
             return QueryResult(error="RustBindingTimeout", error_message=str(e))
@@ -74,6 +75,7 @@ class RustBindingBackend(Backend):
         cols = list(resp.get("columns") or [])
         rows = []
         for record in resp.get("rows") or []:
+            record = _decode_floats(record)
             if cols:
                 rows.append([record.get(c) for c in cols])
             else:
@@ -166,3 +168,14 @@ class RustBindingBackend(Backend):
 
 class _Timeout(BackendError):
     pass
+
+
+def _decode_floats(v):
+    """{"$float": "NaN" | "Infinity" | "-Infinity"} from the runner is a float."""
+    if isinstance(v, dict):
+        if len(v) == 1 and "$float" in v:
+            return float(v["$float"].replace("Infinity", "inf"))
+        return {k: _decode_floats(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_decode_floats(x) for x in v]
+    return v
