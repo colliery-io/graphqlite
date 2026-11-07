@@ -18,8 +18,39 @@
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
 
-/* Transform single-argument math functions */
+static int transform_math_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call);
+
+/* Transform single-argument math functions. A NaN argument gives NaN
+ * (abs(0/0.0) was 0.0: the NaN sentinel text read as a number,
+ * GQLITE-T-0518). */
 int transform_math_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    const char *fn = func_call->function_name ? func_call->function_name : "";
+    ast_node *arg = (func_call->args && func_call->args->count == 1) ? func_call->args->items[0] : NULL;
+    if (strcasecmp(fn, "isNaN") == 0) {
+        /* isNaN of a value that is not a number is a type error at compile
+         * time (Neo4j NaNAcceptance) */
+        if (arg && (arg->type == AST_NODE_LIST || arg->type == AST_NODE_MAP ||
+                    (arg->type == AST_NODE_LITERAL &&
+                     (((cypher_literal *)arg)->literal_type == LITERAL_STRING ||
+                      ((cypher_literal *)arg)->literal_type == LITERAL_BOOLEAN)))) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("SyntaxError: InvalidArgumentType: isNaN() expects a number");
+            return -1;
+        }
+        return transform_math_function_inner(ctx, func_call);
+    }
+    if (!arg || strcasecmp(fn, "sign") == 0) return transform_math_function_inner(ctx, func_call);
+    char *xs = cypher_transform_capture_expression(ctx, arg);
+    if (!xs) return transform_math_function_inner(ctx, func_call);
+    append_sql(ctx, "(CASE WHEN (%s) = (CHAR(1) || 'NaN') THEN (CHAR(1) || 'NaN') ELSE ", xs);
+    free(xs);
+    if (transform_math_function_inner(ctx, func_call) < 0) return -1;
+    append_sql(ctx, " END)");
+    return 0;
+}
+
+static int transform_math_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming math function: %s", func_call->function_name);
 

@@ -530,6 +530,24 @@ int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *
         return 0;
     }
 
+    /* Two parameters: lists or maps compare with three-valued element
+     * equality ([1, 2] = [1, null] is null; it was false as JSON text), and
+     * a boolean against a number is not equal (GQLITE-T-0518). */
+    if ((binary_op->op_type == BINARY_OP_EQ || binary_op->op_type == BINARY_OP_NEQ) &&
+        binary_op->left->type == AST_NODE_PARAMETER && binary_op->right->type == AST_NODE_PARAMETER) {
+        const char *a = ((cypher_parameter *)binary_op->left)->name;
+        const char *b = ((cypher_parameter *)binary_op->right)->name;
+        bool eq = binary_op->op_type == BINARY_OP_EQ;
+        append_sql(ctx, "(CASE WHEN :%s IS NULL OR :%s IS NULL THEN NULL "
+                        "WHEN :%s__gqlt = 'json' AND :%s__gqlt = 'json' THEN %s_gql_eq(:%s, :%s)%s "
+                        "WHEN (:%s__gqlt = 'bool') <> (:%s__gqlt = 'bool') THEN %d "
+                        "ELSE (:%s %s :%s) END)",
+                   a, b, a, b, eq ? "" : "(NOT ", a, b, eq ? "" : ")",
+                   a, b, eq ? 0 : 1, a, eq ? "=" : "<>", b);
+        ctx->in_comparison = was_in_comparison;
+        return 0;
+    }
+
     /* A parameter against a value known only at run time (`n.k = $x`):
      * both are 1 / 0 for a boolean, so a boolean against a number was
      * equal. Compare the boolean tags first (GQLITE-T-0431). */
