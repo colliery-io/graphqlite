@@ -123,7 +123,17 @@ def check(engine: Engine, case: Case, graph: Graph) -> Failure | None:
                 s = engine.run(conn, setup)
                 if not s.ok:
                     raise RuntimeError(f"graph setup failed: {s.error}\n{setup}")
-        results.append((var.label, var.queries, _run_variant(engine, conn, case, var)))
+                bad = engine.storage_problems(conn)
+                if bad:
+                    results.append(("setup", [setup], Outcome(False, error=bad)))
+                    return Failure("error", results)
+        o = _run_variant(engine, conn, case, var)
+        if o.ok and case.write:
+            # the graph a write left behind must be consistent (GQLITE-T-0525)
+            bad = engine.storage_problems(conn)
+            if bad:
+                o = Outcome(False, error=bad)
+        results.append((var.label, var.queries, o))
     if any(not o.ok for _, _, o in results):
         return Failure("error", results)
     key = keyfn(case.compare)

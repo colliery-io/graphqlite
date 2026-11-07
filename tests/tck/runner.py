@@ -168,6 +168,15 @@ def _run_scenario(feature_file: str, sc: Scenario, backend: Backend) -> Scenario
         # Scenario had no Then-step (or only setup). Treat as pass.
         verdict = "pass"
 
+    # The stored graph must be consistent after every scenario that passed
+    # (GQLITE-T-0525); the extension backend checks it.
+    check = getattr(backend, "storage_problems", None)
+    if verdict == "pass" and check is not None:
+        problems = check()
+        if problems:
+            verdict = "fail"
+            diag = f"storage inconsistent: {problems}"
+
     return _outcome(
         feature_file, sc, verdict, backend, t0, diag,
         expected=expected_payload, actual=actual_payload,

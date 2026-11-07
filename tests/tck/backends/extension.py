@@ -92,6 +92,16 @@ class ExtensionBackend(Backend):
             return None
         return resp if resp.get("ok") else None
 
+    def storage_problems(self) -> str | None:
+        """gql_check_storage() violations after a scenario (GQLITE-T-0525),
+        or None when the graph is consistent."""
+        try:
+            resp = self._send({"cmd": "storage"})
+        except BackendError:
+            self._spawn()
+            return None
+        return resp.get("problems") if resp.get("ok") else None
+
     def close(self) -> None:
         if self._proc is None or self._proc.poll() is not None:
             return

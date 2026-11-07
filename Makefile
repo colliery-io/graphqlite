@@ -225,7 +225,8 @@ RUNTIME_SRCS = \
 	$(RUNTIME_DIR)/udf_register.c \
 	$(RUNTIME_DIR)/cypher_rows_vtab.c \
 	$(RUNTIME_DIR)/gql_tz.c \
-	$(RUNTIME_DIR)/gql_tzdata.c
+	$(RUNTIME_DIR)/gql_tzdata.c \
+	$(RUNTIME_DIR)/storage_check.c
 
 RUNTIME_OBJS = $(RUNTIME_SRCS:$(RUNTIME_DIR)/%.c=$(BUILD_RUNTIME_DIR)/%.o)
 RUNTIME_OBJS_COV = $(RUNTIME_SRCS:$(RUNTIME_DIR)/%.c=$(BUILD_RUNTIME_DIR)/%.cov.o)
@@ -619,12 +620,15 @@ test-python: extension
 
 test-bindings: test-rust test-python
 
+# GQLITE-T-0525: each functional test ends with the stored graph consistent.
+STORAGE_CHECK_SQL = tests/functional/data/storage_check.sql
+
 test-functional: extension
 	@echo "Running functional tests..."
 	@for test_file in tests/functional/*.sql; do \
 		if [ -f "$$test_file" ] && [[ "$$test_file" != *"constraint"* ]] && [[ "$$test_file" != *"expected_failures"* ]]; then \
 			echo "Running: $$(basename $$test_file)"; \
-			$(SQLITE) -bail < "$$test_file" || exit 1; \
+			cat "$$test_file" $(STORAGE_CHECK_SQL) | $(SQLITE) -bail || exit 1; \
 		fi; \
 	done
 

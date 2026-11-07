@@ -57,6 +57,26 @@ class Engine:
         return conn
 
     @staticmethod
+    def storage_problems(conn: sqlite3.Connection) -> str | None:
+        """Violations of the stored graph (gql_check_storage, GQLITE-T-0525)
+        and of its constraints, or None when consistent. None also when the
+        extension has no checker (an older build given with --ext)."""
+        try:
+            v = conn.execute("SELECT gql_check_storage()").fetchone()[0]
+        except sqlite3.OperationalError as e:
+            if "no such function" in str(e):
+                return None
+            return f"storage check failed: {e}"
+        if v and v != "[]":
+            return f"storage inconsistent: {v}"
+        try:
+            conn.execute("SELECT gql_check_constraints()").fetchone()
+        except sqlite3.OperationalError as e:
+            if "no such function" not in str(e):
+                return f"constraint violated: {e}"
+        return None
+
+    @staticmethod
     def run(conn: sqlite3.Connection, query: str) -> Outcome:
         try:
             raw = conn.execute("SELECT cypher(?)", (query,)).fetchone()[0]
