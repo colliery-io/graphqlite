@@ -672,6 +672,28 @@ int register_path_variable(cypher_transform_context *ctx, const char *name, cyph
 }
 
 /* Generate next unique alias */
+/* After a WITH in a subquery body, the outer variables it did not project
+ * or shadow are seeded again: Cypher keeps them in scope for the whole
+ * subquery (GQLITE-T-0513). */
+static void reseed_outer_vars(cypher_transform_context *ctx)
+{
+    for (int i = 0; i < ctx->outer_var_count; i++) {
+        const struct subquery_outer_var *o = &ctx->outer_vars[i];
+        if (transform_var_lookup(ctx->var_ctx, o->name)) continue;   /* projected or shadowed */
+        if (o->projected) {
+            transform_var_register_projected(ctx->var_ctx, o->name, o->alias);
+        } else if (o->edge) {
+            transform_var_register_edge(ctx->var_ctx, o->name, o->alias, NULL);
+            transform_var_set_alias_is_id(ctx->var_ctx, o->name, true);
+        } else {
+            transform_var_register_node(ctx->var_ctx, o->name, o->alias, NULL);
+            transform_var_set_alias_is_id(ctx->var_ctx, o->name, true);
+        }
+        transform_var_set_bound(ctx->var_ctx, o->name, true);
+        if (o->scalar) transform_var_set_scalar_value(ctx->var_ctx, o->name, true);
+    }
+}
+
 int cypher_transform_read_query_sql(cypher_transform_context *ctx, cypher_query *query)
 {
     if (!ctx || !query || !query->clauses) return -1;
@@ -688,8 +710,35 @@ int cypher_transform_read_query_sql(cypher_transform_context *ctx, cypher_query 
         int rc = 0;
         switch (clause->type) {
             case AST_NODE_MATCH:  rc = transform_match_clause(ctx, (cypher_match*)clause); break;
-            case AST_NODE_WITH:   rc = transform_with_clause(ctx, (cypher_with*)clause); break;
-            case AST_NODE_UNWIND: rc = transform_unwind_clause(ctx, (cypher_unwind*)clause); break;
+            case AST_NODE_WITH: {
+                /* A WITH in the body may not rebind a name of the outer
+                 * scope to another value (Neo4j: SyntaxError). */
+                cypher_with *w = (cypher_with*)clause;
+                for (int wi = 0; w->items && wi < w->items->count && ctx->outer_var_count; wi++) {
+                    cypher_return_item *it = (cypher_return_item*)w->items->items[wi];
+                    if (!it || !it->alias) continue;
+                    if (it->expr && it->expr->type == AST_NODE_IDENTIFIER &&
+                        strcmp(((cypher_identifier*)it->expr)->name, it->alias) == 0) continue;
+                    for (int oi = 0; oi < ctx->outer_var_count; oi++) {
+                        if (strcmp(ctx->outer_vars[oi].name, it->alias) != 0) continue;
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                                 "SyntaxError: VariableAlreadyBound: `%s` in a subquery shadows the variable of the same name in the outer scope; rename it",
+                                 it->alias);
+                        ctx->has_error = true;
+                        free(ctx->error_message);
+                        ctx->error_message = strdup(msg);
+                        return -1;
+                    }
+                }
+                rc = transform_with_clause(ctx, w);
+                if (rc >= 0) reseed_outer_vars(ctx);
+                break;
+            }
+            case AST_NODE_UNWIND:
+                rc = transform_unwind_clause(ctx, (cypher_unwind*)clause);
+                if (rc >= 0) reseed_outer_vars(ctx);
+                break;
             case AST_NODE_RETURN: rc = transform_return_clause(ctx, (cypher_return*)clause); break;
             default:
                 ctx->has_error = true;

@@ -3974,17 +3974,21 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 int sql_type = sqlite3_column_type(stmt, 0);
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
                                 if (val) {
-                                    /* {node,edge}_props_bool stores 0/1; expose as
-                                     * "true"/"false" so the JSON formatter
-                                     * treats it as a string and openCypher's
-                                     * boolean literal is preserved. */
-                                    if (strcmp(type_tables[t], "node_props_bool") == 0 ||
-                                        strcmp(type_tables[t], "edge_props_bool") == 0) {
+                                    /* {node,edge}_props_bool stores 0/1: a
+                                     * boolean, not the string "true" (it was
+                                     * typed text, which the result writer
+                                     * quotes, GQLITE-T-0513). A stored string
+                                     * stays a string, JSON stays JSON. */
+                                    if (strstr(type_tables[t], "_props_bool")) {
                                         result->data[0][i] = strdup(atoi(val) ? "true" : "false");
-                                        result->data_types[0][i] = SQLITE_TEXT;
+                                        result->data_types[0][i] = GQL_COL_TYPE_BOOLEAN;
+                                    } else if (strstr(type_tables[t], "_props_json")) {
+                                        result->data[0][i] = strdup(val);
+                                        result->data_types[0][i] = GQL_COL_TYPE_JSON;
                                     } else {
                                         result->data[0][i] = strdup(val);
-                                        result->data_types[0][i] = sql_type;
+                                        result->data_types[0][i] =
+                                            strstr(type_tables[t], "_props_text") ? GQL_COL_TYPE_STRING : sql_type;
                                     }
                                 }
                             }

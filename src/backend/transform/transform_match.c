@@ -2071,8 +2071,11 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
     char prop_alias[64], pk_alias[64], node_alias_buf[64];
 
     if (!has_from) {
-        /* First table in query - use FROM */
-        if (has_prop_pairs) {
+        /* First table in query - use FROM. An OPTIONAL MATCH takes the
+         * anchored LEFT JOIN below: starting from the property table gave
+         * no row at all when nothing matched, not one null row
+         * (OPTIONAL MATCH (n {name: 'Charlie'}), GQLITE-T-0513). */
+        if (has_prop_pairs && !optional) {
             /* Start with property table for better selectivity */
             cypher_map_pair *first_pair = (cypher_map_pair*)prop_map->pairs->items[0];
             if (first_pair->key && first_pair->value && first_pair->value->type == AST_NODE_LITERAL) {
@@ -2146,26 +2149,52 @@ static int generate_node_match(cypher_transform_context *ctx, cypher_node_patter
                  * so the anchor row produces NULL bindings when no node
                  * matches the label. The post-JOIN label JOINs below are
                  * then skipped (they'd inner-join away the anchor). */
+                /* Literal inline properties go in the ON with the labels, so
+                 * a node that does not match leaves the one null row
+                 * (OPTIONAL MATCH (n {name: 'Charlie'}), GQLITE-T-0513). */
+                dynamic_buffer on_buf;
+                dbuf_init(&on_buf);
                 if (has_labels(node)) {
-                    dynamic_buffer on_buf;
-                    dbuf_init(&on_buf);
                     for (int li = 0; li < node->labels->count; li++) {
                         const char *lbl = get_label_string(node->labels->items[li]);
                         if (!lbl) continue;
                         char *esc = escape_sql_string(lbl);
-                        if (li > 0) dbuf_append(&on_buf, " AND ");
+                        if (!dbuf_is_empty(&on_buf)) dbuf_append(&on_buf, " AND ");
                         dbuf_appendf(&on_buf,
                                      "EXISTS (SELECT 1 FROM node_labels nl WHERE nl.node_id = %s.id AND nl.label = '%s')",
                                      alias, esc ? esc : lbl);
                         free(esc);
                     }
-                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
-                             get_graph_table(ctx, "nodes"), alias, dbuf_get(&on_buf));
-                    dbuf_free(&on_buf);
-                } else {
-                    sql_join(ctx->unified_builder, SQL_JOIN_LEFT,
-                             get_graph_table(ctx, "nodes"), alias, "1=1");
                 }
+                for (int pi = 0; has_prop_pairs && pi < prop_map->pairs->count; pi++) {
+                    cypher_map_pair *pair = (cypher_map_pair*)prop_map->pairs->items[pi];
+                    if (!pair || !pair->key || !pair->value || pair->value->type != AST_NODE_LITERAL) continue;
+                    cypher_literal *lit = (cypher_literal*)pair->value;
+                    const char *ptab = NULL;
+                    char val[96];
+                    switch (lit->literal_type) {
+                        case LITERAL_INTEGER: ptab = "node_props_int"; snprintf(val, sizeof(val), "%lld", (long long)lit->value.integer); break;
+                        case LITERAL_DECIMAL: ptab = "node_props_real"; snprintf(val, sizeof(val), "%.17g", lit->value.decimal); break;
+                        case LITERAL_BOOLEAN: ptab = "node_props_bool"; snprintf(val, sizeof(val), "%d", lit->value.boolean ? 1 : 0); break;
+                        case LITERAL_STRING:  ptab = "node_props_text"; break;
+                        default: break;
+                    }
+                    if (!ptab) continue;
+                    if (!dbuf_is_empty(&on_buf)) dbuf_append(&on_buf, " AND ");
+                    dbuf_appendf(&on_buf,
+                                 "EXISTS (SELECT 1 FROM %s t JOIN %s pk ON pk.id = t.key_id "
+                                 "WHERE t.node_id = %s.id AND pk.key = '%s' AND t.value = ",
+                                 get_graph_table(ctx, ptab), get_graph_table(ctx, "property_keys"),
+                                 alias, sql_esc_tmp(pair->key));
+                    if (lit->literal_type == LITERAL_STRING)
+                        dbuf_appendf(&on_buf, "'%s')", sql_esc_tmp(lit->value.string ? lit->value.string : ""));
+                    else
+                        dbuf_appendf(&on_buf, "%s)", val);
+                    mark_pair_consumed(ctx, pair);
+                }
+                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, get_graph_table(ctx, "nodes"), alias,
+                         dbuf_is_empty(&on_buf) ? "1=1" : dbuf_get(&on_buf));
+                dbuf_free(&on_buf);
             } else {
                 sql_from(ctx->unified_builder, get_graph_table(ctx, "nodes"), alias);
             }
