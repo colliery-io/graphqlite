@@ -141,6 +141,9 @@ void set_result_error_ex(cypher_result *result, const char *error_msg,
 
 /* Helper to bind parameters from JSON to a prepared statement */
 int bind_params_from_json(sqlite3_stmt *stmt, const char *params_json);
+/* The SQLite error of the last failed SET/CREATE expression evaluation, or
+ * NULL (GQLITE-T-0500). */
+const char *executor_eval_last_error(void);
 
 /* Decode one JSON escape sequence from a parameter string. `*pp` points at the
  * character after the backslash and is advanced past the sequence; the decoded

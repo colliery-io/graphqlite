@@ -7,8 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 #include "transform/cypher_transform.h"
+#include "runtime/gql_error.h"
 #include "transform/transform_helpers.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
@@ -338,8 +340,32 @@ static int emit_in_operand(cypher_transform_context *ctx, ast_node *expr, bool l
     return 0;
 }
 
+/* Two integer literals whose +, -, * or / is outside the 64-bit range: SQLite
+ * turns that into a float (9223372036854775807 + 1 gave 9.22e+18); it is an
+ * error (GQLITE-T-0500). */
+static bool int_literals_overflow(cypher_binary_op *b)
+{
+    if (!b->left || !b->right || b->left->type != AST_NODE_LITERAL || b->right->type != AST_NODE_LITERAL)
+        return false;
+    cypher_literal *l = (cypher_literal *)b->left, *r = (cypher_literal *)b->right;
+    if (l->literal_type != LITERAL_INTEGER || r->literal_type != LITERAL_INTEGER) return false;
+    long long x = l->value.integer, y = r->value.integer, out;
+    switch (b->op_type) {
+        case BINARY_OP_ADD: return __builtin_add_overflow(x, y, &out);
+        case BINARY_OP_SUB: return __builtin_sub_overflow(x, y, &out);
+        case BINARY_OP_MUL: return __builtin_mul_overflow(x, y, &out);
+        case BINARY_OP_DIV: return x == LLONG_MIN && y == -1;
+        default: return false;
+    }
+}
+
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op)
 {
+    if (int_literals_overflow(binary_op)) {
+        ctx->has_error = true;
+        ctx->error_message = strdup(GQL_ERR_INT_OVERFLOW);
+        return -1;
+    }
     CYPHER_DEBUG("Transforming binary operation: op_type=%d", binary_op->op_type);
 
     /* Standalone NaN constant `0.0 / 0.0` (not a comparison operand — those are

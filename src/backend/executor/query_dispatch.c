@@ -5032,7 +5032,10 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
             else sqlite3_bind_text(st, pn, sc->text, -1, SQLITE_TRANSIENT);
         }
         if (executor->params_json) bind_params_from_json(st, executor->params_json);
-        if (sqlite3_step(st) == SQLITE_ROW) {
+        int step = sqlite3_step(st);
+        if (step != SQLITE_ROW && step != SQLITE_DONE && !executor->eval_error[0])
+            snprintf(executor->eval_error, sizeof(executor->eval_error), "%s", sqlite3_errmsg(executor->db));
+        if (step == SQLITE_ROW) {
             type = sqlite3_column_type(st, 0);
             sqlite3_value *cv = sqlite3_column_value(st, 0);
             if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) type = GQL_COL_TYPE_BOOLEAN;
@@ -7236,11 +7239,21 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     }
     free(eager_done);
 
+    /* An expression of a row failed (GQLITE-T-0500): the query fails. */
+    if (rc >= 0 && executor->eval_error[0]) {
+        set_result_error(result, executor->eval_error);
+        rc = -1;
+    }
+
     /* --- 5. RETURN --------------------------------------------------------- */
     if (rc >= 0) {
         result->success = true;
         if (ret_clause && ret_clause->items) {
             rc = rw_project_return(executor, ret_clause, rows, row_alive, n_rows, result);
+        }
+        if (rc >= 0 && executor->eval_error[0]) {
+            set_result_error(result, executor->eval_error);
+            rc = -1;
         }
     }
 

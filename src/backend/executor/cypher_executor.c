@@ -841,6 +841,7 @@ cypher_result* cypher_executor_execute(cypher_executor *executor, const char *qu
     }
 
     CYPHER_DEBUG("Executing query: %s", query);
+    executor->eval_error[0] = '\0';   /* GQLITE-T-0500: a row error of this query only */
 
     /* CREATE / DROP / SHOW INDEX and CONSTRAINT (GQLITE-T-0008) */
     {

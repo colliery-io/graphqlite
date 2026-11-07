@@ -40,6 +40,7 @@ Use parentheses to override precedence.
 - `Integer + Float` → Float
 - `String + String` → String concatenation
 - Any arithmetic with `null` → `null`
+- Integer arithmetic whose result is outside the 64-bit range (`9223372036854775807 + 1`) is an error, `ArithmeticError: integer overflow`; it does not wrap or turn into a float. The same holds for duration arithmetic.
 - A float division by zero gives `Infinity`, `-Infinity` or `NaN` (`1 / 0.0`, `-1 / 0.0`, `0.0 / 0.0`). An integer division by zero (`1 / 0`) gives `null`.
 
 **Infinity and NaN in results**

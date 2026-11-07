@@ -53,6 +53,10 @@
  * orderability rank places it just after numbers (rank 8). (GQLITE-T-0340.) */
 #define GQL_NAN_SENTINEL  "\x01NaN"
 
+/* An integer result outside the 64-bit range (GQLITE-T-0500). openCypher
+ * integer arithmetic does not wrap or turn into a float. */
+#define GQL_ERR_INT_OVERFLOW "ArithmeticError: integer overflow"
+
 /* Result text with infinite and NaN floats written as the bare tokens
  * Infinity, -Infinity and NaN, the one form in every result (GQLITE-T-0484).
  * Rewrites, outside JSON strings: numbers out of the double range (9e999,
