@@ -1297,3 +1297,64 @@ def test_parity() -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     return subprocess.run([python, "-m", "tests.parity.run"], cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="differential",
+    about="Harness queries on Neo4j Community (Docker) and GraphQLite, results compared",
+    tool=angreal.ToolDescription(
+        """
+Differential test against Neo4j (GQLITE-T-0529). Starts Neo4j Community
+5.26 in Docker (heap 1 GB, container memory 2 GB, Bolt on 127.0.0.1:17687
+only), runs the metamorphic harness's random graphs and queries on it and
+on GraphQLite, compares the rows the way the harness does (nodes,
+relationships and paths without ids), and removes the container. The
+neo4j Python driver is installed in build/differential/venv. Known
+Neo4j-only behaviours are counted, not failed (KNOWN in
+tests/differential/run.py). Neo4j is GPL-3.0 and only run as a service.
+
+On a machine that runs other containers: check `df -h` and the Docker VM's
+memory first; the container is removed even when the run fails.
+
+## When to use
+- By hand, in batches, to look for wrong answers both forms of a query
+  share (the metamorphic relations cannot see those)
+
+## Examples
+```
+angreal test differential --count 10000 --seed 7
+```
+
+## Output
+- Each difference signature with examples; build/differential/results.json.
+
+## Exit code
+1 when a case differs outside KNOWN; else 0.
+""",
+        risk_level="moderate"
+    )
+)
+@angreal.argument(name="count", long="count", python_type="int", help="Cases (default 2000)")
+@angreal.argument(name="seed", long="seed", python_type="int", help="Seed (default 1)")
+def test_differential(count: int = 0, seed: int = 0) -> int:
+    """Differential test against Neo4j in Docker."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    venv = os.path.join(root, "build", "differential", "venv")
+    vpy = os.path.join(venv, "bin", "python")
+    if not os.path.exists(vpy):
+        python = _pick_python_with_extension_support()
+        if python is None:
+            print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+            return 2
+        if subprocess.run([python, "-m", "venv", venv]).returncode != 0:
+            return 2
+        if subprocess.run([vpy, "-m", "pip", "install", "-q", "neo4j"]).returncode != 0:
+            return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [vpy, "-m", "tests.differential.run", "--start",
+           "--count", str(count or 2000), "--seed", str(seed or 1)]
+    return subprocess.run(cmd, cwd=root, env=env).returncode
