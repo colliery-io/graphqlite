@@ -269,6 +269,13 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_to_string_strict_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* toStringOrNull: the same, with null where toString() is a TypeError */
+  static int ornull_flag = 1;
+  rc = sqlite3_create_function(db, "_gql_to_string_ornull", 1,
+                         SQLITE_UTF8 | SQLITE_DETERMINISTIC, &ornull_flag,
+                         gql_to_string_strict_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_order_key", 1,
                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
                          gql_order_key_func, 0, 0);

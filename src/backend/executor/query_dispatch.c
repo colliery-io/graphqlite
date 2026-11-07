@@ -3709,10 +3709,10 @@ static bool return_item_is_hand_projectable(cypher_return_item *item, variable_m
     switch (expr->type) {
         case AST_NODE_LITERAL:
             return true;
-        case AST_NODE_IDENTIFIER: {
-            const char *n = ((cypher_identifier*)expr)->name;
-            return get_variable_node_id(vm, n) >= 0 || get_variable_edge_id(vm, n) >= 0;
-        }
+        case AST_NODE_IDENTIFIER:
+            /* A whole node or relationship: the hand projection gave its id
+             * as a string, and null for a relationship (GQLITE-T-0516). */
+            return false;
         case AST_NODE_PROPERTY: {
             cypher_property *prop = (cypher_property*)expr;
             if (!prop->expr || prop->expr->type != AST_NODE_IDENTIFIER) return false;
@@ -3743,10 +3743,34 @@ static bool return_needs_bound_rematch(cypher_return *ret, variable_map *vm)
     return false;
 }
 
-static void append_pattern_items(ast_list *dst, ast_list *src)
+/* Does a pattern path name a variable bound in vm? */
+static bool path_has_bound_var(ast_node *item, variable_map *vm)
+{
+    if (!item) return false;
+    if (item->type == AST_NODE_NODE_PATTERN) {
+        const char *v = ((cypher_node_pattern*)item)->variable;
+        return v && get_variable_node_id(vm, v) >= 0;
+    }
+    if (item->type != AST_NODE_PATH) return false;
+    cypher_path *p = (cypher_path*)item;
+    if (p->var_name) return true;
+    for (int i = 0; p->elements && i < p->elements->count; i++) {
+        ast_node *el = p->elements->items[i];
+        const char *v = NULL;
+        if (el->type == AST_NODE_NODE_PATTERN) v = ((cypher_node_pattern*)el)->variable;
+        else if (el->type == AST_NODE_REL_PATTERN) v = ((cypher_rel_pattern*)el)->variable;
+        if (v && (get_variable_node_id(vm, v) >= 0 || get_variable_edge_id(vm, v) >= 0)) return true;
+    }
+    return false;
+}
+
+/* The written paths that name a bound variable: a path with none
+ * (`CREATE (a), ()`) would match every node again and multiply the row. */
+static void append_pattern_items(ast_list *dst, ast_list *src, variable_map *vm)
 {
     if (!src) return;
-    for (int i = 0; i < src->count; i++) ast_list_append(dst, src->items[i]);
+    for (int i = 0; i < src->count; i++)
+        if (path_has_bound_var(src->items[i], vm)) ast_list_append(dst, src->items[i]);
 }
 
 static int execute_return_via_bound_rematch(cypher_executor *executor, cypher_query *query,
@@ -3758,9 +3782,9 @@ static int execute_return_via_bound_rematch(cypher_executor *executor, cypher_qu
     for (int i = 0; query->clauses && i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
-        if (c->type == AST_NODE_CREATE) append_pattern_items(combined, ((cypher_create*)c)->pattern);
-        else if (c->type == AST_NODE_MERGE) append_pattern_items(combined, ((cypher_merge*)c)->pattern);
-        else if (c->type == AST_NODE_MATCH) append_pattern_items(combined, ((cypher_match*)c)->pattern);
+        if (c->type == AST_NODE_CREATE) append_pattern_items(combined, ((cypher_create*)c)->pattern, vm);
+        else if (c->type == AST_NODE_MERGE) append_pattern_items(combined, ((cypher_merge*)c)->pattern, vm);
+        else if (c->type == AST_NODE_MATCH) append_pattern_items(combined, ((cypher_match*)c)->pattern, vm);
     }
 
     /* id(var) = <bound id> for every binding, ANDed together. */
@@ -3777,6 +3801,40 @@ static int execute_return_via_bound_rematch(cypher_executor *executor, cypher_qu
         where = where ? (ast_node*)make_binary_op(BINARY_OP_AND, where, eq, 0) : eq;
     }
 
+    /* The ids pin every entity: the written property maps are not
+     * filters here, and one that reads another variable
+     * (`(c {t: type(m)})`) is not valid SQL in a MATCH (GQLITE-T-0516).
+     * Set them aside for the re-match. */
+    int n_props = 0, cap_props = 16;
+    ast_node ***prop_slots = malloc((size_t)cap_props * sizeof(*prop_slots));
+    ast_node **prop_saved = malloc((size_t)cap_props * sizeof(*prop_saved));
+    for (int i = 0; prop_slots && prop_saved && i < combined->count; i++) {
+        ast_node *it = combined->items[i];
+        ast_list *els = NULL;
+        ast_list single = { .items = &it, .count = 1 };
+        if (it->type == AST_NODE_PATH) els = ((cypher_path*)it)->elements;
+        else if (it->type == AST_NODE_NODE_PATTERN) els = &single;
+        for (int j = 0; els && j < els->count; j++) {
+            ast_node *el = els->items[j];
+            ast_node **slot = NULL;
+            if (el->type == AST_NODE_NODE_PATTERN) slot = &((cypher_node_pattern*)el)->properties;
+            else if (el->type == AST_NODE_REL_PATTERN) slot = &((cypher_rel_pattern*)el)->properties;
+            if (!slot || !*slot) continue;
+            if (n_props == cap_props) {
+                cap_props *= 2;
+                ast_node ***g1 = realloc(prop_slots, (size_t)cap_props * sizeof(*prop_slots));
+                if (g1) prop_slots = g1;
+                ast_node **g2 = realloc(prop_saved, (size_t)cap_props * sizeof(*prop_saved));
+                if (g2) prop_saved = g2;
+                if (!g1 || !g2) { cap_props /= 2; break; }
+            }
+            prop_slots[n_props] = slot;
+            prop_saved[n_props] = *slot;
+            *slot = NULL;
+            n_props++;
+        }
+    }
+
     cypher_match *synth = make_cypher_match(combined, where, false, NULL);
     int rc = -1;
     if (synth) {
@@ -3785,6 +3843,9 @@ static int execute_return_via_bound_rematch(cypher_executor *executor, cypher_qu
     } else {
         set_result_error(result, "OOM");
     }
+    for (int i = 0; i < n_props; i++) *prop_slots[i] = prop_saved[i];
+    free(prop_slots);
+    free(prop_saved);
     if (where) ast_node_free(where);
     free(combined->items);
     free(combined);
@@ -5375,8 +5436,33 @@ static int rw_eval_with_entity_props(cypher_executor *executor, ast_node *expr, 
     return rc;
 }
 
+static bool rw_reads_graph(ast_node *e);
+
+/* rw_eval_cell, with the 1/0 of a boolean-shaped expression (a CASE of
+ * EXISTS { }) as a boolean (GQLITE-T-0516). */
+static void rw_eval_cell_typed(cypher_executor *executor, ast_node *expr, rw_row *row, char **text, int *type)
+{
+    rw_eval_cell(executor, expr, row, text, type);
+    if (*text && *type == SQLITE_INTEGER && rw_expr_yields_boolean(expr) &&
+        (strcmp(*text, "0") == 0 || strcmp(*text, "1") == 0)) {
+        bool b = (*text)[0] == '1';
+        free(*text);
+        *text = strdup(b ? "true" : "false");
+        *type = GQL_COL_TYPE_BOOLEAN;
+    }
+}
+
 static ast_node *rw_value_literal(cypher_executor *executor, ast_node *expr, const rw_row *row)
 {
+    if (expr && rw_reads_graph(expr)) {
+        /* EXISTS { }, COUNT { }, a pattern comprehension: evaluated over
+         * the row before the write (GQLITE-T-0516; MERGE wrote null). */
+        char *text = NULL; int type;
+        rw_eval_cell_typed(executor, expr, (rw_row*)row, &text, &type);
+        ast_node *lit = rw_make_literal(executor, text, text ? type : SQLITE_NULL);
+        free(text);
+        return lit;
+    }
     if (expr && !rw_expr_scalar_only(expr, row) && expr->type != AST_NODE_IDENTIFIER && rw_expr_bound(expr, row)) {
         /* A value over the row's entities (`MERGE (:City {name: p.bornIn})`). */
         char *text = NULL; int type;
@@ -6758,6 +6844,101 @@ static cypher_result *rw_run_call(cypher_executor *executor, ast_node *inner, rw
     return ir;
 }
 
+/* GQLITE-T-0516: does an expression read the graph (EXISTS { }, COUNT { },
+ * a pattern expression or a pattern comprehension)? */
+static bool rw_reads_graph(ast_node *e)
+{
+    if (!e) return false;
+    switch (e->type) {
+        case AST_NODE_EXISTS_EXPR:
+            return ((cypher_exists_expr*)e)->expr_type != EXISTS_TYPE_PROPERTY;
+        case AST_NODE_PATTERN_COMPREHENSION:
+            return true;
+        case AST_NODE_BINARY_OP:
+            return rw_reads_graph(((cypher_binary_op*)e)->left) || rw_reads_graph(((cypher_binary_op*)e)->right);
+        case AST_NODE_NOT_EXPR: return rw_reads_graph(((cypher_not_expr*)e)->expr);
+        case AST_NODE_NULL_CHECK: return rw_reads_graph(((cypher_null_check*)e)->expr);
+        case AST_NODE_LABEL_EXPR: return rw_reads_graph(((cypher_label_expr*)e)->expr);
+        case AST_NODE_PROPERTY: return rw_reads_graph(((cypher_property*)e)->expr);
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript*)e;
+            return rw_reads_graph(s->expr) || rw_reads_graph(s->index) ||
+                   rw_reads_graph(s->slice_start) || rw_reads_graph(s->slice_end);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            ast_list *a = ((cypher_function_call*)e)->args;
+            for (int i = 0; a && i < a->count; i++) if (rw_reads_graph(a->items[i])) return true;
+            return false;
+        }
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list*)e)->items;
+            for (int i = 0; a && i < a->count; i++) if (rw_reads_graph(a->items[i])) return true;
+            return false;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map*)e;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (rw_reads_graph(((cypher_map_pair*)m->pairs->items[i])->value)) return true;
+            return false;
+        }
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr*)e;
+            if (rw_reads_graph(c->operand) || rw_reads_graph(c->else_expr)) return true;
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause*)c->when_clauses->items[i];
+                if (rw_reads_graph(w->condition) || rw_reads_graph(w->result)) return true;
+            }
+            return false;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension*)e;
+            return rw_reads_graph(lc->list_expr) || rw_reads_graph(lc->where_expr) ||
+                   rw_reads_graph(lc->transform_expr);
+        }
+        default:
+            return false;
+    }
+}
+
+/* A property value of a CREATE that reads the graph, and the expression it
+ * held before the row values replaced it. */
+typedef struct { ast_node **slot; ast_node *orig; } rw_eager_slot;
+
+/* The property values of a CREATE pattern that read the graph. With
+ * out == NULL, only counts them. */
+static int rw_eager_slots(ast_list *pattern, rw_eager_slot **out, int *n)
+{
+    int found = 0;
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *it = pattern->items[i];
+        ast_list *els = NULL;
+        ast_node *single[1] = { it };
+        ast_list one = { .items = single, .count = 1 };
+        if (it->type == AST_NODE_PATH) els = ((cypher_path*)it)->elements;
+        else if (it->type == AST_NODE_NODE_PATTERN) els = &one;
+        for (int j = 0; els && j < els->count; j++) {
+            ast_node *el = els->items[j], *props = NULL;
+            if (el->type == AST_NODE_NODE_PATTERN) props = ((cypher_node_pattern*)el)->properties;
+            else if (el->type == AST_NODE_REL_PATTERN) props = ((cypher_rel_pattern*)el)->properties;
+            if (!props || props->type != AST_NODE_MAP) continue;
+            cypher_map *m = (cypher_map*)props;
+            for (int k = 0; m->pairs && k < m->pairs->count; k++) {
+                cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[k];
+                if (!pair || !rw_reads_graph(pair->value)) continue;
+                found++;
+                if (!out) continue;
+                rw_eager_slot *g = realloc(*out, (size_t)(*n + 1) * sizeof(rw_eager_slot));
+                if (!g) return found;
+                *out = g;
+                (*out)[*n].slot = &pair->value;
+                (*out)[*n].orig = NULL;
+                (*n)++;
+            }
+        }
+    }
+    return found;
+}
+
 static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
@@ -6906,6 +7087,20 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         if (clauses->items[i] && (clauses->items[i]->type == AST_NODE_MERGE ||
                                   clauses->items[i]->type == AST_NODE_CREATE)) { first_merge = i; break; }
     bool *eager_done = calloc((size_t)clauses->count, sizeof(bool));
+    /* GQLITE-T-0516: a CREATE whose property values read the graph is a
+     * barrier. Every row reaches it, then its values are computed for each
+     * row, then the rows create: `UNWIND [1, 2] AS i CREATE (:N {c: COUNT
+     * { MATCH () }})` gives 0 for both rows, as in openCypher, and a CREATE
+     * before it has run for every row. 1 = barrier ahead, 2 = values done. */
+    int *create_eager = calloc((size_t)clauses->count, sizeof(int));
+    rw_eager_slot *eager_slots = NULL;
+    int n_eager_slots = 0;
+    for (int i = prefix_end; create_eager && i < clauses->count; i++) {
+        ast_node *c = clauses->items[i];
+        if (c && c->type == AST_NODE_CREATE &&
+            rw_eager_slots(((cypher_create*)c)->pattern, NULL, NULL) > 0)
+            create_eager[i] = 1;
+    }
     for (int i = prefix_end; i < first_merge; i++) {
         ast_node *c = clauses->items[i];
         if (!c || c->type != AST_NODE_DELETE) continue;
@@ -7117,6 +7312,11 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 }
                 case AST_NODE_CREATE: {
                     cypher_create *cr = (cypher_create*)c;
+                    if (create_eager && create_eager[i] == 1) {
+                        row_alive[r] = false;
+                        row_start[r] = -(i + 1);
+                        break;
+                    }
                     rw_subst *subs = NULL; int n_subs = 0;
                     rw_literalize_pattern(executor, cr->pattern, &rows[r], &subs, &n_subs);
                     /* Entities bound by the row (e.g. CREATE (a)-[:R]->(b) after
@@ -7205,7 +7405,59 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         int barrier = -1;
         for (int r = 0; r < n_rows; r++)
             if (row_start[r] < 0 && (barrier < 0 || -row_start[r] - 1 < barrier)) barrier = -row_start[r] - 1;
-        if (barrier >= 0) {
+        if (barrier >= 0 && clauses->items[barrier]->type == AST_NODE_CREATE) {
+            /* GQLITE-T-0516: each parked row gets the values of the
+             * CREATE's graph-reading properties as hidden scalars, the
+             * properties then read those, and the rows go on (moved to the
+             * end, in order) from the CREATE. */
+            int first = n_eager_slots;
+            rw_eager_slots(((cypher_create*)clauses->items[barrier])->pattern, &eager_slots, &n_eager_slots);
+            int old_n = n_rows, n_parked = 0;
+            for (int r = 0; r < old_n; r++) {
+                if (row_start[r] != -(barrier + 1)) continue;
+                n_parked++;
+                for (int k = first; k < n_eager_slots; k++) {
+                    char *t = NULL; int ty = SQLITE_NULL;
+                    rw_eval_cell_typed(executor, *eager_slots[k].slot, &rows[r], &t, &ty);
+                    char nm[40];
+                    snprintf(nm, sizeof(nm), "__rw_eager_%d", k);
+                    rw_row_add_scalar(&rows[r], nm, t, t ? ty : SQLITE_NULL);
+                    free(t);
+                }
+            }
+            for (int k = first; k < n_eager_slots; k++) {
+                char nm[40];
+                snprintf(nm, sizeof(nm), "__rw_eager_%d", k);
+                eager_slots[k].orig = *eager_slots[k].slot;
+                *eager_slots[k].slot = (ast_node*)make_identifier(nm, 0);
+            }
+            create_eager[barrier] = 2;
+            if (n_rows + n_parked > rows_cap) {
+                int nc = n_rows + n_parked;
+                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                if (gr) rows = gr;
+                if (ga) row_alive = ga;
+                if (gs) row_start = gs;
+                if (!gr || !ga || !gs) rc = -1;
+                else rows_cap = nc;
+            }
+            if (rc >= 0) {
+                for (int r = 0; r < old_n; r++) {
+                    if (row_start[r] != -(barrier + 1)) continue;
+                    rows[n_rows] = rows[r];
+                    memset(&rows[r], 0, sizeof(rw_row));
+                    row_alive[r] = false;
+                    row_start[r] = clauses->count;
+                    row_alive[n_rows] = false;
+                    row_start[n_rows] = barrier;
+                    n_rows++;
+                }
+                scan_from = old_n;
+                goto run_rows;
+            }
+        } else if (barrier >= 0) {
             int *idx = calloc((size_t)n_rows, sizeof(int));
             int n_idx = 0;
             for (int r = 0; r < n_rows; r++) {
@@ -7261,6 +7513,13 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         }
     }
 
+    for (int k = 0; k < n_eager_slots; k++) {
+        if (!eager_slots[k].orig) continue;
+        ast_node_free(*eager_slots[k].slot);
+        *eager_slots[k].slot = eager_slots[k].orig;
+    }
+    free(eager_slots);
+    free(create_eager);
     for (int r = 0; r < n_rows; r++) rw_row_free(&rows[r]);
     free(rows);
     free(row_alive);

@@ -256,6 +256,13 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     /* Save variable count before processing patterns (for multi-graph support) */
     int var_count_before = transform_var_count(ctx->var_ctx);
 
+    /* Each pattern's base for its anonymous `n_<j>` aliases is the
+     * counter here plus the elements of the patterns before it
+     * (transform_match_pattern), so the constraint pass below can name the
+     * same tables. It used the last pattern's base for every pattern:
+     * `MATCH ()-[r]->(), (c)` gave "no such column: n_3.id" (GQLITE-T-0516). */
+    int anon_run = ctx->anon_node_counter;
+
     /* Process each pattern in the MATCH - this only adds table joins */
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
@@ -292,6 +299,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
         cypher_path *path = (cypher_path*)pattern;
+        ctx->anon_node_base = anon_run;
+        anon_run += path->elements->count;
         
         /* Add constraints for each node in this pattern */
         for (int j = 0; j < path->elements->count; j++) {
