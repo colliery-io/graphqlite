@@ -4166,8 +4166,18 @@ void regexp_func(
         pattern += 4;  /* Skip the flag */
     }
 
+    /* =~ matches the whole string, as in openCypher: '1_.*' does not
+     * match '21_val' (GQLITE-T-0519; regexec finds a match anywhere). */
+    size_t plen = strlen(pattern);
+    char *anchored = malloc(plen + 5);
+    if (!anchored) { sqlite3_result_error_nomem(context); return; }
+    memcpy(anchored, "^(", 2);
+    memcpy(anchored + 2, pattern, plen);
+    memcpy(anchored + 2 + plen, ")$", 3);
+
     /* Compile the regex */
-    ret = regcomp(&regex, pattern, cflags);
+    ret = regcomp(&regex, anchored, cflags);
+    free(anchored);
     if (ret != 0) {
         char errbuf[256];
         regerror(ret, &regex, errbuf, sizeof(errbuf));

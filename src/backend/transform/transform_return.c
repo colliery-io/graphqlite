@@ -9,6 +9,7 @@
 #include <ctype.h>
 
 #include "transform/cypher_transform.h"
+#include "gql_thread_local.h"
 #include "entity_json_sql.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
@@ -32,6 +33,9 @@ char* serialize_ast_to_json(ast_node *expr);
 /* Nesting depth of a list/map literal made only of constants (integers,
  * strings, booleans, null), or -1. Decimals are excluded: the serializer
  * prints them with %g. */
+/* Nesting depth of pattern comprehensions being transformed (GQLITE-T-0519) */
+static GQL_THREAD_LOCAL int g_pc_depth;
+
 static int const_literal_depth(ast_node *expr)
 {
     if (!expr) return -1;
@@ -421,6 +425,8 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
  * __gqlt_<i> after the visible columns, as plain text that survives the
  * sorter of ORDER BY / DISTINCT / GROUP BY, which drops subtypes. The
  * result reader applies it. */
+static bool ast_contains_aggregate_func(ast_node *expr);
+
 static bool expr_has_aggregate(const ast_node *expr)
 {
     if (!expr) return false;
@@ -439,6 +445,8 @@ static bool expr_has_aggregate(const ast_node *expr)
         const cypher_binary_op *b = (const cypher_binary_op *)expr;
         return expr_has_aggregate(b->left) || expr_has_aggregate(b->right);
     }
+    if (expr->type == AST_NODE_CASE_EXPR)
+        return ast_contains_aggregate_func((ast_node *)expr);
     return false;
 }
 
@@ -613,6 +621,18 @@ static bool ast_contains_aggregate_func(ast_node *expr)
             /* T-0370: the comprehension's source list may aggregate
              * (`[x IN collect(p) | ...]`). */
             return ast_contains_aggregate_func(((cypher_list_comprehension *)expr)->list_expr);
+        case AST_NODE_CASE_EXPR: {
+            /* GQLITE-T-0519: CASE k WHEN 'a' THEN sum(v) ELSE max(v) END */
+            cypher_case_expr *c = (cypher_case_expr *)expr;
+            if (ast_contains_aggregate_func(c->operand) || ast_contains_aggregate_func(c->else_expr))
+                return true;
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause *)c->when_clauses->items[i];
+                if (ast_contains_aggregate_func(w->condition) || ast_contains_aggregate_func(w->result))
+                    return true;
+            }
+            return false;
+        }
         default:
             return false;
     }
@@ -684,6 +704,20 @@ static void return_implicit_group_by(cypher_transform_context *ctx, cypher_retur
             free(gb_expr);
         }
     }
+}
+
+
+/* SQL of a SKIP / LIMIT expression that is not a literal or a parameter,
+ * in parentheses; NULL on failure. */
+static char *limit_skip_expr_sql(cypher_transform_context *ctx, ast_node *expr)
+{
+    char *e = cypher_transform_capture_expression(ctx, expr);
+    if (!e) return NULL;
+    size_t n = strlen(e) + 3;
+    char *out = malloc(n);
+    if (out) snprintf(out, n, "(%s)", e);
+    free(e);
+    return out;
 }
 
 int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
@@ -1021,6 +1055,18 @@ return_star_done:
                 limit_val = -1;
             }
 
+            /* An expression (`SKIP reduce(s = 0, x IN [0, 2] | s + x)`) was
+
+             * ignored (GQLITE-T-0519). */
+
+            if (ret->limit && ret->limit->type != AST_NODE_LITERAL && ret->limit->type != AST_NODE_PARAMETER)
+
+                limit_param = limit_skip_expr_sql(ctx, ret->limit);
+
+            if (ret->skip && ret->skip->type != AST_NODE_LITERAL && ret->skip->type != AST_NODE_PARAMETER)
+
+                offset_param = limit_skip_expr_sql(ctx, ret->skip);
+
             sql_limit(ctx->unified_builder, limit_val, offset_val);
             if (limit_param || offset_param) {
                 sql_limit_expr(ctx->unified_builder, limit_param, offset_param);
@@ -1249,6 +1295,18 @@ return_star_done:
                         register_parameter(ctx, p->name);
                     }
                 }
+
+                /* An expression (`SKIP reduce(s = 0, x IN [0, 2] | s + x)`) was
+
+                 * ignored (GQLITE-T-0519). */
+
+                if (ret->limit && ret->limit->type != AST_NODE_LITERAL && ret->limit->type != AST_NODE_PARAMETER)
+
+                    limit_param = limit_skip_expr_sql(ctx, ret->limit);
+
+                if (ret->skip && ret->skip->type != AST_NODE_LITERAL && ret->skip->type != AST_NODE_PARAMETER)
+
+                    offset_param = limit_skip_expr_sql(ctx, ret->skip);
 
                 sql_limit(ctx->unified_builder, limit_val, offset_val);
                 if (limit_param || offset_param) {
@@ -2334,6 +2392,11 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                  *      WHERE r.source_id = n.id AND r.target_id = m.id [AND cond])
                  */
                 cypher_pattern_comprehension *comp = (cypher_pattern_comprehension*)expr;
+                /* Table aliases are numbered from 100 x the nesting depth: a
+                 * comprehension inside another one's expression reused
+                 * `_pc_n1` and hid the outer `i1` (GQLITE-T-0519). */
+                int pcb = g_pc_depth * 100;
+                g_pc_depth++;
 
                 if (!comp->pattern || comp->pattern->count == 0) {
                     ctx->has_error = true;
@@ -2443,7 +2506,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                 append_sql(ctx, ", ");
                             }
                             snprintf(node_aliases[node_count], sizeof(node_aliases[node_count]),
-                                    "_pc_n%d", node_count);
+                                    "_pc_n%d", node_count + pcb);
                             append_sql(ctx, "nodes AS %s", node_aliases[node_count]);
                             if (!inner_anchor[0])
                                 snprintf(inner_anchor, sizeof(inner_anchor), "%s.id", node_aliases[node_count]);
@@ -2473,14 +2536,14 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                               ? node_ids[node_count - 1] : NULL;
                             char *vt = pc_varlen_table(ctx, vrel, anc);
                             if (!vt) return -1;
-                            append_sql(ctx, "%s AS _pc_e%d", vt, i/2);
+                            append_sql(ctx, "%s AS _pc_e%d", vt, i/2 + pcb);
                             free(vt);
                             if (!inner_anchor[0])
-                                snprintf(inner_anchor, sizeof(inner_anchor), "_pc_e%d.start_id", i/2);
+                                snprintf(inner_anchor, sizeof(inner_anchor), "_pc_e%d.start_id", i/2 + pcb);
                         } else {
-                            append_sql(ctx, "edges AS _pc_e%d", i/2);
+                            append_sql(ctx, "edges AS _pc_e%d", i/2 + pcb);
                             if (!inner_anchor[0])
-                                snprintf(inner_anchor, sizeof(inner_anchor), "_pc_e%d.id", i/2);
+                                snprintf(inner_anchor, sizeof(inner_anchor), "_pc_e%d.id", i/2 + pcb);
                         }
                         first_table = false;
                     }
@@ -2511,7 +2574,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             if (!rel->variable || !rel->variable[0]) {
                                 if (comp->path_var) {
                                     char gen[32];
-                                    snprintf(gen, sizeof(gen), "_pc_relv%d", rel_i);
+                                    snprintf(gen, sizeof(gen), "_pc_relv%d", rel_i + pcb);
                                     rel->variable = strdup(gen);
                                 }
                             }
@@ -2520,7 +2583,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             if (rel->variable && rel->variable[0] &&
                                 (!rel->varlen || (comp->path_var && strncmp(rel->variable, "_pc_relv", 8) == 0))) {
                                 char alias[32];
-                                snprintf(alias, sizeof(alias), "_pc_e%d", rel_i);
+                                snprintf(alias, sizeof(alias), "_pc_e%d", rel_i + pcb);
                                 transform_var_register_edge(ctx->var_ctx, rel->variable, alias, NULL);
                             }
                             rel_i++;
@@ -2538,10 +2601,10 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                             if (!np->variable || !np->variable[0]) {
                                 int slot = i / 2;
                                 char gen[32];
-                                snprintf(gen, sizeof(gen), "_pc_nv%d", slot);
+                                snprintf(gen, sizeof(gen), "_pc_nv%d", slot + pcb);
                                 np->variable = strdup(gen);
                                 char alias[32];
-                                snprintf(alias, sizeof(alias), "_pc_n%d", slot);
+                                snprintf(alias, sizeof(alias), "_pc_n%d", slot + pcb);
                                 transform_var_register_node(ctx->var_ctx, np->variable, alias, NULL);
                             }
                         }
@@ -2575,27 +2638,27 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                         if (rel->varlen) {
                             /* the walk table is in the pattern's direction */
                             append_sql(ctx, "_pc_e%d.start_id = %s AND _pc_e%d.end_id = %s",
-                                      rel_index, node_ids[source_node],
-                                      rel_index, node_ids[target_node]);
+                                      rel_index + pcb, node_ids[source_node],
+                                      rel_index + pcb, node_ids[target_node]);
                         } else if (rel->left_arrow && !rel->right_arrow) {
                             /* <-[r]- means target->source */
                             append_sql(ctx, "_pc_e%d.target_id = %s AND _pc_e%d.source_id = %s",
-                                      rel_index, node_ids[source_node],
-                                      rel_index, node_ids[target_node]);
+                                      rel_index + pcb, node_ids[source_node],
+                                      rel_index + pcb, node_ids[target_node]);
                         } else if (!rel->left_arrow && !rel->right_arrow) {
                             /* T-0370: -[r]- is undirected — either
                              * orientation (Pattern2 [11]). */
                             append_sql(ctx, "((_pc_e%d.source_id = %s AND _pc_e%d.target_id = %s)"
                                             " OR (_pc_e%d.source_id = %s AND _pc_e%d.target_id = %s))",
-                                      rel_index, node_ids[source_node],
-                                      rel_index, node_ids[target_node],
-                                      rel_index, node_ids[target_node],
-                                      rel_index, node_ids[source_node]);
+                                      rel_index + pcb, node_ids[source_node],
+                                      rel_index + pcb, node_ids[target_node],
+                                      rel_index + pcb, node_ids[target_node],
+                                      rel_index + pcb, node_ids[source_node]);
                         } else {
                             /* -[r]-> means source->target */
                             append_sql(ctx, "_pc_e%d.source_id = %s AND _pc_e%d.target_id = %s",
-                                      rel_index, node_ids[source_node],
-                                      rel_index, node_ids[target_node]);
+                                      rel_index + pcb, node_ids[source_node],
+                                      rel_index + pcb, node_ids[target_node]);
                         }
 
                         /* Relationship type or type list (a type list was
@@ -2603,7 +2666,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                          * inside. */
                         if (!rel->varlen) {
                             char ealias[32];
-                            snprintf(ealias, sizeof(ealias), "_pc_e%d", rel_index);
+                            snprintf(ealias, sizeof(ealias), "_pc_e%d", rel_index + pcb);
                             char *tc = pc_rel_type_cond(rel, ealias);
                             if (tc) { append_sql(ctx, "%s", tc); free(tc); }
                         }
@@ -2651,7 +2714,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                 for (int ea = 0; ea < rel_index; ea++) {
                     for (int eb = ea + 1; eb < rel_index; eb++) {
                         append_sql(ctx, "%s_pc_e%d.id <> _pc_e%d.id",
-                                   first_condition ? "" : " AND ", ea, eb);
+                                   first_condition ? "" : " AND ", ea + pcb, eb + pcb);
                         first_condition = false;
                     }
                 }
@@ -2777,6 +2840,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* Restore variable count (remove pattern-local variables) */
                 transform_var_truncate_to(ctx->var_ctx, saved_var_count);
+                g_pc_depth--;
             }
             break;
 

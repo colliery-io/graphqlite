@@ -99,6 +99,18 @@ static const char *find_aggregating_call(ast_node *expr)
          * list (List12 [5]); the element/WHERE expressions run per
          * element and are not grouping keys. */
         return find_aggregating_call(((cypher_list_comprehension*)expr)->list_expr);
+    } else if (expr->type == AST_NODE_CASE_EXPR) {
+        /* `CASE k WHEN 'a' THEN sum(v) ELSE max(v) END` aggregates; it was a
+         * grouping key, so all rows fell in one group (GQLITE-T-0519). */
+        cypher_case_expr *c = (cypher_case_expr*)expr;
+        const char *r = find_aggregating_call(c->operand);
+        if (!r) r = find_aggregating_call(c->else_expr);
+        for (int i = 0; !r && c->when_clauses && i < c->when_clauses->count; i++) {
+            cypher_when_clause *w = (cypher_when_clause*)c->when_clauses->items[i];
+            r = find_aggregating_call(w->condition);
+            if (!r) r = find_aggregating_call(w->result);
+        }
+        return r;
     }
     return NULL;
 }
