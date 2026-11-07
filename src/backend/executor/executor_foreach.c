@@ -11,6 +11,33 @@
 #include "executor/cypher_executor.h"
 #include "transform/cypher_transform.h"
 #include "parser/cypher_debug.h"
+#include "runtime/gql_error.h"
+
+/* GQLITE-T-0517: a value that is not a list is iterated once, as a list of
+ * that value (`FOREACH (v IN 1 | ...)`); null stays null (no iteration).
+ * Takes the value as SQL would give it, and returns an owned JSON array,
+ * or NULL. */
+static char *foreach_single_as_list(sqlite3 *db, int sql_type, const char *text, bool is_bool, bool is_json)
+{
+    if (sql_type == SQLITE_NULL || !text) return NULL;
+    if (is_json && text[0] == '[') return strdup(text);
+    if (is_bool) return strdup((strcmp(text, "0") == 0 || strcmp(text, "false") == 0) ? "[false]" : "[true]");
+    if (sql_type == SQLITE_INTEGER || sql_type == SQLITE_FLOAT || is_json) {
+        char *r = sqlite3_mprintf("[%s]", text);
+        char *out = r ? strdup(r) : NULL;
+        sqlite3_free(r);
+        return out;
+    }
+    char *out = NULL;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT json_array(?1)", -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, text, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_text(st, 0))
+            out = strdup((const char *)sqlite3_column_text(st, 0));
+        sqlite3_finalize(st);
+    }
+    return out;
+}
 
 /* Forward declaration for evaluating list expressions */
 static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
@@ -230,9 +257,27 @@ static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
         int erc = executor_eval_value(executor, expr, outer, &pt, &pv);
         if (erc == -2) { property_value_free(&pv); return 0; }
         if (erc < 0) { property_value_free(&pv); return -1; }
-        if (pt == PROP_TYPE_JSON || pt == PROP_TYPE_TEXT) {
-            *json_out = pv.as_str;
-            pv.as_str = NULL;
+        char num[64];
+        switch (pt) {
+            case PROP_TYPE_JSON:
+                *json_out = foreach_single_as_list(executor->db, SQLITE_TEXT, pv.as_str, false, true);
+                break;
+            case PROP_TYPE_TEXT:
+                *json_out = foreach_single_as_list(executor->db, SQLITE_TEXT, pv.as_str, false, false);
+                break;
+            case PROP_TYPE_INTEGER:
+                snprintf(num, sizeof(num), "%lld", (long long)pv.as_int);
+                *json_out = foreach_single_as_list(executor->db, SQLITE_INTEGER, num, false, false);
+                break;
+            case PROP_TYPE_REAL:
+                snprintf(num, sizeof(num), "%.17g", pv.as_real);
+                *json_out = foreach_single_as_list(executor->db, SQLITE_FLOAT, num, false, false);
+                break;
+            case PROP_TYPE_BOOLEAN:
+                *json_out = foreach_single_as_list(executor->db, SQLITE_INTEGER, pv.as_bool ? "1" : "0", true, false);
+                break;
+            default:
+                break;
         }
         property_value_free(&pv);
         return 0;
@@ -264,8 +309,14 @@ static int evaluate_list_expression(cypher_executor *executor, ast_node *expr,
     if (executor->params_json) bind_params_from_json(stmt, executor->params_json);
 
     if (sqlite3_step(stmt) == SQLITE_ROW) {
+        sqlite3_value *v = sqlite3_column_value(stmt, 0);
         const char *text = (const char *)sqlite3_column_text(stmt, 0);
-        if (text) *json_out = strdup(text);
+        int t = sqlite3_column_type(stmt, 0);
+        unsigned int sub = v ? sqlite3_value_subtype(v) : 0;
+        bool is_json = sub == GQL_SUBTYPE_JSON ||
+                       (t == SQLITE_TEXT && text && text[0] == '[');   /* a list from a function */
+        bool is_bool = sub == GQL_SUBTYPE_BOOLEAN || (t == SQLITE_INTEGER && ast_is_boolean_expr(expr));
+        *json_out = foreach_single_as_list(executor->db, t, text, is_bool, is_json);
     }
     sqlite3_finalize(stmt);
     return 0;
