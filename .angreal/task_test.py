@@ -1198,3 +1198,57 @@ def test_upgrade(releases: str = "") -> int:
     if releases:
         cmd += ["--releases", releases]
     return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="sqlite-matrix",
+    about="Functional tests and TCK on several SQLite releases built from the amalgamation",
+    tool=angreal.ToolDescription(
+        """
+SQLite version matrix (GQLITE-T-0531). Downloads each SQLite release's
+amalgamation from sqlite.org into build/sqlite-matrix/<version> (kept),
+builds a sqlite3 shell and a shared libsqlite3, runs `make test-functional`
+with that shell and the TCK with Python loading that libsqlite3
+(DYLD_LIBRARY_PATH / LD_LIBRARY_PATH). Default versions: 3.45.1 (the
+minimum supported), 3.46.1, 3.50.4, 3.53.4, 3.54.1 and the pre-release
+snapshot.
+
+## When to use
+- Before a release; after a change to JSON, subtype or float handling
+
+## Examples
+```
+angreal test sqlite-matrix
+angreal test sqlite-matrix --versions 3.45.1 --no-tck
+```
+
+## Output
+- One line per version with the functional and TCK results; logs in
+  build/sqlite-matrix/.
+
+## Exit code
+1 when a version fails; else 0. Needs network access on the first run.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="versions", long="versions", help="Comma-separated versions")
+@angreal.argument(name="no_tck", long="no-tck", is_flag=True, takes_value=False, help="Functional tests only")
+def test_sqlite_matrix(versions: str = "", no_tck: bool = False) -> int:
+    """SQLite version matrix."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.sqlite_matrix.run"]
+    if versions:
+        cmd += ["--versions", versions]
+    if no_tck:
+        cmd.append("--no-tck")
+    return subprocess.run(cmd, cwd=root, env=env).returncode

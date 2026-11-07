@@ -237,6 +237,52 @@ bool ast_expr_equal(const ast_node *a, const ast_node *b)
     }
 }
 
+/* A double as SQL that every SQLite reads back as exactly that double
+ * (GQLITE-T-0531). Decimal text is safe when its significand has at most
+ * 15 digits and its power of ten is at most 22: then even a parser that
+ * computes in double (SQLite before 3.53 on arm64) rounds once. Any other
+ * value is written as its exact bits, _gql_f64(M, E) = M * 2^E: `1e-305`
+ * read back as 9.999999999999999e-306 (TCK Literals5 [6] on SQLite 3.50). */
+const char *gql_sql_real(char *buf, size_t buflen, double v)
+{
+    if (!buf || buflen == 0) return buf;
+    if (isnan(v) || isinf(v) || v == 0.0) {
+        snprintf(buf, buflen, v == 0.0 ? (signbit(v) ? "-0.0" : "0.0") : "%.17g", v);
+        return buf;
+    }
+    char t[64];
+    snprintf(t, sizeof(t), "%.15g", v);
+    bool safe = strtod(t, NULL) == v;
+    if (safe) {
+        /* digits of the significand and its power of ten */
+        int digits = 0, frac = 0, exp10 = 0;
+        bool in_frac = false, leading = true;
+        const char *p = t;
+        if (*p == '-') p++;
+        for (; *p && *p != 'e' && *p != 'E'; p++) {
+            if (*p == '.') { in_frac = true; continue; }
+            if (leading && *p == '0') { if (in_frac) frac++; continue; }
+            leading = false;
+            digits++;
+            if (in_frac) frac++;
+        }
+        if (*p == 'e' || *p == 'E') exp10 = atoi(p + 1);
+        /* trailing zeros of the integer digits do not count */
+        int k = exp10 - frac;
+        safe = digits <= 15 && k <= 22 && k >= -22;
+    }
+    if (safe) {
+        snprintf(buf, buflen, "%s", t);
+        if (!strpbrk(buf, ".eE") && strlen(buf) + 3 <= buflen) strcat(buf, ".0");
+        return buf;
+    }
+    int e2 = 0;
+    double m = frexp(v, &e2);
+    long long mant = (long long)ldexp(m, 53);
+    snprintf(buf, buflen, "_gql_f64(%lld, %d)", mant, e2 - 53);
+    return buf;
+}
+
 /* Render a double as the shortest text that reads back as the same value,
  * keeping ".0" on a whole number so a float never reads back as an integer
  * (GQLITE-T-0403). "%g" kept 6 digits and dropped the ".0". */

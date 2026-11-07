@@ -289,7 +289,7 @@ static bool plan_index_comparison(cypher_transform_context *ctx, cypher_binary_o
             pl->tables[pl->ntables++] = "_props_real";
             break;
         case LITERAL_DECIMAL:
-            snprintf(pl->val_buf, sizeof(pl->val_buf), "%.17g", lit->value.decimal);
+            gql_sql_real(pl->val_buf, sizeof(pl->val_buf), lit->value.decimal);
             pl->tables[pl->ntables++] = "_props_int";
             pl->tables[pl->ntables++] = "_props_real";
             break;

@@ -11,4 +11,7 @@ char *gql_check_storage_db(sqlite3 *db);
 
 void gql_check_storage_func(sqlite3_context *context, int argc, sqlite3_value **argv);
 
+/* _gql_f64(M, E) = M * 2^E (GQLITE-T-0531) */
+void gql_f64_func(sqlite3_context *context, int argc, sqlite3_value **argv);
+
 #endif

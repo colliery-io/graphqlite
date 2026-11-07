@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "graphqlite_sqlite.h"
 #include "runtime/storage_check.h"
@@ -152,4 +153,11 @@ void gql_check_storage_func(sqlite3_context *context, int argc, sqlite3_value **
     char *r = gql_check_storage_db(sqlite3_context_db_handle(context));
     if (!r) { sqlite3_result_error_nomem(context); return; }
     sqlite3_result_text(context, r, -1, sqlite3_free);
+}
+
+/* _gql_f64(M, E): M * 2^E (GQLITE-T-0531, gql_sql_real) */
+void gql_f64_func(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    if (argc != 2 || sqlite3_value_type(argv[0]) == SQLITE_NULL) { sqlite3_result_null(context); return; }
+    sqlite3_result_double(context, ldexp((double)sqlite3_value_int64(argv[0]), sqlite3_value_int(argv[1])));
 }
