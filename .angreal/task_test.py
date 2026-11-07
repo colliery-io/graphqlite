@@ -1092,3 +1092,55 @@ def test_neo4j_acceptance(update_baseline: bool = False) -> int:
     if update_baseline:
         cmd.append("--update-baseline")
     return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="crash",
+    about="Kill a writer at random points; check the database is whole and each write all-or-nothing",
+    tool=angreal.ToolDescription(
+        """
+Crash test (GQLITE-T-0530). Starts tests/crash/writer.py on one database
+file, kills it with SIGKILL after a random delay, reopens the file and
+checks: PRAGMA integrity_check, gql_check_storage(), and that every write is
+all there or not there (each write tags its rows with a batch id). The
+writes: UNWIND CREATE, CREATE of relationships, MERGE in FOREACH, SET,
+DETACH DELETE, BEGIN ... COMMIT of three CREATEs, and the Python bulk
+importers. Rounds alternate journal_mode WAL and DELETE; the file is kept
+across rounds.
+
+## When to use
+- After a change to a write path, the executor's transactions or the bulk
+  importers
+
+## Examples
+```
+angreal test crash
+angreal test crash --rounds 1000
+```
+
+## Output
+- One line per bad round and a summary. The database of the first bad
+  round is kept in build/crash/.
+
+## Exit code
+1 when a round finds a problem; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="rounds", long="rounds", python_type="int", help="Rounds (default 200)")
+@angreal.argument(name="seed", long="seed", python_type="int", help="Seed (default 1)")
+def test_crash(rounds: int = 0, seed: int = 0) -> int:
+    """Crash test of the write paths."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.crash.run", "--rounds", str(rounds or 200), "--seed", str(seed or 1)]
+    return subprocess.run(cmd, cwd=root, env=env).returncode
