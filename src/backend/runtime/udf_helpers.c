@@ -488,6 +488,23 @@ void gql_order_cmp_func(
     if (lt == SQLITE_NULL || rt == SQLITE_NULL) {
         sqlite3_result_null(context); return;
     }
+    /* NaN (its sentinel text) against a number or NaN: every ordered
+     * comparison is false; against anything else, null (GQLITE-T-0518:
+     * `WITH 0.0/0.0 AS nan RETURN nan < 0.0` was null). */
+    {
+        bool l_nan = lt == SQLITE_TEXT && strcmp((const char *)sqlite3_value_text(argv[0]), GQL_NAN_SENTINEL) == 0;
+        bool r_nan = rt == SQLITE_TEXT && strcmp((const char *)sqlite3_value_text(argv[1]), GQL_NAN_SENTINEL) == 0;
+        if (l_nan || r_nan) {
+            bool l_ok = l_nan || lt == SQLITE_INTEGER || lt == SQLITE_FLOAT;
+            bool r_ok = r_nan || rt == SQLITE_INTEGER || rt == SQLITE_FLOAT;
+            const char *lg = argc == 5 ? (const char *)sqlite3_value_text(argv[3]) : NULL;
+            const char *rg = argc == 5 ? (const char *)sqlite3_value_text(argv[4]) : NULL;
+            if ((lg && strcmp(lg, "bool") == 0) || (rg && strcmp(rg, "bool") == 0)) l_ok = false;
+            if (l_ok && r_ok) sqlite3_result_int(context, 0);
+            else sqlite3_result_null(context);
+            return;
+        }
+    }
     /* Note: we don't reject boolean-vs-boolean ordering here. The
      * spec is fuzzy and graphqlite's existing tests (Precedence1
      * [23]/[26]) rely on boolean values surviving the < / > paths
@@ -1101,6 +1118,8 @@ void gql_to_string_strict_func(
                 return;
             }
         }
+        /* toStringOrNull (user data set): null (GQLITE-T-0516) */
+        if (sqlite3_user_data(context)) { sqlite3_result_null(context); return; }
         sqlite3_result_error(context,
             "TypeError: InvalidArgumentValue: toString() does not accept lists, maps, nodes, relationships, or paths", -1);
         return;
@@ -4147,8 +4166,18 @@ void regexp_func(
         pattern += 4;  /* Skip the flag */
     }
 
+    /* =~ matches the whole string, as in openCypher: '1_.*' does not
+     * match '21_val' (GQLITE-T-0519; regexec finds a match anywhere). */
+    size_t plen = strlen(pattern);
+    char *anchored = malloc(plen + 5);
+    if (!anchored) { sqlite3_result_error_nomem(context); return; }
+    memcpy(anchored, "^(", 2);
+    memcpy(anchored + 2, pattern, plen);
+    memcpy(anchored + 2 + plen, ")$", 3);
+
     /* Compile the regex */
-    ret = regcomp(&regex, pattern, cflags);
+    ret = regcomp(&regex, anchored, cflags);
+    free(anchored);
     if (ret != 0) {
         char errbuf[256];
         regerror(ret, &regex, errbuf, sizeof(errbuf));

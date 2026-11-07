@@ -140,6 +140,15 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
     if (transform_expression(ctx, func_call->args->items[0]) < 0) {
         return -1;
     }
+    if (strcmp(sql_func, "TRIM") == 0 || strcmp(sql_func, "LTRIM") == 0 ||
+        strcmp(sql_func, "RTRIM") == 0) {
+        /* Whitespace as Java's Character.isWhitespace, as in Neo4j: the
+         * Unicode space and line separators other than the no-break
+         * spaces, and the ASCII controls (GQLITE-T-0519; only ' ' was
+         * trimmed). */
+        append_sql(ctx, ", char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 5760, 8192, 8193, 8194, "
+                        "8195, 8196, 8197, 8198, 8200, 8201, 8202, 8232, 8233, 8287, 12288)");
+    }
     append_sql(ctx, ")");
 
     return 0;

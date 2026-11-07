@@ -75,6 +75,16 @@ static int append_expr_prop_filter(cypher_transform_context *ctx, bool is_edge,
     char *v = cypher_transform_capture_expression(ctx, value);
     ctx->in_comparison = saved_cmp;
     if (!v) return -1;
+    if (ast_yields_boolean(value)) {
+        /* `{x: (NOT n:A)}`: a boolean by its shape is 1 / 0 with no tag in
+         * SQL, so it never reached the boolean table (GQLITE-T-0519). */
+        size_t n = strlen(v) + 32;
+        char *tagged = malloc(n);
+        if (!tagged) { free(v); return -1; }
+        snprintf(tagged, n, "_gql_retag((%s), 'bool')", v);
+        free(v);
+        v = tagged;
+    }
     char *esc_key = escape_sql_string(key);
     const char *k = esc_key ? esc_key : key;
     const char *col = is_edge ? "edge_id" : "node_id";
@@ -167,15 +177,22 @@ static const char *get_node_id_ref(cypher_transform_context *ctx,
                                    const char *alias,
                                    const char *var_name)
 {
-    static GQL_THREAD_LOCAL char id_ref_buf[256];
+    static GQL_THREAD_LOCAL char id_ref_buf[512];
 
     /* Check if this is a projected variable or a post-WITH node/edge (alias_is_id) */
     bool skip_id_suffix = var_name &&
         (transform_var_is_projected(ctx->var_ctx, var_name) ||
          transform_var_alias_is_id(ctx->var_ctx, var_name));
 
-    if (skip_id_suffix) {
-        /* For projected variables or post-WITH variables, the alias IS the id value */
+    if (skip_id_suffix && var_name && !transform_var_alias_is_id(ctx->var_ctx, var_name)) {
+        /* A projected value: an id, or a node as JSON (`WITH {k: a} AS m
+         * WITH m.k AS nd MATCH (x)<--(nd)` compared the edge with the JSON
+         * text, GQLITE-T-0519). */
+        snprintf(id_ref_buf, sizeof(id_ref_buf),
+                 "(CASE WHEN typeof(%s) = 'integer' THEN %s WHEN json_valid(%s) THEN json_extract(%s, '$.id') END)",
+                 alias, alias, alias, alias);
+    } else if (skip_id_suffix) {
+        /* For post-WITH variables, the alias IS the id value */
         snprintf(id_ref_buf, sizeof(id_ref_buf), "%s", alias);
     } else {
         /* For regular nodes, use alias.id */
@@ -256,6 +273,13 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     /* Save variable count before processing patterns (for multi-graph support) */
     int var_count_before = transform_var_count(ctx->var_ctx);
 
+    /* Each pattern's base for its anonymous `n_<j>` aliases is the
+     * counter here plus the elements of the patterns before it
+     * (transform_match_pattern), so the constraint pass below can name the
+     * same tables. It used the last pattern's base for every pattern:
+     * `MATCH ()-[r]->(), (c)` gave "no such column: n_3.id" (GQLITE-T-0516). */
+    int anon_run = ctx->anon_node_counter;
+
     /* Process each pattern in the MATCH - this only adds table joins */
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
@@ -292,6 +316,8 @@ int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
     for (int i = 0; i < match->pattern->count; i++) {
         ast_node *pattern = match->pattern->items[i];
         cypher_path *path = (cypher_path*)pattern;
+        ctx->anon_node_base = anon_run;
+        anon_run += path->elements->count;
         
         /* Add constraints for each node in this pattern */
         for (int j = 0; j < path->elements->count; j++) {

@@ -109,6 +109,132 @@ static int bind_all_params(sqlite3_stmt *stmt, param_binding *bindings, int coun
     return 0;
 }
 
+/* GQLITE-T-0517: does a MERGE property value need evaluating (an
+ * expression, not a literal, a parameter or a list / map of literals)? */
+static bool merge_value_needs_eval(ast_node *v)
+{
+    if (!v || v->type == AST_NODE_LITERAL || v->type == AST_NODE_PARAMETER) return false;
+    if (v->type == AST_NODE_LIST || v->type == AST_NODE_MAP) {
+        char *js = merge_json_value(v);
+        free(js);
+        return js == NULL;
+    }
+    return true;
+}
+
+/* GQLITE-T-0517: the value of a MERGE property expression, with the values
+ * of an enclosing FOREACH / UNWIND in scope (`MERGE (b {x: x + 1})`; it was
+ * ignored, so the MERGE matched any node and set nothing). 0 = value,
+ * -2 = null, -1 = cannot evaluate. */
+static int merge_eval_value(cypher_executor *executor, ast_node *v,
+                            property_type *t, property_value *pv)
+{
+    if (g_foreach_ctx && (v->type == AST_NODE_PROPERTY || v->type == AST_NODE_IDENTIFIER) &&
+        foreach_value(executor->db, g_foreach_ctx, v, t, pv) == 0)
+        return 0;
+    variable_map *vm = create_variable_map();
+    if (!vm) return -1;
+    int rc = executor_eval_value(executor, v, vm, t, pv);
+    free_variable_map(vm);
+    return rc;
+}
+
+/* GQLITE-T-0515: set the inline properties of a node a MERGE created. */
+static void set_merge_node_props(cypher_executor *executor, int node_id,
+                                 cypher_node_pattern *np, cypher_result *result)
+{
+    if (!np->properties || np->properties->type != AST_NODE_MAP) return;
+    cypher_map *map = (cypher_map*)np->properties;
+    for (int j = 0; map->pairs && j < map->pairs->count; j++) {
+        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+        if (!pair->key || !pair->value) continue;
+        if ((pair->value->type == AST_NODE_PROPERTY || pair->value->type == AST_NODE_IDENTIFIER) &&
+            g_foreach_ctx) {
+            property_type t = PROP_TYPE_TEXT;
+            property_value v;
+            property_value_init(&v);
+            if (foreach_value(executor->db, g_foreach_ctx, pair->value, &t, &v) == 0 &&
+                cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t,
+                                                property_value_ptr(t, &v)) == 0)
+                result->properties_set++;
+            property_value_free(&v);
+        } else if (pair->value->type == AST_NODE_PARAMETER) {
+            set_node_prop_from_param(executor, node_id, pair->key, (cypher_parameter*)pair->value, result);
+        } else if (pair->value->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)pair->value;
+            int b = lit->value.boolean;
+            property_type t;
+            const void *v;
+            switch (lit->literal_type) {
+                case LITERAL_STRING:  t = PROP_TYPE_TEXT;    v = lit->value.string;   break;
+                case LITERAL_INTEGER: t = PROP_TYPE_INTEGER; v = &lit->value.integer; break;
+                case LITERAL_DECIMAL: t = PROP_TYPE_REAL;    v = &lit->value.decimal; break;
+                case LITERAL_BOOLEAN: t = PROP_TYPE_BOOLEAN; v = &b;                  break;
+                default: continue;
+            }
+            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t, v) == 0)
+                result->properties_set++;
+        } else if (merge_value_needs_eval(pair->value)) {
+            property_type t = PROP_TYPE_TEXT;
+            property_value v;
+            property_value_init(&v);
+            if (merge_eval_value(executor, pair->value, &t, &v) == 0 &&
+                cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t,
+                                                property_value_ptr(t, &v)) == 0)
+                result->properties_set++;
+            property_value_free(&v);
+        } else {
+            char *js = merge_json_value(pair->value);
+            if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key,
+                                                      PROP_TYPE_JSON, js) == 0)
+                result->properties_set++;
+            free(js);
+        }
+    }
+}
+
+/* GQLITE-T-0515: set the inline properties of a relationship a MERGE created. */
+static void set_merge_edge_props(cypher_executor *executor, int edge_id,
+                                 cypher_rel_pattern *rp, cypher_result *result)
+{
+    if (!rp->properties || rp->properties->type != AST_NODE_MAP) return;
+    cypher_map *map = (cypher_map*)rp->properties;
+    for (int j = 0; map->pairs && j < map->pairs->count; j++) {
+        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+        if (!pair->key || !pair->value) continue;
+        property_type t = PROP_TYPE_TEXT;
+        property_value v;
+        property_value_init(&v);
+        const void *ptr = NULL;
+        char *js = NULL;
+        int b = 0;
+        if (pair->value->type == AST_NODE_PARAMETER) {
+            if (executor->params_json &&
+                get_param_value(executor->params_json, ((cypher_parameter*)pair->value)->name, &t, &v) == 0)
+                ptr = property_value_ptr(t, &v);
+        } else if (pair->value->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)pair->value;
+            switch (lit->literal_type) {
+                case LITERAL_STRING:  t = PROP_TYPE_TEXT;    ptr = lit->value.string;   break;
+                case LITERAL_INTEGER: t = PROP_TYPE_INTEGER; ptr = &lit->value.integer; break;
+                case LITERAL_DECIMAL: t = PROP_TYPE_REAL;    ptr = &lit->value.decimal; break;
+                case LITERAL_BOOLEAN: t = PROP_TYPE_BOOLEAN; b = lit->value.boolean; ptr = &b; break;
+                default: break;
+            }
+        } else if ((js = merge_json_value(pair->value)) != NULL) {
+            t = PROP_TYPE_JSON;
+            ptr = js;
+        } else if (merge_value_needs_eval(pair->value) &&
+                   merge_eval_value(executor, pair->value, &t, &v) == 0) {
+            ptr = property_value_ptr(t, &v);
+        }
+        if (ptr && cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, t, ptr) == 0)
+            result->properties_set++;
+        property_value_free(&v);
+        free(js);
+    }
+}
+
 /* GQLITE-T-0515: the label and property filters of a MERGE node pattern, as
  * JOINs on the alias `n` ("SELECT n.id FROM nodes n" + these). Appends its
  * bindings at *bind_count (at most cap) and the strings they point to at
@@ -143,8 +269,7 @@ static void append_node_filters(cypher_executor *executor, cypher_node_pattern *
             for (int i = 0; i < map->pairs->count; i++) {
                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[i];
                 if (pair->key && pair->value &&
-                    (((pair->value->type == AST_NODE_PROPERTY ||
-                       pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) ||
+                    (merge_value_needs_eval(pair->value) ||
                      (pair->value->type == AST_NODE_PARAMETER && executor->params_json))) {
                     /* Parameter-valued inline property, e.g.
                      * MERGE (n:L {id: $id}). Previously skipped, so the
@@ -160,7 +285,7 @@ static void append_node_filters(cypher_executor *executor, cypher_node_pattern *
                     int vrc = (pair->value->type == AST_NODE_PARAMETER)
                         ? get_param_value(executor->params_json,
                                           ((cypher_parameter*)pair->value)->name, &ptype, &pv)
-                        : foreach_value(executor->db, g_foreach_ctx, pair->value, &ptype, &pv);
+                        : merge_eval_value(executor, pair->value, &ptype, &pv);
                     if (vrc != 0) {
                         property_value_free(&pv);
                         continue;
@@ -193,6 +318,13 @@ static void append_node_filters(cypher_executor *executor, cypher_node_pattern *
                             prop_table = "node_props_bool";
                             val_bind.type = BIND_INT;
                             val_bind.value.integer = pv.as_bool ? 1 : 0;
+                            break;
+                        case PROP_TYPE_JSON:
+                            prop_table = "node_props_json";
+                            val_bind.type = BIND_TEXT;
+                            val_bind.value.text = pv.as_str;
+                            owned_strs[owned_count++] = pv.as_str;
+                            pv.as_str = NULL; /* ownership moved */
                             break;
                         default:
                             break;
@@ -375,18 +507,21 @@ static void append_edge_filters(cypher_executor *executor, cypher_rel_pattern *r
             for (int i = 0; i < map->pairs->count; i++) {
                 cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[i];
                 if (pair->key && pair->value &&
-                    pair->value->type == AST_NODE_PARAMETER &&
-                    executor->params_json) {
+                    ((pair->value->type == AST_NODE_PARAMETER && executor->params_json) ||
+                     merge_value_needs_eval(pair->value))) {
                     /* Parameter-valued inline property, e.g.
                      * MERGE (a)-[r:T {id: $eid}]->(b). Previously skipped,
                      * so MERGE matched any existing edge on the triple and
                      * never created a second one (same family as GitHub
                      * #96; needed for #97-style caller-assigned edge ids). */
-                    cypher_parameter *param = (cypher_parameter*)pair->value;
                     property_type ptype;
                     property_value pv;
                     property_value_init(&pv);
-                    if (get_param_value(executor->params_json, param->name, &ptype, &pv) != 0) {
+                    int vrc = (pair->value->type == AST_NODE_PARAMETER)
+                        ? get_param_value(executor->params_json,
+                                          ((cypher_parameter*)pair->value)->name, &ptype, &pv)
+                        : merge_eval_value(executor, pair->value, &ptype, &pv);
+                    if (vrc != 0) {
                         property_value_free(&pv);
                         continue;
                     }
@@ -605,90 +740,6 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
     return edge_id;
 }
-/* GQLITE-T-0515: set the inline properties of a node a MERGE created. */
-static void set_merge_node_props(cypher_executor *executor, int node_id,
-                                 cypher_node_pattern *np, cypher_result *result)
-{
-    if (!np->properties || np->properties->type != AST_NODE_MAP) return;
-    cypher_map *map = (cypher_map*)np->properties;
-    for (int j = 0; map->pairs && j < map->pairs->count; j++) {
-        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-        if (!pair->key || !pair->value) continue;
-        if ((pair->value->type == AST_NODE_PROPERTY || pair->value->type == AST_NODE_IDENTIFIER) &&
-            g_foreach_ctx) {
-            property_type t = PROP_TYPE_TEXT;
-            property_value v;
-            property_value_init(&v);
-            if (foreach_value(executor->db, g_foreach_ctx, pair->value, &t, &v) == 0 &&
-                cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t,
-                                                property_value_ptr(t, &v)) == 0)
-                result->properties_set++;
-            property_value_free(&v);
-        } else if (pair->value->type == AST_NODE_PARAMETER) {
-            set_node_prop_from_param(executor, node_id, pair->key, (cypher_parameter*)pair->value, result);
-        } else if (pair->value->type == AST_NODE_LITERAL) {
-            cypher_literal *lit = (cypher_literal*)pair->value;
-            int b = lit->value.boolean;
-            property_type t;
-            const void *v;
-            switch (lit->literal_type) {
-                case LITERAL_STRING:  t = PROP_TYPE_TEXT;    v = lit->value.string;   break;
-                case LITERAL_INTEGER: t = PROP_TYPE_INTEGER; v = &lit->value.integer; break;
-                case LITERAL_DECIMAL: t = PROP_TYPE_REAL;    v = &lit->value.decimal; break;
-                case LITERAL_BOOLEAN: t = PROP_TYPE_BOOLEAN; v = &b;                  break;
-                default: continue;
-            }
-            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t, v) == 0)
-                result->properties_set++;
-        } else {
-            char *js = merge_json_value(pair->value);
-            if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key,
-                                                      PROP_TYPE_JSON, js) == 0)
-                result->properties_set++;
-            free(js);
-        }
-    }
-}
-
-/* GQLITE-T-0515: set the inline properties of a relationship a MERGE created. */
-static void set_merge_edge_props(cypher_executor *executor, int edge_id,
-                                 cypher_rel_pattern *rp, cypher_result *result)
-{
-    if (!rp->properties || rp->properties->type != AST_NODE_MAP) return;
-    cypher_map *map = (cypher_map*)rp->properties;
-    for (int j = 0; map->pairs && j < map->pairs->count; j++) {
-        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-        if (!pair->key || !pair->value) continue;
-        property_type t = PROP_TYPE_TEXT;
-        property_value v;
-        property_value_init(&v);
-        const void *ptr = NULL;
-        char *js = NULL;
-        int b = 0;
-        if (pair->value->type == AST_NODE_PARAMETER) {
-            if (executor->params_json &&
-                get_param_value(executor->params_json, ((cypher_parameter*)pair->value)->name, &t, &v) == 0)
-                ptr = property_value_ptr(t, &v);
-        } else if (pair->value->type == AST_NODE_LITERAL) {
-            cypher_literal *lit = (cypher_literal*)pair->value;
-            switch (lit->literal_type) {
-                case LITERAL_STRING:  t = PROP_TYPE_TEXT;    ptr = lit->value.string;   break;
-                case LITERAL_INTEGER: t = PROP_TYPE_INTEGER; ptr = &lit->value.integer; break;
-                case LITERAL_DECIMAL: t = PROP_TYPE_REAL;    ptr = &lit->value.decimal; break;
-                case LITERAL_BOOLEAN: t = PROP_TYPE_BOOLEAN; b = lit->value.boolean; ptr = &b; break;
-                default: break;
-            }
-        } else if ((js = merge_json_value(pair->value)) != NULL) {
-            t = PROP_TYPE_JSON;
-            ptr = js;
-        }
-        if (ptr && cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, t, ptr) == 0)
-            result->properties_set++;
-        property_value_free(&v);
-        free(js);
-    }
-}
-
 #define MERGE_PATH_MAX 32
 
 /* GQLITE-T-0515: MERGE of a path with relationships. openCypher matches the
@@ -961,71 +1012,7 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                         }
                     }
 
-                    /* Add properties if specified */
-                    if (node_pattern->properties && node_pattern->properties->type == AST_NODE_MAP) {
-                        cypher_map *map = (cypher_map*)node_pattern->properties;
-                        if (map->pairs) {
-                            for (int j = 0; j < map->pairs->count; j++) {
-                                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                if (pair->key && pair->value && (pair->value->type == AST_NODE_PROPERTY ||
-                                    pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) {
-                                    /* Resolve from foreach context (e.g., item.id), keeping the type (#124) */
-                                    property_type fv_type = PROP_TYPE_TEXT;
-                                    property_value fv;
-                                    property_value_init(&fv);
-                                    if (foreach_value(executor->db, g_foreach_ctx, pair->value, &fv_type, &fv) == 0 &&
-                                        cypher_schema_set_node_property(executor->schema_mgr, node_id,
-                                            pair->key, fv_type, property_value_ptr(fv_type, &fv)) == 0) {
-                                        result->properties_set++;
-                                    }
-                                    property_value_free(&fv);
-                                } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                    cypher_literal *lit = (cypher_literal*)pair->value;
-                                    property_type prop_type = PROP_TYPE_TEXT;
-                                    const void *prop_value = NULL;
-
-                                    switch (lit->literal_type) {
-                                        case LITERAL_STRING:
-                                            prop_type = PROP_TYPE_TEXT;
-                                            prop_value = lit->value.string;
-                                            break;
-                                        case LITERAL_INTEGER:
-                                            prop_type = PROP_TYPE_INTEGER;
-                                            prop_value = &lit->value.integer;
-                                            break;
-                                        case LITERAL_DECIMAL:
-                                            prop_type = PROP_TYPE_REAL;
-                                            prop_value = &lit->value.decimal;
-                                            break;
-                                        case LITERAL_BOOLEAN:
-                                            prop_type = PROP_TYPE_BOOLEAN;
-                                            prop_value = &lit->value.boolean;
-                                            break;
-                                        default:
-                                            continue;
-                                    }
-
-                                    if (prop_value) {
-                                        cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value);
-                                        result->properties_set++;
-                                    }
-                                } else if (pair->key && pair->value &&
-                                           (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
-                                    /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
-                                    char *js = merge_json_value(pair->value);
-                                    if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id,
-                                            pair->key, PROP_TYPE_JSON, js) == 0) {
-                                        result->properties_set++;
-                                    }
-                                    free(js);
-                                } else if (pair->key && pair->value &&
-                                           pair->value->type == AST_NODE_PARAMETER) {
-                                    set_node_prop_from_param(executor, node_id, pair->key,
-                                        (cypher_parameter*)pair->value, result);
-                                }
-                            }
-                        }
-                    }
+                    set_merge_node_props(executor, node_id, node_pattern, result);
                 }
 
                 /* Store variable mapping if present */
@@ -1131,6 +1118,8 @@ int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
                             }
                         }
                     }
+                    /* the properties were not set here */
+                    set_merge_node_props(executor, node_id, node_pattern, result);
                 }
 
                 if (node_pattern->variable) {
@@ -1377,71 +1366,7 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                         }
                     }
 
-                    /* Add properties if specified */
-                    if (node_pattern->properties && node_pattern->properties->type == AST_NODE_MAP) {
-                        cypher_map *map = (cypher_map*)node_pattern->properties;
-                        if (map->pairs) {
-                            for (int j = 0; j < map->pairs->count; j++) {
-                                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                if (pair->key && pair->value && (pair->value->type == AST_NODE_PROPERTY ||
-                                    pair->value->type == AST_NODE_IDENTIFIER) && g_foreach_ctx) {
-                                    /* Resolve from foreach context (e.g., item.id), keeping the type (#124) */
-                                    property_type fv_type = PROP_TYPE_TEXT;
-                                    property_value fv;
-                                    property_value_init(&fv);
-                                    if (foreach_value(executor->db, g_foreach_ctx, pair->value, &fv_type, &fv) == 0 &&
-                                        cypher_schema_set_node_property(executor->schema_mgr, node_id,
-                                            pair->key, fv_type, property_value_ptr(fv_type, &fv)) == 0) {
-                                        result->properties_set++;
-                                    }
-                                    property_value_free(&fv);
-                                } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                    cypher_literal *lit = (cypher_literal*)pair->value;
-                                    property_type prop_type = PROP_TYPE_TEXT;
-                                    const void *prop_value = NULL;
-
-                                    switch (lit->literal_type) {
-                                        case LITERAL_STRING:
-                                            prop_type = PROP_TYPE_TEXT;
-                                            prop_value = lit->value.string;
-                                            break;
-                                        case LITERAL_INTEGER:
-                                            prop_type = PROP_TYPE_INTEGER;
-                                            prop_value = &lit->value.integer;
-                                            break;
-                                        case LITERAL_DECIMAL:
-                                            prop_type = PROP_TYPE_REAL;
-                                            prop_value = &lit->value.decimal;
-                                            break;
-                                        case LITERAL_BOOLEAN:
-                                            prop_type = PROP_TYPE_BOOLEAN;
-                                            prop_value = &lit->value.boolean;
-                                            break;
-                                        default:
-                                            continue;
-                                    }
-
-                                    if (prop_value) {
-                                        cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, prop_type, prop_value);
-                                        result->properties_set++;
-                                    }
-                                } else if (pair->key && pair->value &&
-                                           (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
-                                    /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
-                                    char *js = merge_json_value(pair->value);
-                                    if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id,
-                                            pair->key, PROP_TYPE_JSON, js) == 0) {
-                                        result->properties_set++;
-                                    }
-                                    free(js);
-                                } else if (pair->key && pair->value &&
-                                           pair->value->type == AST_NODE_PARAMETER) {
-                                    set_node_prop_from_param(executor, node_id, pair->key,
-                                        (cypher_parameter*)pair->value, result);
-                                }
-                            }
-                        }
-                    }
+                    set_merge_node_props(executor, node_id, node_pattern, result);
                 }
 
                 /* Store variable mapping */

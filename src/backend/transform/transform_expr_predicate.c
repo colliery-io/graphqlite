@@ -495,10 +495,12 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                             }
                         }
 
-                        /* Add WHERE clause for joins and constraints */
-                        append_sql(ctx, " WHERE ");
+                        /* Add WHERE clause for joins and constraints. `1` first:
+                         * `EXISTS { () }` has no condition, and an empty WHERE
+                         * was invalid SQL (GQLITE-T-0519). */
+                        append_sql(ctx, " WHERE 1");
 
-                        bool first_condition = true;
+                        bool first_condition = false;
                         int rel_index = 0;
 
                         /* Generate join conditions between nodes and relationships */

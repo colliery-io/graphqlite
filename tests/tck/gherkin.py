@@ -164,18 +164,26 @@ def _consume_step_payload(lines: list[str], i: int, step: Step) -> int:
     # Skip blank lines, then accept either a docstring or a table.
     n = len(lines)
     j = i
-    while j < n and not lines[j].strip():
+    # Blank lines and comments (`# Setup: ...` before a docstring).
+    while j < n and (not lines[j].strip() or lines[j].strip().startswith("#")):
         j += 1
     if j >= n:
         return i
 
     nxt = lines[j].strip()
     if nxt.startswith('"""'):
-        # Docstring — capture lines until the closing """.
+        # Docstring — capture lines until the closing """. As in Gherkin,
+        # each line loses the indentation of the opening """, so a string
+        # literal that spans lines keeps only its own spaces.
+        indent = len(lines[j]) - len(lines[j].lstrip())
         body: list[str] = []
         j += 1
         while j < n and lines[j].strip() != '"""':
-            body.append(lines[j])
+            ln = lines[j]
+            k = 0
+            while k < indent and k < len(ln) and ln[k] in " \t":
+                k += 1
+            body.append(ln[k:])
             j += 1
         # Skip the closing """ if present.
         if j < n:

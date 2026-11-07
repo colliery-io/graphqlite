@@ -98,6 +98,23 @@ CountExpressionAcceptance.feature::Simple COUNT with single unbound node with in
 CountExpressionAcceptance.feature::Simple COUNT with where clause outside the node
 CountExpressionAcceptance.feature::Simple COUNT without where clause
 CountExpressionAcceptance.feature::Standalone COUNT with RETURN *
+Create.feature::Create with reverse of toStringOrNull
+Create.feature::Creating patterns first evaluates all contained count expressions (example 1)
+Create.feature::Creating patterns first evaluates all contained count expressions (example 2)
+Create.feature::Creating patterns first evaluates all contained count expressions (example 4)
+Create.feature::Creating patterns first evaluates all contained count expressions (example 5)
+Create.feature::Creating patterns first evaluates all contained count expressions on all inputs
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 1)
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 2)
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 4)
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 5)
+Create.feature::Creating patterns first evaluates all contained pattern comprehensions
+Create.feature::Creating patterns first evaluates all contained pattern expressions
+Create.feature::Dependencies between nodes and relationships longer pattern
+Create.feature::Dependencies between nodes and relationships separate clauses
+Create.feature::Dependencies between nodes and relationships single clause
+Create.feature::Dependencies between nodes and relationships two clauses with count separate clauses
+Create.feature::Dependencies between nodes and relationships two clauses with count single clause
 Create.feature::Dependencies in creating multiple nodes
 Create.feature::Dependencies in creating multiple rels
 DeleteAcceptance.feature::Return properties from deleted node
@@ -279,6 +296,7 @@ MatchAcceptance.feature::difficult to plan query number 2
 MatchAcceptance.feature::difficult to plan query number 3
 MatchAcceptance.feature::equality with boolean lists
 MatchAcceptance.feature::loops with relationship type
+MergeLegacyAcceptance.feature::Evaluate pattern comprehension in MERGE on an empty database correctly
 MergeLegacyAcceptance.feature::Fail when imposing new predicates on a variable that is already bound
 MergeLegacyAcceptance.feature::Introduce named paths
 MergeLegacyAcceptance.feature::Unbound pattern
@@ -491,6 +509,7 @@ UnwindAcceptance.feature::Nested type support with mixed list and map literals w
 UnwindAcceptance.feature::Nested unwind with doubles
 UnwindAcceptance.feature::Nested unwind with longs
 UnwindAcceptance.feature::Primitive node type support in list literal
+UnwindAcceptance.feature::Primitive relationship type support in list literal
 UnwindAcceptance.feature::Unwind on array property
 VarLengthAcceptance.feature::Handles checking properties on nodes in multistep path - using ALL() function on path node properties
 VarLengthAcceptance.feature::Handles checking properties on nodes in path - using ALL() function on path node properties
