@@ -47,6 +47,7 @@ static void gql_result_json_text(sqlite3_context *context, const char *json)
 
 /* Error helper + GQL_ERR_* macros: moved to runtime/gql_error.h (I-0040 M6) */
 
+
 /* Per-connection executor cache structure */
 typedef struct {
     sqlite3 *db;
@@ -92,14 +93,59 @@ static size_t json_put_escaped(char *buf, size_t size, size_t off, const char *s
 }
 
 /* Bytes a column name can take in the JSON output, escaped, per row. */
-static size_t column_names_json_size(cypher_result *result)
+/* A JSON result text that grows as it is written (GQLITE-T-0496). The
+ * result writer sized one buffer up front and wrote with
+ * offset += snprintf(...): a null cell was not in the size, so a result with
+ * many null cells wrote past the buffer (heap overflow, found by the fuzzer). */
+typedef struct {
+    char *p;
+    size_t off, cap;
+    bool oom;
+} json_writer;
+
+static bool jw_reserve(json_writer *w, size_t n)
 {
-    size_t n = 0;
-    for (int col = 0; col < result->column_count; col++) {
-        const char *name = result->column_names ? result->column_names[col] : NULL;
-        n += (name ? strlen(name) * 6 : 16) + 4;
-    }
-    return n;
+    if (w->oom) return false;
+    if (w->off + n + 1 <= w->cap) return true;
+    size_t cap = w->cap ? w->cap : 1024;
+    while (cap < w->off + n + 1) cap *= 2;
+    char *q = realloc(w->p, cap);
+    if (!q) { w->oom = true; return false; }
+    w->p = q;
+    w->cap = cap;
+    return true;
+}
+
+static void jw_put(json_writer *w, const char *s, size_t n)
+{
+    if (!jw_reserve(w, n)) return;
+    memcpy(w->p + w->off, s, n);
+    w->off += n;
+    w->p[w->off] = '\0';
+}
+
+static void jw_puts(json_writer *w, const char *s)
+{
+    jw_put(w, s, strlen(s));
+}
+
+/* `s` as the inside of a JSON string (json_put_escaped). */
+static void jw_escaped(json_writer *w, const char *s)
+{
+    if (!s || !jw_reserve(w, strlen(s) * 6)) return;
+    w->off = json_put_escaped(w->p, w->cap, w->off, s);
+    w->p[w->off] = '\0';
+}
+
+/* Hand the text to SQLite and free it; an allocation failure is an error. */
+static void jw_result(sqlite3_context *context, json_writer *w)
+{
+    if (w->oom || !w->p)
+        graphqlite_result_error(context, "Memory allocation failed for result formatting", GQL_ERR_MEMORY);
+    else
+        gql_result_json_text(context, w->p);
+    free(w->p);
+    w->p = NULL;
 }
 
 static cypher_executor *cache_get_executor(void *arg) {
@@ -225,44 +271,22 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                 }
             } else {
                 /* Multiple results - return as JSON array */
-                size_t buffer_size = 1024 + (size_t)result->row_count * column_names_json_size(result);
-                for (int row = 0; row < result->row_count; row++) {
-                    for (int col = 0; col < result->column_count; col++) {
-                        if (result->agtype_data[row][col]) {
-                            char *temp_str = agtype_value_to_string(result->agtype_data[row][col]);
-                            if (temp_str) {
-                                buffer_size += strlen(temp_str) + 20;
-                                free(temp_str);
-                            }
-                        } else if (result->data && result->data[row] && result->data[row][col]) {
-                            /* T-0309: include text fallback data in sizing. */
-                            buffer_size += strlen(result->data[row][col]) + 20;
-                        }
-                    }
-                }
+                json_writer w = {0};
 
-                char *json_result = malloc(buffer_size);
-                if (!json_result) {
-                    graphqlite_result_error(context, "Memory allocation failed for agtype result formatting", GQL_ERR_MEMORY);
-                    cypher_result_free(result);
-                    return;
-                }
-                size_t offset = 0;
-
-                offset += snprintf(json_result + offset, buffer_size - offset, "[");
+                jw_puts(&w, "[");
 
                 for (int row = 0; row < result->row_count; row++) {
-                    if (row > 0) offset += snprintf(json_result + offset, buffer_size - offset, ",");
+                    if (row > 0) jw_puts(&w, ",");
 
                     if (result->column_count == 1) {
                         /* Single column - wrap with column name for consistent format */
-                        offset += snprintf(json_result + offset, buffer_size - offset, "{\"");
+                        jw_puts(&w, "{\"");
                         if (result->column_names && result->column_names[0]) {
-                            offset = json_put_escaped(json_result, buffer_size, offset, result->column_names[0]);
+                            jw_escaped(&w, result->column_names[0]);
                         } else {
-                            offset += snprintf(json_result + offset, buffer_size - offset, "result");
+                            jw_puts(&w, "result");
                         }
-                        offset += snprintf(json_result + offset, buffer_size - offset, "\":");
+                        jw_puts(&w, "\":");
                         /* T-0309: when agtype cell unset (varlen edge JSON
                          * array in result->data), fall back to text data
                          * verbatim. agtype_value_to_string(NULL) returns
@@ -272,34 +296,34 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             result->data && result->data[row] && result->data[row][0]) {
                             const char *txt = result->data[row][0];
                             size_t slen = strlen(txt);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, txt, slen); offset += slen; }
+                            jw_put(&w, txt, slen);
                         } else {
                             char *agtype_str = agtype_value_to_string(result->agtype_data[row][0]);
                             if (agtype_str) {
                                 size_t slen = strlen(agtype_str);
-                                if (offset + slen < buffer_size) { memcpy(json_result + offset, agtype_str, slen); offset += slen; }
+                                jw_put(&w, agtype_str, slen);
                                 free(agtype_str);
                             } else {
-                                offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                                jw_puts(&w, "null");
                             }
                         }
-                        offset += snprintf(json_result + offset, buffer_size - offset, "}");
+                        jw_puts(&w, "}");
                     } else {
                         /* Multiple columns - create object */
-                        offset += snprintf(json_result + offset, buffer_size - offset, "{");
+                        jw_puts(&w, "{");
                         for (int col = 0; col < result->column_count; col++) {
-                            if (col > 0) offset += snprintf(json_result + offset, buffer_size - offset, ",");
+                            if (col > 0) jw_puts(&w, ",");
 
-                            offset += snprintf(json_result + offset, buffer_size - offset, "\"");
+                            jw_puts(&w, "\"");
                             if (result->column_names && result->column_names[col]) {
-                                offset = json_put_escaped(json_result, buffer_size, offset, result->column_names[col]);
+                                jw_escaped(&w, result->column_names[col]);
                             } else {
                                 char col_name[32];
                                 snprintf(col_name, sizeof(col_name), "column_%d", col);
                                 size_t slen = strlen(col_name);
-                                if (offset + slen < buffer_size) { memcpy(json_result + offset, col_name, slen); offset += slen; }
+                                jw_put(&w, col_name, slen);
                             }
-                            offset += snprintf(json_result + offset, buffer_size - offset, "\":");
+                            jw_puts(&w, "\":");
 
                             /* T-0309: agtype_value_to_string(NULL) returns
                              * 'null' — so the text-fallback path must be
@@ -309,67 +333,48 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                                 result->data && result->data[row] && result->data[row][col]) {
                                 const char *txt = result->data[row][col];
                                 size_t slen = strlen(txt);
-                                if (offset + slen < buffer_size) { memcpy(json_result + offset, txt, slen); offset += slen; }
+                                jw_put(&w, txt, slen);
                             } else {
                                 char *agtype_str = agtype_value_to_string(result->agtype_data[row][col]);
                                 if (agtype_str) {
                                     size_t slen = strlen(agtype_str);
-                                    if (offset + slen < buffer_size) { memcpy(json_result + offset, agtype_str, slen); offset += slen; }
+                                    jw_put(&w, agtype_str, slen);
                                     free(agtype_str);
                                 } else {
-                                    offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                                    jw_puts(&w, "null");
                                 }
                             }
                         }
-                        offset += snprintf(json_result + offset, buffer_size - offset, "}");
+                        jw_puts(&w, "}");
                     }
                 }
-                offset += snprintf(json_result + offset, buffer_size - offset, "]");
-                json_result[offset] = '\0';
+                jw_puts(&w, "]");
 
-                gql_result_json_text(context, json_result);
-                free(json_result);
+                jw_result(context, &w);
             }
         } else if (result->row_count > 0 && result->data) {
             /* Format results as JSON with column names */
-            size_t buffer_size = 1024 + (size_t)result->row_count * column_names_json_size(result);
-            for (int row = 0; row < result->row_count; row++) {
-                for (int col = 0; col < result->column_count; col++) {
-                    if (result->data[row][col]) {
-                        /* Account for JSON escaping: a control character expands
-                         * to a 6-byte \uXXXX sequence in the worst case */
-                        buffer_size += strlen(result->data[row][col]) * 6 + 20;
-                    }
-                }
-            }
+            json_writer w = {0};
 
-            char *json_result = malloc(buffer_size);
-            if (!json_result) {
-                graphqlite_result_error(context, "Memory allocation failed for result formatting", GQL_ERR_MEMORY);
-                cypher_result_free(result);
-                return;
-            }
-            size_t offset = 0;
-
-            offset += snprintf(json_result + offset, buffer_size - offset, "[");
+            jw_puts(&w, "[");
 
             for (int row = 0; row < result->row_count; row++) {
-                if (row > 0) offset += snprintf(json_result + offset, buffer_size - offset, ",");
-                offset += snprintf(json_result + offset, buffer_size - offset, "{");
+                if (row > 0) jw_puts(&w, ",");
+                jw_puts(&w, "{");
 
                 for (int col = 0; col < result->column_count; col++) {
-                    if (col > 0) offset += snprintf(json_result + offset, buffer_size - offset, ",");
+                    if (col > 0) jw_puts(&w, ",");
 
-                    offset += snprintf(json_result + offset, buffer_size - offset, "\"");
+                    jw_puts(&w, "\"");
                     if (result->column_names && result->column_names[col]) {
-                        offset = json_put_escaped(json_result, buffer_size, offset, result->column_names[col]);
+                        jw_escaped(&w, result->column_names[col]);
                     } else {
                         char col_name[32];
                         snprintf(col_name, sizeof(col_name), "column_%d", col);
                         size_t slen = strlen(col_name);
-                        if (offset + slen < buffer_size) { memcpy(json_result + offset, col_name, slen); offset += slen; }
+                        jw_put(&w, col_name, slen);
                     }
-                    offset += snprintf(json_result + offset, buffer_size - offset, "\":");
+                    jw_puts(&w, "\":");
 
                     if (result->data[row][col]) {
                         const char *val = result->data[row][col];
@@ -390,15 +395,15 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                             const char *b = (strcmp(val, "1") == 0) ? "true"
                                           : (strcmp(val, "0") == 0) ? "false" : val;
                             size_t slen = strlen(b);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, b, slen); offset += slen; }
+                            jw_put(&w, b, slen);
                         } else
                         /* Check if value is already JSON (starts with [, { or "). */
                         if (col_type == GQL_COL_TYPE_JSON || val[0] == '[' || val[0] == '{' || val[0] == '"') {
                             size_t slen = strlen(val);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
+                            jw_put(&w, val, slen);
                         } else if (col_type == SQLITE_INTEGER) {
                             size_t slen = strlen(val);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
+                            jw_put(&w, val, slen);
                         } else if (col_type == SQLITE_FLOAT) {
                             /* Cypher distinguishes Float from Integer in result
                              * type. Whole-number floats must render with a
@@ -406,18 +411,12 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                              * integer 20. Append ".0" if val has no decimal
                              * point or exponent marker. */
                             size_t slen = strlen(val);
-                            if (offset + slen < buffer_size) {
-                                memcpy(json_result + offset, val, slen);
-                                offset += slen;
-                            }
+                            jw_put(&w, val, slen);
                             bool has_frac = false;
                             for (const char *p = val; *p; p++) {
                                 if (*p == '.' || *p == 'e' || *p == 'E') { has_frac = true; break; }
                             }
-                            if (!has_frac && offset + 2 < buffer_size) {
-                                json_result[offset++] = '.';
-                                json_result[offset++] = '0';
-                            }
+                            if (!has_frac) jw_puts(&w, ".0");
                         } else if (col_type == GQL_COL_TYPE_BOOLEAN) {
                             /* UDF-tagged boolean — emit unquoted JSON
                              * true/false. Replaces the historical
@@ -425,17 +424,17 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                              * legitimate string values "true"/"false"
                              * (e.g. toString(true) result). I-0040 M13. */
                             size_t slen = strlen(val);
-                            if (offset + slen < buffer_size) { memcpy(json_result + offset, val, slen); offset += slen; }
+                            jw_put(&w, val, slen);
                         } else if (strcmp(val, GQL_NAN_SENTINEL) == 0) {
                             /* NaN sentinel (GQLITE-T-0340) — emit unquoted NaN. */
-                            offset += snprintf(json_result + offset, buffer_size - offset, "NaN");
+                            jw_puts(&w, "NaN");
                         } else {
                             render_string:
                             /* String value - quote and escape. Control
                              * characters must be escaped too or the output is
                              * not valid JSON (perf review C1: RETURN 'a\\nb' and
                              * EXPLAIN output were unparseable). */
-                            offset += snprintf(json_result + offset, buffer_size - offset, "\"");
+                            jw_puts(&w, "\"");
                             while (*val) {
                                 unsigned char ch = (unsigned char)*val;
                                 const char *esc = NULL;
@@ -457,25 +456,23 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
                                 }
                                 if (esc) {
                                     size_t elen = strlen(esc);
-                                    if (offset + elen < buffer_size) { memcpy(json_result + offset, esc, elen); offset += elen; }
-                                } else if (offset < buffer_size) {
-                                    json_result[offset++] = *val;
+                                    jw_put(&w, esc, elen);
+                                } else {
+                                    jw_put(&w, val, 1);
                                 }
                                 val++;
                             }
-                            offset += snprintf(json_result + offset, buffer_size - offset, "\"");
+                            jw_puts(&w, "\"");
                         }
                     } else {
-                        offset += snprintf(json_result + offset, buffer_size - offset, "null");
+                        jw_puts(&w, "null");
                     }
                 }
-                offset += snprintf(json_result + offset, buffer_size - offset, "}");
+                jw_puts(&w, "}");
             }
-            offset += snprintf(json_result + offset, buffer_size - offset, "]");
-            json_result[offset] = '\0';
+            jw_puts(&w, "]");
 
-            gql_result_json_text(context, json_result);
-            free(json_result);
+            jw_result(context, &w);
         } else if (result->column_count > 0) {
             /* Query with RETURN clause but zero rows - return empty array */
             sqlite3_result_text(context, "[]", -1, SQLITE_STATIC);

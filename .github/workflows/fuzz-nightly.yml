@@ -1,0 +1,68 @@
+name: Fuzz nightly
+
+# libFuzzer on cypher() with ASan + UBSan (GQLITE-T-0496). The seed corpus is
+# the TCK and functional-test queries. It does not gate anything: read the
+# summary, download the crashes artifact, and record each crash as a task.
+# Reproduce one locally: angreal test fuzz --reproduce <file>.
+
+on:
+  schedule:
+    - cron: "43 5 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Fuzzing budget in minutes"
+        default: "20"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libsqlite3-dev clang libclang-rt-dev
+
+      - name: Build fuzz target
+        run: make fuzz-build
+
+      - name: Fuzz
+        continue-on-error: true
+        env:
+          GQLITE_FUZZ_EXT: build/fuzz/graphqlite
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          python3 tests/fuzz/make_corpus.py build/fuzz/corpus
+          mkdir -p build/fuzz/crashes
+          MIN="${{ github.event.inputs.minutes || '20' }}"
+          ./build/fuzz/fuzz_cypher -fork=4 -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1 \
+            -dict=tests/fuzz/cypher.dict -max_len=4096 -timeout=10 -rss_limit_mb=3072 \
+            -max_total_time=$((MIN * 60)) -artifact_prefix=build/fuzz/crashes/ \
+            build/fuzz/corpus > build/fuzz/fuzz.log 2>&1 || true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Fuzz nightly"
+            echo '```'
+            tail -3 build/fuzz/fuzz.log || true
+            echo "crash/timeout/oom inputs: $(ls build/fuzz/crashes 2>/dev/null | wc -l)"
+            ls build/fuzz/crashes 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload crashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            build/fuzz/crashes
+            build/fuzz/fuzz.log
+          if-no-files-found: ignore
+          retention-days: 30
