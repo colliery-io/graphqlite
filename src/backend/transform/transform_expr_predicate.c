@@ -294,6 +294,49 @@ int transform_count_subquery(cypher_transform_context *ctx, cypher_function_call
                                "(SELECT count(*) FROM (%s))");
 }
 
+/* A property map anywhere in a pattern: (n)-[{rel: 1}]->(), ({prop: 42}). */
+static bool pattern_has_properties(ast_list *pattern)
+{
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *p = pattern->items[i];
+        if (!p || p->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path *)p;
+        for (int j = 0; path->elements && j < path->elements->count; j++) {
+            ast_node *e = path->elements->items[j];
+            if (!e) continue;
+            if (e->type == AST_NODE_NODE_PATTERN && ((cypher_node_pattern *)e)->properties) return true;
+            if (e->type == AST_NODE_REL_PATTERN && ((cypher_rel_pattern *)e)->properties) return true;
+        }
+    }
+    return false;
+}
+
+/* A pattern predicate with property maps, as the subquery EXISTS { MATCH
+ * pattern [WHERE ...] }: the pattern emitter below ignored every property
+ * map, so WHERE (n)-[{rel: 1}]->() matched any relationship (GQLITE-T-0514).
+ * The AST nodes are borrowed for the call and handed back. */
+static int emit_pattern_as_query(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
+{
+    cypher_match *m = make_cypher_match(exists_expr->expr.pattern, exists_expr->where_clause, false, NULL);
+    ast_list *clauses = ast_list_create();
+    if (!m || !clauses) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Out of memory in a pattern predicate");
+        return -1;
+    }
+    ast_list_append(clauses, (ast_node *)m);
+    cypher_query *q = make_cypher_query(clauses, false);
+    cypher_exists_expr as_query = *exists_expr;
+    as_query.expr_type = EXISTS_TYPE_QUERY;
+    as_query.expr.query = (ast_node *)q;
+    as_query.where_clause = NULL;
+    int rc = emit_query_subquery(ctx, &as_query, "EXISTS (%s)");
+    m->pattern = NULL;           /* borrowed: owned by exists_expr */
+    m->where = NULL;
+    ast_node_free((ast_node *)q);
+    return rc;
+}
+
 int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
 {
     CYPHER_DEBUG("Transforming EXISTS expression");
@@ -316,6 +359,8 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                     ctx->error_message = strdup("EXISTS pattern expression is empty");
                     return -1;
                 }
+                if (pattern_has_properties(exists_expr->expr.pattern))
+                    return emit_pattern_as_query(ctx, exists_expr);
 
                 /* Generate SQL EXISTS subquery with pattern matching */
                 append_sql(ctx, "EXISTS (");
