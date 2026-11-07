@@ -973,6 +973,20 @@ void gql_to_bool_strict_func(
     sqlite3_result_int(context, sqlite3_value_int64(argv[0]) ? 1 : 0);
 }
 
+/* A double as a long long. False for NaN, Infinity or a value outside the
+ * long long range: a C cast of those is undefined behaviour (GQLITE-T-0499,
+ * found by UBSan: toInteger(1e30), duration({days: 1 / 0.0})). Truncates
+ * toward zero, as the cast does. */
+static bool gql_double_to_ll(double d, long long *out)
+{
+    if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0)) return false;
+    *out = (long long)d;
+    return true;
+}
+
+#define GQL_ERR_INT_RANGE "ArgumentError: NumberOutOfRange: toInteger() of NaN, Infinity or a value outside the integer range"
+#define GQL_ERR_DURATION_RANGE "ArgumentError: NumberOutOfRange: a duration component is NaN, infinite or too large"
+
 void gql_to_integer_strict_func(
     sqlite3_context *context, int argc, sqlite3_value **argv) {
     if (argc != 1) { sqlite3_result_null(context); return; }
@@ -987,12 +1001,23 @@ void gql_to_integer_strict_func(
         sqlite3_result_value(context, argv[0]); return;
     }
     if (t == SQLITE_FLOAT) {
-        sqlite3_result_int64(context, (long long)sqlite3_value_double(argv[0]));
+        long long v;
+        if (!gql_double_to_ll(sqlite3_value_double(argv[0]), &v)) {
+            sqlite3_result_error(context, GQL_ERR_INT_RANGE, -1);
+            return;
+        }
+        sqlite3_result_int64(context, v);
         return;
     }
     /* Text: try parse */
     const char *s = (const char*)sqlite3_value_text(argv[0]);
     if (!s) { sqlite3_result_null(context); return; }
+    /* NaN arrives as the NaN sentinel text; like Infinity it has no
+     * integer (GQLITE-T-0499). */
+    if (strcmp(s, GQL_NAN_SENTINEL) == 0) {
+        sqlite3_result_error(context, GQL_ERR_INT_RANGE, -1);
+        return;
+    }
     /* 'true' / 'false' are not numeric */
     if (strcmp(s, "true") == 0 || strcmp(s, "false") == 0) {
         sqlite3_result_error(context,
@@ -1004,7 +1029,15 @@ void gql_to_integer_strict_func(
     if (end != s && *end == 0) { sqlite3_result_int64(context, v); return; }
     /* try float then truncate */
     double d = strtod(s, &end);
-    if (end != s && *end == 0) { sqlite3_result_int64(context, (long long)d); return; }
+    if (end != s && *end == 0) {
+        long long v;
+        if (!gql_double_to_ll(d, &v)) {
+            sqlite3_result_error(context, GQL_ERR_INT_RANGE, -1);
+            return;
+        }
+        sqlite3_result_int64(context, v);
+        return;
+    }
     sqlite3_result_null(context);
 }
 
@@ -1807,7 +1840,9 @@ static bool parse_iso_date_head(const char *s, int *y, int *mo, int *d,
     if (*p == '+' || *p == '-') { if (*p == '-') sign = -1; p++; }
     const char *ys = p;
     long long yv = 0;
-    while (*p >= '0' && *p <= '9') { yv = yv * 10 + (*p - '0'); p++; }
+    /* Count every digit but add at most 10: more than 9 is rejected below,
+     * and an unbounded total overflowed (GQLITE-T-0503). */
+    while (*p >= '0' && *p <= '9') { if (p - ys < 10) yv = yv * 10 + (*p - '0'); p++; }
     int ydigits = (int)(p - ys);
     if (ydigits < 4 || ydigits > 9 || *p != '-') return false;
     if (ydigits > 4 && ys == s) return false;   /* >4 digits need a sign */
@@ -2861,10 +2896,13 @@ static void scale_duration(sqlite3_context *ctx, const char *dur, double factor)
      * within a small tolerance (absorbs the noise), otherwise truncate toward
      * zero (so a genuine half like *0.5 of an odd nanosecond drops, not rounds). */
     double rounded = round(total_ns);
-    long long ns_ll = (fabs(total_ns - rounded) < 0.05)
-                          ? (long long)rounded
-                          : (long long)trunc(total_ns);
-    emit_duration_json(ctx, (long long)months_int, (long long)days_int, ns_ll);
+    long long ns_ll, months_ll, days_ll;
+    if (!gql_double_to_ll((fabs(total_ns - rounded) < 0.05) ? rounded : trunc(total_ns), &ns_ll) ||
+        !gql_double_to_ll(months_int, &months_ll) || !gql_double_to_ll(days_int, &days_ll)) {
+        sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);   /* GQLITE-T-0499 */
+        return;
+    }
+    emit_duration_json(ctx, months_ll, days_ll, ns_ll);
 }
 
 /* A float result: SQLite turns a NaN result into NULL, so NaN is returned as
@@ -3293,10 +3331,17 @@ void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **a
         long long ms = sqlite3_value_int64(argv[7]);
         long long us = sqlite3_value_int64(argv[8]);
         long long ns = sqlite3_value_int64(argv[9]);
-        total_months = years * 12 + months;
-        total_days = weeks * 7 + days;
-        total_secs = hours * 3600LL + minutes * 60LL + seconds;
-        total_ns = ms * 1000000LL + us * 1000LL + ns;
+        /* Checked: a component near the integer range overflowed (UB). */
+        long long a, b, c;
+        if (__builtin_mul_overflow(years, 12LL, &a) || __builtin_add_overflow(a, months, &total_months) ||
+            __builtin_mul_overflow(weeks, 7LL, &a) || __builtin_add_overflow(a, days, &total_days) ||
+            __builtin_mul_overflow(hours, 3600LL, &a) || __builtin_mul_overflow(minutes, 60LL, &b) ||
+            __builtin_add_overflow(a, b, &c) || __builtin_add_overflow(c, seconds, &total_secs) ||
+            __builtin_mul_overflow(ms, 1000000LL, &a) || __builtin_mul_overflow(us, 1000LL, &b) ||
+            __builtin_add_overflow(a, b, &c) || __builtin_add_overflow(c, ns, &total_ns)) {
+            sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);   /* GQLITE-T-0499 */
+            return;
+        }
     } else {
         /* Fractional path — cascade via double, watching for tiny drift.
          * Fractional months convert to days at 30 days/month (openCypher
@@ -3312,21 +3357,36 @@ void gql_duration_compose_func(sqlite3_context *ctx, int argc, sqlite3_value **a
         double us = sqlite3_value_double(argv[8]);
         double ns = sqlite3_value_double(argv[9]);
         double total_months_d = years * 12.0 + months;
-        total_months = (long long)total_months_d;
+        long long total_ns_from_secs, extra_ns;
+        /* Each cast is checked: NaN, Infinity or a too-large component was
+         * undefined behaviour (GQLITE-T-0499). */
+        if (!gql_double_to_ll(total_months_d, &total_months)) {
+            sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);
+            return;
+        }
         double frac_months = total_months_d - total_months;
         /* Fractional months convert to days at the average Gregorian month
          * (365.2425/12 = 30.436875 days), matching Cypher duration arithmetic
          * (Temporal8 [6]). */
         double total_days_d = weeks * 7.0 + days + frac_months * 30.436875;
-        total_days = (long long)total_days_d;
+        if (!gql_double_to_ll(total_days_d, &total_days)) {
+            sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);
+            return;
+        }
         double frac_days = total_days_d - total_days;
         double total_seconds_d = frac_days * 86400.0 + hours * 3600.0
                                + minutes * 60.0 + seconds;
-        total_secs = (long long)total_seconds_d;
+        if (!gql_double_to_ll(total_seconds_d, &total_secs)) {
+            sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);
+            return;
+        }
         double frac_secs = total_seconds_d - total_secs;
-        long long total_ns_from_secs = (long long)(frac_secs * 1e9 + 0.5);
-        long long extra_ns = (long long)(ms * 1e6 + us * 1e3 + ns + 0.5);
-        total_ns = total_ns_from_secs + extra_ns;
+        if (!gql_double_to_ll(frac_secs * 1e9 + 0.5, &total_ns_from_secs) ||
+            !gql_double_to_ll(ms * 1e6 + us * 1e3 + ns + 0.5, &extra_ns) ||
+            __builtin_add_overflow(total_ns_from_secs, extra_ns, &total_ns)) {
+            sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);
+            return;
+        }
     }
 
     /* Cypher durations do NOT normalize sub-day time into the days field — the
@@ -3395,20 +3455,27 @@ void gql_duration_parse_iso_func(sqlite3_context *ctx, int argc, sqlite3_value *
     double inputs[10] = { years, months, weeks, days, hours, minutes, seconds, 0, 0, 0 };
     /* We need sqlite3_value objects to pass; simpler: inline the compose logic. */
     double total_months_d = years * 12.0 + months;
-    long long total_months = (long long)total_months_d;
+    long long total_months, total_days, total_secs, total_ns_from_secs, total_ns;
+    /* Each cast and the nanosecond total are checked: a too-large component
+     * was undefined behaviour (GQLITE-T-0499). */
+    if (!gql_double_to_ll(total_months_d, &total_months)) { sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1); return; }
     double frac_months = total_months_d - total_months;
     /* Fractional months cascade to days at the average Gregorian month
      * (30.436875), matching Cypher (Temporal2 [7] 'P0.75M'). */
     double total_days_d = weeks * 7.0 + days + frac_months * 30.436875;
-    long long total_days = (long long)total_days_d;
+    if (!gql_double_to_ll(total_days_d, &total_days)) { sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1); return; }
     double frac_days = total_days_d - total_days;
     double total_seconds_d = frac_days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds;
-    long long total_secs = (long long)total_seconds_d;
+    if (!gql_double_to_ll(total_seconds_d, &total_secs)) { sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1); return; }
     double frac_secs = total_seconds_d - total_secs;
     /* Round half away from zero — the constant +0.5 truncated negative
      * fractional seconds the wrong way (PT-1.999S → -1.998999999S). */
-    long long total_ns_from_secs = (long long)(frac_secs * 1e9 + (frac_secs >= 0 ? 0.5 : -0.5));
-    long long total_ns = total_secs * 1000000000LL + total_ns_from_secs;
+    if (!gql_double_to_ll(frac_secs * 1e9 + (frac_secs >= 0 ? 0.5 : -0.5), &total_ns_from_secs) ||
+        __builtin_mul_overflow(total_secs, 1000000000LL, &total_ns) ||
+        __builtin_add_overflow(total_ns, total_ns_from_secs, &total_ns)) {
+        sqlite3_result_error(ctx, GQL_ERR_DURATION_RANGE, -1);
+        return;
+    }
     /* Durations keep days and the sub-day time part as independent signed
      * components — do NOT carry sub-day seconds into days (a day is not always
      * 86400s, and PT-1.999S must stay a time duration, not -1 day + 23:59:58).

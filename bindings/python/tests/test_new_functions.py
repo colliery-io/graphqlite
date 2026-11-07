@@ -265,6 +265,32 @@ class TestIsNaN:
         assert results[0]["result"] in (False, 0)
 
 
+class TestNumericRanges:
+    """NaN, Infinity or an out-of-range value as an integer was undefined
+    behaviour in C; it is an error now (GQLITE-T-0499)."""
+
+    @pytest.mark.parametrize("query", [
+        "RETURN toInteger(1e30) AS r",
+        "RETURN toInteger(-1 / 0.0) AS r",
+        "RETURN toInteger(0.0 / 0.0) AS r",
+        "RETURN toInteger('1e30') AS r",
+    ])
+    def test_to_integer_out_of_range(self, db, query):
+        with pytest.raises(Exception, match="NumberOutOfRange"):
+            db.cypher(query)
+
+    @pytest.mark.parametrize("query", [
+        "RETURN duration({days: 1 / 0.0}) AS r",
+        "RETURN duration({seconds: 1e300}) AS r",
+        "RETURN duration({years: 9223372036854775807}) AS r",
+        "RETURN duration('PT99999999999999999999S') AS r",
+        "RETURN duration({days: 1}) * 1e300 AS r",
+    ])
+    def test_duration_out_of_range(self, db, query):
+        with pytest.raises(Exception, match="NumberOutOfRange"):
+            db.cypher(query)
+
+
 # =============================================================================
 # Tranche 3: Date/time, spatial
 # =============================================================================
