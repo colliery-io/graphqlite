@@ -1144,3 +1144,57 @@ def test_crash(rounds: int = 0, seed: int = 0) -> int:
     env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     cmd = [python, "-m", "tests.crash.run", "--rounds", str(rounds or 200), "--seed", str(seed or 1)]
     return subprocess.run(cmd, cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="upgrade",
+    about="Databases written by earlier releases open with this build and answer the same",
+    tool=angreal.ToolDescription(
+        """
+Upgrade test (GQLITE-T-0527). For each release (v0.9.4, v0.10.0, v0.11.0,
+v0.12.0) it exports the tag's source with git archive into
+build/upgrade/<tag>/src, builds the extension there (kept between runs),
+writes a fixture graph with every value type, an index and a constraint,
+then opens that file with this build. The answers to a fixed query set must
+equal this build's answers on a fixture it wrote itself, except values the
+old release stored differently (OLD_WRITES in tests/upgrade/run.py). Then
+it writes to the old file and checks gql_check_storage() and the
+constraints.
+
+## When to use
+- Before a release, and after a change to the schema or to how values are
+  stored or read
+
+## Examples
+```
+angreal test upgrade
+angreal test upgrade --releases v0.12.0
+```
+
+## Output
+- One line per release; each difference with both answers. The first run
+  builds the four releases (a few minutes).
+
+## Exit code
+1 when a release reads differently or a write or check fails; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="releases", long="releases", help="Comma-separated release tags")
+def test_upgrade(releases: str = "") -> int:
+    """Upgrade test from earlier releases."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    cmd = [python, "-m", "tests.upgrade.run"]
+    if releases:
+        cmd += ["--releases", releases]
+    return subprocess.run(cmd, cwd=root, env=env).returncode
