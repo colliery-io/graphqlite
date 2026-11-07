@@ -210,6 +210,18 @@ static bool is_string_function(const char *name)
  * an int or real keeps its SQLite type; text of unknown origin keeps the old
  * handling). `value_sql` is the expression's SQL, for the _gql_typetag
  * fallback (NULL to transform it here). Caller frees. */
+/* max() / min() of a boolean: a boolean, encoded like every other one in
+ * RETURN, so UNION and DISTINCT see one `false` (GQLITE-T-0521: it was
+ * integer 0 next to the text of _gql_bool_str). */
+static bool bool_aggregate(ast_node *expr)
+{
+    if (!expr || expr->type != AST_NODE_FUNCTION_CALL) return false;
+    cypher_function_call *fc = (cypher_function_call *)expr;
+    return fc->function_name &&
+           (!strcasecmp(fc->function_name, "max") || !strcasecmp(fc->function_name, "min")) &&
+           fc->args && fc->args->count == 1 && ast_is_boolean_expr(fc->args->items[0]);
+}
+
 char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const char *value_sql)
 {
     if (!ctx || !expr) return NULL;
@@ -828,6 +840,7 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
                 item->expr->type == AST_NODE_NULL_CHECK ||
                 item->expr->type == AST_NODE_LIST_PREDICATE ||
                 item->expr->type == AST_NODE_EXISTS_EXPR ||
+                bool_aggregate(item->expr) ||
                 (item->expr->type == AST_NODE_BINARY_OP && (
                     ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_AND ||
                     ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_OR  ||
@@ -1106,6 +1119,7 @@ return_star_done:
                     item->expr->type == AST_NODE_NULL_CHECK ||
                     item->expr->type == AST_NODE_LIST_PREDICATE ||
                     item->expr->type == AST_NODE_EXISTS_EXPR ||
+                bool_aggregate(item->expr) ||
                     (item->expr->type == AST_NODE_BINARY_OP && (
                         ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_AND ||
                         ((cypher_binary_op*)item->expr)->op_type == BINARY_OP_OR  ||
