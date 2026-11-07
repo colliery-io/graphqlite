@@ -66,6 +66,14 @@ LDFLAGS = $(EXTRA_LIBS) -lcunit -lsqlite3 -lm
 # Sanitizer build (GQLITE-T-0495): AddressSanitizer + UndefinedBehavior-
 # Sanitizer, into its own build directory. Use `make extension-asan`; the
 # host (sqlite3, python) must preload the ASan runtime (angreal test sanitize).
+# Coverage build of the extension (GQLITE-T-0497): gcov counters, into its
+# own build directory. Use `make extension-cov`; `angreal test
+# harness-coverage` runs the metamorphic harness on it and reports.
+ifdef COVERAGE_EXT
+EXT_COV_FLAGS = --coverage
+EXTENSION_CFLAGS_BASE += $(EXT_COV_FLAGS)
+endif
+
 ifdef SANITIZE
 SANITIZE_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
 ifdef FUZZ
@@ -306,6 +314,10 @@ graphqlite: $(MAIN_APP)
 # Build SQLite extension
 extension: $(EXTENSION_LIB)
 
+# The extension with gcov counters, in $(BUILD_DIR)/cov (GQLITE-T-0497).
+extension-cov:
+	$(MAKE) COVERAGE_EXT=1 BUILD_DIR=$(BUILD_DIR)/cov extension
+
 # The extension with ASan + UBSan, in $(BUILD_DIR)/asan (GQLITE-T-0495).
 extension-asan:
 	$(MAKE) SANITIZE=1 BUILD_DIR=$(BUILD_DIR)/asan extension
@@ -359,13 +371,13 @@ endif
 # SQLite extension shared library (with full parser, transform, and executor)
 $(EXTENSION_LIB): $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) | dirs $(GRAMMAR_HDR)
 ifeq ($(UNAME_S),Darwin)
-	$(CC) -g -fPIC -dynamiclib $(SANITIZE_FLAGS) $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) -o $@ -undefined dynamic_lookup
+	$(CC) -g -fPIC -dynamiclib $(SANITIZE_FLAGS) $(EXT_COV_FLAGS) $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) -o $@ -undefined dynamic_lookup
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
 	$(CC) -shared -static $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) -o $@ -lsqlite3 -lsystre -ltre -lintl -liconv
 else ifneq (,$(findstring MSYS,$(UNAME_S)))
 	$(CC) -shared -static $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) -o $@ -lsqlite3 -lsystre -ltre -lintl -liconv
 else
-	$(CC) -shared -fPIC $(SANITIZE_FLAGS) $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) -o $@
+	$(CC) -shared -fPIC $(SANITIZE_FLAGS) $(EXT_COV_FLAGS) $(EXTENSION_OBJ) $(PARSER_OBJS_PIC) $(TRANSFORM_OBJS_PIC) $(EXECUTOR_OBJS_PIC) $(RUNTIME_OBJS_PIC) -o $@
 endif
 
 # Main application object
@@ -660,4 +672,4 @@ clean:
 	find . -name "*.gcno" -delete
 	find . -name "*.gcov" -delete
 
-.PHONY: all help dirs extension-asan fuzz-build test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable
+.PHONY: all help dirs extension-asan extension-cov fuzz-build test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable
