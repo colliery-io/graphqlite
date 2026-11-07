@@ -679,3 +679,17 @@ class TestReturnStarEdgeCases:
         db.cypher("CREATE (y:StarMulti {id: 'sm2'})")
         results = db.cypher("MATCH (n:StarMulti) RETURN *")
         assert len(results) == 2
+
+
+class TestIsNaNArgumentType:
+    """isNaN() of a value that is not a number is a type error at compile
+    time (Neo4j NaNAcceptance; GQLITE-T-0518). It returned false."""
+
+    @pytest.mark.parametrize("query", [
+        'RETURN isNaN("foo") AS r',
+        "RETURN isNaN(true) AS r",
+        "RETURN isNaN([1]) AS r",
+    ])
+    def test_non_number_is_an_error(self, db, query):
+        with pytest.raises(Exception, match="InvalidArgumentType"):
+            db.cypher(query)

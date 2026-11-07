@@ -156,6 +156,12 @@ operator    [+*/%^=!&|~]+
 {octint}        { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
 {integer}       { prepare_integer_token(yyextra, yytext); return CYPHER_TOKEN_INTEGER; }
 {decimal}       { prepare_decimal_token(yyextra, yytext); return CYPHER_TOKEN_DECIMAL; }
+{decimal}[fFdD] {
+    /* A float with a type suffix, as Neo4j takes it: 1.0f, 2.5d
+     * (GQLITE-T-0518). strtod stops at the suffix. */
+    prepare_decimal_token(yyextra, yytext);
+    return CYPHER_TOKEN_DECIMAL;
+}
 {digit}+\./[^.] {
     /* '5.' as a decimal when NOT immediately followed by another dot
      * (flex trailing context: `/[^.]`). Prevents '1..2' from tokenizing

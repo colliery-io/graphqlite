@@ -488,6 +488,23 @@ void gql_order_cmp_func(
     if (lt == SQLITE_NULL || rt == SQLITE_NULL) {
         sqlite3_result_null(context); return;
     }
+    /* NaN (its sentinel text) against a number or NaN: every ordered
+     * comparison is false; against anything else, null (GQLITE-T-0518:
+     * `WITH 0.0/0.0 AS nan RETURN nan < 0.0` was null). */
+    {
+        bool l_nan = lt == SQLITE_TEXT && strcmp((const char *)sqlite3_value_text(argv[0]), GQL_NAN_SENTINEL) == 0;
+        bool r_nan = rt == SQLITE_TEXT && strcmp((const char *)sqlite3_value_text(argv[1]), GQL_NAN_SENTINEL) == 0;
+        if (l_nan || r_nan) {
+            bool l_ok = l_nan || lt == SQLITE_INTEGER || lt == SQLITE_FLOAT;
+            bool r_ok = r_nan || rt == SQLITE_INTEGER || rt == SQLITE_FLOAT;
+            const char *lg = argc == 5 ? (const char *)sqlite3_value_text(argv[3]) : NULL;
+            const char *rg = argc == 5 ? (const char *)sqlite3_value_text(argv[4]) : NULL;
+            if ((lg && strcmp(lg, "bool") == 0) || (rg && strcmp(rg, "bool") == 0)) l_ok = false;
+            if (l_ok && r_ok) sqlite3_result_int(context, 0);
+            else sqlite3_result_null(context);
+            return;
+        }
+    }
     /* Note: we don't reject boolean-vs-boolean ordering here. The
      * spec is fuzzy and graphqlite's existing tests (Precedence1
      * [23]/[26]) rely on boolean values surviving the < / > paths
