@@ -981,6 +981,68 @@ def test_fuzz(minutes: float = 0.0, jobs: int = 0, docker: bool = False, reprodu
 
 @test()
 @angreal.command(
+    name="harness-coverage",
+    about="Report the transform and executor code the metamorphic harness never reaches",
+    tool=angreal.ToolDescription(
+        """
+Build the extension with gcov counters (`make extension-cov`, into
+build/cov; GQLITE-T-0497), run the metamorphic harness on it (cover mode,
+then random mode), and report line coverage of src/backend/transform and
+src/backend/executor: per file, the functions the run never entered
+(largest first), and the large functions it entered but mostly missed.
+Those are where a new generator or relation finds bugs.
+
+## When to use
+- To choose the next harness generator or relation
+- After adding one, to see what it reached
+
+## Examples
+```
+angreal test harness-coverage
+angreal test harness-coverage --count 50000 --top 60
+```
+
+## Output
+- The report on stdout and in build/cov/harness-coverage.txt.
+
+## Exit code
+0 when the report was written; 2 when there was no coverage data.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="count", long="count", python_type="int", help="Random-mode cases (default 20000)")
+@angreal.argument(name="reps", long="reps", python_type="int", help="Cover-mode runs per row (default 2)")
+@angreal.argument(name="top", long="top", python_type="int", help="Functions listed per section (default 40)")
+def test_harness_coverage(count: int = 0, reps: int = 0, top: int = 0) -> int:
+    """Coverage of the metamorphic harness."""
+    import glob
+    root = get_project_root()
+    if run_make("extension-cov") != 0:
+        return 1
+    for f in glob.glob(os.path.join(root, "build", "cov", "**", "*.gcda"), recursive=True):
+        os.remove(f)
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    ext = os.path.join(root, "build", "cov", "graphqlite")
+    for args in (["--mode", "cover", "--reps", str(reps or 2)],
+                 ["--mode", "random", "--seed", "1", "--count", str(count or 20000)]):
+        r = subprocess.run([python, "-m", "tests.metamorphic", *args, "--ext", ext],
+                           cwd=root, env=env, capture_output=True, text=True)
+        line = [l for l in r.stdout.splitlines() if l.startswith("metamorphic ")]
+        print(line[-1] if line else "metamorphic: no summary", flush=True)
+    return subprocess.run([python, "-m", "tests.metamorphic.coverage_report",
+                           "--build", os.path.join(root, "build", "cov"), "--top", str(top or 40),
+                           "--out", os.path.join(root, "build", "cov", "harness-coverage.txt")],
+                          cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
     name="neo4j-acceptance",
     about="Run Neo4j's acceptance features (fetched at test time) against the baseline",
     tool=angreal.ToolDescription(

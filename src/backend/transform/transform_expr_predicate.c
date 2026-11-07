@@ -209,6 +209,10 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
     int n_outer = transform_var_count(ctx->var_ctx);
     char **outer_tokens = calloc((size_t)(n_outer > 0 ? n_outer : 1), sizeof(char*));
     int outer_token_count = 0;
+    /* How each outer variable was seeded, for a WITH in the body to keep
+     * it (GQLITE-T-0513). Names and aliases are copies. */
+    struct subquery_outer_var *outer_vars = calloc((size_t)(n_outer > 0 ? n_outer : 1), sizeof(*outer_vars));
+    int outer_var_count = 0;
     for (int vi = 0; vi < n_outer; vi++) {
         transform_var *v = transform_var_at(ctx->var_ctx, vi);
         if (!v || !v->name) continue;
@@ -220,6 +224,11 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
             transform_var_set_bound(sub->var_ctx, v->name, true);
             if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
                 transform_var_set_scalar_value(sub->var_ctx, v->name, true);
+            }
+            if (outer_vars) {
+                struct subquery_outer_var *o = &outer_vars[outer_var_count++];
+                o->name = strdup(v->name); o->alias = strdup(alias); o->projected = true;
+                o->scalar = transform_var_is_scalar_value(ctx->var_ctx, v->name);
             }
             continue;
         }
@@ -243,6 +252,12 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
         }
         transform_var_set_bound(sub->var_ctx, v->name, true);
         transform_var_set_alias_is_id(sub->var_ctx, v->name, true);
+        if (outer_vars) {
+            struct subquery_outer_var *o = &outer_vars[outer_var_count++];
+            o->name = strdup(v->name); o->alias = strdup(id_expr);
+            o->edge = transform_var_is_edge(ctx->var_ctx, v->name);
+            o->scalar = transform_var_is_scalar_value(ctx->var_ctx, v->name);
+        }
         /* Remember the outer table token so the body never adds it to FROM. */
         if (outer_tokens) {
             const char *dot = strchr(id_expr, '.');
@@ -260,11 +275,20 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
     transform_var_mark_inherited(sub->var_ctx);
     sub->correlated_outer_aliases = (const char **)outer_tokens;
     sub->correlated_outer_count = outer_token_count;
+    sub->outer_vars = outer_vars;
+    sub->outer_var_count = outer_var_count;
     int rc = cypher_transform_read_query_sql(sub, q);
     sub->correlated_outer_aliases = NULL;
     sub->correlated_outer_count = 0;
+    sub->outer_vars = NULL;
+    sub->outer_var_count = 0;
     for (int ti = 0; ti < outer_token_count; ti++) free(outer_tokens[ti]);
     free(outer_tokens);
+    for (int oi = 0; oi < outer_var_count; oi++) {
+        free((char *)outer_vars[oi].name);
+        free((char *)outer_vars[oi].alias);
+    }
+    free(outer_vars);
     if (rc < 0 || sub->sql_size == 0) {
         ctx->has_error = true;
         free(ctx->error_message);
@@ -294,6 +318,49 @@ int transform_count_subquery(cypher_transform_context *ctx, cypher_function_call
                                "(SELECT count(*) FROM (%s))");
 }
 
+/* A property map anywhere in a pattern: (n)-[{rel: 1}]->(), ({prop: 42}). */
+static bool pattern_has_properties(ast_list *pattern)
+{
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *p = pattern->items[i];
+        if (!p || p->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path *)p;
+        for (int j = 0; path->elements && j < path->elements->count; j++) {
+            ast_node *e = path->elements->items[j];
+            if (!e) continue;
+            if (e->type == AST_NODE_NODE_PATTERN && ((cypher_node_pattern *)e)->properties) return true;
+            if (e->type == AST_NODE_REL_PATTERN && ((cypher_rel_pattern *)e)->properties) return true;
+        }
+    }
+    return false;
+}
+
+/* A pattern predicate with property maps, as the subquery EXISTS { MATCH
+ * pattern [WHERE ...] }: the pattern emitter below ignored every property
+ * map, so WHERE (n)-[{rel: 1}]->() matched any relationship (GQLITE-T-0514).
+ * The AST nodes are borrowed for the call and handed back. */
+static int emit_pattern_as_query(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
+{
+    cypher_match *m = make_cypher_match(exists_expr->expr.pattern, exists_expr->where_clause, false, NULL);
+    ast_list *clauses = ast_list_create();
+    if (!m || !clauses) {
+        ctx->has_error = true;
+        ctx->error_message = strdup("Out of memory in a pattern predicate");
+        return -1;
+    }
+    ast_list_append(clauses, (ast_node *)m);
+    cypher_query *q = make_cypher_query(clauses, false);
+    cypher_exists_expr as_query = *exists_expr;
+    as_query.expr_type = EXISTS_TYPE_QUERY;
+    as_query.expr.query = (ast_node *)q;
+    as_query.where_clause = NULL;
+    int rc = emit_query_subquery(ctx, &as_query, "EXISTS (%s)");
+    m->pattern = NULL;           /* borrowed: owned by exists_expr */
+    m->where = NULL;
+    ast_node_free((ast_node *)q);
+    return rc;
+}
+
 int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_expr *exists_expr)
 {
     CYPHER_DEBUG("Transforming EXISTS expression");
@@ -316,6 +383,8 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                     ctx->error_message = strdup("EXISTS pattern expression is empty");
                     return -1;
                 }
+                if (pattern_has_properties(exists_expr->expr.pattern))
+                    return emit_pattern_as_query(ctx, exists_expr);
 
                 /* Generate SQL EXISTS subquery with pattern matching */
                 append_sql(ctx, "EXISTS (");

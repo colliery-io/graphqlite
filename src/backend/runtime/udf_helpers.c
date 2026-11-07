@@ -28,6 +28,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <limits.h>
 
 #if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
 #  define timegm(tm) _mkgmtime(tm)
@@ -2599,15 +2600,22 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
                                         const char *duration_json, int sign) {
     tparts p;
     if (!parse_temporal_parts(temporal, &p)) { sqlite3_result_text(ctx, temporal, -1, SQLITE_TRANSIENT); return; }
-    long long add_months = dur_field_ll(duration_json, "months") * sign;
-    long long add_days = dur_field_ll(duration_json, "days") * sign;
-    long long add_seconds = dur_field_ll(duration_json, "seconds") * sign;
-    long long add_ns_field = dur_field_ll(duration_json, "nanosecondsOfSecond") * sign;
-    long long add_total_ns = add_seconds * 1000000000LL + add_ns_field;
+    long long add_months, add_days, add_seconds, add_ns_field, add_total_ns, total_months;
+    /* Checked: a duration near the integer range overflowed these sums
+     * (GQLITE-T-0500). The day and time-of-day sums below are checked too. */
+    if (__builtin_mul_overflow(dur_field_ll(duration_json, "months"), (long long)sign, &add_months) ||
+        __builtin_mul_overflow(dur_field_ll(duration_json, "days"), (long long)sign, &add_days) ||
+        __builtin_mul_overflow(dur_field_ll(duration_json, "seconds"), (long long)sign, &add_seconds) ||
+        __builtin_mul_overflow(dur_field_ll(duration_json, "nanosecondsOfSecond"), (long long)sign, &add_ns_field) ||
+        __builtin_mul_overflow(add_seconds, 1000000000LL, &add_total_ns) ||
+        __builtin_add_overflow(add_total_ns, add_ns_field, &add_total_ns) ||
+        __builtin_add_overflow((long long)(p.y) * 12 + (p.mo - 1), add_months, &total_months)) {
+        sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);
+        return;
+    }
 
     if (p.has_date) {
         /* Add months / years first. */
-        long long total_months = (long long)(p.y) * 12 + (p.mo - 1) + add_months;
         int new_year = (int)(total_months / 12);
         int new_month = (int)(total_months - (long long)new_year * 12) + 1;
         if (new_month < 1) { new_month += 12; new_year -= 1; }
@@ -2616,7 +2624,11 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
         int dim = days_in_month_c(new_year, new_month);
         if (new_day > dim) new_day = dim;
         /* Add days. */
-        long long base_days = days_from_civil(new_year, new_month, new_day) + (long long)add_days;
+        long long base_days;
+        if (__builtin_add_overflow(days_from_civil(new_year, new_month, new_day), add_days, &base_days)) {
+            sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);
+            return;
+        }
         /* Time-of-day contribution: only applies when the input itself has a
          * time component (datetime/localdatetime). Pure date inputs ignore
          * the duration's hours/minutes/seconds/ns (openCypher rule). */
@@ -2626,12 +2638,18 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
             time_ns = (long long)p.h * 3600LL * 1000000000LL
                     + (long long)p.mi * 60LL * 1000000000LL
                     + (long long)p.sec * 1000000000LL + p.ns;
-            time_ns += add_total_ns;
             long long DAY_NS = 86400LL * 1000000000LL;
+            if (__builtin_add_overflow(time_ns, add_total_ns, &time_ns)) {
+                sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);
+                return;
+            }
             long long extra_days = time_ns / DAY_NS;
             residue_ns = time_ns - extra_days * DAY_NS;
             if (residue_ns < 0) { residue_ns += DAY_NS; extra_days -= 1; }
-            base_days += extra_days;
+            if (__builtin_add_overflow(base_days, extra_days, &base_days)) {
+                sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);
+                return;
+            }
         } else {
             /* Pure date + duration: the duration's sub-day time still
              * contributes its WHOLE days (truncated toward zero); the sub-day
@@ -2689,8 +2707,10 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
         long long time_ns = (long long)p.h * 3600LL * 1000000000LL
                           + (long long)p.mi * 60LL * 1000000000LL
                           + (long long)p.sec * 1000000000LL + p.ns;
-        time_ns += add_total_ns;
         long long DAY_NS = 86400LL * 1000000000LL;
+        /* Only the time of day counts: reduce the duration first so the sum
+         * cannot overflow (GQLITE-T-0500). */
+        time_ns += add_total_ns % DAY_NS;
         time_ns = ((time_ns % DAY_NS) + DAY_NS) % DAY_NS;
         int new_h = (int)(time_ns / (3600LL * 1000000000LL));
         int new_mi = (int)((time_ns / (60LL * 1000000000LL)) % 60);
@@ -2735,11 +2755,18 @@ static void gql_dyn_addsub_func(sqlite3_context *ctx, int argc, sqlite3_value **
     bool rhs_dur = is_duration_value(argv[1], NULL);
 
     if (lhs_dur && rhs_dur) {
-        long long m = dur_field_ll(lhs_text, "months") + sign * dur_field_ll(rhs_text, "months");
-        long long da = dur_field_ll(lhs_text, "days") + sign * dur_field_ll(rhs_text, "days");
-        long long s = dur_field_ll(lhs_text, "seconds") + sign * dur_field_ll(rhs_text, "seconds");
-        long long ns = dur_field_ll(lhs_text, "nanosecondsOfSecond") + sign * dur_field_ll(rhs_text, "nanosecondsOfSecond");
-        emit_duration_json_split(ctx, m, da, s, ns);
+        /* Checked: a component past the integer range is an error, not a
+         * wrapped value (GQLITE-T-0500). */
+        static const char *const fields[4] = { "months", "days", "seconds", "nanosecondsOfSecond" };
+        long long out[4];
+        for (int i = 0; i < 4; i++) {
+            long long a = dur_field_ll(lhs_text, fields[i]), b = dur_field_ll(rhs_text, fields[i]);
+            if (sign > 0 ? __builtin_add_overflow(a, b, &out[i]) : __builtin_sub_overflow(a, b, &out[i])) {
+                sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);
+                return;
+            }
+        }
+        emit_duration_json_split(ctx, out[0], out[1], out[2], out[3]);
         return;
     }
     if (lhs_dur || rhs_dur) {
@@ -2859,7 +2886,14 @@ static void gql_dyn_addsub_func(sqlite3_context *ctx, int argc, sqlite3_value **
     } else {
         long long a = sqlite3_value_int64(argv[0]);
         long long b = sqlite3_value_int64(argv[1]);
-        sqlite3_result_int64(ctx, sign > 0 ? a + b : a - b);
+        long long r;
+        /* Integer overflow is an error, not a wrapped value (GQLITE-T-0500:
+         * x + 1 for the largest integer gave the smallest). */
+        if (sign > 0 ? __builtin_add_overflow(a, b, &r) : __builtin_sub_overflow(a, b, &r)) {
+            sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);
+            return;
+        }
+        sqlite3_result_int64(ctx, r);
     }
 }
 
@@ -2949,7 +2983,12 @@ static void gql_dyn_muldiv_func(sqlite3_context *ctx, int argc, sqlite3_value **
     /* Plain numeric: preserve SQLite-native int/float semantics. */
     if (op == '*') {
         if (t0 == SQLITE_INTEGER && t1 == SQLITE_INTEGER) {
-            sqlite3_result_int64(ctx, sqlite3_value_int64(argv[0]) * sqlite3_value_int64(argv[1]));
+            long long r;
+            if (__builtin_mul_overflow(sqlite3_value_int64(argv[0]), sqlite3_value_int64(argv[1]), &r)) {
+                sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);   /* GQLITE-T-0500 */
+                return;
+            }
+            sqlite3_result_int64(ctx, r);
         } else {
             gql_result_float(ctx, sqlite3_value_double(argv[0]) * sqlite3_value_double(argv[1]));
         }
@@ -2957,7 +2996,12 @@ static void gql_dyn_muldiv_func(sqlite3_context *ctx, int argc, sqlite3_value **
         if (t0 == SQLITE_INTEGER && t1 == SQLITE_INTEGER) {
             long long b = sqlite3_value_int64(argv[1]);
             if (b == 0) { sqlite3_result_null(ctx); return; }
-            sqlite3_result_int64(ctx, sqlite3_value_int64(argv[0]) / b);
+            long long a = sqlite3_value_int64(argv[0]);
+            if (a == LLONG_MIN && b == -1) {
+                sqlite3_result_error(ctx, GQL_ERR_INT_OVERFLOW, -1);   /* GQLITE-T-0500 */
+                return;
+            }
+            sqlite3_result_int64(ctx, a / b);
         } else {
             /* A float division by zero gives Infinity, -Infinity or NaN
              * (openCypher); SQLite's / gives NULL (GQLITE-T-0484). */

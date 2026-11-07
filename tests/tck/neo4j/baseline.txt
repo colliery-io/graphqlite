@@ -51,8 +51,15 @@ CountExpressionAcceptance.feature::COUNT in WHERE with ORDER BY
 CountExpressionAcceptance.feature::COUNT in WHERE with ORDER BY, SKIP and LIMIT
 CountExpressionAcceptance.feature::COUNT in WHERE with SKIP
 CountExpressionAcceptance.feature::COUNT of cartesian product of a node and relationship patterns
+CountExpressionAcceptance.feature::COUNT on the right side of an OR should work
+CountExpressionAcceptance.feature::COUNT on the right side of an OR with a NOT should work
+CountExpressionAcceptance.feature::COUNT on the right side of an XOR should work
+CountExpressionAcceptance.feature::COUNT on the right side of an XOR with a NOT should work
+CountExpressionAcceptance.feature::COUNT should allow omission of RETURN in more complex queries
+CountExpressionAcceptance.feature::COUNT should have same results with a RETURN as one without
 CountExpressionAcceptance.feature::COUNT should return zero for NULL relationships
 CountExpressionAcceptance.feature::COUNT should work as grouping key
+CountExpressionAcceptance.feature::COUNT should work in a SET statement
 CountExpressionAcceptance.feature::COUNT should work in a WHEN statement
 CountExpressionAcceptance.feature::COUNT should work in a WITH statement
 CountExpressionAcceptance.feature::COUNT should work in a return statement
@@ -64,15 +71,18 @@ CountExpressionAcceptance.feature::COUNT subquery with empty node
 CountExpressionAcceptance.feature::COUNT works in conjunction with algebraic operations
 CountExpressionAcceptance.feature::Count can be nested inside another count
 CountExpressionAcceptance.feature::Count should allow shadowing of variables not yet introduced in outer scope
+CountExpressionAcceptance.feature::Count should allow the shadowing of introduced variables
 CountExpressionAcceptance.feature::Count subquery with FINISH should fail
 CountExpressionAcceptance.feature::Count subquery with updating procedure should fail
 CountExpressionAcceptance.feature::Count used in a nested plan
 CountExpressionAcceptance.feature::Count with a RETURNING case
 CountExpressionAcceptance.feature::Count with function use should work
+CountExpressionAcceptance.feature::Count with shadowing of an outer variable should result in error
 CountExpressionAcceptance.feature::Full COUNT with MATCH keyword
 CountExpressionAcceptance.feature::Full COUNT with MATCH keyword and RETURN that is null
 CountExpressionAcceptance.feature::Full COUNT with reference to outer variable
 CountExpressionAcceptance.feature::Full COUNT with single node with predicate
+CountExpressionAcceptance.feature::Full count subquery with aggregation before and after subquery
 CountExpressionAcceptance.feature::Full count subquery with aggregation comparison inside
 CountExpressionAcceptance.feature::Full count subquery with aggregation inside
 CountExpressionAcceptance.feature::Full count subquery with update clause should fail
@@ -92,6 +102,10 @@ Create.feature::Dependencies in creating multiple nodes
 Create.feature::Dependencies in creating multiple rels
 DeleteAcceptance.feature::Return properties from deleted node
 ExistsExpressionAcceptance.feature::Aggregation with exists in horizon of tail should plan
+ExistsExpressionAcceptance.feature::Can set a property to the value of an exists expression
+ExistsExpressionAcceptance.feature::Can set two properties to the value of an exists expression
+ExistsExpressionAcceptance.feature::Can use exists as part of a create
+ExistsExpressionAcceptance.feature::Can use exists expression as a function parameter
 ExistsExpressionAcceptance.feature::Double Exists (no result) without where clause should return no results
 ExistsExpressionAcceptance.feature::Double Exists after WITH (no result) without where clause should return no results
 ExistsExpressionAcceptance.feature::Double Exists after WITH without where clause should work
@@ -112,8 +126,11 @@ ExistsExpressionAcceptance.feature::Ensure we don't leak variables to the outsid
 ExistsExpressionAcceptance.feature::Exists after WITH DISTINCT with simple predicate should work
 ExistsExpressionAcceptance.feature::Exists after WITH DISTINCT without where clause should work
 ExistsExpressionAcceptance.feature::Exists after additive WITH with simple predicate should work
+ExistsExpressionAcceptance.feature::Exists after empty optional match with simple predicate should work
+ExistsExpressionAcceptance.feature::Exists after empty optional match without where clause should work
 ExistsExpressionAcceptance.feature::Exists after optional match with simple predicate should work
 ExistsExpressionAcceptance.feature::Exists after optional match without where clause should work
+ExistsExpressionAcceptance.feature::Exists after rename WITH with simple predicate should work
 ExistsExpressionAcceptance.feature::Exists after renaming WITH without where clause should work
 ExistsExpressionAcceptance.feature::Exists after selective WITH with simple predicate should work
 ExistsExpressionAcceptance.feature::Exists after selective WITH without where clause should work
@@ -127,7 +144,13 @@ ExistsExpressionAcceptance.feature::Exists in MATCH in horizon without where cla
 ExistsExpressionAcceptance.feature::Exists in RETURN should work
 ExistsExpressionAcceptance.feature::Exists inside a WITH should work
 ExistsExpressionAcceptance.feature::Exists is valid as part of an equality check
+ExistsExpressionAcceptance.feature::Exists on the right side of an OR should work
+ExistsExpressionAcceptance.feature::Exists on the right side of an OR with a NOT should work
+ExistsExpressionAcceptance.feature::Exists on the right side of an XOR should work
+ExistsExpressionAcceptance.feature::Exists on the right side of an XOR with a NOT should work
+ExistsExpressionAcceptance.feature::Exists should allow omission of RETURN in more complex queries
 ExistsExpressionAcceptance.feature::Exists should allow shadowing of variables not yet introduced in outer scope
+ExistsExpressionAcceptance.feature::Exists should allow the shadowing of introduced variables
 ExistsExpressionAcceptance.feature::Exists should handle more complex relationship predicate
 ExistsExpressionAcceptance.feature::Exists should handle relationship predicate
 ExistsExpressionAcceptance.feature::Exists should handle relationship predicate linking inner and outer relationship
@@ -148,10 +171,12 @@ ExistsExpressionAcceptance.feature::Exists with RETURN that is null
 ExistsExpressionAcceptance.feature::Exists with a RETURNING case should work
 ExistsExpressionAcceptance.feature::Exists with create should fail with syntax error
 ExistsExpressionAcceptance.feature::Exists with delete should fail with syntax error
+ExistsExpressionAcceptance.feature::Exists with inner aggregation and using outer variable should work
 ExistsExpressionAcceptance.feature::Exists with inner aggregation inside another expression and using outer variable should work
 ExistsExpressionAcceptance.feature::Exists with merge should fail with syntax error
 ExistsExpressionAcceptance.feature::Exists with nested Exists should work
 ExistsExpressionAcceptance.feature::Exists with set should fail with syntax error
+ExistsExpressionAcceptance.feature::Exists with shadowing of an outer variable should result in error
 ExistsExpressionAcceptance.feature::Exists with unrelated inner pattern should work
 ExistsExpressionAcceptance.feature::Exists without where clause but with predicate on outer match should work
 ExistsExpressionAcceptance.feature::Full Exists after simple WITH without inner where clause should work
@@ -163,6 +188,7 @@ ExistsExpressionAcceptance.feature::Full existential subquery with aggregation c
 ExistsExpressionAcceptance.feature::Inner clause variables of same hierarchy are not mixed
 ExistsExpressionAcceptance.feature::Inner clause variables with shadowed variable name
 ExistsExpressionAcceptance.feature::Inner query with MATCH -> WHERE -> WITH -> WHERE should parse and return results
+ExistsExpressionAcceptance.feature::Inner query with UNWIND should work
 ExistsExpressionAcceptance.feature::Inner where clause should consider outer variables
 ExistsExpressionAcceptance.feature::Inner where clause should consider outer variables with property
 ExistsExpressionAcceptance.feature::Multiple patterns in inner MATCH should be supported
@@ -175,9 +201,13 @@ ExistsExpressionAcceptance.feature::RETURN in inner MATCH should allow for alias
 ExistsExpressionAcceptance.feature::Recursive inner where clause should consider outer relation variables
 ExistsExpressionAcceptance.feature::Recursive inner where clause should consider outer variables
 ExistsExpressionAcceptance.feature::Reuse of variable after exists should not affect result
+ExistsExpressionAcceptance.feature::Should handle scoping and dependencies properly when EXISTS is in horizon
+ExistsExpressionAcceptance.feature::Should support variable length pattern
 ExistsExpressionAcceptance.feature::Simple Exists should work even if MATCH is omitted
 ExistsExpressionAcceptance.feature::Simple Exists without where clause should work
 ExistsExpressionAcceptance.feature::Standalone Exists with RETURN *
+ExistsExpressionAcceptance.feature::Unfulfilled Exists after optional match with simple predicate should work
+ExistsExpressionAcceptance.feature::Unfulfilled exists after optional match without where clause should work
 ExistsExpressionAcceptance.feature::WHERE EXISTS or WHERE NOT EXISTS WITH OR and horizon should work
 ExistsExpressionAcceptance.feature::WHERE NOT EXISTS WITH AND and horizon should work
 ExistsExpressionAcceptance.feature::WHERE NOT EXISTS WITH OR and multiple horizons should work
@@ -194,6 +224,8 @@ ForeachAcceptance.feature::Add labels inside FOREACH
 ForeachAcceptance.feature::Foreach with single literal in list
 ForeachAcceptance.feature::Foreach with single null
 ForeachAcceptance.feature::Foreach with single null in list
+ForeachAcceptance.feature::Merge inside foreach should see variables introduced by update actions outside foreach
+ForeachAcceptance.feature::Merging inside a FOREACH using a previously matched node
 ForeachAcceptance.feature::Merging inside a FOREACH using a previously matched node and a previously merged node
 ForeachAcceptance.feature::Merging inside a FOREACH using two previously merged nodes
 ForeachAcceptance.feature::Should handle running merge inside a foreach loop
@@ -248,7 +280,12 @@ MatchAcceptance.feature::difficult to plan query number 3
 MatchAcceptance.feature::equality with boolean lists
 MatchAcceptance.feature::loops with relationship type
 MergeLegacyAcceptance.feature::Fail when imposing new predicates on a variable that is already bound
+MergeLegacyAcceptance.feature::Introduce named paths
 MergeLegacyAcceptance.feature::Unbound pattern
+MergeLegacyAcceptance.feature::Using a longer pattern
+MergeLegacyAcceptance.feature::Using a single bound node
+MergeLegacyAcceptance.feature::Using bound nodes in mid-pattern
+MergeLegacyAcceptance.feature::Using bound nodes in mid-pattern when pattern partly matches
 MiscAcceptance.feature::GitHub Issue #13190
 MiscAcceptance.feature::GitHub Issue #13190 variant
 MiscAcceptance.feature::Github issue number 13432 query 1
@@ -282,6 +319,7 @@ OperatorChaining.feature::Long chains of integer comparisons
 OperatorChaining.feature::Long chains of string comparisons
 OptionalMatchAcceptance.feature::Id on null
 OptionalMatchAcceptance.feature::double optional match with repeated null relationship
+OptionalMatchAcceptance.feature::optional equality with boolean lists
 OptionalMatchAcceptance.feature::optional match followed by aggregation and map-projection
 OptionalMatchAcceptance.feature::optional match followed by match with repeated null relationship
 OptionalMatchAcceptance.feature::optional match with distinct
@@ -327,7 +365,18 @@ PatternExpressionAcceptance.feature::Using a variable-length pattern expression 
 PatternExpressionAcceptance.feature::Using list comprehension in a WHERE
 PatternExpressionAcceptance.feature::Using list comprehension in a WITH
 PatternExpressionAcceptance.feature::Using pattern expression in RETURN
+PatternPredicates.feature::Filter relationships with properties using pattern predicate
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between an expression and a subquery
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between one expression and a negated subquery
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between one negated subquery and a subquery
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between one negated subquery, a subquery, and an equality expression
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between one negated subquery, two subqueries, and an equality expression
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between one negated subquery, two subqueries, and an equality expression 2
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between one subquery and a negated subquery
+PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between two expressions and a subquery
 PatternPredicates.feature::Filter using a pattern predicate that is a logical OR between two subqueries
+PatternPredicates.feature::Filter using a variable length relationship pattern predicate with properties
+PatternPredicates.feature::Filter using negated pattern predicate
 PatternPredicates.feature::Handling pattern predicates
 PatternPredicates.feature::Handling pattern predicates without matches
 PatternPredicates.feature::Matching named path with variable length pattern and pattern predicates

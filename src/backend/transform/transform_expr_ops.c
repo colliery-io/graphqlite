@@ -7,8 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 #include "transform/cypher_transform.h"
+#include "runtime/gql_error.h"
 #include "transform/transform_helpers.h"
 #include "transform/transform_func_string.h"
 #include "transform/transform_func_math.h"
@@ -106,6 +108,27 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
                        (var && var->kind == VAR_KIND_PROJECTED);
     char idref[256];
     snprintf(idref, sizeof(idref), "%s%s", alias, alias_is_id ? "" : ".id");
+
+    /* A projected value can hold the entity itself, as JSON: a list
+     * comprehension variable over [n], a WITH or UNWIND of a collected list.
+     * Its labels are those of the node with that JSON's id, and on a
+     * relationship it tests the type; it compared the JSON text with a node
+     * id, so [x IN [n] WHERE x:A] was always [] (GQLITE-T-0494). */
+    if (var && var->kind == VAR_KIND_PROJECTED && !is_edge) {
+        append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL "
+                        "WHEN json_valid(%s) AND json_type(%s) = 'object' THEN "
+                        "(CASE WHEN json_type(%s, '$.labels') IS NOT NULL THEN "
+                        "EXISTS (SELECT 1 FROM node_labels WHERE node_id = json_extract(%s, '$.id') AND label = ",
+                   idref, idref, idref, idref, idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, ") WHEN json_type(%s, '$.startNode') IS NOT NULL THEN json_extract(%s, '$.type') = ",
+                   idref, idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, " END) WHEN EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s AND label = ", idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, ") THEN 1 ELSE 0 END)");
+        return 0;
+    }
 
     /* Label/type predicate with Cypher 3VL: a null entity yields null, not
      * false (Graph5 [5]); on a relationship `r:T` checks the edge TYPE, not
@@ -338,8 +361,32 @@ static int emit_in_operand(cypher_transform_context *ctx, ast_node *expr, bool l
     return 0;
 }
 
+/* Two integer literals whose +, -, * or / is outside the 64-bit range: SQLite
+ * turns that into a float (9223372036854775807 + 1 gave 9.22e+18); it is an
+ * error (GQLITE-T-0500). */
+static bool int_literals_overflow(cypher_binary_op *b)
+{
+    if (!b->left || !b->right || b->left->type != AST_NODE_LITERAL || b->right->type != AST_NODE_LITERAL)
+        return false;
+    cypher_literal *l = (cypher_literal *)b->left, *r = (cypher_literal *)b->right;
+    if (l->literal_type != LITERAL_INTEGER || r->literal_type != LITERAL_INTEGER) return false;
+    long long x = l->value.integer, y = r->value.integer, out;
+    switch (b->op_type) {
+        case BINARY_OP_ADD: return __builtin_add_overflow(x, y, &out);
+        case BINARY_OP_SUB: return __builtin_sub_overflow(x, y, &out);
+        case BINARY_OP_MUL: return __builtin_mul_overflow(x, y, &out);
+        case BINARY_OP_DIV: return x == LLONG_MIN && y == -1;
+        default: return false;
+    }
+}
+
 int transform_binary_operation(cypher_transform_context *ctx, cypher_binary_op *binary_op)
 {
+    if (int_literals_overflow(binary_op)) {
+        ctx->has_error = true;
+        ctx->error_message = strdup(GQL_ERR_INT_OVERFLOW);
+        return -1;
+    }
     CYPHER_DEBUG("Transforming binary operation: op_type=%d", binary_op->op_type);
 
     /* Standalone NaN constant `0.0 / 0.0` (not a comparison operand — those are

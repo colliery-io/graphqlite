@@ -3974,17 +3974,21 @@ static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 int sql_type = sqlite3_column_type(stmt, 0);
                                 const char *val = (const char*)sqlite3_column_text(stmt, 0);
                                 if (val) {
-                                    /* {node,edge}_props_bool stores 0/1; expose as
-                                     * "true"/"false" so the JSON formatter
-                                     * treats it as a string and openCypher's
-                                     * boolean literal is preserved. */
-                                    if (strcmp(type_tables[t], "node_props_bool") == 0 ||
-                                        strcmp(type_tables[t], "edge_props_bool") == 0) {
+                                    /* {node,edge}_props_bool stores 0/1: a
+                                     * boolean, not the string "true" (it was
+                                     * typed text, which the result writer
+                                     * quotes, GQLITE-T-0513). A stored string
+                                     * stays a string, JSON stays JSON. */
+                                    if (strstr(type_tables[t], "_props_bool")) {
                                         result->data[0][i] = strdup(atoi(val) ? "true" : "false");
-                                        result->data_types[0][i] = SQLITE_TEXT;
+                                        result->data_types[0][i] = GQL_COL_TYPE_BOOLEAN;
+                                    } else if (strstr(type_tables[t], "_props_json")) {
+                                        result->data[0][i] = strdup(val);
+                                        result->data_types[0][i] = GQL_COL_TYPE_JSON;
                                     } else {
                                         result->data[0][i] = strdup(val);
-                                        result->data_types[0][i] = sql_type;
+                                        result->data_types[0][i] =
+                                            strstr(type_tables[t], "_props_text") ? GQL_COL_TYPE_STRING : sql_type;
                                     }
                                 }
                             }
@@ -5032,7 +5036,10 @@ static int rw_eval_scalar(cypher_executor *executor, ast_node *expr, const rw_ro
             else sqlite3_bind_text(st, pn, sc->text, -1, SQLITE_TRANSIENT);
         }
         if (executor->params_json) bind_params_from_json(st, executor->params_json);
-        if (sqlite3_step(st) == SQLITE_ROW) {
+        int step = sqlite3_step(st);
+        if (step != SQLITE_ROW && step != SQLITE_DONE && !executor->eval_error[0])
+            snprintf(executor->eval_error, sizeof(executor->eval_error), "%s", sqlite3_errmsg(executor->db));
+        if (step == SQLITE_ROW) {
             type = sqlite3_column_type(st, 0);
             sqlite3_value *cv = sqlite3_column_value(st, 0);
             if (cv && sqlite3_value_subtype(cv) == GQL_SUBTYPE_BOOLEAN) type = GQL_COL_TYPE_BOOLEAN;
@@ -7236,11 +7243,21 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     }
     free(eager_done);
 
+    /* An expression of a row failed (GQLITE-T-0500): the query fails. */
+    if (rc >= 0 && executor->eval_error[0]) {
+        set_result_error(result, executor->eval_error);
+        rc = -1;
+    }
+
     /* --- 5. RETURN --------------------------------------------------------- */
     if (rc >= 0) {
         result->success = true;
         if (ret_clause && ret_clause->items) {
             rc = rw_project_return(executor, ret_clause, rows, row_alive, n_rows, result);
+        }
+        if (rc >= 0 && executor->eval_error[0]) {
+            set_result_error(result, executor->eval_error);
+            rc = -1;
         }
     }
 

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "executor/executor_internal.h"
+#include "gql_thread_local.h"
 #include "transform/transform_helpers.h"
 #include "runtime/gql_error.h"
 #include "executor/cypher_executor.h"
@@ -91,6 +92,21 @@ static bool ast_is_constant(const ast_node *expr)
         default:
             return false;
     }
+}
+
+/* The SQLite error of the last expression evaluation that failed, for the
+ * caller's message: SET n.v = n.v + 1 on the largest integer said
+ * "Failed to evaluate SET expression", or wrote null (GQLITE-T-0500). */
+static GQL_THREAD_LOCAL char g_eval_error[256];
+
+const char *executor_eval_last_error(void)
+{
+    return g_eval_error[0] ? g_eval_error : NULL;
+}
+
+static void eval_error_set(sqlite3 *db)
+{
+    snprintf(g_eval_error, sizeof(g_eval_error), "%s", db ? sqlite3_errmsg(db) : "error");
 }
 
 static int evaluate_ast_with_context_raw(
@@ -213,10 +229,14 @@ static int evaluate_ast_with_context_raw(
         }
     }
 
+    g_eval_error[0] = '\0';
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
+        /* No row is null; an error (integer overflow, a function's error)
+         * fails the write instead of storing null (GQLITE-T-0500). */
+        if (rc != SQLITE_DONE) eval_error_set(executor->db);
         sqlite3_finalize(stmt);
-        return -2;
+        return rc == SQLITE_DONE ? -2 : -1;
     }
 
     int col_type = sqlite3_column_type(stmt, 0);
@@ -325,8 +345,10 @@ int evaluate_function_call_via_sqlite(
         }
     }
 
+    g_eval_error[0] = '\0';
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
+        if (rc != SQLITE_DONE) eval_error_set(executor->db);
         sqlite3_finalize(stmt);
         return -1;
     }
@@ -1215,7 +1237,13 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             bool has_prop_arg = false;
             if (func->args) {
                 for (int fa = 0; fa < func->args->count; fa++) {
-                    if (func->args->items[fa] && func->args->items[fa]->type == AST_NODE_PROPERTY) {
+                    /* A subquery argument (COUNT { (p)-->() }) reads the row's
+                     * variables too: without them it counted for every
+                     * node (GQLITE-T-0513). */
+                    if (func->args->items[fa] &&
+                        (func->args->items[fa]->type == AST_NODE_PROPERTY ||
+                         func->args->items[fa]->type == AST_NODE_EXISTS_EXPR ||
+                         func->args->items[fa]->type == AST_NODE_IDENTIFIER)) {
                         has_prop_arg = true;
                         break;
                     }
@@ -1240,7 +1268,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 char error[256];
                 snprintf(error, sizeof(error), "Failed to evaluate function '%s' in SET",
                          func->function_name ? func->function_name : "unknown");
-                set_result_error(result, error);
+                set_result_error(result, executor_eval_last_error() ? executor_eval_last_error() : error);
                 property_value_free(&set_pv);
                 return -1;
             }
@@ -1379,7 +1407,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                     item->expr->type == AST_NODE_NULL_CHECK ||
                     item->expr->type == AST_NODE_SUBSCRIPT ||
                     item->expr->type == AST_NODE_LIST ||
-                    item->expr->type == AST_NODE_MAP)) {
+                    item->expr->type == AST_NODE_MAP ||
+                    item->expr->type == AST_NODE_EXISTS_EXPR ||
+                    item->expr->type == AST_NODE_LABEL_EXPR)) {
             /* Arbitrary expression RHS: SET n.num = n.num + 1, etc.
              * Evaluate via SQL with the var_map's nodes joined in. */
             int rc = evaluate_ast_with_context(executor, item->expr, var_map,
@@ -1398,7 +1428,8 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 property_value_free(&set_pv);
                 continue;
             } else if (rc < 0) {
-                set_result_error(result, "Failed to evaluate SET expression");
+                set_result_error(result, executor_eval_last_error() ? executor_eval_last_error()
+                                                                    : "Failed to evaluate SET expression");
                 property_value_free(&set_pv);
                 return -1;
             }

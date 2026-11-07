@@ -18,6 +18,15 @@ typedef enum {
 } transform_path_type;
 
 /* Transform context - tracks state during AST transformation */
+/* An outer variable seeded into a subquery body (GQLITE-T-0513). */
+struct subquery_outer_var {
+    const char *name;
+    const char *alias;      /* projected source, or the entity's id expression */
+    bool projected;
+    bool scalar;
+    bool edge;
+};
+
 struct cypher_transform_context {
     sqlite3 *db;                    /* SQLite database connection */
 
@@ -94,6 +103,14 @@ struct cypher_transform_context {
      * enclosing query. Borrowed pointers; owned by the EXISTS emitter. */
     const char **correlated_outer_aliases;
     int correlated_outer_count;
+
+    /* GQLITE-T-0513: inside an EXISTS / COUNT { } body, how each outer
+     * variable was seeded, so a WITH in the body does not drop it: Cypher
+     * keeps the outer variables in scope for the whole subquery
+     * (EXISTS { WITH count(*) AS c MATCH (person)-->() }). Borrowed;
+     * owned by the subquery emitter. */
+    const struct subquery_outer_var *outer_vars;
+    int outer_var_count;
 
     /* Unified SQL builder for clause-based SQL generation */
     sql_builder *unified_builder;

@@ -107,6 +107,12 @@ struct cypher_executor {
     sqlite3_stmt *helper_stmts[GQL_HELPER_STMT_MAX];
     char *helper_sql[GQL_HELPER_STMT_MAX];
     int helper_count;
+
+    /* The SQLite error of an expression evaluated for one row of a write
+     * pipeline (integer overflow, a function error). A row's NULL and a
+     * row's error both came back as "no value", so SET stored null; the
+     * pipeline now fails with this message (GQLITE-T-0500). */
+    char eval_error[256];
 };
 
 typedef struct executor_trace_ctx {

@@ -259,6 +259,36 @@ class TestHyperbolicFunctions:
         assert abs(val - expected) < 0.0001
 
 
+class TestIntegerOverflow:
+    """Integer arithmetic past the 64-bit range is an error: it gave a float
+    or a wrapped value, and SET / CREATE stored null (GQLITE-T-0500)."""
+
+    @pytest.mark.parametrize("query", [
+        "RETURN 9223372036854775807 + 1 AS r",
+        "RETURN -9223372036854775808 - 1 AS r",
+        "RETURN 9223372036854775807 * 2 AS r",
+        "RETURN -9223372036854775808 / -1 AS r",
+        "UNWIND [9223372036854775807] AS x RETURN x + 1 AS r",
+        "UNWIND [9223372036854775807] AS x RETURN x * 2 AS r",
+        "UNWIND [-9223372036854775808] AS x RETURN -x AS r",
+        "UNWIND [9223372036854775807] AS x WITH x WHERE x + 1 > 0 RETURN x AS r",
+        "UNWIND [9223372036854775807] AS x CREATE (:Ov {v: x + 1})",
+        "RETURN duration({seconds: 9223372036854775807}) + duration({seconds: 1}) AS r",
+        "RETURN date('2020-01-01') + duration({days: 9223372036854775807}) AS r",
+    ])
+    def test_overflow_is_an_error(self, db, query):
+        with pytest.raises(Exception, match="integer overflow"):
+            db.cypher(query)
+
+    def test_set_overflow_fails_and_writes_nothing(self, db):
+        db.cypher("CREATE (:Ov2 {v: 9223372036854775807})")
+        with pytest.raises(Exception, match="integer overflow"):
+            db.cypher("MATCH (n:Ov2) SET n.k = 1, n.v = n.v + 1")
+        r = db.cypher("MATCH (n:Ov2) RETURN n.v AS v, n.k AS k")
+        assert r[0]["v"] == 9223372036854775807
+        assert r[0]["k"] is None
+
+
 class TestIsNaN:
     def test_isnan_number(self, db):
         results = db.cypher("RETURN isNaN(42) AS result")
