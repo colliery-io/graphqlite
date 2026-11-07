@@ -109,6 +109,27 @@ int transform_label_expression(cypher_transform_context *ctx, cypher_label_expr 
     char idref[256];
     snprintf(idref, sizeof(idref), "%s%s", alias, alias_is_id ? "" : ".id");
 
+    /* A projected value can hold the entity itself, as JSON: a list
+     * comprehension variable over [n], a WITH or UNWIND of a collected list.
+     * Its labels are those of the node with that JSON's id, and on a
+     * relationship it tests the type; it compared the JSON text with a node
+     * id, so [x IN [n] WHERE x:A] was always [] (GQLITE-T-0494). */
+    if (var && var->kind == VAR_KIND_PROJECTED && !is_edge) {
+        append_sql(ctx, "(CASE WHEN %s IS NULL THEN NULL "
+                        "WHEN json_valid(%s) AND json_type(%s) = 'object' THEN "
+                        "(CASE WHEN json_type(%s, '$.labels') IS NOT NULL THEN "
+                        "EXISTS (SELECT 1 FROM node_labels WHERE node_id = json_extract(%s, '$.id') AND label = ",
+                   idref, idref, idref, idref, idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, ") WHEN json_type(%s, '$.startNode') IS NOT NULL THEN json_extract(%s, '$.type') = ",
+                   idref, idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, " END) WHEN EXISTS (SELECT 1 FROM node_labels WHERE node_id = %s AND label = ", idref);
+        append_string_literal(ctx, label_expr->label_name);
+        append_sql(ctx, ") THEN 1 ELSE 0 END)");
+        return 0;
+    }
+
     /* Label/type predicate with Cypher 3VL: a null entity yields null, not
      * false (Graph5 [5]); on a relationship `r:T` checks the edge TYPE, not
      * node labels (Graph5 [2]). */
