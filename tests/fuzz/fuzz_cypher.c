@@ -62,9 +62,37 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
     return 0;
 }
 
+/* Deeper nesting than a real query has: brackets more than MAX_NESTING
+ * deep, or more than MAX_NESTING signs in a row (`RETURN ------1`). The
+ * transform recurses once per level and ASan's larger frames overflow the
+ * stack at about a hundred levels; a normal build handles ~10,000 and the
+ * parser stops there with an error (GQLITE-T-0504). Skipped, so fuzz runs
+ * report real bugs. Quoted strings and backtick names are not counted. */
+#define MAX_NESTING 64
+
+static int too_deep(const uint8_t *data, size_t size)
+{
+    int depth = 0, max_depth = 0, signs = 0, max_signs = 0;
+    uint8_t quote = 0;
+    for (size_t i = 0; i < size; i++) {
+        uint8_t c = data[i];
+        if (quote) {
+            if (c == '\\' && i + 1 < size) i++;
+            else if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '\'' || c == '"' || c == '`') { quote = c; continue; }
+        if (c == '(' || c == '[' || c == '{') { if (++depth > max_depth) max_depth = depth; }
+        else if ((c == ')' || c == ']' || c == '}') && depth > 0) depth--;
+        if (c == '-' || c == '+') { if (++signs > max_signs) max_signs = signs; }
+        else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') signs = 0;
+    }
+    return max_depth > MAX_NESTING || max_signs > MAX_NESTING;
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-    if (size > 4096) return 0;
+    if (size > 4096 || too_deep(data, size)) return 0;
     steps = 0;
     sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
     sqlite3_bind_text(query_stmt, 1, (const char *)data, (int)size, SQLITE_TRANSIENT);
