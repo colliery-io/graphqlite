@@ -84,6 +84,14 @@ EXTENSION_CFLAGS_BASE += $(SANITIZE_FLAGS)
 CFLAGS += $(SANITIZE_FLAGS)
 endif
 
+# ThreadSanitizer build (GQLITE-T-0528), into $(BUILD_DIR)/tsan: `make
+# concurrency-tsan` runs tests/concurrency/stress.c on it.
+ifdef TSAN
+SANITIZE_FLAGS = -fsanitize=thread -fno-omit-frame-pointer
+EXTENSION_CFLAGS_BASE += $(SANITIZE_FLAGS)
+CFLAGS += $(SANITIZE_FLAGS)
+endif
+
 # Extension-specific flags: enable sqlite3ext.h API pointer redirection
 EXTENSION_CFLAGS = -DGRAPHQLITE_EXTENSION
 
@@ -318,6 +326,23 @@ extension: $(EXTENSION_LIB)
 # The extension with gcov counters, in $(BUILD_DIR)/cov (GQLITE-T-0497).
 extension-cov:
 	$(MAKE) COVERAGE_EXT=1 BUILD_DIR=$(BUILD_DIR)/cov extension
+
+# The extension with ThreadSanitizer, in $(BUILD_DIR)/tsan (GQLITE-T-0528).
+extension-tsan:
+	$(MAKE) TSAN=1 BUILD_DIR=$(BUILD_DIR)/tsan extension
+
+# Concurrency stress test (GQLITE-T-0528): threads, connections, a shared
+# connection. CONCURRENCY_ARGS = threads seconds.
+CONCURRENCY_ARGS ?= 8 10
+concurrency: extension
+	$(CC) -g -O1 -I$(VENDOR_SQLITE_DIR) $(EXTRA_INCLUDES) -o $(BUILD_DIR)/concurrency-stress tests/concurrency/stress.c $(EXTRA_LIBS) -lsqlite3 -lpthread
+	$(BUILD_DIR)/concurrency-stress $(BUILD_DIR)/concurrency.db $(BUILD_DIR)/graphqlite $(CONCURRENCY_ARGS) conns
+	$(BUILD_DIR)/concurrency-stress $(BUILD_DIR)/concurrency.db $(BUILD_DIR)/graphqlite $(CONCURRENCY_ARGS) shared
+
+concurrency-tsan: extension-tsan
+	$(CC) -g -O1 -fsanitize=thread -fno-omit-frame-pointer -I$(VENDOR_SQLITE_DIR) $(EXTRA_INCLUDES) -o $(BUILD_DIR)/tsan/concurrency-stress tests/concurrency/stress.c $(EXTRA_LIBS) -lsqlite3 -lpthread
+	TSAN_OPTIONS="halt_on_error=0 exitcode=66 suppressions=tests/concurrency/tsan.supp $(TSAN_OPTIONS)" $(BUILD_DIR)/tsan/concurrency-stress $(BUILD_DIR)/tsan/concurrency.db $(BUILD_DIR)/tsan/graphqlite $(CONCURRENCY_ARGS) conns
+	TSAN_OPTIONS="halt_on_error=0 exitcode=66 suppressions=tests/concurrency/tsan.supp $(TSAN_OPTIONS)" $(BUILD_DIR)/tsan/concurrency-stress $(BUILD_DIR)/tsan/concurrency.db $(BUILD_DIR)/tsan/graphqlite $(CONCURRENCY_ARGS) shared
 
 # The extension with ASan + UBSan, in $(BUILD_DIR)/asan (GQLITE-T-0495).
 extension-asan:
@@ -676,4 +701,4 @@ clean:
 	find . -name "*.gcno" -delete
 	find . -name "*.gcov" -delete
 
-.PHONY: all help dirs extension-asan extension-cov fuzz-build test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable
+.PHONY: all help dirs extension-asan extension-tsan concurrency concurrency-tsan extension-cov fuzz-build test test-unit test-rust test-python test-bindings test-functional test-cli test-all test-constraints test-perf test-perf-quick test-perf-scaled test-perf-pagerank performance coverage clean unit rust python bindings functional cli gqlite-portable

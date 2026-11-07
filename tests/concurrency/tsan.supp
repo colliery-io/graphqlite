@@ -1,0 +1,7 @@
+# ThreadSanitizer suppressions for `make concurrency-tsan` (GQLITE-T-0528).
+#
+# SQLITE_EXTENSION_INIT2 (SQLite's macro for loadable extensions) stores the
+# host's API table pointer in one global each time a connection loads the
+# extension. Every load stores the same pointer, so the race is benign; it
+# is how every SQLite extension works.
+race:sqlite3_graphqlite_init

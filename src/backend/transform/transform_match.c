@@ -1970,7 +1970,7 @@ skip_combined_exists:
                     /* dup the alias substring into a small static pool so
                      * its lifetime spans the WHERE emission. */
                     static GQL_THREAD_LOCAL char pool[16][80];
-                    static int pool_idx = 0;
+                    static GQL_THREAD_LOCAL int pool_idx = 0;
                     int slot = pool_idx++ % 16;
                     size_t alen = (size_t)(end - as);
                     if (alen >= sizeof(pool[slot])) alen = sizeof(pool[slot]) - 1;

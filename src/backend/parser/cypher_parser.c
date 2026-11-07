@@ -3,6 +3,7 @@
  * Bridge between scanner and Bison-generated parser
  */
 
+#include "gql_thread_local.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -492,7 +493,7 @@ const char* cypher_token_name(int token)
         case CYPHER_END_P:       return "END";
         default:
             if (token >= 32 && token <= 126) {
-                static char char_name[4];
+                static GQL_THREAD_LOCAL char char_name[4];
                 snprintf(char_name, sizeof(char_name), "'%c'", token);
                 return char_name;
             }

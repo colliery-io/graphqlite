@@ -248,9 +248,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     cypher_parameter *param = (cypher_parameter*)pair->value;
                                     property_value pv;
                                     property_value_init(&pv);
-                                    static int64_t int_buf;
-                                    static double real_buf;
-                                    static int bool_buf;
+                                    static GQL_THREAD_LOCAL int64_t int_buf;
+                                    static GQL_THREAD_LOCAL double real_buf;
+                                    static GQL_THREAD_LOCAL int bool_buf;
 
                                     int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
                                     if (rc == -2) {
@@ -341,9 +341,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                                 "edge_props_real", "edge_props_text",
                                                 "edge_props_bool", "edge_props_json", NULL};
                                             const char **tables = is_edge ? edge_t : node_t;
-                                            static int64_t int_buf;
-                                            static double real_buf;
-                                            static int bool_buf;
+                                            static GQL_THREAD_LOCAL int64_t int_buf;
+                                            static GQL_THREAD_LOCAL double real_buf;
+                                            static GQL_THREAD_LOCAL int bool_buf;
                                             /* Text of any length (a 256-byte buffer
                                              * cut longer strings). */
                                             static GQL_THREAD_LOCAL char *text_buf = NULL;
@@ -409,9 +409,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         property_value_free(&func_pv);
                                         continue;
                                     } else if (rc == 0) {
-                                        static int64_t func_int_buf;
-                                        static double func_real_buf;
-                                        static int func_bool_buf;
+                                        static GQL_THREAD_LOCAL int64_t func_int_buf;
+                                        static GQL_THREAD_LOCAL double func_real_buf;
+                                        static GQL_THREAD_LOCAL int func_bool_buf;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, func_pv.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -440,9 +440,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value_init(&gen_pv);
                                     int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv);
                                     if (erc == 0) {
-                                        static int64_t gen_int_buf;
-                                        static double gen_real_buf;
-                                        static int gen_bool_buf;
+                                        static GQL_THREAD_LOCAL int64_t gen_int_buf;
+                                        static GQL_THREAD_LOCAL double gen_real_buf;
+                                        static GQL_THREAD_LOCAL int gen_bool_buf;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, prop_type, gen_pv.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -596,9 +596,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     cypher_parameter *param = (cypher_parameter*)pair->value;
                                     property_value pv2;
                                     property_value_init(&pv2);
-                                    static int64_t int_buf2;
-                                    static double real_buf2;
-                                    static int bool_buf2;
+                                    static GQL_THREAD_LOCAL int64_t int_buf2;
+                                    static GQL_THREAD_LOCAL double real_buf2;
+                                    static GQL_THREAD_LOCAL int bool_buf2;
 
                                     int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv2);
                                     if (rc == -2) {
@@ -634,9 +634,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                         property_value_free(&func_pv2);
                                         continue;
                                     } else if (rc == 0) {
-                                        static int64_t func_int_buf2;
-                                        static double func_real_buf2;
-                                        static int func_bool_buf2;
+                                        static GQL_THREAD_LOCAL int64_t func_int_buf2;
+                                        static GQL_THREAD_LOCAL double func_real_buf2;
+                                        static GQL_THREAD_LOCAL int func_bool_buf2;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, func_pv2.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -662,9 +662,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     property_value_init(&gen_pv2);
                                     int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv2);
                                     if (erc == 0) {
-                                        static int64_t gen_int_buf2;
-                                        static double gen_real_buf2;
-                                        static int gen_bool_buf2;
+                                        static GQL_THREAD_LOCAL int64_t gen_int_buf2;
+                                        static GQL_THREAD_LOCAL double gen_real_buf2;
+                                        static GQL_THREAD_LOCAL int gen_bool_buf2;
                                         if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
                                             if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, prop_type, gen_pv2.as_str, true) == 0) {
                                                 result->properties_set++;
@@ -786,9 +786,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 cypher_parameter *param = (cypher_parameter*)pair->value;
                                 property_value pv;
                                 property_value_init(&pv);
-                                static int64_t rel_int_buf;
-                                static double rel_real_buf;
-                                static int rel_bool_buf;
+                                static GQL_THREAD_LOCAL int64_t rel_int_buf;
+                                static GQL_THREAD_LOCAL double rel_real_buf;
+                                static GQL_THREAD_LOCAL int rel_bool_buf;
 
                                 int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
                                 if (rc == -2) {
@@ -824,9 +824,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 cypher_function_call *func = (cypher_function_call*)pair->value;
                                 property_value func_pv;
                                 property_value_init(&func_pv);
-                                static int64_t rel_func_int_buf;
-                                static double rel_func_real_buf;
-                                static int rel_func_bool_buf;
+                                static GQL_THREAD_LOCAL int64_t rel_func_int_buf;
+                                static GQL_THREAD_LOCAL double rel_func_real_buf;
+                                static GQL_THREAD_LOCAL int rel_func_bool_buf;
                                 int rc = var_map ? executor_eval_value(executor, (ast_node *)func, var_map, &prop_type, &func_pv)
                                                      : evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
                                 /* toBoolean() and other boolean functions give 1/0 (GQLITE-T-0408). */
@@ -894,9 +894,9 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                  * path (GQLITE-T-0339 part 2). */
                                 property_value gen_pv;
                                 property_value_init(&gen_pv);
-                                static int64_t rel_gen_int_buf;
-                                static double rel_gen_real_buf;
-                                static int rel_gen_bool_buf;
+                                static GQL_THREAD_LOCAL int64_t rel_gen_int_buf;
+                                static GQL_THREAD_LOCAL double rel_gen_real_buf;
+                                static GQL_THREAD_LOCAL int rel_gen_bool_buf;
                                 int erc = executor_eval_value(executor, pair->value, var_map, &prop_type, &gen_pv);
                                 if (erc == 0) {
                                     if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
