@@ -14,8 +14,9 @@
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
 
-/* Transform toString function */
-int transform_tostring_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+/* toString, or toStringOrNull with udf "_gql_to_string_ornull" */
+static int transform_tostring_with(cypher_transform_context *ctx, cypher_function_call *func_call,
+                                   const char *udf)
 {
     CYPHER_DEBUG("Transforming toString function");
 
@@ -74,11 +75,17 @@ int transform_tostring_function(cypher_transform_context *ctx, cypher_function_c
 
     /* Strict UDF rejects lists/maps/nodes/relationships/paths (TypeError)
      * but renders Duration JSON via its _iso8601 field. */
-    append_sql(ctx, "_gql_to_string_strict(");
+    append_sql(ctx, "%s(", udf);
     if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
     append_sql(ctx, ")");
 
     return 0;
+}
+
+/* Transform toString function */
+int transform_tostring_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    return transform_tostring_with(ctx, func_call, "_gql_to_string_strict");
 }
 
 /* Transform type conversion functions: toInteger, toFloat, toBoolean */
@@ -157,10 +164,9 @@ int transform_type_conversion_ornull_function(cypher_transform_context *ctx, cyp
         if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
         append_sql(ctx, " AS TEXT)) IN ('true', '1') THEN 1 ELSE 0 END) ELSE NULL END)");
     } else if (strcasecmp(func_call->function_name, "toStringOrNull") == 0) {
-        /* toStringOrNull - always succeeds for non-null, returns NULL for null */
-        append_sql(ctx, "CAST(");
-        if (transform_expression(ctx, func_call->args->items[0]) < 0) return -1;
-        append_sql(ctx, " AS TEXT)");
+        /* toString, with null for a list, map, node, relationship or path
+         * (it was CAST AS TEXT: the JSON text of a node, GQLITE-T-0516) */
+        return transform_tostring_with(ctx, func_call, "_gql_to_string_ornull");
     }
 
     return 0;

@@ -1101,6 +1101,8 @@ void gql_to_string_strict_func(
                 return;
             }
         }
+        /* toStringOrNull (user data set): null (GQLITE-T-0516) */
+        if (sqlite3_user_data(context)) { sqlite3_result_null(context); return; }
         sqlite3_result_error(context,
             "TypeError: InvalidArgumentValue: toString() does not accept lists, maps, nodes, relationships, or paths", -1);
         return;

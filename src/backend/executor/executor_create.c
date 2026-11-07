@@ -342,7 +342,8 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     cypher_function_call *func = (cypher_function_call*)pair->value;
                                     property_value func_pv;
                                     property_value_init(&func_pv);
-                                    int rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
+                                    int rc = var_map ? executor_eval_value(executor, (ast_node *)func, var_map, &prop_type, &func_pv)
+                                                     : evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
                                     /* toBoolean() and other boolean functions give 1/0 (GQLITE-T-0408). */
                                     if (rc == 0 && prop_type == PROP_TYPE_INTEGER && ast_is_boolean_expr((ast_node *)func) &&
                                         (func_pv.as_int == 0 || func_pv.as_int == 1)) {
@@ -575,7 +576,8 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                     cypher_function_call *func = (cypher_function_call*)pair->value;
                                     property_value func_pv2;
                                     property_value_init(&func_pv2);
-                                    int rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv2);
+                                    int rc = var_map ? executor_eval_value(executor, (ast_node *)func, var_map, &prop_type, &func_pv2)
+                                                     : evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv2);
                                     if (rc == -2) {
                                         property_value_free(&func_pv2);
                                         continue;
@@ -773,7 +775,8 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                 static int64_t rel_func_int_buf;
                                 static double rel_func_real_buf;
                                 static int rel_func_bool_buf;
-                                int rc = evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
+                                int rc = var_map ? executor_eval_value(executor, (ast_node *)func, var_map, &prop_type, &func_pv)
+                                                     : evaluate_function_call_via_sqlite(executor, func, &prop_type, &func_pv);
                                 /* toBoolean() and other boolean functions give 1/0 (GQLITE-T-0408). */
                                 if (rc == 0 && prop_type == PROP_TYPE_INTEGER && ast_is_boolean_expr((ast_node *)func) &&
                                     (func_pv.as_int == 0 || func_pv.as_int == 1)) {
