@@ -109,30 +109,23 @@ static int bind_all_params(sqlite3_stmt *stmt, param_binding *bindings, int coun
     return 0;
 }
 
-/* Find a node by label and properties, returns node_id or -1 if not found */
-int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern)
+/* GQLITE-T-0515: the label and property filters of a MERGE node pattern, as
+ * JOINs on the alias `n` ("SELECT n.id FROM nodes n" + these). Appends its
+ * bindings at *bind_count (at most cap) and the strings they point to at
+ * *owned_count; the caller frees those after sqlite3_step. */
+static void append_node_filters(cypher_executor *executor, cypher_node_pattern *node_pattern,
+                                sqlite3_str *sqls, param_binding *bindings, int *bind_count_p,
+                                int cap, char **owned_strs, int *owned_count_p)
 {
-    if (!executor || !node_pattern) {
-        return -1;
-    }
+    int bind_count = *bind_count_p;
+    int owned_count = *owned_count_p;
 
-    /* Build SQL query with parameterized values */
-    sqlite3_str *sqls = sqlite3_str_new(executor->db);
-    param_binding bindings[MAX_BINDINGS];
-    int bind_count = 0;
-    /* Strings resolved from $parameters; must stay alive until after
-     * sqlite3_step (BIND_TEXT uses SQLITE_STATIC). */
-    char *owned_strs[MAX_BINDINGS];
-    int owned_count = 0;
-
-    sqlite3_str_appendf(sqls,
-                       "SELECT n.id FROM nodes n");
 
     /* Add label joins if specified - one join per label */
     if (has_labels(node_pattern)) {
         for (int li = 0; li < node_pattern->labels->count; li++) {
             const char *label = get_label_string(node_pattern->labels->items[li]);
-            if (label && bind_count < MAX_BINDINGS) {
+            if (label && bind_count < cap) {
                 sqlite3_str_appendf(sqls,
                                   " JOIN node_labels nl%d ON n.id = nl%d.node_id AND nl%d.label = ?",
                                   li, li, li);
@@ -172,7 +165,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                         property_value_free(&pv);
                         continue;
                     }
-                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) {
+                    if (bind_count + 2 > cap || owned_count >= cap) {
                         property_value_free(&pv);
                         break;
                     }
@@ -221,7 +214,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                     /* GQLITE-T-0402: a list or map matches by JSON value. */
                     char *js = merge_json_value(pair->value);
                     if (!js) continue;
-                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) { free(js); break; }
+                    if (bind_count + 2 > cap || owned_count >= cap) { free(js); break; }
                     owned_strs[owned_count++] = js;
                     sqlite3_str_appendf(sqls,
                                       " JOIN node_props_json np%d ON n.id = np%d.node_id"
@@ -237,7 +230,7 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
 
-                    if (bind_count + 2 > MAX_BINDINGS) break;
+                    if (bind_count + 2 > cap) break;
 
                     /* Determine which property table to join */
                     const char *prop_table = "node_props_text";
@@ -307,6 +300,31 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
         }
     }
 
+    *bind_count_p = bind_count;
+    *owned_count_p = owned_count;
+}
+
+/* Find a node by label and properties, returns node_id or -1 if not found */
+int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern)
+{
+    if (!executor || !node_pattern) {
+        return -1;
+    }
+
+    /* Build SQL query with parameterized values */
+    sqlite3_str *sqls = sqlite3_str_new(executor->db);
+    param_binding bindings[MAX_BINDINGS];
+    int bind_count = 0;
+    /* Strings resolved from $parameters; must stay alive until after
+     * sqlite3_step (BIND_TEXT uses SQLITE_STATIC). */
+    char *owned_strs[MAX_BINDINGS];
+    int owned_count = 0;
+
+    sqlite3_str_appendf(sqls,
+                       "SELECT n.id FROM nodes n");
+    append_node_filters(executor, node_pattern, sqls, bindings, &bind_count,
+                        MAX_BINDINGS, owned_strs, &owned_count);
+
     sqlite3_str_appendf(sqls, " LIMIT 1");
 
     char *sql = sqlite3_str_finish(sqls);
@@ -341,46 +359,15 @@ int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pa
     return node_id;
 }
 
-/* Find an edge by source, target, type and optional properties. Returns edge_id or -1 if not found */
-int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id,
-                                 const char *type, cypher_rel_pattern *rel_pattern)
+/* GQLITE-T-0515: the property filters of a MERGE relationship pattern, as
+ * "AND EXISTS (...)" terms on the alias `e`. Same contract as
+ * append_node_filters. */
+static void append_edge_filters(cypher_executor *executor, cypher_rel_pattern *rel_pattern,
+                                sqlite3_str *sqls, param_binding *bindings, int *bind_count_p,
+                                int cap, char **owned_strs, int *owned_count_p)
 {
-    if (!executor || source_id < 0 || target_id < 0) {
-        return -1;
-    }
-
-    /* Build SQL query with parameterized values */
-    sqlite3_str *sqls = sqlite3_str_new(executor->db);
-    param_binding bindings[MAX_BINDINGS];
-    int bind_count = 0;
-    /* Strings resolved from $parameters; must stay alive until after
-     * sqlite3_step (BIND_TEXT uses SQLITE_STATIC). */
-    char *owned_strs[MAX_BINDINGS];
-    int owned_count = 0;
-
-    /* source_id and target_id are integers from our own code, safe to interpolate.
-     * For an undirected pattern (a)-[r]-(b) the existing edge may run either
-     * way, so match both orientations (Merge5 [12]/[13]). */
-    bool undirected = rel_pattern && !rel_pattern->left_arrow && !rel_pattern->right_arrow;
-    if (undirected) {
-        sqlite3_str_appendf(sqls,
-                           "SELECT e.id FROM edges e WHERE ((e.source_id = %d AND e.target_id = %d)"
-                           " OR (e.source_id = %d AND e.target_id = %d))",
-                           source_id, target_id, target_id, source_id);
-    } else {
-        sqlite3_str_appendf(sqls,
-                           "SELECT e.id FROM edges e WHERE e.source_id = %d AND e.target_id = %d",
-                           source_id, target_id);
-    }
-
-    /* Add type filter if specified - use parameter binding */
-    if (type && bind_count < MAX_BINDINGS) {
-        sqlite3_str_appendf(sqls, " AND e.type = ?");
-        bindings[bind_count].type = BIND_TEXT;
-        bindings[bind_count].value.text = type;
-        bind_count++;
-    }
-
+    int bind_count = *bind_count_p;
+    int owned_count = *owned_count_p;
     /* Add property joins if specified */
     if (rel_pattern && rel_pattern->properties && rel_pattern->properties->type == AST_NODE_MAP) {
         cypher_map *map = (cypher_map*)rel_pattern->properties;
@@ -403,7 +390,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                         property_value_free(&pv);
                         continue;
                     }
-                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) {
+                    if (bind_count + 2 > cap || owned_count >= cap) {
                         property_value_free(&pv);
                         break;
                     }
@@ -452,7 +439,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                     /* GQLITE-T-0402: a list or map matches by JSON value. */
                     char *js = merge_json_value(pair->value);
                     if (!js) continue;
-                    if (bind_count + 2 > MAX_BINDINGS || owned_count >= MAX_BINDINGS) { free(js); break; }
+                    if (bind_count + 2 > cap || owned_count >= cap) { free(js); break; }
                     owned_strs[owned_count++] = js;
                     sqlite3_str_appendf(sqls,
                                       " AND EXISTS (SELECT 1 FROM edge_props_json ep%d"
@@ -468,7 +455,7 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
                 } else if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
                     cypher_literal *lit = (cypher_literal*)pair->value;
 
-                    if (bind_count + 2 > MAX_BINDINGS) break;
+                    if (bind_count + 2 > cap) break;
 
                     /* Determine which property table to join */
                     const char *prop_table = "edge_props_text";
@@ -538,6 +525,53 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
         }
     }
 
+    *bind_count_p = bind_count;
+    *owned_count_p = owned_count;
+}
+
+/* Find an edge by source, target, type and optional properties. Returns edge_id or -1 if not found */
+int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id,
+                                 const char *type, cypher_rel_pattern *rel_pattern)
+{
+    if (!executor || source_id < 0 || target_id < 0) {
+        return -1;
+    }
+
+    /* Build SQL query with parameterized values */
+    sqlite3_str *sqls = sqlite3_str_new(executor->db);
+    param_binding bindings[MAX_BINDINGS];
+    int bind_count = 0;
+    /* Strings resolved from $parameters; must stay alive until after
+     * sqlite3_step (BIND_TEXT uses SQLITE_STATIC). */
+    char *owned_strs[MAX_BINDINGS];
+    int owned_count = 0;
+
+    /* source_id and target_id are integers from our own code, safe to interpolate.
+     * For an undirected pattern (a)-[r]-(b) the existing edge may run either
+     * way, so match both orientations (Merge5 [12]/[13]). */
+    bool undirected = rel_pattern && !rel_pattern->left_arrow && !rel_pattern->right_arrow;
+    if (undirected) {
+        sqlite3_str_appendf(sqls,
+                           "SELECT e.id FROM edges e WHERE ((e.source_id = %d AND e.target_id = %d)"
+                           " OR (e.source_id = %d AND e.target_id = %d))",
+                           source_id, target_id, target_id, source_id);
+    } else {
+        sqlite3_str_appendf(sqls,
+                           "SELECT e.id FROM edges e WHERE e.source_id = %d AND e.target_id = %d",
+                           source_id, target_id);
+    }
+
+    /* Add type filter if specified - use parameter binding */
+    if (type && bind_count < MAX_BINDINGS) {
+        sqlite3_str_appendf(sqls, " AND e.type = ?");
+        bindings[bind_count].type = BIND_TEXT;
+        bindings[bind_count].value.text = type;
+        bind_count++;
+    }
+
+    append_edge_filters(executor, rel_pattern, sqls, bindings, &bind_count,
+                        MAX_BINDINGS, owned_strs, &owned_count);
+
     sqlite3_str_appendf(sqls, " LIMIT 1");
 
     char *sql = sqlite3_str_finish(sqls);
@@ -571,6 +605,247 @@ int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id
     for (int k = 0; k < owned_count; k++) free(owned_strs[k]);
     return edge_id;
 }
+/* GQLITE-T-0515: set the inline properties of a node a MERGE created. */
+static void set_merge_node_props(cypher_executor *executor, int node_id,
+                                 cypher_node_pattern *np, cypher_result *result)
+{
+    if (!np->properties || np->properties->type != AST_NODE_MAP) return;
+    cypher_map *map = (cypher_map*)np->properties;
+    for (int j = 0; map->pairs && j < map->pairs->count; j++) {
+        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+        if (!pair->key || !pair->value) continue;
+        if ((pair->value->type == AST_NODE_PROPERTY || pair->value->type == AST_NODE_IDENTIFIER) &&
+            g_foreach_ctx) {
+            property_type t = PROP_TYPE_TEXT;
+            property_value v;
+            property_value_init(&v);
+            if (foreach_value(executor->db, g_foreach_ctx, pair->value, &t, &v) == 0 &&
+                cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t,
+                                                property_value_ptr(t, &v)) == 0)
+                result->properties_set++;
+            property_value_free(&v);
+        } else if (pair->value->type == AST_NODE_PARAMETER) {
+            set_node_prop_from_param(executor, node_id, pair->key, (cypher_parameter*)pair->value, result);
+        } else if (pair->value->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)pair->value;
+            int b = lit->value.boolean;
+            property_type t;
+            const void *v;
+            switch (lit->literal_type) {
+                case LITERAL_STRING:  t = PROP_TYPE_TEXT;    v = lit->value.string;   break;
+                case LITERAL_INTEGER: t = PROP_TYPE_INTEGER; v = &lit->value.integer; break;
+                case LITERAL_DECIMAL: t = PROP_TYPE_REAL;    v = &lit->value.decimal; break;
+                case LITERAL_BOOLEAN: t = PROP_TYPE_BOOLEAN; v = &b;                  break;
+                default: continue;
+            }
+            if (cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key, t, v) == 0)
+                result->properties_set++;
+        } else {
+            char *js = merge_json_value(pair->value);
+            if (js && cypher_schema_set_node_property(executor->schema_mgr, node_id, pair->key,
+                                                      PROP_TYPE_JSON, js) == 0)
+                result->properties_set++;
+            free(js);
+        }
+    }
+}
+
+/* GQLITE-T-0515: set the inline properties of a relationship a MERGE created. */
+static void set_merge_edge_props(cypher_executor *executor, int edge_id,
+                                 cypher_rel_pattern *rp, cypher_result *result)
+{
+    if (!rp->properties || rp->properties->type != AST_NODE_MAP) return;
+    cypher_map *map = (cypher_map*)rp->properties;
+    for (int j = 0; map->pairs && j < map->pairs->count; j++) {
+        cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
+        if (!pair->key || !pair->value) continue;
+        property_type t = PROP_TYPE_TEXT;
+        property_value v;
+        property_value_init(&v);
+        const void *ptr = NULL;
+        char *js = NULL;
+        int b = 0;
+        if (pair->value->type == AST_NODE_PARAMETER) {
+            if (executor->params_json &&
+                get_param_value(executor->params_json, ((cypher_parameter*)pair->value)->name, &t, &v) == 0)
+                ptr = property_value_ptr(t, &v);
+        } else if (pair->value->type == AST_NODE_LITERAL) {
+            cypher_literal *lit = (cypher_literal*)pair->value;
+            switch (lit->literal_type) {
+                case LITERAL_STRING:  t = PROP_TYPE_TEXT;    ptr = lit->value.string;   break;
+                case LITERAL_INTEGER: t = PROP_TYPE_INTEGER; ptr = &lit->value.integer; break;
+                case LITERAL_DECIMAL: t = PROP_TYPE_REAL;    ptr = &lit->value.decimal; break;
+                case LITERAL_BOOLEAN: t = PROP_TYPE_BOOLEAN; b = lit->value.boolean; ptr = &b; break;
+                default: break;
+            }
+        } else if ((js = merge_json_value(pair->value)) != NULL) {
+            t = PROP_TYPE_JSON;
+            ptr = js;
+        }
+        if (ptr && cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, t, ptr) == 0)
+            result->properties_set++;
+        property_value_free(&v);
+        free(js);
+    }
+}
+
+#define MERGE_PATH_MAX 32
+
+/* GQLITE-T-0515: MERGE of a path with relationships. openCypher matches the
+ * whole pattern, with the variables bound before the MERGE held fixed; if no
+ * match exists it creates every relationship and every node that is not
+ * bound. Used to match node by node, so `MATCH (a) MERGE (a)-[:T]->()` took
+ * any existing node as the anonymous end and made a self-loop. Binds the
+ * pattern's variables in var_map and runs ON CREATE or ON MATCH once. */
+static int merge_rel_path(cypher_executor *executor, cypher_merge *merge, cypher_path *path,
+                          variable_map *var_map, cypher_result *result)
+{
+    int n_el = path->elements->count;
+    if (n_el % 2 == 0 || n_el / 2 + 1 > MERGE_PATH_MAX) {
+        set_result_error(result, "Invalid relationship pattern in MERGE");
+        return -1;
+    }
+    int k = n_el / 2 + 1;                       /* nodes; k - 1 relationships */
+    cypher_node_pattern *np[MERGE_PATH_MAX];
+    cypher_rel_pattern *rp[MERGE_PATH_MAX];
+    int bound[MERGE_PATH_MAX], same_as[MERGE_PATH_MAX], ids[MERGE_PATH_MAX], eids[MERGE_PATH_MAX];
+    for (int i = 0; i < n_el; i++) {
+        ast_node *el = path->elements->items[i];
+        int want = (i % 2 == 0) ? AST_NODE_NODE_PATTERN : AST_NODE_REL_PATTERN;
+        if ((int)el->type != want) {
+            set_result_error(result, "Invalid relationship pattern in MERGE");
+            return -1;
+        }
+        if (i % 2 == 0) np[i / 2] = (cypher_node_pattern*)el;
+        else rp[i / 2] = (cypher_rel_pattern*)el;
+    }
+    for (int i = 0; i < k; i++) {
+        bound[i] = np[i]->variable ? get_variable_node_id(var_map, np[i]->variable) : -1;
+        same_as[i] = -1;
+        if (bound[i] < 0 && np[i]->variable)
+            for (int j = 0; j < i; j++)
+                if (np[j]->variable && strcmp(np[j]->variable, np[i]->variable) == 0) {
+                    same_as[i] = j;
+                    break;
+                }
+    }
+
+    /* Match: one join over the whole pattern. */
+    enum { CAP = 4 * MAX_BINDINGS };
+    param_binding bindings[CAP];
+    char *owned[CAP];
+    int bind_count = 0, owned_count = 0;
+    sqlite3_str *q = sqlite3_str_new(executor->db);
+    sqlite3_str_appendall(q, "SELECT ");
+    for (int i = 0; i < k; i++) sqlite3_str_appendf(q, "%sn%d.id", i ? ", " : "", i);
+    for (int r = 0; r < k - 1; r++) sqlite3_str_appendf(q, ", e%d.id", r);
+    sqlite3_str_appendall(q, " FROM ");
+    for (int i = 0; i < k; i++) sqlite3_str_appendf(q, "%snodes n%d", i ? ", " : "", i);
+    for (int r = 0; r < k - 1; r++) sqlite3_str_appendf(q, ", edges e%d", r);
+    sqlite3_str_appendall(q, " WHERE 1");
+    for (int i = 0; i < k; i++) {
+        if (bound[i] >= 0) {
+            sqlite3_str_appendf(q, " AND n%d.id = %d", i, bound[i]);
+        } else if (same_as[i] >= 0) {
+            sqlite3_str_appendf(q, " AND n%d.id = n%d.id", i, same_as[i]);
+        } else if (has_labels(np[i]) || np[i]->properties) {
+            sqlite3_str_appendf(q, " AND n%d.id IN (SELECT n.id FROM nodes n", i);
+            append_node_filters(executor, np[i], q, bindings, &bind_count, CAP, owned, &owned_count);
+            sqlite3_str_appendall(q, ")");
+        }
+    }
+    for (int r = 0; r < k - 1; r++) {
+        int a = r, b = r + 1;
+        if (rp[r]->left_arrow && !rp[r]->right_arrow) { a = r + 1; b = r; }
+        if (!rp[r]->left_arrow && !rp[r]->right_arrow)
+            sqlite3_str_appendf(q, " AND ((e%d.source_id = n%d.id AND e%d.target_id = n%d.id)"
+                                   " OR (e%d.source_id = n%d.id AND e%d.target_id = n%d.id))",
+                                r, a, r, b, r, b, r, a);
+        else
+            sqlite3_str_appendf(q, " AND e%d.source_id = n%d.id AND e%d.target_id = n%d.id", r, a, r, b);
+        if (rp[r]->type && bind_count < CAP) {
+            sqlite3_str_appendf(q, " AND e%d.type = ?", r);
+            bindings[bind_count].type = BIND_TEXT;
+            bindings[bind_count].value.text = rp[r]->type;
+            bind_count++;
+        }
+        if (rp[r]->properties) {
+            sqlite3_str_appendf(q, " AND e%d.id IN (SELECT e.id FROM edges e WHERE 1", r);
+            append_edge_filters(executor, rp[r], q, bindings, &bind_count, CAP, owned, &owned_count);
+            sqlite3_str_appendall(q, ")");
+        }
+        for (int s = 0; s < r; s++) sqlite3_str_appendf(q, " AND e%d.id <> e%d.id", r, s);
+    }
+    sqlite3_str_appendall(q, " LIMIT 1");
+    char *sql = sqlite3_str_finish(q);
+    if (!sql) {
+        for (int i = 0; i < owned_count; i++) free(owned[i]);
+        set_result_error(result, "Out of memory in MERGE");
+        return -1;
+    }
+    CYPHER_DEBUG("MERGE path match: %s", sql);
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(executor->db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    bool matched = false;
+    if (rc == SQLITE_OK && bind_all_params(stmt, bindings, bind_count) == 0 &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        matched = true;
+        for (int i = 0; i < k; i++) ids[i] = sqlite3_column_int(stmt, i);
+        for (int r = 0; r < k - 1; r++) eids[r] = sqlite3_column_int(stmt, k + r);
+    }
+    char prep_err[256] = "";
+    if (rc != SQLITE_OK)
+        snprintf(prep_err, sizeof(prep_err), "MERGE match failed: %s", sqlite3_errmsg(executor->db));
+    sqlite3_finalize(stmt);
+    for (int i = 0; i < owned_count; i++) free(owned[i]);
+    if (prep_err[0]) {
+        set_result_error(result, prep_err);
+        return -1;
+    }
+
+    if (!matched) {
+        /* Create: each node that is not bound, then each relationship. */
+        for (int i = 0; i < k; i++) {
+            if (bound[i] >= 0) { ids[i] = bound[i]; continue; }
+            if (same_as[i] >= 0) { ids[i] = ids[same_as[i]]; continue; }
+            ids[i] = cypher_schema_create_node(executor->schema_mgr);
+            if (ids[i] < 0) {
+                set_result_error(result, "Failed to create node in MERGE");
+                return -1;
+            }
+            result->nodes_created++;
+            for (int li = 0; has_labels(np[i]) && li < np[i]->labels->count; li++) {
+                const char *label = get_label_string(np[i]->labels->items[li]);
+                if (label) cypher_schema_add_node_label(executor->schema_mgr, ids[i], label);
+            }
+            set_merge_node_props(executor, ids[i], np[i], result);
+        }
+        for (int r = 0; r < k - 1; r++) {
+            int a = ids[r], b = ids[r + 1];
+            if (rp[r]->left_arrow && !rp[r]->right_arrow) { a = ids[r + 1]; b = ids[r]; }
+            eids[r] = cypher_schema_create_edge(executor->schema_mgr, a, b,
+                                                rp[r]->type ? rp[r]->type : "RELATED");
+            if (eids[r] < 0) {
+                set_result_error(result, "Failed to create relationship in MERGE");
+                return -1;
+            }
+            result->relationships_created++;
+            set_merge_edge_props(executor, eids[r], rp[r], result);
+        }
+    }
+
+    for (int i = 0; i < k; i++)
+        if (np[i]->variable) set_variable_node_id(var_map, np[i]->variable, ids[i]);
+    for (int r = 0; r < k - 1; r++)
+        if (rp[r]->variable) set_variable_edge_id(var_map, rp[r]->variable, eids[r]);
+
+    ast_list *set = matched ? merge->on_match : merge->on_create;
+    if (set && set->count > 0 && execute_set_items(executor, set, var_map, result) < 0)
+        return -1;
+    return 0;
+}
+
 /* Execute MERGE clause — canonical signature (I-0041 C8–C10).
  *
  * external_vars may be NULL when MERGE is run without a preceding
@@ -631,8 +906,11 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
 
         cypher_path *path = (cypher_path*)pattern;
         if (!path->elements) continue;
+        if (path->elements->count > 1) {   /* GQLITE-T-0515 */
+            if (merge_rel_path(executor, merge, path, var_map, result) < 0) { free_variable_map(var_map); return -1; }
+            continue;
+        }
 
-        int previous_node_id = -1;
 
         /* Process path elements: node, rel, node, rel, node, ... */
         for (int i = 0; i < path->elements->count; i++) {
@@ -648,7 +926,6 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                     node_id = get_variable_node_id(var_map, node_pattern->variable);
                     if (node_id >= 0) {
                         CYPHER_DEBUG("Reusing existing node %d for variable '%s'", node_id, node_pattern->variable);
-                        previous_node_id = node_id;
                         continue;
                     }
                 }
@@ -756,7 +1033,6 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                     set_variable_node_id(var_map, node_pattern->variable, node_id);
                 }
 
-                previous_node_id = node_id;
 
                 /* Apply ON CREATE SET if node was created */
                 if (was_created && merge->on_create && merge->on_create->count > 0) {
@@ -776,265 +1052,6 @@ int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                     }
                 }
 
-            } else if (element->type == AST_NODE_REL_PATTERN) {
-                /* Handle relationship MERGE - need source and target nodes */
-                if (previous_node_id < 0 || i + 1 >= path->elements->count) {
-                    set_result_error(result, "Invalid relationship pattern in MERGE");
-                    free_variable_map(var_map);
-                    return -1;
-                }
-
-                /* Get the target node (next element) */
-                ast_node *next_element = path->elements->items[i + 1];
-                if (next_element->type != AST_NODE_NODE_PATTERN) {
-                    set_result_error(result, "Expected node after relationship in MERGE");
-                    free_variable_map(var_map);
-                    return -1;
-                }
-
-                cypher_node_pattern *target_pattern = (cypher_node_pattern*)next_element;
-                int target_node_id = -1;
-                bool target_was_created = false;
-
-                /* Check if target variable already exists in var_map */
-                if (target_pattern->variable) {
-                    target_node_id = get_variable_node_id(var_map, target_pattern->variable);
-                }
-
-                if (target_node_id < 0) {
-                    /* Try to find existing target node by label + properties */
-                    target_node_id = find_node_by_pattern(executor, target_pattern);
-
-                    if (target_node_id >= 0) {
-                        nodes_matched++;
-                        CYPHER_DEBUG("MERGE relationship: matched existing target node %d", target_node_id);
-                    } else {
-                        /* Create the target node */
-                        target_node_id = cypher_schema_create_node(executor->schema_mgr);
-                        if (target_node_id < 0) {
-                            set_result_error(result, "Failed to create target node in MERGE");
-                            free_variable_map(var_map);
-                            return -1;
-                        }
-
-                        target_was_created = true;
-                        nodes_created_in_merge++;
-                        result->nodes_created++;
-                        CYPHER_DEBUG("MERGE relationship: created target node %d", target_node_id);
-
-                        /* Add labels to target node */
-                        if (has_labels(target_pattern)) {
-                            for (int li = 0; li < target_pattern->labels->count; li++) {
-                                const char *label = get_label_string(target_pattern->labels->items[li]);
-                                if (label) {
-                                    cypher_schema_add_node_label(executor->schema_mgr, target_node_id, label);
-                                }
-                            }
-                        }
-
-                        /* Add properties to target node */
-                        if (target_pattern->properties && target_pattern->properties->type == AST_NODE_MAP) {
-                            cypher_map *map = (cypher_map*)target_pattern->properties;
-                            if (map->pairs) {
-                                for (int j = 0; j < map->pairs->count; j++) {
-                                    cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                    if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                        cypher_literal *lit = (cypher_literal*)pair->value;
-                                        property_type prop_type = PROP_TYPE_TEXT;
-                                        const void *prop_value = NULL;
-
-                                        switch (lit->literal_type) {
-                                            case LITERAL_STRING:
-                                                prop_type = PROP_TYPE_TEXT;
-                                                prop_value = lit->value.string;
-                                                break;
-                                            case LITERAL_INTEGER:
-                                                prop_type = PROP_TYPE_INTEGER;
-                                                prop_value = &lit->value.integer;
-                                                break;
-                                            case LITERAL_DECIMAL:
-                                                prop_type = PROP_TYPE_REAL;
-                                                prop_value = &lit->value.decimal;
-                                                break;
-                                            case LITERAL_BOOLEAN:
-                                                prop_type = PROP_TYPE_BOOLEAN;
-                                                prop_value = &lit->value.boolean;
-                                                break;
-                                            default:
-                                                continue;
-                                        }
-
-                                        if (prop_value) {
-                                            cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value);
-                                            result->properties_set++;
-                                        }
-                                    } else if (pair->key && pair->value &&
-                                               (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
-                                        /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
-                                        char *js = merge_json_value(pair->value);
-                                        if (js && cypher_schema_set_node_property(executor->schema_mgr, target_node_id,
-                                                pair->key, PROP_TYPE_JSON, js) == 0) {
-                                            result->properties_set++;
-                                        }
-                                        free(js);
-                                    } else if (pair->key && pair->value &&
-                                               pair->value->type == AST_NODE_PARAMETER) {
-                                        set_node_prop_from_param(executor, target_node_id, pair->key,
-                                            (cypher_parameter*)pair->value, result);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    /* Store target variable mapping */
-                    if (target_pattern->variable) {
-                        set_variable_node_id(var_map, target_pattern->variable, target_node_id);
-                    }
-                }
-
-                /* Now handle the relationship itself */
-                cypher_rel_pattern *rel_pattern = (cypher_rel_pattern*)element;
-                const char *rel_type = rel_pattern->type ? rel_pattern->type : "RELATED";
-
-                /* Determine direction */
-                int source_id, dest_id;
-                if (rel_pattern->left_arrow && !rel_pattern->right_arrow) {
-                    /* <-[:TYPE]- (reversed) */
-                    source_id = target_node_id;
-                    dest_id = previous_node_id;
-                } else {
-                    /* -[:TYPE]-> or -[:TYPE]- (forward or undirected) */
-                    source_id = previous_node_id;
-                    dest_id = target_node_id;
-                }
-
-                /* Try to find existing edge */
-                int edge_id = find_edge_by_pattern(executor, source_id, dest_id, rel_type, rel_pattern);
-                bool edge_was_created = false;
-
-                if (edge_id >= 0) {
-                    CYPHER_DEBUG("MERGE matched existing edge %d", edge_id);
-                } else {
-                    /* Create new edge */
-                    edge_id = cypher_schema_create_edge(executor->schema_mgr, source_id, dest_id, rel_type);
-                    if (edge_id < 0) {
-                        set_result_error(result, "Failed to create relationship in MERGE");
-                        free_variable_map(var_map);
-                        return -1;
-                    }
-
-                    edge_was_created = true;
-                    result->relationships_created++;
-                    CYPHER_DEBUG("MERGE created new edge %d: %d -[:%s]-> %d", edge_id, source_id, rel_type, dest_id);
-
-                    /* Add relationship properties */
-                    if (rel_pattern->properties && rel_pattern->properties->type == AST_NODE_MAP) {
-                        cypher_map *map = (cypher_map*)rel_pattern->properties;
-                        if (map->pairs) {
-                            for (int j = 0; j < map->pairs->count; j++) {
-                                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                if (!pair->key || !pair->value) continue;
-
-                                property_type prop_type = PROP_TYPE_TEXT;
-                                const void *prop_value = NULL;
-
-                                if (pair->value->type == AST_NODE_LITERAL) {
-                                    cypher_literal *lit = (cypher_literal*)pair->value;
-                                    switch (lit->literal_type) {
-                                        case LITERAL_STRING:
-                                            prop_type = PROP_TYPE_TEXT;
-                                            prop_value = lit->value.string;
-                                            break;
-                                        case LITERAL_INTEGER:
-                                            prop_type = PROP_TYPE_INTEGER;
-                                            prop_value = &lit->value.integer;
-                                            break;
-                                        case LITERAL_DECIMAL:
-                                            prop_type = PROP_TYPE_REAL;
-                                            prop_value = &lit->value.decimal;
-                                            break;
-                                        case LITERAL_BOOLEAN:
-                                            prop_type = PROP_TYPE_BOOLEAN;
-                                            prop_value = &lit->value.boolean;
-                                            break;
-                                        default:
-                                            continue;
-                                    }
-                                } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
-                                    cypher_parameter *param = (cypher_parameter*)pair->value;
-                                    property_value pv;
-                                    property_value_init(&pv);
-                                    static int64_t merge_int_buf;
-                                    static double merge_real_buf;
-                                    static int merge_bool_buf;
-
-                                    int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
-                                    if (rc == -2) {
-                                        property_value_free(&pv);
-                                        continue;
-                                    } else if (rc == 0) {
-                                        if (prop_type == PROP_TYPE_TEXT) {
-                                            prop_value = pv.as_str;
-                                        } else if (prop_type == PROP_TYPE_INTEGER) {
-                                            merge_int_buf = pv.as_int;
-                                            prop_value = &merge_int_buf;
-                                        } else if (prop_type == PROP_TYPE_REAL) {
-                                            merge_real_buf = pv.as_real;
-                                            prop_value = &merge_real_buf;
-                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
-                                            merge_bool_buf = pv.as_bool;
-                                            prop_value = &merge_bool_buf;
-                                        } else if (prop_type == PROP_TYPE_JSON) {
-                                            prop_value = pv.as_str;
-                                        }
-                                    } else {
-                                        property_value_free(&pv);
-                                        continue;
-                                    }
-                                }
-
-                                /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
-                                char *merge_js = NULL;
-                                if (!prop_value && (merge_js = merge_json_value(pair->value)) != NULL) {
-                                    prop_type = PROP_TYPE_JSON;
-                                    prop_value = merge_js;
-                                }
-                                if (prop_value) {
-                                    cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
-                                    result->properties_set++;
-                                }
-                                free(merge_js);
-                            }
-                        }
-                    }
-                }
-
-                /* Store edge variable mapping */
-                if (rel_pattern->variable) {
-                    set_variable_edge_id(var_map, rel_pattern->variable, edge_id);
-                }
-
-                /* Apply ON CREATE / ON MATCH for the MERGE as a whole.
-                 * A MERGE of a relationship pattern is considered "created" when
-                 * either the edge or the target endpoint was newly created. */
-                bool merge_was_create = edge_was_created || target_was_created;
-                if (merge_was_create && merge->on_create && merge->on_create->count > 0) {
-                    if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
-                        free_variable_map(var_map);
-                        return -1;
-                    }
-                }
-                if (!merge_was_create && merge->on_match && merge->on_match->count > 0) {
-                    if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
-                        free_variable_map(var_map);
-                        return -1;
-                    }
-                }
-
-                previous_node_id = target_node_id;
-                /* Skip the next element since we already processed the target node */
-                i++;
             }
         }
     }
@@ -1069,8 +1086,11 @@ int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
 
         cypher_path *path = (cypher_path*)pattern;
         if (!path->elements) continue;
+        if (path->elements->count > 1) {   /* GQLITE-T-0515 */
+            if (merge_rel_path(executor, merge, path, var_map, result) < 0) { return -1; }
+            continue;
+        }
 
-        int previous_node_id = -1;
 
         for (int i = 0; i < path->elements->count; i++) {
             ast_node *element = path->elements->items[i];
@@ -1084,7 +1104,6 @@ int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
                     node_id = get_variable_node_id(var_map, node_pattern->variable);
                     if (node_id >= 0) {
                         CYPHER_DEBUG("Using pre-bound variable '%s' = node %d", node_pattern->variable, node_id);
-                        previous_node_id = node_id;
                         continue;
                     }
                 }
@@ -1117,61 +1136,7 @@ int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
                 if (node_pattern->variable) {
                     set_variable_node_id(var_map, node_pattern->variable, node_id);
                 }
-                previous_node_id = node_id;
 
-            } else if (element->type == AST_NODE_REL_PATTERN && i + 1 < path->elements->count) {
-                cypher_rel_pattern *rel = (cypher_rel_pattern*)element;
-                cypher_node_pattern *target = (cypher_node_pattern*)path->elements->items[i + 1];
-
-                int target_node_id = -1;
-
-                /* Check pre-bound variables for target */
-                if (target->variable) {
-                    target_node_id = get_variable_node_id(var_map, target->variable);
-                }
-
-                if (target_node_id < 0) {
-                    target_node_id = find_node_by_pattern(executor, target);
-                }
-
-                if (target_node_id < 0) {
-                    /* Create target node */
-                    target_node_id = cypher_schema_create_node(executor->schema_mgr);
-                    if (target_node_id < 0) {
-                        set_result_error(result, "Failed to create target node in MERGE");
-                        return -1;
-                    }
-                    result->nodes_created++;
-
-                    if (has_labels(target)) {
-                        for (int li = 0; li < target->labels->count; li++) {
-                            const char *label = get_label_string(target->labels->items[li]);
-                            if (label) {
-                                cypher_schema_add_node_label(executor->schema_mgr, target_node_id, label);
-                            }
-                        }
-                    }
-                }
-
-                if (target->variable) {
-                    set_variable_node_id(var_map, target->variable, target_node_id);
-                }
-
-                /* Create edge if it doesn't exist */
-                int source_id = previous_node_id;
-                if (source_id >= 0 && target_node_id >= 0) {
-                    const char *rel_type = rel->type ? rel->type : "RELATED";
-                    int edge_id = cypher_schema_create_edge(executor->schema_mgr, source_id, target_node_id, rel_type);
-                    if (edge_id >= 0) {
-                        result->relationships_created++;
-                        if (rel->variable) {
-                            set_variable_edge_id(var_map, rel->variable, edge_id);
-                        }
-                    }
-                }
-
-                previous_node_id = target_node_id;
-                i++; /* Skip target node */
             }
         }
     }
@@ -1357,8 +1322,11 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
 
         cypher_path *path = (cypher_path*)pattern;
         if (!path->elements) continue;
+        if (path->elements->count > 1) {   /* GQLITE-T-0515 */
+            if (merge_rel_path(executor, merge, path, var_map, result) < 0) { free_row_maps(row_maps, row_count); return -1; }
+            continue;
+        }
 
-        int previous_node_id = -1;
 
         /* Process path elements: node, rel, node, rel, node, ... */
         for (int i = 0; i < path->elements->count; i++) {
@@ -1375,7 +1343,6 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                     if (node_id >= 0) {
                         CYPHER_DEBUG("Using bound node %d for variable '%s'", node_id, node_pattern->variable);
                         nodes_matched++;
-                        previous_node_id = node_id;
                         continue;
                     }
                 }
@@ -1482,7 +1449,6 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                     set_variable_node_id(var_map, node_pattern->variable, node_id);
                 }
 
-                previous_node_id = node_id;
 
                 /* Apply ON CREATE SET if node was created */
                 if (was_created && merge->on_create && merge->on_create->count > 0) {
@@ -1502,261 +1468,6 @@ int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_matc
                     }
                 }
 
-            } else if (element->type == AST_NODE_REL_PATTERN) {
-                /* Handle relationship in MERGE path */
-                if (previous_node_id < 0 || i + 1 >= path->elements->count) {
-                    set_result_error(result, "Invalid relationship pattern in MERGE");
-                    free_row_maps(row_maps, row_count);
-                    return -1;
-                }
-
-                /* Get the target node (next element) */
-                ast_node *next_element = path->elements->items[i + 1];
-                if (next_element->type != AST_NODE_NODE_PATTERN) {
-                    set_result_error(result, "Expected node after relationship in MERGE");
-                    free_row_maps(row_maps, row_count);
-                    return -1;
-                }
-
-                cypher_node_pattern *target_pattern = (cypher_node_pattern*)next_element;
-                int target_node_id = -1;
-
-                /* Check if target variable already exists in var_map (from MATCH) */
-                if (target_pattern->variable) {
-                    target_node_id = get_variable_node_id(var_map, target_pattern->variable);
-                    if (target_node_id >= 0) {
-                        CYPHER_DEBUG("Using bound target node %d for variable '%s'", target_node_id, target_pattern->variable);
-                    }
-                }
-
-                if (target_node_id < 0) {
-                    /* Try to find existing target node by label + properties */
-                    target_node_id = find_node_by_pattern(executor, target_pattern);
-
-                    if (target_node_id >= 0) {
-                        nodes_matched++;
-                        CYPHER_DEBUG("MERGE relationship: matched existing target node %d", target_node_id);
-                    } else {
-                        /* Create the target node */
-                        target_node_id = cypher_schema_create_node(executor->schema_mgr);
-                        if (target_node_id < 0) {
-                            set_result_error(result, "Failed to create target node in MERGE");
-                            free_row_maps(row_maps, row_count);
-                            return -1;
-                        }
-
-                        nodes_created_in_merge++;
-                        result->nodes_created++;
-                        CYPHER_DEBUG("MERGE relationship: created target node %d", target_node_id);
-
-                        /* Add labels to target node */
-                        if (has_labels(target_pattern)) {
-                            for (int li = 0; li < target_pattern->labels->count; li++) {
-                                const char *label = get_label_string(target_pattern->labels->items[li]);
-                                if (label) {
-                                    cypher_schema_add_node_label(executor->schema_mgr, target_node_id, label);
-                                }
-                            }
-                        }
-
-                        /* Add properties to target node */
-                        if (target_pattern->properties && target_pattern->properties->type == AST_NODE_MAP) {
-                            cypher_map *map = (cypher_map*)target_pattern->properties;
-                            if (map->pairs) {
-                                for (int j = 0; j < map->pairs->count; j++) {
-                                    cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                    if (pair->key && pair->value && pair->value->type == AST_NODE_LITERAL) {
-                                        cypher_literal *lit = (cypher_literal*)pair->value;
-                                        property_type prop_type = PROP_TYPE_TEXT;
-                                        const void *prop_value = NULL;
-
-                                        switch (lit->literal_type) {
-                                            case LITERAL_STRING:
-                                                prop_type = PROP_TYPE_TEXT;
-                                                prop_value = lit->value.string;
-                                                break;
-                                            case LITERAL_INTEGER:
-                                                prop_type = PROP_TYPE_INTEGER;
-                                                prop_value = &lit->value.integer;
-                                                break;
-                                            case LITERAL_DECIMAL:
-                                                prop_type = PROP_TYPE_REAL;
-                                                prop_value = &lit->value.decimal;
-                                                break;
-                                            case LITERAL_BOOLEAN:
-                                                prop_type = PROP_TYPE_BOOLEAN;
-                                                prop_value = &lit->value.boolean;
-                                                break;
-                                            default:
-                                                continue;
-                                        }
-
-                                        if (prop_value) {
-                                            cypher_schema_set_node_property(executor->schema_mgr, target_node_id, pair->key, prop_type, prop_value);
-                                            result->properties_set++;
-                                        }
-                                    } else if (pair->key && pair->value &&
-                                               (pair->value->type == AST_NODE_LIST || pair->value->type == AST_NODE_MAP)) {
-                                        /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
-                                        char *js = merge_json_value(pair->value);
-                                        if (js && cypher_schema_set_node_property(executor->schema_mgr, target_node_id,
-                                                pair->key, PROP_TYPE_JSON, js) == 0) {
-                                            result->properties_set++;
-                                        }
-                                        free(js);
-                                    } else if (pair->key && pair->value &&
-                                               pair->value->type == AST_NODE_PARAMETER) {
-                                        set_node_prop_from_param(executor, target_node_id, pair->key,
-                                            (cypher_parameter*)pair->value, result);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    /* Store target variable mapping */
-                    if (target_pattern->variable) {
-                        set_variable_node_id(var_map, target_pattern->variable, target_node_id);
-                    }
-                }
-
-                /* Handle the relationship itself */
-                cypher_rel_pattern *rel_pattern = (cypher_rel_pattern*)element;
-                const char *rel_type = rel_pattern->type ? rel_pattern->type : "RELATED";
-
-                /* Determine direction */
-                int source_id, dest_id;
-                if (rel_pattern->left_arrow && !rel_pattern->right_arrow) {
-                    source_id = target_node_id;
-                    dest_id = previous_node_id;
-                } else {
-                    source_id = previous_node_id;
-                    dest_id = target_node_id;
-                }
-
-                /* Try to find existing edge */
-                int edge_id = find_edge_by_pattern(executor, source_id, dest_id, rel_type, rel_pattern);
-                bool edge_was_created = false;
-
-                if (edge_id >= 0) {
-                    CYPHER_DEBUG("MERGE matched existing edge %d", edge_id);
-                } else {
-                    /* Create new edge */
-                    edge_id = cypher_schema_create_edge(executor->schema_mgr, source_id, dest_id, rel_type);
-                    if (edge_id < 0) {
-                        set_result_error(result, "Failed to create relationship in MERGE");
-                        free_row_maps(row_maps, row_count);
-                        return -1;
-                    }
-
-                    edge_was_created = true;
-                    result->relationships_created++;
-                    CYPHER_DEBUG("MERGE created new edge %d: %d -[:%s]-> %d", edge_id, source_id, rel_type, dest_id);
-
-                    /* Add relationship properties */
-                    if (rel_pattern->properties && rel_pattern->properties->type == AST_NODE_MAP) {
-                        cypher_map *map = (cypher_map*)rel_pattern->properties;
-                        if (map->pairs) {
-                            for (int j = 0; j < map->pairs->count; j++) {
-                                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[j];
-                                if (!pair->key || !pair->value) continue;
-
-                                property_type prop_type = PROP_TYPE_TEXT;
-                                const void *prop_value = NULL;
-
-                                if (pair->value->type == AST_NODE_LITERAL) {
-                                    cypher_literal *lit = (cypher_literal*)pair->value;
-                                    switch (lit->literal_type) {
-                                        case LITERAL_STRING:
-                                            prop_type = PROP_TYPE_TEXT;
-                                            prop_value = lit->value.string;
-                                            break;
-                                        case LITERAL_INTEGER:
-                                            prop_type = PROP_TYPE_INTEGER;
-                                            prop_value = &lit->value.integer;
-                                            break;
-                                        case LITERAL_DECIMAL:
-                                            prop_type = PROP_TYPE_REAL;
-                                            prop_value = &lit->value.decimal;
-                                            break;
-                                        case LITERAL_BOOLEAN:
-                                            prop_type = PROP_TYPE_BOOLEAN;
-                                            prop_value = &lit->value.boolean;
-                                            break;
-                                        default:
-                                            continue;
-                                    }
-                                } else if (pair->value->type == AST_NODE_PARAMETER && executor->params_json) {
-                                    cypher_parameter *param = (cypher_parameter*)pair->value;
-                                    property_value pv;
-                                    property_value_init(&pv);
-                                    static int64_t mv_int_buf;
-                                    static double mv_real_buf;
-                                    static int mv_bool_buf;
-
-                                    int rc = get_param_value(executor->params_json, param->name, &prop_type, &pv);
-                                    if (rc == -2) {
-                                        property_value_free(&pv);
-                                        continue;
-                                    } else if (rc == 0) {
-                                        if (prop_type == PROP_TYPE_TEXT) {
-                                            prop_value = pv.as_str;
-                                        } else if (prop_type == PROP_TYPE_INTEGER) {
-                                            mv_int_buf = pv.as_int;
-                                            prop_value = &mv_int_buf;
-                                        } else if (prop_type == PROP_TYPE_REAL) {
-                                            mv_real_buf = pv.as_real;
-                                            prop_value = &mv_real_buf;
-                                        } else if (prop_type == PROP_TYPE_BOOLEAN) {
-                                            mv_bool_buf = pv.as_bool;
-                                            prop_value = &mv_bool_buf;
-                                        } else if (prop_type == PROP_TYPE_JSON) {
-                                            prop_value = pv.as_str;
-                                        }
-                                    } else {
-                                        property_value_free(&pv);
-                                        continue;
-                                    }
-                                }
-
-                                /* GQLITE-T-0402: a list or map is stored as JSON (was dropped). */
-                                char *merge_js = NULL;
-                                if (!prop_value && (merge_js = merge_json_value(pair->value)) != NULL) {
-                                    prop_type = PROP_TYPE_JSON;
-                                    prop_value = merge_js;
-                                }
-                                if (prop_value) {
-                                    cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, prop_type, prop_value);
-                                    result->properties_set++;
-                                }
-                                free(merge_js);
-                            }
-                        }
-                    }
-                }
-
-                /* Store edge variable mapping */
-                if (rel_pattern->variable) {
-                    set_variable_edge_id(var_map, rel_pattern->variable, edge_id);
-                }
-
-                /* Apply ON CREATE / ON MATCH for the edge half of the MERGE */
-                if (edge_was_created && merge->on_create && merge->on_create->count > 0) {
-                    if (execute_set_items(executor, merge->on_create, var_map, result) < 0) {
-                        free_row_maps(row_maps, row_count);
-                        return -1;
-                    }
-                }
-                if (!edge_was_created && merge->on_match && merge->on_match->count > 0) {
-                    if (execute_set_items(executor, merge->on_match, var_map, result) < 0) {
-                        free_row_maps(row_maps, row_count);
-                        return -1;
-                    }
-                }
-
-                previous_node_id = target_node_id;
-                /* Skip the next element since we already processed the target node */
-                i++;
             }
         }
     }
