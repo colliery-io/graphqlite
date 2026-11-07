@@ -23,6 +23,7 @@ CaseExpression.feature::Returning a CASE expression with a pattern expression al
 CaseExpression.feature::Returning a CASE expression with label predicates
 CaseExpression.feature::Shorthand case with filtering pattern comprehension should work as expected
 CaseExpression.feature::Simple case with a dynamic property access
+CaseExpression.feature::Simple case with aggregations
 CaseExpression.feature::Using a CASE expression in a WHERE, negative case
 CaseExpression.feature::Using a CASE expression in a WHERE, positive case
 CaseExpression.feature::Using a CASE expression in a WHERE, with label predicate
@@ -139,6 +140,7 @@ ExistsExpressionAcceptance.feature::EXISTS in WHERE with ORDER BY, SKIP and LIMI
 ExistsExpressionAcceptance.feature::EXISTS in WHERE with SKIP
 ExistsExpressionAcceptance.feature::EXISTS subquery as property inside node
 ExistsExpressionAcceptance.feature::EXISTS subquery in join key
+ExistsExpressionAcceptance.feature::EXISTS subquery with empty node
 ExistsExpressionAcceptance.feature::Ensure we don't leak variables to the outside
 ExistsExpressionAcceptance.feature::Exists after WITH DISTINCT with simple predicate should work
 ExistsExpressionAcceptance.feature::Exists after WITH DISTINCT without where clause should work
@@ -165,6 +167,7 @@ ExistsExpressionAcceptance.feature::Exists on the right side of an OR should wor
 ExistsExpressionAcceptance.feature::Exists on the right side of an OR with a NOT should work
 ExistsExpressionAcceptance.feature::Exists on the right side of an XOR should work
 ExistsExpressionAcceptance.feature::Exists on the right side of an XOR with a NOT should work
+ExistsExpressionAcceptance.feature::Exists should allow non-shadowing variable reuse in complex query
 ExistsExpressionAcceptance.feature::Exists should allow omission of RETURN in more complex queries
 ExistsExpressionAcceptance.feature::Exists should allow shadowing of variables not yet introduced in outer scope
 ExistsExpressionAcceptance.feature::Exists should allow the shadowing of introduced variables
@@ -238,13 +241,18 @@ ExistsExpressionAcceptance.feature::Where Not Exists with multiple WITH should w
 ExistsExpressionAcceptance.feature::Where Not pattern predicate Exists with OR should work
 ExpressionAcceptance.feature::[1] Unevaluated expressions should not cause errors
 ForeachAcceptance.feature::Add labels inside FOREACH
+ForeachAcceptance.feature::Foreach with single literal
 ForeachAcceptance.feature::Foreach with single literal in list
 ForeachAcceptance.feature::Foreach with single null
 ForeachAcceptance.feature::Foreach with single null in list
+ForeachAcceptance.feature::Foreach with with expression
+ForeachAcceptance.feature::Inside nested FOREACH
+ForeachAcceptance.feature::Inside nested FOREACH, nodes inlined
 ForeachAcceptance.feature::Merge inside foreach should see variables introduced by update actions outside foreach
 ForeachAcceptance.feature::Merging inside a FOREACH using a previously matched node
 ForeachAcceptance.feature::Merging inside a FOREACH using a previously matched node and a previously merged node
 ForeachAcceptance.feature::Merging inside a FOREACH using two previously merged nodes
+ForeachAcceptance.feature::Merging inside a FOREACH using two previously merged nodes that also depend on WITH
 ForeachAcceptance.feature::Should handle running merge inside a foreach loop
 IsEmptyFunctionAcceptance.feature::isEmpty should be null-in-null-out
 IsEmptyFunctionAcceptance.feature::isEmpty should return false for non-empty list
@@ -281,6 +289,7 @@ MapProjectionAcceptance.feature::Should use custom key in mixed map projection
 MapProjectionAcceptance.feature::Should use custom key in node and relationship map projection
 MapProjectionAcceptance.feature::Should use custom key in node map projection
 MapProjectionAcceptance.feature::Should use custom key in relationship map projection
+MatchAcceptance.feature::Expand on a node stored in a map
 MatchAcceptance.feature::Filter on path nodes
 MatchAcceptance.feature::Filter with AND/OR
 MatchAcceptance.feature::Handle filtering with empty properties map
@@ -289,6 +298,8 @@ MatchAcceptance.feature::Match on multiple labels with OR
 MatchAcceptance.feature::Should allow AND and OR with STARTS WITH predicates
 MatchAcceptance.feature::Should allow AND and OR with equality predicates
 MatchAcceptance.feature::Should allow AND and OR with inequality predicates
+MatchAcceptance.feature::Should allow AND and OR with regex predicates
+MatchAcceptance.feature::Should allow OR with regex predicates
 MatchAcceptance.feature::Should handle complex IS NOT NULL on node property when node is null
 MatchAcceptance.feature::Variable length path with both sides already bound
 MatchAcceptance.feature::difficult to plan query number 1
@@ -309,12 +320,16 @@ MiscAcceptance.feature::GitHub Issue #13190 variant
 MiscAcceptance.feature::Github issue number 13432 query 1
 MiscAcceptance.feature::Github issue number 13432 query 2
 MiscAcceptance.feature::Github issue number 13432 query 3
+MiscAcceptance.feature::Github issue number 13484
+MiscAcceptance.feature::Issue aZDSO5do example 1
 MiscAcceptance.feature::Issue with generated code and value population
 MiscAcceptance.feature::Should not discard re-used variable names
 NaNAcceptance.feature::using a NaN value
 NaNAcceptance.feature::using a Negative Infinity
 NaNAcceptance.feature::using a Positive Infinity
+NaNAcceptance.feature::using a non-number value
 NaNAcceptance.feature::using a plain double
+NaNAcceptance.feature::using a plain float
 NaNAcceptance.feature::using a plain hexadecimal number
 NaNAcceptance.feature::using a plain integer
 NaNAcceptance.feature::using a plain octal number
@@ -325,7 +340,11 @@ NaNAcceptance.feature::with NOT of an equality
 NaNAcceptance.feature::with NOT of an equality with NaN on both sides
 NaNAcceptance.feature::with NOT of an inequality
 NaNAcceptance.feature::with NOT of an inequality containing a function
+NaNAcceptance.feature::with NOT of an inequality containing params
+NaNAcceptance.feature::with NOT of an inequality with NaN in a property
+NaNAcceptance.feature::with NOT of an inequality with NaN in a variable
 NaNAcceptance.feature::with NOT of an inequality with NaN on both sides
+NaNAcceptance.feature::with chained numerical function value
 NullIfFunctionAcceptance.feature::Can be used as a filter
 NullIfFunctionAcceptance.feature::Null as first param returns null
 NullIfFunctionAcceptance.feature::Null as second param doesn't return null
@@ -340,6 +359,7 @@ OptionalMatchAcceptance.feature::double optional match with repeated null relati
 OptionalMatchAcceptance.feature::optional equality with boolean lists
 OptionalMatchAcceptance.feature::optional match followed by aggregation and map-projection
 OptionalMatchAcceptance.feature::optional match followed by match with repeated null relationship
+OptionalMatchAcceptance.feature::optional match with OR where clause
 OptionalMatchAcceptance.feature::optional match with distinct
 OptionalMatchAcceptance.feature::type on null
 OrderByAcceptance.feature::ORDER BY node problem
@@ -366,6 +386,10 @@ PatternExpressionAcceptance.feature::Greater-than-or-equals with a size of patte
 PatternExpressionAcceptance.feature::Handling a null value in inner predicate
 PatternExpressionAcceptance.feature::Less-than with a size of pattern comprehension with a NULL variable
 PatternExpressionAcceptance.feature::Less-than-or-equal with a size of pattern comprehension with a NULL variable
+PatternExpressionAcceptance.feature::Nested pattern comprehension with food
+PatternExpressionAcceptance.feature::Nested pattern comprehensions
+PatternExpressionAcceptance.feature::Nested pattern comprehensions 2
+PatternExpressionAcceptance.feature::Nested pattern comprehensions 3
 PatternExpressionAcceptance.feature::Nested pattern comprehensions 4
 PatternExpressionAcceptance.feature::Pattern comprehension with a NULL variable
 PatternExpressionAcceptance.feature::Pattern expressions and ORDER BY
@@ -434,6 +458,7 @@ SkipLimitAcceptance.feature::Limit in with clause
 SkipLimitAcceptance.feature::Order by followed by limit in return clause
 SkipLimitAcceptance.feature::PartialTop with limit 0
 SkipLimitAcceptance.feature::Reduce LIMIT should be allowed
+SkipLimitAcceptance.feature::Reduce SKIP should be allowed
 SkipLimitAcceptance.feature::Skipping more than Integer.Max rows should be allowed
 SkipLimitAcceptance.feature::Stand alone limit in the return clause
 SkipLimitAcceptance.feature::Top with limit 0
@@ -481,9 +506,11 @@ TernaryComparisonAcceptance.feature::Spatial comparison test (example 6)
 TernaryEqualityAcceptance.feature::Duration equality test of different durations
 TernaryEqualityAcceptance.feature::Duration equality test of equal durations
 TernaryEqualityAcceptance.feature::List equality [1, 2, 3] and [1, 'two', 3]
+TernaryEqualityAcceptance.feature::List equality [1, 2, 3] and [1, null, 3]
 TernaryEqualityAcceptance.feature::List equality [1, 2, 3] and [1, null, 4]
 TernaryEqualityAcceptance.feature::Map equality {k1: 42, k2: 43, k3: 44} and {k1: 42, k2: null, k3: 'fortyfour'}
 TernaryEqualityAcceptance.feature::Map equality {k1: 42} and {k2: null}
+TernaryEqualityAcceptance.feature::Map equality {k: 42} and {k: null}
 TernaryEqualityAcceptance.feature::Map equality {k: 42} and {null: 43}
 TernaryEqualityAcceptance.feature::Spatial equality test (example 1)
 TernaryEqualityAcceptance.feature::Spatial equality test (example 2)
@@ -492,6 +519,7 @@ TernaryEqualityAcceptance.feature::equality between different types should yield
 TernaryEqualityAcceptance.feature::equality between different types should yield false (example 2)
 TernaryEqualityAcceptance.feature::equality between different types should yield false (example 3)
 TernaryEqualityAcceptance.feature::equality between different types should yield false (example 4)
+TrimFunctionsAcceptance.feature::Trim functions trimming whitespace strings
 TrimFunctionsAcceptance.feature::Trim functions with null handling for 1 argument options
 UnionDistinct.feature::Failing when UNION has different columns (example 2)
 UnionDistinct.feature::Failing when mixing UNION ALL and UNION (example 2)
