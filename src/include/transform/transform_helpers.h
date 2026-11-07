@@ -41,6 +41,8 @@ bool ast_expr_equal(const ast_node *a, const ast_node *b);
 
 /* Shortest round-trip text of a double; a whole number keeps ".0". */
 const char *gql_format_double(char *buf, size_t buflen, double v);
+/* A double as SQL that reads back exactly on every SQLite (GQLITE-T-0531) */
+const char *gql_sql_real(char *buf, size_t buflen, double v);
 
 /* True if `expr` evaluates to a Cypher boolean (comparison, AND/OR/NOT/XOR,
  * IS NULL, quantifier, EXISTS, boolean literal). Used to wrap projections in

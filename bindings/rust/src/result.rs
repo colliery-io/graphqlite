@@ -27,6 +27,62 @@ use crate::Error;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+/// Sentinel strings for the bare `NaN`, `Infinity` and `-Infinity` tokens of
+/// a result, which JSON (and serde_json) has no number for.
+const NAN_SENTINEL: &str = "\u{1}gqlite:NaN";
+const INF_SENTINEL: &str = "\u{1}gqlite:Infinity";
+const NINF_SENTINEL: &str = "\u{1}gqlite:-Infinity";
+
+/// Parse a result's JSON text. The engine writes a non-finite float as the
+/// bare token `NaN`, `Infinity` or `-Infinity` (as JavaScript and Python's
+/// json do); serde_json rejects them, and a result holding one came back as
+/// one string column (GQLITE-T-0532). Tokens outside strings become sentinel
+/// strings, which [`Value::from_json`] reads back as floats.
+pub(crate) fn parse_result_json(text: &str) -> serde_json::Result<JsonValue> {
+    if !(text.contains("NaN") || text.contains("Infinity")) {
+        return serde_json::from_str(text);
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 32);
+    let mut i = 0;
+    let mut in_str = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if c == b'\\' && i + 1 < bytes.len() {
+                out.push_str(&text[i..i + 2]);
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_str = false;
+            }
+        } else if c == b'"' {
+            in_str = true;
+        } else {
+            let rest = &text[i..];
+            let token = if rest.starts_with("NaN") {
+                Some(("NaN", NAN_SENTINEL))
+            } else if rest.starts_with("-Infinity") {
+                Some(("-Infinity", NINF_SENTINEL))
+            } else if rest.starts_with("Infinity") {
+                Some(("Infinity", INF_SENTINEL))
+            } else {
+                None
+            };
+            if let Some((tok, sentinel)) = token {
+                out.push_str(&serde_json::to_string(sentinel).unwrap_or_default());
+                i += tok.len();
+                continue;
+            }
+        }
+        let ch = text[i..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    serde_json::from_str(&out)
+}
+
 /// A dynamically-typed value returned from a Cypher query.
 ///
 /// Cypher queries can return various types of values. This enum represents
@@ -79,7 +135,12 @@ impl Value {
                     Value::Null
                 }
             }
-            JsonValue::String(s) => Value::String(s),
+            JsonValue::String(s) => match s.as_str() {
+                NAN_SENTINEL => Value::Float(f64::NAN),
+                INF_SENTINEL => Value::Float(f64::INFINITY),
+                NINF_SENTINEL => Value::Float(f64::NEG_INFINITY),
+                _ => Value::String(s),
+            },
             JsonValue::Array(arr) => Value::Array(arr.into_iter().map(Value::from_json).collect()),
             JsonValue::Object(obj) => Value::Object(
                 obj.into_iter()
@@ -431,7 +492,7 @@ impl CypherResult {
         }
 
         // Try to parse as JSON
-        let json: JsonValue = match serde_json::from_str(trimmed) {
+        let json: JsonValue = match parse_result_json(trimmed) {
             Ok(v) => v,
             Err(_) => {
                 // Non-JSON result (possibly a status message or error)

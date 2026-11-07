@@ -4852,3 +4852,32 @@ fn test_string_properties_stay_text() {
     let node = g.get_node("m").unwrap().unwrap();
     assert_eq!(node["properties"]["count"], V::Integer(123));
 }
+
+/// GQLITE-T-0532: columns keep the RETURN order (they were sorted by name).
+#[test]
+fn test_columns_keep_return_order() {
+    let conn = test_connection();
+    let r = conn.cypher("RETURN 1 AS z, 2 AS a, 3 AS m").unwrap();
+    assert_eq!(r.columns(), &["z".to_string(), "a".to_string(), "m".to_string()]);
+}
+
+/// GQLITE-T-0532: NaN and Infinity in a result are floats (the result was
+/// one string column, because serde_json rejects the bare tokens).
+#[test]
+fn test_non_finite_floats() {
+    use graphqlite::Value as V;
+    let conn = test_connection();
+    let r = conn
+        .cypher("RETURN 0.0 / 0.0 AS nan, 1.0 / 0.0 AS inf, -1.0 / 0.0 AS ninf, 'NaN' AS s, [1.0 / 0.0] AS l")
+        .unwrap();
+    assert_eq!(r.columns().len(), 5);
+    let row = &r[0];
+    match row.get_value("nan") {
+        Some(V::Float(f)) => assert!(f.is_nan()),
+        other => panic!("nan: {other:?}"),
+    }
+    assert_eq!(row.get_value("inf"), Some(&V::Float(f64::INFINITY)));
+    assert_eq!(row.get_value("ninf"), Some(&V::Float(f64::NEG_INFINITY)));
+    assert_eq!(row.get_value("s"), Some(&V::String("NaN".into())));
+    assert_eq!(row.get_value("l"), Some(&V::Array(vec![V::Float(f64::INFINITY)])));
+}

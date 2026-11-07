@@ -9,6 +9,7 @@
 #include <stdarg.h>
 
 #include "transform/cypher_transform.h"
+#include "transform/transform_helpers.h"
 #include "gql_thread_local.h"
 #include "transform/sql_builder.h"
 #include "parser/cypher_debug.h"
@@ -391,18 +392,8 @@ static int transform_literal_into(const cypher_literal *lit,
             return 0;
         case LITERAL_DECIMAL: {
             char buf[64];
-            snprintf(buf, sizeof(buf), "%.17g", lit->value.decimal);
-            bool has_dot = false;
-            for (char *p = buf; *p; p++) {
-                if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n') {
-                    has_dot = true; break;
-                }
-            }
-            if (!has_dot) {
-                size_t l = strlen(buf);
-                if (l + 2 < sizeof(buf)) { buf[l] = '.'; buf[l+1] = '0'; buf[l+2] = 0; }
-            }
-            dbuf_append(out, buf);
+            /* reads back exactly on every SQLite, ".0" kept (GQLITE-T-0531) */
+            dbuf_append(out, gql_sql_real(buf, sizeof(buf), lit->value.decimal));
             return 0;
         }
         case LITERAL_STRING: {
@@ -1474,7 +1465,7 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
                     case LITERAL_INTEGER: tbl = "edge_props_int";
                         snprintf(val_buf, sizeof(val_buf), "%lld", (long long)lit->value.integer); break;
                     case LITERAL_DECIMAL: tbl = "edge_props_real";
-                        snprintf(val_buf, sizeof(val_buf), "%.17g", lit->value.decimal); break;
+                        gql_sql_real(val_buf, sizeof(val_buf), lit->value.decimal); break;
                     case LITERAL_BOOLEAN: tbl = "edge_props_bool";
                         snprintf(val_buf, sizeof(val_buf), "%d", lit->value.boolean ? 1 : 0); break;
                     default: continue;

@@ -110,11 +110,12 @@ static int generate_node_delete(cypher_transform_context *ctx, const char *varia
     CYPHER_DEBUG("Generating node DELETE for %s (alias: %s)", variable, alias);
     
     /* Delete node properties first */
+    /* GQLITE-T-0525: the JSON table too (list and map values were left) */
     const char *prop_tables[] = {
-        "node_props_text", "node_props_int", "node_props_real", "node_props_bool"
+        "node_props_text", "node_props_int", "node_props_real", "node_props_bool", "node_props_json"
     };
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         sql_raw(ctx->unified_builder, "DELETE FROM %s WHERE node_id = %s.id; ", 
                    prop_tables[i], alias);
     }
@@ -146,10 +147,10 @@ static int generate_edge_delete(cypher_transform_context *ctx, const char *varia
     
     /* Delete edge properties first using IN subquery */
     const char *prop_tables[] = {
-        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool"
+        "edge_props_text", "edge_props_int", "edge_props_real", "edge_props_bool", "edge_props_json"
     };
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         sql_raw(ctx->unified_builder, "DELETE FROM %s WHERE edge_id IN (SELECT %s.id FROM edges AS %s); ", 
                    prop_tables[i], alias, alias);
     }

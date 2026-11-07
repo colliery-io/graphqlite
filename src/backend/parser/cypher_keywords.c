@@ -1,3 +1,4 @@
+#include "gql_thread_local.h"
 #include <string.h>
 #include <ctype.h>
 #include "parser/cypher_keywords.h"
@@ -61,7 +62,7 @@ int cypher_keyword_lookup(const char *str)
 /* Look up a keyword and return full information */
 const CypherKeywordToken *cypher_keyword_lookup_full(const char *str)
 {
-    static CypherKeywordToken result;
+    static GQL_THREAD_LOCAL CypherKeywordToken result;
     const CypherKeyword *kw = binary_search_keyword(str);
     
     if (kw) {

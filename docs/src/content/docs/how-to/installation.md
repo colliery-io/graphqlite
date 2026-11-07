@@ -72,8 +72,15 @@ Building from source produces the raw extension file you can load into any SQLit
 | GCC or Clang | 9+ | C compiler |
 | Bison | 3.0+ | Parser generator |
 | Flex | 2.6+ | Lexer generator |
-| SQLite development headers | 3.35+ | SQLite API |
+| SQLite development headers | 3.45+ | SQLite API |
 | CUnit | 2.1+ | Unit tests (optional) |
+
+GraphQLite needs **SQLite 3.45 or later** at run time, in whatever program
+loads it (the `sqlite3` shell, Python, your application). It relies on
+SQLite's JSON subtypes (`SQLITE_RESULT_SUBTYPE`, 3.45); with an older
+SQLite, lists, maps and nodes inside lists come back wrong. `angreal test
+sqlite-matrix` runs the tests on 3.45.1, 3.46.1, 3.50.4, 3.53.4 and the
+newest release.
 
 ### macOS
 

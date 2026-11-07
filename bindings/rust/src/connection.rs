@@ -294,7 +294,7 @@ impl Connection {
                 Err(e) => return Err(map_query_error(e)),
             };
             let json_str: String = row.get(0)?;
-            let obj = match serde_json::from_str::<serde_json::Value>(&json_str) {
+            let obj = match crate::result::parse_result_json(&json_str) {
                 Ok(serde_json::Value::Object(obj)) => obj,
                 Ok(_) => {
                     return Err(Error::Cypher(

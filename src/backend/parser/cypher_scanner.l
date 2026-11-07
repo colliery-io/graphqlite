@@ -25,7 +25,8 @@ static void prepare_integer_token(CypherScannerState *state, const char *text);
 static void prepare_decimal_token(CypherScannerState *state, const char *text);
 static void scanner_error(CypherScannerState *state, const char *message, int token_len);
 static char* unescape_string(const char *escaped_str, int length);
-extern bool g_invalid_unicode_in_string;
+#include "gql_thread_local.h"
+extern GQL_THREAD_LOCAL bool g_invalid_unicode_in_string;
 
 /* Update location tracking - yyextra is CypherScannerState* in reentrant mode */
 #define YY_USER_ACTION \
@@ -425,10 +426,11 @@ CypherToken cypher_scanner_get_current_token(const CypherScannerState *state)
 
 /* Process escape sequences in string literals */
 /* Set by unescape_string to flag an InvalidUnicodeLiteral so the caller
- * can route a specific scanner_error. We're single-threaded per parse so
- * a file-scope slot is fine. (Declared `extern` at top of file so the
- * earlier callers can read it.) */
-bool g_invalid_unicode_in_string = false;
+ * can route a specific scanner_error. One per thread: two connections can
+ * parse at the same time (a data race found by `make concurrency-tsan`,
+ * GQLITE-T-0528). (Declared `extern` at top of file so the earlier callers
+ * can read it.) */
+GQL_THREAD_LOCAL bool g_invalid_unicode_in_string = false;
 
 static char* unescape_string(const char *escaped_str, int length)
 {
