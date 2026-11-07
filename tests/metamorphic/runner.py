@@ -92,13 +92,21 @@ def keyfn(compare: str):
 
 def _run_variant(engine: Engine, conn, case: Case, var: Variant) -> Outcome:
     per_part = []
+    failed = False
     for q in var.queries:
         o = None
         for _ in range(var.repeat):
             o = engine.run(conn, q)
             if not o.ok:
+                if var.expect_error:      # GQLITE-T-0526: then compare what is left
+                    failed = True
+                    break
                 return o
+        if failed:
+            break
         per_part.append(o.rows)
+    if var.expect_error and not failed:
+        return Outcome(False, error="the write was expected to fail and did not")
     if var.mode == "write":
         o = engine.run(conn, case.readback)
         if not o.ok:

@@ -41,6 +41,62 @@ static bool ast_contains_function_call(ast_node *expr)
     return false;
 }
 
+/* Does a list or map refer to anything but literals and function calls: a
+ * variable, a property, a parameter, an operator? */
+static bool ast_has_reference(ast_node *expr)
+{
+    if (!expr) return false;
+    switch (expr->type) {
+        case AST_NODE_LITERAL: return false;
+        case AST_NODE_LIST: {
+            cypher_list *l = (cypher_list*)expr;
+            for (int i = 0; l->items && i < l->items->count; i++)
+                if (ast_has_reference(l->items->items[i])) return true;
+            return false;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map*)expr;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (ast_has_reference(((cypher_map_pair*)m->pairs->items[i])->value)) return true;
+            return false;
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            cypher_function_call *f = (cypher_function_call*)expr;
+            for (int i = 0; f->args && i < f->args->count; i++)
+                if (ast_has_reference(f->args->items[i])) return true;
+            return false;
+        }
+        default: return true;
+    }
+}
+
+static char* evaluate_expr_to_json(cypher_executor *executor, ast_node *expr);
+
+/* The JSON of a list or map property value. One that refers to a variable
+ * (a FOREACH or UNWIND value, an entity created earlier in the query) is
+ * evaluated with them in scope: `FOREACH (i IN [1, 2] | CREATE ({k: [i, 1]}))`
+ * stored [null, 1] (GQLITE-T-0526, found by the write-batching relation). */
+static char *list_or_map_json(cypher_executor *executor, ast_node *value, variable_map *vm)
+{
+    if (ast_has_reference(value)) {
+        variable_map *tmp = vm ? NULL : create_variable_map();
+        property_type t = PROP_TYPE_TEXT;
+        property_value pv;
+        property_value_init(&pv);
+        char *out = NULL;
+        if (executor_eval_value(executor, value, vm ? vm : tmp, &t, &pv) == 0 &&
+            (t == PROP_TYPE_JSON || t == PROP_TYPE_TEXT) && pv.as_str) {
+            out = pv.as_str;
+            pv.as_str = NULL;
+        }
+        property_value_free(&pv);
+        if (tmp) free_variable_map(tmp);
+        if (out) return out;
+    }
+    return ast_contains_function_call(value) ? evaluate_expr_to_json(executor, value)
+                                             : serialize_ast_to_json(value);
+}
+
 /* Evaluate a list/map AST expression via SQL transform pipeline, returning
  * a JSON-text string the caller must free. Used for list/map literals that
  * embed function calls (date(), datetime(), etc.) which AST-only
@@ -178,9 +234,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                      * (e.g. [date(...), date(...)]), evaluate via SQL so
                                      * temporals get their string forms; otherwise the pure
                                      * AST-to-JSON path handles literals. */
-                                    char *json_str = ast_contains_function_call(pair->value)
-                                        ? evaluate_expr_to_json(executor, pair->value)
-                                        : serialize_ast_to_json(pair->value);
+                                    char *json_str = list_or_map_json(executor, pair->value, var_map);
                                     if (json_str) {
                                         if (cypher_schema_set_node_property_ex(executor->schema_mgr, node_id, pair->key, PROP_TYPE_JSON, json_str, true) == 0) {
                                             result->properties_set++;
@@ -528,9 +582,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
                                      * (e.g. [date(...), date(...)]), evaluate via SQL so
                                      * temporals get their string forms; otherwise the pure
                                      * AST-to-JSON path handles literals. */
-                                    char *json_str = ast_contains_function_call(pair->value)
-                                        ? evaluate_expr_to_json(executor, pair->value)
-                                        : serialize_ast_to_json(pair->value);
+                                    char *json_str = list_or_map_json(executor, pair->value, var_map);
                                     if (json_str) {
                                         if (cypher_schema_set_node_property_ex(executor->schema_mgr, target_node_id, pair->key, PROP_TYPE_JSON, json_str, true) == 0) {
                                             result->properties_set++;
@@ -700,7 +752,7 @@ int execute_path_pattern_with_variables(cypher_executor *executor, cypher_path *
 
                             if (pair->value->type == AST_NODE_MAP || pair->value->type == AST_NODE_LIST) {
                                 /* Map or list literal - serialize to JSON and store as JSON type */
-                                char *json_str = serialize_ast_to_json(pair->value);
+                                char *json_str = list_or_map_json(executor, pair->value, var_map);
                                 if (json_str) {
                                     if (cypher_schema_set_edge_property(executor->schema_mgr, edge_id, pair->key, PROP_TYPE_JSON, json_str) == 0) {
                                         result->properties_set++;

@@ -78,6 +78,12 @@ class Engine:
 
     @staticmethod
     def run(conn: sqlite3.Connection, query: str) -> Outcome:
+        if query.startswith("SQL:"):         # BEGIN / ROLLBACK around writes (GQLITE-T-0526)
+            try:
+                conn.execute(query[4:])
+            except sqlite3.Error as e:
+                return Outcome(False, error=str(e))
+            return Outcome(True, rows=[])
         try:
             raw = conn.execute("SELECT cypher(?)", (query,)).fetchone()[0]
         except sqlite3.Error as e:
