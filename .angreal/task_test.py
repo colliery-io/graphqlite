@@ -1035,6 +1035,11 @@ def test_harness_coverage(count: int = 0, reps: int = 0, top: int = 0) -> int:
                            cwd=root, env=env, capture_output=True, text=True)
         line = [l for l in r.stdout.splitlines() if l.startswith("metamorphic ")]
         print(line[-1] if line else "metamorphic: no summary", flush=True)
+    # The graph algorithms are reached only by their invariants (GQLITE-T-0512).
+    r = subprocess.run([python, "-m", "tests.algorithms.run", "--count", "200", "--ext", ext],
+                       cwd=root, env=env, capture_output=True, text=True)
+    line = [l for l in r.stdout.splitlines() if l.startswith("algorithm invariants")]
+    print(line[-1] if line else "algorithm invariants: no summary", flush=True)
     return subprocess.run([python, "-m", "tests.metamorphic.coverage_report",
                            "--build", os.path.join(root, "build", "cov"), "--top", str(top or 40),
                            "--out", os.path.join(root, "build", "cov", "harness-coverage.txt")],
@@ -1297,6 +1302,60 @@ def test_parity() -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     return subprocess.run([python, "-m", "tests.parity.run"], cwd=root, env=env).returncode
+
+
+@test()
+@angreal.command(
+    name="algorithms",
+    about="Graph algorithm invariants on random graphs (PageRank, components, paths, centrality)",
+    tool=angreal.ToolDescription(
+        """
+Graph algorithm invariants (GQLITE-T-0512). Builds random small graphs
+(self-loops and parallel edges allowed) and checks every algorithm the
+extension has against a reference in plain Python or an invariant:
+PageRank sums to 1 and does not depend on creation order; wcc and scc equal
+union-find and Tarjan; bfs and dfs reach the nodes reachable along outgoing
+edges; dijkstra (hops and a cost property), astar and apsp equal a
+reference shortest path; degree, triangle count, betweenness and closeness
+equal reference values; eigenvector centrality and node similarity do not
+depend on order; label propagation and Louvain communities stay inside one
+weak component.
+
+## When to use
+- After a change to src/backend/executor/graph_algo_*.c or graph_algorithms.c
+
+## Examples
+```
+angreal test algorithms
+angreal test algorithms --count 2000 --seed 7
+```
+
+## Output
+- One line per failing check with the first graph, and a summary line.
+
+## Exit code
+1 when a check fails; else 0.
+""",
+        risk_level="safe"
+    )
+)
+@angreal.argument(name="count", long="count", python_type="int", required=False,
+                  help="random graphs (default 300)")
+@angreal.argument(name="seed", long="seed", python_type="int", required=False,
+                  help="random seed (default 1)")
+def test_algorithms(count: int = 0, seed: int = 0) -> int:
+    """Graph algorithm invariants on random graphs."""
+    if not ensure_extension_built():
+        return 1
+    root = get_project_root()
+    python = _pick_python_with_extension_support()
+    if python is None:
+        print("ERROR: no python3 with sqlite3 extension support found.", flush=True)
+        return 2
+    env = os.environ.copy()
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return subprocess.run([python, "-m", "tests.algorithms.run", "--count", str(count or 300),
+                           "--seed", str(seed or 1)], cwd=root, env=env).returncode
 
 
 @test()
