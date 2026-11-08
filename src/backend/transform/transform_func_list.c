@@ -90,6 +90,8 @@ int transform_list_function(cypher_transform_context *ctx, cypher_function_call 
 }
 
 /* Transform range() function - generate list of integers */
+static int transform_range_inner(cypher_transform_context *ctx, cypher_function_call *func_call);
+
 int transform_range_function(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming range() function");
@@ -137,6 +139,24 @@ int transform_range_function(cypher_transform_context *ctx, cypher_function_call
         }
     }
 
+    /* A null start, end or step gives null, as other Cypher functions do
+     * with a null argument (GQLITE-T-0534; it gave []). Neo4j raises a
+     * TypeError instead. */
+    append_sql(ctx, "(CASE WHEN ");
+    for (int i = 0; i < func_call->args->count; i++) {
+        char *a = cypher_transform_capture_expression(ctx, func_call->args->items[i]);
+        if (!a) return -1;
+        append_sql(ctx, "%s(%s) IS NULL", i ? " OR " : "", a);
+        free(a);
+    }
+    append_sql(ctx, " THEN NULL ELSE ");
+    if (transform_range_inner(ctx, func_call) < 0) return -1;
+    append_sql(ctx, " END)");
+    return 0;
+}
+
+static int transform_range_inner(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
     /* Use a recursive CTE to generate the inclusive openCypher range.
      *
      * openCypher's range is INCLUSIVE on both ends; the iteration direction

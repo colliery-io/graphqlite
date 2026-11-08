@@ -20,6 +20,9 @@
 #define GQL_ERR_MEMORY        "MEMORY_ERROR"
 #define GQL_ERR_INTERNAL      "INTERNAL_ERROR"
 #define GQL_ERR_NOT_IMPL      "NOT_IMPLEMENTED"
+/* Another connection holds the write lock; the query can be retried
+ * (GQLITE-T-0533). The SQLite result code is SQLITE_BUSY. */
+#define GQL_ERR_BUSY          "BUSY"
 
 /* sqlite3_result_subtype value used to tag UDF results whose payload is a
  * Cypher boolean encoded as the text "true" / "false". The JSON result

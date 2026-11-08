@@ -90,7 +90,7 @@ The first byte distinguishes the two shapes: `[` is a result set, `{` is a stati
 | Key | Present | Meaning |
 |-----|---------|---------|
 | `error` | always | Human-readable reason. Grammar errors name the unexpected token and, where known, the expected one |
-| `code` | always | `PARSE_ERROR` (scanner or grammar), `VALIDATION_ERROR` (compile-time semantic check such as `RETURN NOT 1` or a UNION column mismatch), `EXECUTION_ERROR` (transform or runtime), `NOT_IMPLEMENTED`, `MEMORY_ERROR`, `INTERNAL_ERROR` |
+| `code` | always | `PARSE_ERROR` (scanner or grammar), `VALIDATION_ERROR` (compile-time semantic check such as `RETURN NOT 1` or a UNION column mismatch), `EXECUTION_ERROR` (transform or runtime), `NOT_IMPLEMENTED`, `MEMORY_ERROR`, `INTERNAL_ERROR`, `BUSY` (another connection holds the write lock; the SQLite result code is `SQLITE_BUSY` and the query can be retried, see Transaction Behavior) |
 | `line`, `column` | parse errors | 1-based location of the offending token |
 
 `{"error", "code"}` is the stable subset; `line` and `column` are only added when known. The message is JSON-escaped, so quotes and control characters in it are safe to decode. Use `cypher_validate()` to get the same diagnostics without executing.
@@ -299,6 +299,25 @@ SELECT cypher('CREATE (:Person {name: ''Alice''})');
 SELECT cypher('CREATE (:Person {name: ''Bob''})');
 COMMIT;
 ```
+
+### Several connections writing
+
+SQLite allows one writer at a time. A `SELECT cypher('CREATE ...')` starts
+as a read and becomes a write when it writes; in WAL mode that upgrade fails
+at once, without waiting for the busy timeout, when another connection has
+written since the read began. The query then fails with code `BUSY` (SQLite
+result code `SQLITE_BUSY`) and writes nothing; run it again.
+
+To make writers wait for each other instead, take the write lock first:
+
+```sql
+BEGIN IMMEDIATE;   -- waits up to the busy timeout for the write lock
+SELECT cypher('MERGE (:Person {name: ''Alice''})');
+COMMIT;
+```
+
+In Python, `CypherError.retryable` is true for a busy error; in Rust,
+`Error::is_busy()`.
 
 ---
 

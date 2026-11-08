@@ -61,3 +61,19 @@ pub enum Error {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }
+
+impl Error {
+    /// True when a Cypher query failed because another connection held the
+    /// write lock (the extension's `BUSY` code, SQLite's `SQLITE_BUSY`). The
+    /// query can be run again; with several writers, run writes inside
+    /// `BEGIN IMMEDIATE` ... `COMMIT` (GQLITE-T-0533).
+    pub fn is_busy(&self) -> bool {
+        match self {
+            Error::Cypher(msg) => msg.starts_with("BusyError:"),
+            Error::Sqlite(rusqlite::Error::SqliteFailure(e, _)) => {
+                e.code == rusqlite::ErrorCode::DatabaseBusy || e.code == rusqlite::ErrorCode::DatabaseLocked
+            }
+            _ => false,
+        }
+    }
+}

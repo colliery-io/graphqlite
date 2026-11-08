@@ -44,8 +44,13 @@ NEO4J_IMAGE = "neo4j:5.26-community"
 CONTAINER = "gqlite-neo4j-differential"
 PORT = 17687
 
-# Known differences, by a regex on the query: (pattern, why).
-KNOWN: list[tuple[str, str]] = [
+# Known differences, by a regex on the query and, optionally, on Neo4j's
+# error: (query pattern, why) or (query pattern, why, neo4j error pattern).
+KNOWN: list[tuple] = [
+    # GraphQLite gives null for range() with a null bound, as other functions
+    # with a null argument; Neo4j raises a TypeError (GQLITE-T-0534).
+    (r"\brange\(", "range() with a null bound: null here, TypeError in Neo4j",
+     r"Invalid input for (start|end|step) value in function 'range\(\)'"),
     # Neo4j 5 refuses `:A|B` and `:A:B` in one query (GQL label expressions
     # do not mix with colon conjunction); openCypher takes both.
     (r"(?=.*\(\w*:[A-Za-z_]+\|)(?=.*(?:\(\w*|\b\w+):[A-Za-z_]+:[A-Za-z_])",
@@ -246,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
                 kind = "rows differ"
             else:
                 kind = "only GraphQLite errors" if not g.ok else "only Neo4j errors"
-            why = next((w for pat, w in KNOWN if re.search(pat, var.query)), None)
+            neo_err = n.error if not n.ok else ""
+            why = next((k[1] for k in KNOWN
+                        if re.search(k[0], var.query)
+                        and (len(k) < 3 or re.search(k[2], neo_err or ""))), None)
             if why:
                 known[why] += 1
                 continue
