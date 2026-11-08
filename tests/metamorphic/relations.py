@@ -1382,8 +1382,9 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
     "temporal": (temporal, ["tm.kind", "tm.form"]),
     "write_agg": (write_agg, G + C1 + ["w.shape", "w.kind", "agg.kind"]),
-    "indexed": (indexed, CHAIN + ["ix.base", "ix.ddl", "pred.kind", "expr.kind", "w.shape", "w.kind",
-                                  "del.form", "ld.form"]),
+    # ret.kind / agg.kind stay out: tlp_where and others need scalar returns
+    "indexed": (indexed, [d for d in CHAIN if d not in ("ret.kind", "agg.kind")]
+                + ["ix.base", "ix.ddl", "pred.kind", "w.shape", "w.kind", "del.form", "ld.form"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
