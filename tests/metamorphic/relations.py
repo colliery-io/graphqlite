@@ -53,6 +53,9 @@ DOMAINS.update({
     # GQLITE-T-0506: MERGE in pipelines
     "mr.end": ["bound", "unbound"],
     "mo.form": ["node", "rel"],
+    # GQLITE-T-0507: CALL { } subqueries
+    "cs.form": ["uncorrelated", "union_all", "union", "union_count", "correlated_union",
+                "after_agg", "write", "write_union", "alone", "after_write"],
 })
 
 
@@ -842,6 +845,74 @@ def expr_context(ch: Chooser) -> Case:
                 [Variant("return", render(base)), Variant(ctx, render(alt))])
 
 
+# ------------------------------------------------------------ CALL { } subqueries
+
+def call_subquery(ch: Chooser) -> Case:
+    """A query inside CALL { } gives the rows it gives on its own: alone, as
+    a UNION, correlated with UNION branches, after an aggregation, and with
+    writes inside (GQLITE-T-0507)."""
+    form = ch.pick("cs.form")
+    n = ch.randint(1, 3)
+    cols = ", ".join(f"c{i}" for i in range(n))
+    if form in ("uncorrelated", "union_all", "union", "union_count"):
+        q1 = render(chain(ch, n_items=n).query())
+        if form == "uncorrelated":
+            return Case("call_subquery/uncorrelated", [
+                Variant("plain", q1), Variant("call", f"CALL {{ {q1} }} RETURN {cols}")])
+        q2 = render(chain(ch, n_items=n).query())
+        if form == "union_all":
+            return Case("call_subquery/union_all", [
+                Variant("union all", f"{q1} UNION ALL {q2}"),
+                Variant("call", f"CALL {{ {q1} UNION ALL {q2} }} RETURN {cols}")])
+        if form == "union":
+            return Case("call_subquery/union", [
+                Variant("union", f"{q1} UNION {q2}", post=equiv),
+                Variant("call", f"CALL {{ {q1} UNION {q2} }} RETURN {cols}", post=equiv)])
+        return Case("call_subquery/union_count", [
+            Variant("parts", parts=[q1, q2], combine=lambda ps: [{"n": len(ps[0]) + len(ps[1])}]),
+            Variant("call", f"CALL {{ {q1} UNION ALL {q2} }} RETURN count(*) AS n")])
+    p = pattern(ch, "c1", ["a", "b"], ["r"])
+    nodes, rels = p.node_vars, p.rel_vars
+    m = f"MATCH {p.text()}"
+    keys = ", ".join(f"{v(x)}.id AS k{i}" for i, x in enumerate(nodes))
+    keep = ", ".join(v(x) for x in nodes + rels)
+    if form == "correlated_union":
+        e1, e2 = expr(ch, nodes, rels), expr(ch, nodes, rels)
+        return Case("call_subquery/correlated_union", [
+            Variant("unwind", render(f"{m} UNWIND [{e1}, {e2}] AS ⟨x⟩ RETURN {keys}, ⟨x⟩ AS x")),
+            Variant("call", render(f"{m} CALL {{ WITH {keep} RETURN {e1} AS ⟨x⟩ UNION ALL "
+                                   f"WITH {keep} RETURN {e2} AS ⟨x⟩ }} RETURN {keys}, ⟨x⟩ AS x"))])
+    if form == "after_agg":
+        return Case("call_subquery/after_agg", [
+            Variant("inline", render(f"{m} RETURN count(*) * 2 AS m")),
+            Variant("call", render(f"{m} WITH count(*) AS ⟨k⟩ CALL {{ WITH ⟨k⟩ RETURN ⟨k⟩ * 2 AS ⟨y⟩ }} "
+                                   f"RETURN ⟨y⟩ AS m"))])
+    e1 = write_expr(ch, nodes, False)
+    if form == "alone":
+        # The whole query is one CALL (the CALL handler, not the row pipeline).
+        return Case(f"call_subquery/alone/{ch.used['w.kind']}", [
+            Variant("inline", render(f"{m} CREATE (:New {{k: {e1}}})"), mode="write"),
+            Variant("call", render(f"CALL {{ {m} CREATE (:New {{k: {e1}}}) }}"), mode="write")],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    if form == "after_write":
+        # A CALL after a write sees what the write made.
+        return Case("call_subquery/after_write", [
+            Variant("count", render(f"{m} RETURN count(*) AS c")),
+            Variant("call", render(f"{m} CREATE (:New) WITH count(*) AS ⟨w⟩ "
+                                   f"CALL {{ MATCH (⟨z⟩:New) RETURN count(⟨z⟩) AS ⟨y⟩ }} RETURN ⟨y⟩ AS c"))])
+    if form == "write":
+        return Case(f"call_subquery/write/{ch.used['w.kind']}", [
+            Variant("inline", render(f"{m} CREATE (:New {{k: {e1}}})"), mode="write"),
+            Variant("call", render(f"{m} CALL {{ WITH {keep} CREATE (:New {{k: {e1}}}) }}"), mode="write")],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    e2 = write_expr(ch, nodes, False)
+    return Case(f"call_subquery/write_union/{ch.used['w.kind']}", [
+        Variant("two writes", render(f"{m} CREATE (:New {{k: {e1}}}) CREATE (:New {{k: {e2}}})"), mode="write"),
+        Variant("call", render(f"{m} CALL {{ WITH {keep} CREATE (:New {{k: {e1}}}) UNION ALL "
+                               f"WITH {keep} CREATE (:New {{k: {e2}}}) }}"), mode="write")],
+        write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
 # ------------------------------------------------- writes after OPTIONAL MATCH
 
 def write_optional(ch: Chooser) -> Case:
@@ -1067,6 +1138,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "merge_direct": (merge_direct, G + C1 + ["w.shape", "w.kind"]),
     "merge_rel": (merge_rel, G + C1 + ["w.shape", "w.kind", "mr.end"]),
     "merge_on": (merge_on, G + C1 + ["w.shape", "w.kind", "mo.form"]),
+    "call_subquery": (call_subquery, CHAIN + ["cs.form", "w.kind"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
