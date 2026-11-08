@@ -77,7 +77,7 @@ class Engine:
         return None
 
     @staticmethod
-    def run(conn: sqlite3.Connection, query: str) -> Outcome:
+    def run(conn: sqlite3.Connection, query: str, params: dict | None = None) -> Outcome:
         if query.startswith("SQL:"):         # BEGIN / ROLLBACK around writes (GQLITE-T-0526)
             try:
                 conn.execute(query[4:])
@@ -85,7 +85,10 @@ class Engine:
                 return Outcome(False, error=str(e))
             return Outcome(True, rows=[])
         try:
-            raw = conn.execute("SELECT cypher(?)", (query,)).fetchone()[0]
+            if params:                       # GQLITE-T-0508: $parameters
+                raw = conn.execute("SELECT cypher(?, ?)", (query, json.dumps(params))).fetchone()[0]
+            else:
+                raw = conn.execute("SELECT cypher(?)", (query,)).fetchone()[0]
         except sqlite3.Error as e:
             msg = str(e)
             try:

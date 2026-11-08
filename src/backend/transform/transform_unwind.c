@@ -500,14 +500,11 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
         }
 
         append_unwind_src(&cte_query, json_each_arg);
-    } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL ||
-               unwind->expr->type == AST_NODE_SUBSCRIPT ||
-               unwind->expr->type == AST_NODE_BINARY_OP ||
-               unwind->expr->type == AST_NODE_PROPERTY ||
-               unwind->expr->type == AST_NODE_CASE_EXPR ||
-               unwind->expr->type == AST_NODE_LITERAL ||
-               (unwind->expr->type == AST_NODE_PARAMETER &&
-                ((cypher_parameter *)unwind->expr)->name)) {
+    } else if (unwind->expr->type != AST_NODE_PARAMETER ||
+               ((cypher_parameter *)unwind->expr)->name) {
+        /* Any other expression: a list comprehension, a CASE, a literal, a
+         * map ... (GQLITE-T-0508: `UNWIND [x IN l WHERE ...] AS i` was
+         * refused). */
         /* #136: a parameter takes this branch too. Its own branch wrapped a
          * MATCH prefix as _prev without the spliced variables, so
          * `MATCH (n) UNWIND $rows AS row ... n` failed with

@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .gen import (Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where,
+from .gen import (Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where, lit,
                   pattern, predicate, render, v, variables)
 from .space import Chooser, DOMAINS
 
@@ -56,6 +56,9 @@ DOMAINS.update({
     # GQLITE-T-0507: CALL { } subqueries
     "cs.form": ["uncorrelated", "union_all", "union", "union_count", "correlated_union",
                 "after_agg", "write", "write_union", "alone", "after_write"],
+    # GQLITE-T-0508: write forms
+    "wf.form": ["set_param_merge", "set_param_replace", "set_map_value", "delete_return",
+                "remove_label", "foreach_set", "foreach_merge", "foreach_list"],
 })
 
 
@@ -70,6 +73,7 @@ class Variant:
     mode: str = "read"                      # read | write (write: compare readback)
     repeat: int = 1
     expect_error: bool = False              # the write must fail and leave nothing
+    params: dict | None = None              # $parameters of every query (GQLITE-T-0508)
 
     @property
     def queries(self) -> list[str]:
@@ -976,6 +980,74 @@ def set_forms(ch: Chooser) -> Case:
     return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
 
 
+# ---------------------------------------------------- more write forms
+
+def write_forms(ch: Chooser) -> Case:
+    """SET from a $map or a map value, DELETE ... RETURN, REMOVE of a label
+    and FOREACH (SET, MERGE, over a computed list) equal the plain forms
+    (GQLITE-T-0508)."""
+    form = ch.pick("wf.form")
+    lab = label_text(ch.pick("c1.label"), ch)
+    cond = label_where(lab, "a")
+    a = "⟨a⟩"
+    m = f"MATCH ({a}{lab})"
+    props = "MATCH (n) RETURN properties(n) AS p"
+    if form in ("set_param_merge", "set_param_replace"):
+        k = ch.choice([1, "x", 1.5, True, [1, 2]])
+        if form == "set_param_merge":
+            pm = {"k": k, "t": "q", "v": None}
+            return Case("write_forms/set_param_merge", [
+                Variant("param", render(f"{m} SET {a} += $props"), mode="write", params={"props": pm}),
+                Variant("items", render(f"{m} SET {a}.k = {lit(k)}, {a}.t = 'q' REMOVE {a}.v"), mode="write")],
+                write=True, readback=props)
+        return Case("write_forms/set_param_replace", [
+            Variant("param", render(f"{m} SET {a} = $props"), mode="write", params={"props": {"k": k}}),
+            Variant("items", render(f"{m} REMOVE {a}.id, {a}.v, {a}.s, {a}.b SET {a}.k = {lit(k)}"),
+                    mode="write")],
+            write=True, readback=props)
+    if form == "set_map_value":
+        e = write_expr(ch, ["a"], False)
+        return Case(f"write_forms/set_map_value/{ch.used['w.kind']}", [
+            Variant("map", render(f"{m} WITH {a}, {{k: {e}, w: {a}.id}} AS ⟨mm⟩ SET {a} += ⟨mm⟩"), mode="write"),
+            Variant("items", render(f"{m} SET {a}.k = {e}, {a}.w = {a}.id"), mode="write")],
+            write=True, readback="MATCH (n) RETURN n.id AS id, properties(n) AS p")
+    if form == "delete_return":
+        # Rows of a DELETE ... RETURN (each variant runs on a fresh graph).
+        return Case("write_forms/delete_return", [
+            Variant("count", render(f"MATCH ({a}) WHERE {cond} RETURN count(*) AS c, sum({a}.id) AS s")),
+            Variant("delete", render(f"{m} WITH {a}, {a}.id AS ⟨i⟩ DETACH DELETE {a} "
+                                     f"RETURN count(*) AS c, sum(⟨i⟩) AS s"))],
+            write=True)
+    if form == "remove_label":
+        return Case("write_forms/remove_label", [
+            Variant("remove", render(f"{m} REMOVE {a}:A"), mode="write"),
+            Variant("set+remove", render(f"{m} SET {a}:Tmp REMOVE {a}:A, {a}:Tmp"), mode="write"),
+            Variant("computed", render(f"MATCH ({a}) RETURN {a}.id AS id, CASE WHEN {cond} THEN "
+                                       f"[⟨l⟩ IN labels({a}) WHERE ⟨l⟩ <> 'A'] ELSE labels({a}) END AS l"))],
+            write=True, readback="MATCH (n) RETURN n.id AS id, labels(n) AS l")
+    if form == "foreach_set":
+        e = write_expr(ch, ["a"], False)
+        return Case(f"write_forms/foreach_set/{ch.used['w.kind']}", [
+            Variant("set", render(f"{m} SET {a}.k = {e}"), mode="write"),
+            Variant("foreach", render(f"{m} WITH collect({a}) AS ⟨ns⟩ FOREACH ({a} IN ⟨ns⟩ | SET {a}.k = {e})"),
+                    mode="write")],
+            write=True, readback="MATCH (n) RETURN n.id AS id, n.k AS k")
+    if form == "foreach_merge":
+        xs = [ch.randint(0, 3) for _ in range(ch.randint(1, 4))]
+        return Case("write_forms/foreach_merge", [
+            Variant("unwind", render(f"UNWIND {xs} AS ⟨i⟩ MERGE (:New {{k: ⟨i⟩}})"), mode="write"),
+            Variant("foreach", render(f"FOREACH (⟨i⟩ IN {xs} | MERGE (:New {{k: ⟨i⟩}}))"), mode="write"),
+            Variant("distinct", render(f"UNWIND {xs} AS ⟨i⟩ RETURN DISTINCT ⟨i⟩ AS k"))],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    src = ch.choice([f"range(0, coalesce({a}.v, 0) % 3)", f"[{a}.id, {a}.id + 1]",
+                     f"[x IN [1, 2, 3] WHERE x <= coalesce({a}.v, 0)]", "[]"])
+    return Case("write_forms/foreach_list", [
+        Variant("unwind", render(f"{m} UNWIND {src} AS ⟨i⟩ CREATE (:New {{k: {a}.id * 10 + ⟨i⟩}})"), mode="write"),
+        Variant("foreach", render(f"{m} FOREACH (⟨i⟩ IN {src} | CREATE (:New {{k: {a}.id * 10 + ⟨i⟩}}))"),
+                mode="write")],
+        write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
 # ---------------------------------------------------- write with RETURN
 
 def write_return(ch: Chooser) -> Case:
@@ -1139,6 +1211,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "merge_rel": (merge_rel, G + C1 + ["w.shape", "w.kind", "mr.end"]),
     "merge_on": (merge_on, G + C1 + ["w.shape", "w.kind", "mo.form"]),
     "call_subquery": (call_subquery, CHAIN + ["cs.form", "w.kind"]),
+    "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),

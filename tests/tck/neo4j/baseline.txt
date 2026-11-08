@@ -563,6 +563,8 @@ UnwindAcceptance.feature::Nested unwind with doubles
 UnwindAcceptance.feature::Nested unwind with longs
 UnwindAcceptance.feature::Nested unwind with mixed types
 UnwindAcceptance.feature::Nested unwind with strings
+UnwindAcceptance.feature::Pattern comprehension in unwind with empty db
+UnwindAcceptance.feature::Pattern comprehension in unwind with hits
 UnwindAcceptance.feature::Primitive node type support in list literal
 UnwindAcceptance.feature::Primitive relationship type support in list literal
 UnwindAcceptance.feature::Unwind on array property
