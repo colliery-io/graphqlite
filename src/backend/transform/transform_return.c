@@ -312,7 +312,7 @@ char *cypher_expr_tag_sql(cypher_transform_context *ctx, ast_node *expr, const c
                     free(v);
                     return out;
                 }
-                if (!strcasecmp(n, "collect")) return strdup("'json'");
+                if (!strcasecmp(n, "collect") || !strcasecmp(n, "__gql_collect_subquery")) return strdup("'json'");
                 /* head(l) and last(l) have the tag of that element: a
                  * string that looks like JSON stays a string
                  * (GQLITE-T-0481). */

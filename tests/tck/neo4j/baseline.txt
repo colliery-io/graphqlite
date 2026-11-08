@@ -118,6 +118,8 @@ Create.feature::Dependencies between nodes and relationships two clauses with co
 Create.feature::Dependencies between nodes and relationships two clauses with count single clause
 Create.feature::Dependencies in creating multiple nodes
 Create.feature::Dependencies in creating multiple rels
+DeleteAcceptance.feature::Does not observe item-by-item visibility
+DeleteAcceptance.feature::Does not observe row-by-row visibility
 DeleteAcceptance.feature::Return properties from deleted node
 ExistsExpressionAcceptance.feature::Aggregation with exists in horizon of tail should plan
 ExistsExpressionAcceptance.feature::Can set a property to the value of an exists expression
@@ -431,6 +433,8 @@ PatternPredicates.feature::Returning a relationship from a pattern predicate
 PatternPredicates.feature::Using a pattern predicate after aggregation 1
 PatternPredicates.feature::Using a pattern predicate after aggregation 2
 PatternPredicates.feature::Using pattern predicate
+RemoveAcceptance.feature::Does not observe item-by-item visibility
+RemoveAcceptance.feature::Does not observe row-by-row visibility
 ReturnAcceptance.feature::Accessing a list with null as lower bound should return null
 ReturnAcceptance.feature::Accessing a list with null as upper bound should return null
 ReturnAcceptance.feature::Accessing a list with null should return null
@@ -462,9 +466,11 @@ SkipLimitAcceptance.feature::Reduce SKIP should be allowed
 SkipLimitAcceptance.feature::Skipping more than Integer.Max rows should be allowed
 SkipLimitAcceptance.feature::Stand alone limit in the return clause
 SkipLimitAcceptance.feature::Top with limit 0
+SubqueryAcceptance.feature::Accessing variables from outer query
 SubqueryAcceptance.feature::Aggregation on imported variables
 SubqueryAcceptance.feature::CALL around single query - using returned var in outer query
 SubqueryAcceptance.feature::CALL around union query - using returned var in outer query
+SubqueryAcceptance.feature::CALLs in sequence
 SubqueryAcceptance.feature::Correlated unit subquery
 SubqueryAcceptance.feature::Each execution of a CALL subquery can observe changes from previous executions, projections should capture the state of the current execution
 SubqueryAcceptance.feature::Embedded nested unit subquery call

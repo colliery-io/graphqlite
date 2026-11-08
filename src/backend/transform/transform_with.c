@@ -1409,7 +1409,10 @@ with_star_columns_done:
                     free(order_expr);
                 }
             }
-            if ((with->limit || with->skip) && dbuf_len(&ord) > 0) {
+            /* Without SKIP / LIMIT too: a later aggregate reads the rows
+             * in order (`WITH o.id AS i ORDER BY i RETURN collect(i)` lost
+             * the order; GQLITE-T-0524). */
+            if (dbuf_len(&ord) > 0) {
                 char *l = with->limit ? transform_expression_to_string(ctx, with->limit) : NULL;
                 char *o = with->skip ? transform_expression_to_string(ctx, with->skip) : NULL;
                 dynamic_buffer sub;

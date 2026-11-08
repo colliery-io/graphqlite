@@ -49,12 +49,50 @@ static ast_node *make_count_subquery(cypher_parser_context *context, char *name,
                                      ast_list *pattern, ast_node *where,
                                      ast_node *query, CYPHER_YYLTYPE *loc)
 {
-    if (!name || strcasecmp(name, "count") != 0) {
-        cypher_yyerror(loc, context, "a { } subquery is only valid after COUNT or EXISTS");
+    bool collect = name && strcasecmp(name, "collect") == 0;
+    if (!name || (!collect && strcasecmp(name, "count") != 0)) {
+        cypher_yyerror(loc, context, "a { } subquery is only valid after COUNT, COLLECT or EXISTS");
         free(name);
         return NULL;
     }
     free(name);
+    if (collect) {
+        /* COLLECT { ... RETURN x [ORDER BY ...] } (GQLITE-T-0524): the
+         * query becomes ... WITH x [ORDER BY ...] RETURN collect(x), whose
+         * one row is the list. */
+        cypher_query *cq = (cypher_query*)query;
+        ast_node *last = cq && cq->clauses && cq->clauses->count > 0
+                         ? cq->clauses->items[cq->clauses->count - 1] : NULL;
+        cypher_return *ret = last && last->type == AST_NODE_RETURN ? (cypher_return*)last : NULL;
+        if (!ret || ret->return_all || !ret->items || ret->items->count != 1) {
+            cypher_yyerror(loc, context, "a COLLECT subquery must end with a RETURN of one column");
+            if (query) ast_node_free(query);
+            else { if (pattern) ast_list_free(pattern); if (where) ast_node_free(where); }
+            return NULL;
+        }
+        cypher_return_item *it = (cypher_return_item*)ret->items->items[0];
+        if (!it->alias)
+            it->alias = strdup(it->expr && it->expr->type == AST_NODE_IDENTIFIER
+                               ? ((cypher_identifier*)it->expr)->name : "__gql_collect");
+        char *col = strdup(it->alias);
+        cypher_with *w = make_cypher_with(ret->distinct, ret->items, ret->order_by, ret->skip, ret->limit, NULL);
+        ret->items = NULL; ret->order_by = NULL; ret->skip = NULL; ret->limit = NULL;
+        ast_node_free(last);
+        cq->clauses->items[cq->clauses->count - 1] = (ast_node*)w;
+        ast_list *cargs = ast_list_create();
+        ast_list_append(cargs, (ast_node*)make_identifier(col, loc->first_line));
+        ast_list *ritems = ast_list_create();
+        ast_list_append(ritems, (ast_node*)make_return_item(
+            (ast_node*)make_function_call(strdup("collect"), cargs, false, loc->first_line),
+            strdup("__gql_collect")));
+        ast_list_append(cq->clauses, (ast_node*)make_cypher_return(false, ritems, NULL, NULL, NULL));
+        free(col);
+        cypher_exists_expr *ce = make_exists_query_expr(query, loc->first_line);
+        if (ce) ce->is_subquery = true;
+        ast_list *args = ast_list_create();
+        ast_list_append(args, (ast_node*)ce);
+        return (ast_node*)make_function_call(strdup("__gql_collect_subquery"), args, false, loc->first_line);
+    }
     if (!query) {
         ast_list *clauses = ast_list_create();
         ast_list_append(clauses, (ast_node*)make_cypher_match(pattern, where, false, NULL));
@@ -959,6 +997,18 @@ remove_item:
             $$ = make_remove_item(prop);
             free($1);
             free($3);
+        }
+    | '(' expr ')' '.' IDENTIFIER
+        {
+            /* REMOVE (expr).property: the entity an expression gives
+             * (GQLITE-T-0524). */
+            $$ = make_remove_item((ast_node*)make_property($2, $5, @5.first_line));
+            free($5);
+        }
+    | '(' expr ')' '.' BQIDENT
+        {
+            $$ = make_remove_item((ast_node*)make_property($2, $5, @5.first_line));
+            free($5);
         }
     | var_name ':' label_name
         {

@@ -752,8 +752,30 @@ static bool delete_then_create(cypher_query *query, clause_flags flags)
  * DELETE p`, `DELETE list[0]`): the MATCH+DELETE handler deletes only node
  * and relationship variables (Delete3 [1]). The row pipeline deletes each
  * entity the value holds. */
+/* REMOVE (expr).prop: the MATCH+REMOVE handler removes only from variables
+ * (GQLITE-T-0524). */
+static bool remove_of_value(cypher_query *query)
+{
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c || c->type != AST_NODE_REMOVE) continue;
+        ast_list *items = ((cypher_remove*)c)->items;
+        for (int k = 0; items && k < items->count; k++) {
+            cypher_remove_item *it = (cypher_remove_item*)items->items[k];
+            if (it && it->target && it->target->type == AST_NODE_PROPERTY &&
+                ((cypher_property*)it->target)->expr &&
+                ((cypher_property*)it->target)->expr->type != AST_NODE_IDENTIFIER) return true;
+        }
+    }
+    return false;
+}
+
 static bool delete_of_value(cypher_query *query, clause_flags flags)
 {
+    if ((flags & CLAUSE_REMOVE) && (flags & CLAUSE_MATCH) &&
+        !(flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN)) &&
+        query->clauses && query->clauses->items[0] &&
+        query->clauses->items[0]->type == AST_NODE_MATCH && remove_of_value(query)) return true;
     if (!(flags & CLAUSE_DELETE) || !(flags & CLAUSE_MATCH)) return false;
     if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
         return false;
@@ -6752,15 +6774,20 @@ static bool rw_is_match_path(ast_list *clauses, const char *name)
     return false;
 }
 
-static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_row *row,
-                             ast_list *clauses, cypher_result *result)
+/* The targets of a DELETE for one row, evaluated against the graph as it
+ * is now: *vm_out and *items_out name every node and relationship to
+ * delete. Both NULL when the items are plain entity variables of the row,
+ * which rw_delete_apply reads from the row. -1 on error. */
+static int rw_delete_prepare(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                             ast_list *clauses, variable_map **vm_out, ast_list **items_out)
 {
+    *vm_out = NULL; *items_out = NULL;
     bool has_expr = false;
     for (int i = 0; del->items && i < del->items->count; i++) {
         cypher_delete_item *it = (cypher_delete_item*)del->items->items[i];
         if (it && (it->expr || (it->variable && rw_row_scalar(row, it->variable)))) has_expr = true;
     }
-    if (!has_expr) return execute_delete_operations(executor, del, row->vm, result);
+    if (!has_expr) return 0;
 
     variable_map *vm = create_variable_map();
     ast_list *items = ast_list_create();
@@ -6812,11 +6839,117 @@ static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_r
         }
         free(text);
     }
+    *vm_out = vm; *items_out = items;
+    return 0;
+}
+
+/* Delete what rw_delete_prepare found; takes vm and items. */
+static int rw_delete_apply(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                           variable_map *vm, ast_list *items, cypher_result *result)
+{
+    if (!vm) return execute_delete_operations(executor, del, row->vm, result);
     cypher_delete synth = *del;
     synth.items = items;
     int rc = execute_delete_operations(executor, &synth, vm, result);
     ast_list_free(items);
     free_variable_map(vm);
+    return rc;
+}
+
+static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                             ast_list *clauses, cypher_result *result)
+{
+    variable_map *vm; ast_list *items;
+    if (rw_delete_prepare(executor, del, row, clauses, &vm, &items) < 0) return -1;
+    return rw_delete_apply(executor, del, row, vm, items, result);
+}
+
+/* REMOVE for one row in two steps, so every row and item is evaluated
+ * against the graph before the clause (GQLITE-T-0524). The base of each
+ * `(expr).prop` item is evaluated and bound as __rm_k in a copy of the
+ * row's write map. */
+typedef struct {
+    cypher_remove synth;     /* items: borrowed or owned */
+    variable_map *vm;
+    ast_list *owned;         /* the items made here */
+} rw_remove_prep;
+
+static int rw_remove_prepare(cypher_executor *executor, cypher_remove *rm, rw_row *row,
+                             rw_remove_prep *p)
+{
+    memset(p, 0, sizeof(*p));
+    p->synth = *rm;
+    p->vm = rw_write_map(row);
+    if (!p->vm) return -1;
+    bool any = false;
+    for (int k = 0; rm->items && k < rm->items->count; k++) {
+        cypher_remove_item *it = (cypher_remove_item*)rm->items->items[k];
+        if (it && it->target && it->target->type == AST_NODE_PROPERTY &&
+            ((cypher_property*)it->target)->expr &&
+            ((cypher_property*)it->target)->expr->type != AST_NODE_IDENTIFIER) any = true;
+    }
+    if (!any) return 0;
+    ast_list *items = ast_list_create();
+    p->owned = ast_list_create();
+    if (!items || !p->owned) {
+        if (items) ast_list_free(items);
+        if (p->owned) ast_list_free(p->owned);
+        p->owned = NULL;
+        return -1;
+    }
+    int n = 0;
+    for (int k = 0; k < rm->items->count; k++) {
+        cypher_remove_item *it = (cypher_remove_item*)rm->items->items[k];
+        if (!it) continue;
+        cypher_property *pr = it->target && it->target->type == AST_NODE_PROPERTY
+                              ? (cypher_property*)it->target : NULL;
+        if (!pr || !pr->expr || pr->expr->type == AST_NODE_IDENTIFIER) {
+            ast_list_append(items, (ast_node*)it);
+            continue;
+        }
+        char *text = NULL; int type = SQLITE_NULL;
+        rw_eval_cell(executor, pr->expr, row, &text, &type);
+        if (!text) continue;   /* REMOVE null.prop does nothing */
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(executor->db,
+                "SELECT json_extract(?1, '$.id'), json_type(?1, '$.startNode') IS NOT NULL "
+                "WHERE json_valid(?1) AND json_type(?1, '$.id') = 'integer' "
+                "AND json_type(?1, '$.properties') = 'object'", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, text, -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(st) == SQLITE_ROW) {
+                char name[32];
+                snprintf(name, sizeof(name), "__rm_%d", n++);
+                int id = sqlite3_column_int(st, 0);
+                if (sqlite3_column_int(st, 1)) set_variable_edge_id(p->vm, name, id);
+                else set_variable_node_id(p->vm, name, id);
+                cypher_remove_item *ni = make_remove_item((ast_node*)make_property(
+                    (ast_node*)make_identifier(name, 0), pr->property_name, 0));
+                ast_list_append(items, (ast_node*)ni);
+                ast_list_append(p->owned, (ast_node*)ni);
+            }
+            sqlite3_finalize(st);
+        }
+        free(text);
+    }
+    p->synth.items = items;
+    return 0;
+}
+
+static void rw_remove_prep_free(rw_remove_prep *p)
+{
+    if (p->owned) {
+        free(p->synth.items->items);    /* the list, not its borrowed items */
+        free(p->synth.items);
+        ast_list_free(p->owned);
+    }
+    if (p->vm) free_variable_map(p->vm);
+    memset(p, 0, sizeof(*p));
+}
+
+static int rw_remove_apply(cypher_executor *executor, rw_remove_prep *p, cypher_result *result)
+{
+    int rc = execute_remove_operations(executor, &p->synth, p->vm, result);
+    rw_remove_prep_free(p);
     return rc;
 }
 
@@ -7230,12 +7363,44 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
             rw_eager_slots(((cypher_create*)c)->pattern, NULL, NULL) > 0)
             create_eager[i] = 1;
     }
+    /* A REMOVE right after the prefix: every row's targets first, then the
+     * removals (RemoveAcceptance, row-by-row visibility; GQLITE-T-0524). */
+    for (int i = prefix_end; i < clauses->count && rc >= 0; i++) {
+        ast_node *c = clauses->items[i];
+        if (!c || c->type != AST_NODE_REMOVE) break;
+        rw_remove_prep *rp = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(*rp));
+        if (!rp) { rc = -1; break; }
+        int prepared = 0;
+        for (int r = 0; r < n_rows && rc >= 0; r++, prepared++)
+            rc = rw_remove_prepare(executor, (cypher_remove*)c, &rows[r], &rp[r]);
+        for (int r = 0; r < prepared; r++) {
+            if (rc >= 0) rc = rw_remove_apply(executor, &rp[r], result);
+            else rw_remove_prep_free(&rp[r]);
+        }
+        free(rp);
+        if (eager_done) eager_done[i] = true;
+    }
     for (int i = prefix_end; i < first_merge; i++) {
         ast_node *c = clauses->items[i];
         if (!c || c->type != AST_NODE_DELETE) continue;
-        for (int r = 0; r < n_rows && rc >= 0; r++) {
-            rc = rw_execute_delete(executor, (cypher_delete*)c, &rows[r], clauses, result);
+        /* Every row's targets first, against the graph before the clause,
+         * then the deletes: a row does not see what an earlier row deleted
+         * (DeleteAcceptance, row-by-row visibility; GQLITE-T-0524). */
+        variable_map **dvm = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(*dvm));
+        ast_list **ditems = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(*ditems));
+        if (!dvm || !ditems) rc = -1;
+        int prepared = 0;
+        for (int r = 0; r < n_rows && rc >= 0; r++, prepared++)
+            rc = rw_delete_prepare(executor, (cypher_delete*)c, &rows[r], clauses, &dvm[r], &ditems[r]);
+        for (int r = 0; r < prepared; r++) {
+            if (rc >= 0) {
+                rc = rw_delete_apply(executor, (cypher_delete*)c, &rows[r], dvm[r], ditems[r], result);
+            } else {
+                if (ditems[r]) ast_list_free(ditems[r]);
+                if (dvm[r]) free_variable_map(dvm[r]);
+            }
         }
+        free(dvm); free(ditems);
         if (eager_done) eager_done[i] = true;
         if (rc < 0) break;
     }
@@ -7431,9 +7596,11 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     break;
                 }
                 case AST_NODE_REMOVE: {
-                    variable_map *wm = rw_write_map(&rows[r]);
-                    rc = execute_remove_operations(executor, (cypher_remove*)c, wm ? wm : rows[r].vm, result);
-                    if (wm) free_variable_map(wm);
+                    if (eager_done && eager_done[i]) break;
+                    rw_remove_prep rp;
+                    rc = rw_remove_prepare(executor, (cypher_remove*)c, &rows[r], &rp);
+                    if (rc >= 0) rc = rw_remove_apply(executor, &rp, result);
+                    else rw_remove_prep_free(&rp);
                     break;
                 }
                 case AST_NODE_FOREACH: {
