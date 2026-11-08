@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .gen import (AGGS, Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where, lit,
+from .gen import (AGGS, LABELS, Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where, lit,
                   pattern, predicate, render, v, variables)
 from .space import Chooser, DOMAINS
 
@@ -63,6 +63,10 @@ DOMAINS.update({
     # GQLITE-T-0509: temporal values
     "tm.kind": ["date", "datetime", "localdatetime", "localtime", "time", "duration"],
     "tm.form": ["context", "stored", "roundtrip", "order", "compare", "component", "truncate"],
+    # GQLITE-T-0511: with and without an index
+    "ix.base": ["predicate_move", "tlp_where", "inline_props", "label_disjunction", "optional_filter",
+                "with_star", "merge_direct", "set_readback", "write_expression", "delete_count"],
+    "ix.ddl": ["index", "composite", "unique", "mixed"],
 })
 
 
@@ -984,6 +988,42 @@ def set_forms(ch: Chooser) -> Case:
     return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
 
 
+# ---------------------------------------------------- with and without an index
+
+def _ddl(ch: Chooser) -> list[str]:
+    form = ch.pick("ix.ddl")
+    out = []
+    for _ in range(ch.randint(1, 3)):
+        lab, prop = ch.choice(LABELS), ch.choice(["v", "s", "id", "b"])
+        kind = form if form != "mixed" else ch.choice(["index", "composite", "unique"])
+        if kind == "index":
+            out.append(f"CREATE INDEX IF NOT EXISTS FOR (n:{lab}) ON (n.{prop})")
+        elif kind == "composite":
+            out.append(f"CREATE INDEX IF NOT EXISTS FOR (n:{lab}) ON (n.v, n.s)")
+        else:   # every generated node has its own id
+            out.append(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{lab}) REQUIRE n.id IS UNIQUE")
+    return out
+
+
+def indexed(ch: Chooser) -> Case:
+    """An index or a uniqueness constraint changes the plan, not the answer:
+    each variant of another relation gives the same rows (or leaves the
+    same graph) after CREATE INDEX / CREATE CONSTRAINT (GQLITE-T-0511)."""
+    base = ch.pick("ix.base")
+    case = RELATIONS[base][0](ch)
+    ddl = _ddl(ch)
+    extra = []
+    for var in case.variants:
+        n = len(ddl)
+        comb = (lambda ps, c=var.combine, n=n: c(ps[n:])) if var.combine else (lambda ps: ps[-1])
+        extra.append(Variant(var.label + "+index", parts=ddl + var.queries, combine=comb, post=var.post,
+                             keymap=var.keymap, mode=var.mode, repeat=var.repeat,
+                             expect_error=var.expect_error, params=var.params))
+    case.variants = case.variants + extra
+    case.relation = f"indexed/{ch.used['ix.ddl']}/" + case.relation
+    return case
+
+
 # ---------------------------------------------------- aggregates after a write
 
 def write_agg(ch: Chooser) -> Case:
@@ -1342,6 +1382,8 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
     "temporal": (temporal, ["tm.kind", "tm.form"]),
     "write_agg": (write_agg, G + C1 + ["w.shape", "w.kind", "agg.kind"]),
+    "indexed": (indexed, CHAIN + ["ix.base", "ix.ddl", "pred.kind", "expr.kind", "w.shape", "w.kind",
+                                  "del.form", "ld.form"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
