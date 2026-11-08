@@ -50,6 +50,9 @@ DOMAINS.update({
     "wb.form": ["create", "set"],
     "wu.form": ["create", "set", "label", "rel"],
     "wrb.form": ["unwind_create", "set_overflow", "merge_overflow", "rollback"],
+    # GQLITE-T-0506: MERGE in pipelines
+    "mr.end": ["bound", "unbound"],
+    "mo.form": ["node", "rel"],
 })
 
 
@@ -594,10 +597,15 @@ def _write_prefix(ch: Chooser, exclude_new: bool = False):
     if shape == "unwind":
         return shape, "UNWIND [1, 2] AS ⟨i⟩", [], ["i"]
     p = pattern(ch, "c1", ["a", "b"], ["r"], hops=ch.pick("c1.hops", [0, 1]))
+    if exclude_new:
+        # A second run must not match the :M relationships the first made
+        # (GQLITE-T-0506): name each relationship to exclude them.
+        p = _named(p)
     nodes, rels = p.node_vars, p.rel_vars
     m = f"MATCH {p.text()}"
     if exclude_new:
-        m += " WHERE " + " AND ".join(f"NOT {v(x)}:New" for x in nodes)
+        m += " WHERE " + " AND ".join([f"NOT {v(x)}:New" for x in nodes] +
+                                      [f"type({v(x)}) <> 'M'" for x in rels])
     if shape == "match":
         return shape, m, nodes, nodes + rels
     if shape == "match_unwind":
@@ -664,6 +672,75 @@ def merge_direct(ch: Chooser) -> Case:
         Variant("twice", q, mode="write", repeat=2),
         Variant("distinct values", render(f"{pre} RETURN DISTINCT {e} AS k"))],
         write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
+def _merge_prefix(ch: Chooser):
+    """The read part before a MERGE; skips the :New nodes of an earlier run."""
+    shape, pre, nodes, scope = _write_prefix(ch, exclude_new=True)
+    if shape == "create":
+        pre, nodes, scope = "UNWIND [1, 2, 2] AS ⟨i⟩", [], ["i"]
+    e = f"coalesce({write_expr(ch, nodes, 'i' in scope)}, 'none')"
+    return shape, pre, nodes, e
+
+
+def merge_rel(ch: Chooser) -> Case:
+    """MERGE of a relationship (both ends bound, or a new end) once or twice
+    leaves one relationship per distinct key, the same graph as MATCH-else-
+    CREATE (GQLITE-T-0506)."""
+    shape, pre, nodes, e = _merge_prefix(ch)
+    end = ch.pick("mr.end")
+    if len(nodes) >= 2 and end == "bound":
+        a, b = v(nodes[0]), v(nodes[1])
+        merge = f"MERGE ({a})-[:M {{k: {e}}}]->({b})"
+        dist = f"RETURN DISTINCT {a}.id AS a, {b}.id AS b, {e} AS k"
+        alt = (f"WITH DISTINCT {a} AS ⟨x⟩, {b} AS ⟨y⟩, {e} AS ⟨k⟩ "
+               f"WHERE NOT (⟨x⟩)-[:M {{k: ⟨k⟩}}]->(⟨y⟩) CREATE (⟨x⟩)-[:M {{k: ⟨k⟩}}]->(⟨y⟩)")
+        readback = "MATCH (a)-[r:M]->(b) RETURN a.id AS a, b.id AS b, r.k AS k"
+    elif nodes:
+        a = v(nodes[0])
+        merge = f"MERGE ({a})-[:M]->(:New {{k: {e}}})"
+        dist = f"RETURN DISTINCT {a}.id AS a, {e} AS k"
+        alt = (f"WITH DISTINCT {a} AS ⟨x⟩, {e} AS ⟨k⟩ "
+               f"WHERE NOT (⟨x⟩)-[:M]->(:New {{k: ⟨k⟩}}) CREATE (⟨x⟩)-[:M]->(:New {{k: ⟨k⟩}})")
+        readback = "MATCH (a)-[:M]->(n:New) RETURN a.id AS a, n.k AS k"
+    else:
+        merge = f"MERGE (:New {{k: {e}}})-[:M]->(:End)"
+        dist = f"RETURN DISTINCT {e} AS k"
+        alt = f"WITH DISTINCT {e} AS ⟨k⟩ CREATE (:New {{k: ⟨k⟩}})-[:M]->(:End)"
+        readback = "MATCH (n:New)-[:M]->(:End) RETURN n.k AS k"
+    return Case(f"merge_rel/{end if nodes else 'none'}/{shape}", [
+        Variant("once", render(f"{pre} {merge}"), mode="write"),
+        Variant("twice", render(f"{pre} {merge}"), mode="write", repeat=2),
+        Variant("match else create", render(f"{pre} {alt}"), mode="write"),
+        Variant("distinct", render(f"{pre} {dist}"))],
+        write=True, readback=readback)
+
+
+def merge_on(ch: Chooser) -> Case:
+    """MERGE ... ON CREATE SET / ON MATCH SET, run twice: each distinct key
+    is created once and matched by every other row of both runs
+    (GQLITE-T-0506)."""
+    shape, pre, nodes, e = _merge_prefix(ch)
+    form = ch.pick("mo.form")
+    if form == "rel" and len(nodes) >= 2:
+        a, b = v(nodes[0]), v(nodes[1])
+        merge = (f"MERGE ({a})-[⟨m⟩:M {{k: {e}}}]->({b}) ON CREATE SET ⟨m⟩.c = 1 "
+                 f"ON MATCH SET ⟨m⟩.n = coalesce(⟨m⟩.n, 0) + 1")
+        computed = (f"WITH {a}.id AS ⟨x⟩, {b}.id AS ⟨y⟩, {e} AS ⟨k⟩ WITH ⟨x⟩, ⟨y⟩, ⟨k⟩, count(*) AS ⟨cnt⟩ "
+                    f"RETURN ⟨x⟩ AS a, ⟨y⟩ AS b, ⟨k⟩ AS k, 1 AS c, 2 * ⟨cnt⟩ - 1 AS n")
+        readback = "MATCH (a)-[r:M]->(b) RETURN a.id AS a, b.id AS b, r.k AS k, r.c AS c, r.n AS n"
+        form = "rel"
+    else:
+        merge = (f"MERGE (⟨m⟩:New {{k: {e}}}) ON CREATE SET ⟨m⟩.c = 1 "
+                 f"ON MATCH SET ⟨m⟩.n = coalesce(⟨m⟩.n, 0) + 1")
+        computed = (f"WITH {e} AS ⟨k⟩ WITH ⟨k⟩, count(*) AS ⟨cnt⟩ "
+                    f"RETURN ⟨k⟩ AS k, 1 AS c, 2 * ⟨cnt⟩ - 1 AS n")
+        readback = "MATCH (n:New) RETURN n.k AS k, n.c AS c, n.n AS n"
+        form = "node"
+    return Case(f"merge_on/{form}/{shape}", [
+        Variant("twice", render(f"{pre} {merge}"), mode="write", repeat=2),
+        Variant("computed", render(f"{pre} {computed}"))],
+        write=True, readback=readback)
 
 
 def set_readback(ch: Chooser) -> Case:
@@ -988,6 +1065,8 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "write_expression": (write_expression, G + C1 + ["w.shape", "w.kind"]),
     "merge_idempotent": (merge_idempotent, G + C1 + ["w.shape", "w.kind"]),
     "merge_direct": (merge_direct, G + C1 + ["w.shape", "w.kind"]),
+    "merge_rel": (merge_rel, G + C1 + ["w.shape", "w.kind", "mr.end"]),
+    "merge_on": (merge_on, G + C1 + ["w.shape", "w.kind", "mo.form"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
