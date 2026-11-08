@@ -18,7 +18,8 @@ class CypherError(sqlite3.Error):
     (GitHub #16):
 
     - ``code``: ``PARSE_ERROR``, ``VALIDATION_ERROR``, ``EXECUTION_ERROR``,
-      ``NOT_IMPLEMENTED``, ``MEMORY_ERROR`` or ``INTERNAL_ERROR``.
+      ``NOT_IMPLEMENTED``, ``MEMORY_ERROR``, ``INTERNAL_ERROR`` or ``BUSY``
+      (another connection holds the write lock; see ``retryable``).
     - ``line`` / ``column``: 1-based location of the offending token for
       parse errors, else ``None``.
     """
@@ -35,6 +36,13 @@ class CypherError(sqlite3.Error):
         self.code = code
         self.line = line
         self.column = column
+
+    @property
+    def retryable(self) -> bool:
+        """True when the query failed because another connection was writing
+        (code ``BUSY``): run it again, or run writes inside
+        ``BEGIN IMMEDIATE`` ... ``COMMIT`` (GQLITE-T-0533)."""
+        return self.code == "BUSY"
 
 
 def _raise_structured(e: sqlite3.Error) -> NoReturn:

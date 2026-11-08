@@ -829,6 +829,22 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
     return result;
 }
 
+/* GQLITE-T-0533: did the last SQLite call fail on a lock? */
+static bool sqlite_error_is_busy(sqlite3 *db)
+{
+    int ec = sqlite3_extended_errcode(db) & 0xff;
+    return ec == SQLITE_BUSY || ec == SQLITE_LOCKED;
+}
+
+static void mark_busy(cypher_result *result)
+{
+    free(result->error_message);
+    result->error_message = NULL;
+    set_result_error_ex(result,
+        "BusyError: the database is locked by another connection's write; retry the query, "
+        "or run writes inside BEGIN IMMEDIATE ... COMMIT", GQL_ERR_BUSY, 0, 0);
+}
+
 /* Execute query string */
 cypher_result* cypher_executor_execute(cypher_executor *executor, const char *query)
 {
@@ -1018,6 +1034,11 @@ static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *a
 
     if (guarded) {
         if (!result || !result->success) {
+            /* A write that failed on a lock (another connection is writing;
+             * in WAL a read cannot become a write over a newer snapshot) is
+             * a busy error the caller can retry, not "Failed to create
+             * node". Checked before the rollback resets the error code. */
+            if (result && sqlite_error_is_busy(executor->db)) mark_busy(result);
             sqlite3_exec(executor->db, "ROLLBACK TO graphqlite_query", NULL, NULL, NULL);
             if (kc && kc->key_insertions != keys_before) {
                 cypher_schema_clear_property_key_cache(executor->schema_mgr);
@@ -1036,10 +1057,14 @@ static cypher_result *execute_ast_guarded(cypher_executor *executor, ast_node *a
              * so no later query runs inside it. */
             char msg[512];
             snprintf(msg, sizeof(msg), "Failed to commit the query: %s", sqlite3_errmsg(executor->db));
+            bool busy = sqlite_error_is_busy(executor->db);
             sqlite3_exec(executor->db, "ROLLBACK TO graphqlite_query", NULL, NULL, NULL);
             sqlite3_exec(executor->db, "RELEASE graphqlite_query", NULL, NULL, NULL);
             cypher_schema_clear_property_key_cache(executor->schema_mgr);
-            if (result && result->success) set_result_error(result, msg);
+            if (result && result->success) {
+                if (busy) mark_busy(result);
+                else set_result_error(result, msg);
+            }
         }
     }
     if (kc) kc->bypass = saved_bypass;

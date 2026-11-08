@@ -111,6 +111,7 @@ RETURN atan2(1.0, 1.0) -- 0.7853...
 | `last(list)` | Any | Last element; `null` if empty |
 | `range(start, end)` | List\<Integer\> | Inclusive integer range with step 1 |
 | `range(start, end, step)` | List\<Integer\> | Inclusive integer range with given step |
+| | | A null `start`, `end` or `step` gives null (Neo4j raises a TypeError) |
 | `collect(expr)` | List | Aggregate: collect non-null values into a list |
 | `keys(node_or_map)` | List\<String\> | Property key names of a node, relationship, or map |
 | `reduce(acc = init, x IN list \| expr)` | Any | Fold list into single value |

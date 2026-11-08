@@ -508,6 +508,10 @@ static void graphqlite_cypher_func(sqlite3_context *context, int argc, sqlite3_v
         /* The renderer JSON-escapes the message, so no quote sanitizing here. */
         graphqlite_result_error_at(context, err_msg, err_code,
                                    result->error_line, result->error_column);
+        /* A busy error keeps SQLite's code, so a caller can retry on it
+         * (GQLITE-T-0533). */
+        if (err_code == GQL_ERR_BUSY || (err_code && strcmp(err_code, GQL_ERR_BUSY) == 0))
+            sqlite3_result_error_code(context, SQLITE_BUSY);
     }
     
     /* Cleanup - only free result, executor is cached */

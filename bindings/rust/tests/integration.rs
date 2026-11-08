@@ -4881,3 +4881,26 @@ fn test_non_finite_floats() {
     assert_eq!(row.get_value("s"), Some(&V::String("NaN".into())));
     assert_eq!(row.get_value("l"), Some(&V::Array(vec![V::Float(f64::INFINITY)])));
 }
+
+/// GQLITE-T-0533: a write that loses the write lock to another connection
+/// is a busy error the caller can retry.
+#[test]
+fn test_busy_write_is_retryable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("busy.db");
+    let a = Connection::open(&path).unwrap();
+    let b = Connection::open(&path).unwrap();
+    a.sqlite_connection()
+        .query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
+        .unwrap();
+    a.cypher("CREATE (:X {v: 1})").unwrap();
+    a.execute("BEGIN").unwrap();
+    a.cypher("MATCH (n:X) RETURN count(*) AS c").unwrap();
+    b.cypher("CREATE (:X {v: 2})").unwrap();
+    let err = a.cypher("CREATE (:X {v: 3})").unwrap_err();
+    assert!(err.is_busy(), "expected a busy error, got {err}");
+    a.execute("ROLLBACK").unwrap();
+    a.cypher("CREATE (:X {v: 3})").unwrap();
+    let not_busy = a.cypher("RETURN 9223372036854775807 + 1 AS x").unwrap_err();
+    assert!(!not_busy.is_busy());
+}
