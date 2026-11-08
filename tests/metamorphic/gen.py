@@ -256,6 +256,23 @@ def expr(ch: Chooser, nodes: list[str], rels: list[str], kind: str | None = None
                   + ([f"type({r})", f"startNode({r}).id"] if r else []),
         "string": [f"{n}.s + 'q'", f"{n}.s STARTS WITH 'x'", f"{n}.s CONTAINS 'y'",
                    f"substring({n}.s, 0, 1)", f"{n}.s =~ 'x.*'"],
+        # GQLITE-T-0510: math, string and list functions
+        "math": [f"ceil({n}.v / 2.0)", f"floor({n}.v / 2.0)", f"round({n}.v / 3.0)", f"sign({n}.v - 1)",
+                 f"sqrt({n}.v)", f"exp({n}.id) > 2", f"log({n}.v + 1)", f"log10({n}.id + 1)",
+                 f"round(sin({n}.v) * 100)", f"round(cos({n}.id) * 100)", f"atan2({n}.v, 1) > 0",
+                 f"toFloat({n}.v) + pi()", f"round(e() * {n}.id)", f"abs(-{n}.v)",
+                 f"round({n}.v * 1.25, 1)", f"{n}.v % 3", f"toInteger({n}.v * 1.5)"],
+        "strfn": [f"trim(' ' + {n}.s + ' ')", f"lTrim('  ' + {n}.s)", f"rTrim({n}.s + '  ')",
+                  f"replace({n}.s, 'x', 'z')", f"split({n}.s + ',a', ',')", f"left({n}.s, 1)",
+                  f"right({n}.s, 1)", f"reverse({n}.s)", f"toLower(toUpper({n}.s))",
+                  f"substring({n}.s, 1)", f"size({n}.s + {m}.s)", f"toString({n}.v) + {n}.s",
+                  f"{n}.s ENDS WITH 'y'"],
+        "listfn": [f"head([{n}.v, {m}.v])", f"last([{n}.id, {m}.id])", f"tail([{n}.id, 1, 2])",
+                   f"size(range(0, {n}.id, 2))", f"[{n}.id, 1, 2][1..]", f"[{n}.id, 1, 2][-1]",
+                   f"{n}.v IN [1, 2, null]", f"reduce(acc = 0, el IN [{n}.id, 2] | acc + el)",
+                   f"any(el IN [{n}.v, 1] WHERE el > 1)", f"all(el IN [{n}.id, 2] WHERE el >= 0)",
+                   f"none(el IN [{n}.v] WHERE el = 1)", f"single(el IN [{n}.id, {m}.id] WHERE el = 0)",
+                   f"keys({{a: {n}.id}})", f"coalesce([{n}.v][0], 0)", f"[el IN range(1, 3) | el * {n}.id]"],
     }
     return ch.choice(table[kind])
 
@@ -300,6 +317,12 @@ AGGS = {
     "min": lambda e, i, n: f"min({i})",
     "max": lambda e, i, n: f"max({e})",
     "avg": lambda e, i, n: f"avg({i})",
+    # GQLITE-T-0510
+    "stdev": lambda e, i, n: f"stDev({i})",
+    "stdevp": lambda e, i, n: f"stDevP({i})",
+    "percentile_cont": lambda e, i, n: f"percentileCont({i}, 0.5)",
+    "percentile_disc": lambda e, i, n: f"percentileDisc({i}, 0.25)",
+    "collect_expr": lambda e, i, n: f"size(collect({e}))",
 }
 
 

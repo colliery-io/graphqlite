@@ -26,10 +26,12 @@ DOMAINS: dict[str, list] = {
     "c3.kind": ["none", "match", "optional", "unwind"],
     "c3.hops": [1, 2], "c3.dir": DIR, "c3.rel": REL,
     "ret.kind": ["scalar", "agg", "mixed", "distinct"],
-    "expr.kind": ["prop", "arith", "case", "func", "list", "map", "nullcheck", "entity", "string"],
+    "expr.kind": ["prop", "arith", "case", "func", "list", "map", "nullcheck", "entity", "string",
+                  "math", "strfn", "listfn"],
     "pred.kind": ["cmp", "null", "bool", "pattern", "in", "string", "label"],
     "agg.kind": ["count_star", "count", "count_distinct", "collect", "collect_distinct",
-                 "sum", "min", "max", "avg"],
+                 "sum", "min", "max", "avg", "stdev", "stdevp", "percentile_cont",
+                 "percentile_disc", "collect_expr"],
 }
 
 # A dimension applies only when another one has one of these values.

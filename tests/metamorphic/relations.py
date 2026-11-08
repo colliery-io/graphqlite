@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .gen import (Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where, lit,
+from .gen import (AGGS, Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where, lit,
                   pattern, predicate, render, v, variables)
 from .space import Chooser, DOMAINS
 
@@ -41,6 +41,7 @@ DOMAINS.update({
     "ec.ctx": ["with", "unwind", "unwind_var", "listidx", "map", "case", "comp", "head",
                "reduce", "call", "order", "limit", "union"],
     "ec.kind": ["prop", "arith", "case", "func", "list", "map", "nullcheck", "entity", "string",
+                "math", "strfn", "listfn",
                 "bool", "nested", "strconv", "float", "literal"],
     "wo.write": ["set_m", "set_a", "create", "create_rel", "set_label"],
     "sf.form": ["replace", "merge_map", "items", "inline_key"],
@@ -983,6 +984,28 @@ def set_forms(ch: Chooser) -> Case:
     return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
 
 
+# ---------------------------------------------------- aggregates after a write
+
+def write_agg(ch: Chooser) -> Case:
+    """An aggregate over what a write made equals the aggregate of the
+    values written (the row pipeline aggregates; GQLITE-T-0510)."""
+    shape, pre, nodes, scope = _write_prefix(ch)
+    e = write_expr(ch, nodes, "i" in scope)
+    if shape == "create":
+        e = _sub_i(e, 2)
+    kind = ch.pick("agg.kind")
+    numeric = ch.used.get("w.kind") in ("prop", "arith") and not (nodes and "." in e and e.endswith(".s"))
+    if kind in ("sum", "avg", "stdev", "stdevp", "percentile_cont", "percentile_disc", "min") and not numeric:
+        kind = "count"
+    agg = AGGS[kind]
+    link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
+    return Case(f"write_agg/{kind}/{shape}", [
+        Variant("computed", render(f"{pre} WITH {e} AS ⟨k⟩ RETURN {agg('⟨k⟩', '⟨k⟩', None)} AS a")),
+        Variant("after create", render(f"{pre} CREATE {link}(⟨n⟩:New {{k: {e}}}) "
+                                       f"RETURN {agg('⟨n⟩.k', '⟨n⟩.k', None)} AS a"))],
+        write=True)
+
+
 # ---------------------------------------------------- temporal values
 
 def _temporal(ch: Chooser, kind: str) -> tuple[str, dict]:
@@ -1318,6 +1341,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "call_subquery": (call_subquery, CHAIN + ["cs.form", "w.kind"]),
     "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
     "temporal": (temporal, ["tm.kind", "tm.form"]),
+    "write_agg": (write_agg, G + C1 + ["w.shape", "w.kind", "agg.kind"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
