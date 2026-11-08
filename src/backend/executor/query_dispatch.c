@@ -655,13 +655,16 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     }
     bool unwind_seen = false, with_seen = false, delete_seen = false;
     bool write_seen = false, merge_seen = false, update_after_merge = false, agg_tail = false;
-    bool early_write = false, with_after_write = false;
+    bool early_write = false, with_after_write = false, unwind_after_write = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
         switch (c->type) {
             case AST_NODE_UNWIND:
-                if (write_seen) return false;
+                /* An UNWIND after the write forks the written rows; the
+                 * read handlers ran the CREATE as SQL or interleaved the
+                 * rows (GQLITE-T-0535). */
+                if (write_seen) unwind_after_write = true;
                 unwind_seen = true;
                 break;
             case AST_NODE_MATCH:
@@ -711,7 +714,8 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     /* A write straight after MATCH keeps its handler, unless a WITH
      * follows it: the read handlers dropped the write (`MATCH (n) REMOVE
      * n.x WITH n ...`, Remove3 / Set6). */
-    if (early_write && !with_after_write) return false;
+    if (early_write && !with_after_write && !unwind_after_write) return false;
+    if (unwind_after_write) return true;
     (void)delete_seen;   /* the pipeline groups after a DELETE too (Delete6) */
     /* An aggregating WITH after the write: only the pipeline groups the
      * written rows (`UNWIND .. CREATE (n) WITH collect(n) AS ns`). */
@@ -5839,6 +5843,8 @@ static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
         }
     }
     bool keep = !w->where || rw_where_keeps(executor, w->where, &next);
+    next.ord = row->ord;   /* the row keeps its place (GQLITE-T-0535) */
+    row->ord = NULL;
     rw_row_free(row);
     *row = next;
     return keep ? 0 : 1;   /* 1 = row filtered out */
@@ -7551,6 +7557,8 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     }
                     rw_restore_subs(subs, n_subs);
                     executor->params_json = user_params; sqlite3_free(row_params); sqlite3_free(sink.json);
+                    /* Each match takes its place under the row (GQLITE-T-0535). */
+                    char *base_ord = nm > 1 && rows[r].ord ? strdup(rows[r].ord) : NULL;
                     for (int k = 0; k < nm; k++) {
                         int target = r;
                         if (k > 0) {
@@ -7574,6 +7582,10 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                             row_alive[target] = false;
                             row_start[target] = i + 1;
                         }
+                        if (base_ord) {
+                            free(rows[target].ord);
+                            rows[target].ord = rw_fork_ord(base_ord, k);
+                        }
                         rw_fold_map(rows[target].vm, maps[k].vm);
                         for (int q = 0; q < maps[k].n_scalars; q++)
                             rw_row_add_scalar(&rows[target], maps[k].scalars[q].name,
@@ -7581,6 +7593,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                         if (is_merge && matched_existing && mg->on_match && mg->on_match->count > 0 && rc >= 0)
                             rc = execute_set_items(executor, mg->on_match, rows[target].vm, result);
                     }
+                    free(base_ord);
                     rw_restore_subs(asubs, n_asubs);
                     for (int k = 0; k < nm; k++) rw_row_free(&maps[k]);
                     free(maps);
