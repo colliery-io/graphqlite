@@ -1755,7 +1755,9 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
     if (!expr) return 0;
     if (expr->type == AST_NODE_EXISTS_EXPR) {
         cypher_exists_expr *ex = (cypher_exists_expr *)expr;
-        if (ex->expr_type == EXISTS_TYPE_PATTERN && ex->expr.pattern) {
+        /* The brace form EXISTS { (n:L) } is a subquery: a single node and
+         * new variables are allowed there (GQLITE-T-0520). */
+        if (ex->expr_type == EXISTS_TYPE_PATTERN && ex->expr.pattern && !ex->is_subquery) {
             /* Pattern1 [11]: `WHERE (n)` — pattern predicate with a
              * single-node path (no relationships). openCypher requires
              * pattern predicates to have at least one relationship;

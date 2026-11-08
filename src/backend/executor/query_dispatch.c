@@ -7315,7 +7315,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                         scope_is_entity[c] = true;
                         continue;
                     }
-                    rw_row_add_scalar(row, scope[c], cell, cell ? ty : SQLITE_NULL);
+                    /* A path variable of the prefix MATCH holds its ids:
+                     * hydrate it, as the tail MATCH does (RETURN p gave the
+                     * ids; GQLITE-T-0520). */
+                    char *hp = cell && rw_is_match_path(clauses, scope[c]) ? rw_hydrate_path(executor, cell) : NULL;
+                    rw_row_add_scalar(row, scope[c], hp ? hp : cell, hp ? SQLITE_TEXT : (cell ? ty : SQLITE_NULL));
+                    free(hp);
                 }
                 n_rows++;
             }

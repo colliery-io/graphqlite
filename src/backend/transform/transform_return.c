@@ -711,6 +711,13 @@ static void return_implicit_group_by(cypher_transform_context *ctx, cypher_retur
         cypher_return_item *it = (cypher_return_item *)ret->items->items[i];
         if (it && it->expr && ast_contains_aggregate_func(it->expr)) continue;
         char *gb_expr = transform_expression_to_string(ctx, it->expr);
+        if (gb_expr && it->expr->type == AST_NODE_LITERAL) {
+            /* `GROUP BY 123` is the 123rd column to SQLite (`RETURN 123,
+             * count(*)` failed; GQLITE-T-0520). */
+            char *wrapped = str_printf("COALESCE(%s, NULL)", gb_expr, NULL);
+            free(gb_expr);
+            gb_expr = wrapped;
+        }
         if (gb_expr) {
             sql_group_by(ctx->unified_builder, gb_expr);
             free(gb_expr);

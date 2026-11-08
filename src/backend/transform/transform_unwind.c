@@ -36,6 +36,17 @@ static bool unwind_ast_is_constant(ast_node *n)
     }
     return false;
 }
+/* The source of an UNWIND: a list unwinds to its elements, null to no row,
+ * any other value to one row of itself (`UNWIND x` with x = 'e' failed with
+ * "malformed JSON"; GQLITE-T-0520). */
+static void append_unwind_src(dynamic_buffer *b, const char *v)
+{
+    dbuf_appendf(b, "json_each(CASE WHEN (%s) IS NULL THEN NULL "
+                 "WHEN json_valid(%s) AND json_type(%s) = 'array' THEN %s "
+                 "WHEN json_valid(%s) AND json_type(%s) = 'object' THEN json_array(json(%s)) "
+                 "ELSE json_array(%s) END)", v, v, v, v, v, v, v, v);
+}
+
 #define UNWIND_JSON_EACH_TAG \
     ", (CASE json_each.type WHEN 'true' THEN 'bool' WHEN 'false' THEN 'bool' " \
     "WHEN 'array' THEN 'json' WHEN 'object' THEN 'json' WHEN 'text' THEN 'text' END) AS " UNWIND_TAG_COL
@@ -488,11 +499,13 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             dbuf_appendf(&cte_query, "(%s) AS _prev, ", inner_sql);
         }
 
-        dbuf_appendf(&cte_query, "json_each(%s)", json_each_arg);
+        append_unwind_src(&cte_query, json_each_arg);
     } else if (unwind->expr->type == AST_NODE_FUNCTION_CALL ||
                unwind->expr->type == AST_NODE_SUBSCRIPT ||
                unwind->expr->type == AST_NODE_BINARY_OP ||
                unwind->expr->type == AST_NODE_PROPERTY ||
+               unwind->expr->type == AST_NODE_CASE_EXPR ||
+               unwind->expr->type == AST_NODE_LITERAL ||
                (unwind->expr->type == AST_NODE_PARAMETER &&
                 ((cypher_parameter *)unwind->expr)->name)) {
         /* #136: a parameter takes this branch too. Its own branch wrapped a
@@ -588,7 +601,7 @@ int transform_unwind_clause(cypher_transform_context *ctx, cypher_unwind *unwind
             }
         }
 
-        dbuf_appendf(&cte_query, "json_each(%s)", func_sql);
+        append_unwind_src(&cte_query, func_sql);
         if (splicable && where_in_inner) {
             /* WHERE keyword is included in where_in_inner (" WHERE ..."). */
             dbuf_append(&cte_query, where_in_inner);

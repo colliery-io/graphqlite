@@ -350,6 +350,16 @@ static bool pattern_has_properties(ast_list *pattern)
     return false;
 }
 
+/* One node and nothing else: `EXISTS { (p:L) }` emitted a WHERE with no
+ * FROM (GQLITE-T-0520). */
+static bool pattern_is_single_node(ast_list *pattern)
+{
+    if (!pattern || pattern->count != 1 || !pattern->items[0] ||
+        pattern->items[0]->type != AST_NODE_PATH) return false;
+    cypher_path *path = (cypher_path *)pattern->items[0];
+    return path->elements && path->elements->count == 1;
+}
+
 /* A pattern predicate with property maps, as the subquery EXISTS { MATCH
  * pattern [WHERE ...] }: the pattern emitter below ignored every property
  * map, so WHERE (n)-[{rel: 1}]->() matched any relationship (GQLITE-T-0514).
@@ -398,7 +408,8 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                     ctx->error_message = strdup("EXISTS pattern expression is empty");
                     return -1;
                 }
-                if (pattern_has_properties(exists_expr->expr.pattern))
+                if (pattern_has_properties(exists_expr->expr.pattern) ||
+                    pattern_is_single_node(exists_expr->expr.pattern))
                     return emit_pattern_as_query(ctx, exists_expr);
 
                 /* Generate SQL EXISTS subquery with pattern matching */

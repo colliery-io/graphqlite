@@ -750,9 +750,12 @@ int cypher_transform_read_query_sql(cypher_transform_context *ctx, cypher_query 
      * MATCH from an outer node records its tables as joins on that node's
      * id, with no FROM, so the SQL was only the WITH RECURSIVE head
      * (GQLITE-T-0514). A one-row FROM holds the joins. */
+    /* A body that matches only outer variables (`COUNT { MATCH (p) }`,
+     * `EXISTS { MATCH (p:L) }`) has no table at all: it is one row, kept by
+     * its WHERE (GQLITE-T-0520). */
     if (ctx->unified_builder && ctx->unified_builder->select_count == 0 &&
         dbuf_is_empty(&ctx->unified_builder->from) &&
-        !dbuf_is_empty(&ctx->unified_builder->joins)) {
+        (!dbuf_is_empty(&ctx->unified_builder->joins) || ctx->unified_builder->cte_count == 0)) {
         sql_from(ctx->unified_builder, "(SELECT 1)", "_gql_one");
     }
     if (ctx->unified_builder &&
