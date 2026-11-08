@@ -960,6 +960,18 @@ remove_item:
             free($1);
             free($3);
         }
+    | '(' expr ')' '.' IDENTIFIER
+        {
+            /* REMOVE (expr).property: the entity an expression gives
+             * (GQLITE-T-0524). */
+            $$ = make_remove_item((ast_node*)make_property($2, $5, @5.first_line));
+            free($5);
+        }
+    | '(' expr ')' '.' BQIDENT
+        {
+            $$ = make_remove_item((ast_node*)make_property($2, $5, @5.first_line));
+            free($5);
+        }
     | var_name ':' label_name
         {
             /* REMOVE n:Label syntax */

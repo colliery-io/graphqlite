@@ -655,13 +655,16 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     }
     bool unwind_seen = false, with_seen = false, delete_seen = false;
     bool write_seen = false, merge_seen = false, update_after_merge = false, agg_tail = false;
-    bool early_write = false, with_after_write = false;
+    bool early_write = false, with_after_write = false, unwind_after_write = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
         switch (c->type) {
             case AST_NODE_UNWIND:
-                if (write_seen) return false;
+                /* An UNWIND after the write forks the written rows; the
+                 * read handlers ran the CREATE as SQL or interleaved the
+                 * rows (GQLITE-T-0535). */
+                if (write_seen) unwind_after_write = true;
                 unwind_seen = true;
                 break;
             case AST_NODE_MATCH:
@@ -711,7 +714,8 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     /* A write straight after MATCH keeps its handler, unless a WITH
      * follows it: the read handlers dropped the write (`MATCH (n) REMOVE
      * n.x WITH n ...`, Remove3 / Set6). */
-    if (early_write && !with_after_write) return false;
+    if (early_write && !with_after_write && !unwind_after_write) return false;
+    if (unwind_after_write) return true;
     (void)delete_seen;   /* the pipeline groups after a DELETE too (Delete6) */
     /* An aggregating WITH after the write: only the pipeline groups the
      * written rows (`UNWIND .. CREATE (n) WITH collect(n) AS ns`). */
@@ -752,8 +756,30 @@ static bool delete_then_create(cypher_query *query, clause_flags flags)
  * DELETE p`, `DELETE list[0]`): the MATCH+DELETE handler deletes only node
  * and relationship variables (Delete3 [1]). The row pipeline deletes each
  * entity the value holds. */
+/* REMOVE (expr).prop: the MATCH+REMOVE handler removes only from variables
+ * (GQLITE-T-0524). */
+static bool remove_of_value(cypher_query *query)
+{
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c || c->type != AST_NODE_REMOVE) continue;
+        ast_list *items = ((cypher_remove*)c)->items;
+        for (int k = 0; items && k < items->count; k++) {
+            cypher_remove_item *it = (cypher_remove_item*)items->items[k];
+            if (it && it->target && it->target->type == AST_NODE_PROPERTY &&
+                ((cypher_property*)it->target)->expr &&
+                ((cypher_property*)it->target)->expr->type != AST_NODE_IDENTIFIER) return true;
+        }
+    }
+    return false;
+}
+
 static bool delete_of_value(cypher_query *query, clause_flags flags)
 {
+    if ((flags & CLAUSE_REMOVE) && (flags & CLAUSE_MATCH) &&
+        !(flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN)) &&
+        query->clauses && query->clauses->items[0] &&
+        query->clauses->items[0]->type == AST_NODE_MATCH && remove_of_value(query)) return true;
     if (!(flags & CLAUSE_DELETE) || !(flags & CLAUSE_MATCH)) return false;
     if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
         return false;
@@ -849,21 +875,23 @@ static bool call_in_rows(cypher_query *query, clause_flags flags)
     if (!(flags & CLAUSE_CALL)) return false;
     if (flags & (CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN)) return false;
     if (!query->clauses || query->clauses->count < 2) return false;
-    int call_pos = -1, calls = 0;
+    int call_pos = -1;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
-        if (c->type == AST_NODE_CALL_SUBQUERY) { if (call_pos < 0) call_pos = i; calls++; }
+        if (c->type == AST_NODE_CALL_SUBQUERY) { if (call_pos < 0) call_pos = i; }
     }
-    if (call_pos < 0 || calls > 1) return false;
+    if (call_pos < 0) return false;
     for (int i = 0; i < call_pos; i++) {
         ast_node_type t = query->clauses->items[i]->type;
         if (t != AST_NODE_UNWIND && t != AST_NODE_WITH && t != AST_NODE_MATCH) return false;
     }
+    /* Later CALL { } clauses run per row too: two in sequence returned
+     * only the statistics (GQLITE-T-0523). */
     for (int i = call_pos + 1; i < query->clauses->count; i++) {
         ast_node_type t = query->clauses->items[i]->type;
         if (t != AST_NODE_RETURN && t != AST_NODE_WITH && t != AST_NODE_UNWIND &&
-            t != AST_NODE_MATCH && !rw_is_write_clause(t)) return false;
+            t != AST_NODE_MATCH && t != AST_NODE_CALL_SUBQUERY && !rw_is_write_clause(t)) return false;
     }
     return true;
 }
@@ -3200,9 +3228,73 @@ static bool unwind_before_create(cypher_query *query)
  * SET, and a WITH after it). Any other shape goes row by row: a clause
  * before the UNWIND (`CREATE (n) WITH n UNWIND ... CREATE ...` ran only
  * the first CREATE), a second CREATE, or a MERGE / DELETE / REMOVE. */
+/* Does an expression mention the variable `name`? (GQLITE-T-0522) */
+static bool ast_mentions(ast_node *e, const char *name)
+{
+    if (!e || !name) return false;
+    switch (e->type) {
+        case AST_NODE_IDENTIFIER: return strcmp(((cypher_identifier *)e)->name, name) == 0;
+        case AST_NODE_PROPERTY: return ast_mentions(((cypher_property *)e)->expr, name);
+        case AST_NODE_BINARY_OP:
+            return ast_mentions(((cypher_binary_op *)e)->left, name) ||
+                   ast_mentions(((cypher_binary_op *)e)->right, name);
+        case AST_NODE_NOT_EXPR: return ast_mentions(((cypher_not_expr *)e)->expr, name);
+        case AST_NODE_NULL_CHECK: return ast_mentions(((cypher_null_check *)e)->expr, name);
+        case AST_NODE_LABEL_EXPR: return ast_mentions(((cypher_label_expr *)e)->expr, name);
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript *)e;
+            return ast_mentions(s->expr, name) || ast_mentions(s->index, name) ||
+                   ast_mentions(s->slice_start, name) || ast_mentions(s->slice_end, name);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            ast_list *a = ((cypher_function_call *)e)->args;
+            for (int i = 0; a && i < a->count; i++) if (ast_mentions(a->items[i], name)) return true;
+            return false;
+        }
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list *)e)->items;
+            for (int i = 0; a && i < a->count; i++) if (ast_mentions(a->items[i], name)) return true;
+            return false;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map *)e;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (ast_mentions(((cypher_map_pair *)m->pairs->items[i])->value, name)) return true;
+            return false;
+        }
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr *)e;
+            if (ast_mentions(c->operand, name) || ast_mentions(c->else_expr, name)) return true;
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause *)c->when_clauses->items[i];
+                if (ast_mentions(w->condition, name) || ast_mentions(w->result, name)) return true;
+            }
+            return false;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension *)e;
+            return ast_mentions(lc->list_expr, name) || ast_mentions(lc->where_expr, name) ||
+                   ast_mentions(lc->transform_expr, name);
+        }
+        default:
+            /* anything else: assume it may, so the general pipeline runs */
+            return true;
+    }
+}
+
+static bool items_mention(ast_list *items, const char *name)
+{
+    for (int i = 0; items && i < items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)items->items[i];
+        if (it && ast_mentions(it->expr, name)) return true;
+    }
+    return false;
+}
+
 static bool unwind_create_needs_pipeline(cypher_query *query)
 {
     int n_unwind = 0, n_create = 0;
+    const char *alias = NULL;
     for (int i = 0; query->clauses && i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
@@ -3210,17 +3302,29 @@ static bool unwind_create_needs_pipeline(cypher_query *query)
             case AST_NODE_UNWIND:
                 if (i != 0 || n_create > 0) return true;
                 n_unwind++;
+                alias = ((cypher_unwind *)c)->alias;
                 break;
             case AST_NODE_CREATE:
                 n_create++;
                 break;
             case AST_NODE_SET:
+                break;
             case AST_NODE_RETURN:
+                /* The fast path binds the UNWIND value only for the CREATE:
+                 * RETURN i gave null (GQLITE-T-0522). */
+                if (alias && (((cypher_return *)c)->return_all ||
+                              items_mention(((cypher_return *)c)->items, alias)))
+                    return true;
                 break;
             case AST_NODE_WITH:
                 /* WITH ... WHERE / aggregation after the CREATE stays on the
-                 * fast path (Create6); a WITH before it does not. */
+                 * fast path (Create6); a WITH before it does not, nor one
+                 * that reads the UNWIND value. */
                 if (n_create == 0) return true;
+                if (alias && (((cypher_with *)c)->pass_all ||
+                              items_mention(((cypher_with *)c)->items, alias) ||
+                              ast_mentions(((cypher_with *)c)->where, alias)))
+                    return true;
                 break;
             default:
                 return true;
@@ -4723,7 +4827,21 @@ typedef struct {
     variable_map *vm;
     rw_scalar *scalars;
     int n_scalars;
+    /* The row's place in the output: the index of its starting row, then
+     * one ".NNNNNN" per UNWIND or CALL { } that forked it, so a row's
+     * results stay together and in order (GQLITE-T-0523). NULL: after the
+     * rows that have one, in index order. */
+    char *ord;
 } rw_row;
+
+/* The key of the fork `k` of a row whose key is `parent`. */
+static char *rw_fork_ord(const char *parent, int k)
+{
+    char *o = sqlite3_mprintf("%s.%06d", parent ? parent : "~", k);
+    char *out = o ? strdup(o) : NULL;
+    sqlite3_free(o);
+    return out;
+}
 
 static void rw_row_free(rw_row *r)
 {
@@ -4731,7 +4849,8 @@ static void rw_row_free(rw_row *r)
     if (r->vm) free_variable_map(r->vm);
     for (int i = 0; i < r->n_scalars; i++) { free(r->scalars[i].name); free(r->scalars[i].text); }
     free(r->scalars);
-    r->vm = NULL; r->scalars = NULL; r->n_scalars = 0;
+    free(r->ord);
+    r->vm = NULL; r->scalars = NULL; r->n_scalars = 0; r->ord = NULL;
 }
 
 static void rw_row_add_scalar(rw_row *r, const char *name, const char *text, int type)
@@ -5724,6 +5843,8 @@ static int rw_apply_with(cypher_executor *executor, cypher_with *w, rw_row *row)
         }
     }
     bool keep = !w->where || rw_where_keeps(executor, w->where, &next);
+    next.ord = row->ord;   /* the row keeps its place (GQLITE-T-0535) */
+    row->ord = NULL;
     rw_row_free(row);
     *row = next;
     return keep ? 0 : 1;   /* 1 = row filtered out */
@@ -6659,15 +6780,20 @@ static bool rw_is_match_path(ast_list *clauses, const char *name)
     return false;
 }
 
-static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_row *row,
-                             ast_list *clauses, cypher_result *result)
+/* The targets of a DELETE for one row, evaluated against the graph as it
+ * is now: *vm_out and *items_out name every node and relationship to
+ * delete. Both NULL when the items are plain entity variables of the row,
+ * which rw_delete_apply reads from the row. -1 on error. */
+static int rw_delete_prepare(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                             ast_list *clauses, variable_map **vm_out, ast_list **items_out)
 {
+    *vm_out = NULL; *items_out = NULL;
     bool has_expr = false;
     for (int i = 0; del->items && i < del->items->count; i++) {
         cypher_delete_item *it = (cypher_delete_item*)del->items->items[i];
         if (it && (it->expr || (it->variable && rw_row_scalar(row, it->variable)))) has_expr = true;
     }
-    if (!has_expr) return execute_delete_operations(executor, del, row->vm, result);
+    if (!has_expr) return 0;
 
     variable_map *vm = create_variable_map();
     ast_list *items = ast_list_create();
@@ -6719,11 +6845,117 @@ static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_r
         }
         free(text);
     }
+    *vm_out = vm; *items_out = items;
+    return 0;
+}
+
+/* Delete what rw_delete_prepare found; takes vm and items. */
+static int rw_delete_apply(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                           variable_map *vm, ast_list *items, cypher_result *result)
+{
+    if (!vm) return execute_delete_operations(executor, del, row->vm, result);
     cypher_delete synth = *del;
     synth.items = items;
     int rc = execute_delete_operations(executor, &synth, vm, result);
     ast_list_free(items);
     free_variable_map(vm);
+    return rc;
+}
+
+static int rw_execute_delete(cypher_executor *executor, cypher_delete *del, rw_row *row,
+                             ast_list *clauses, cypher_result *result)
+{
+    variable_map *vm; ast_list *items;
+    if (rw_delete_prepare(executor, del, row, clauses, &vm, &items) < 0) return -1;
+    return rw_delete_apply(executor, del, row, vm, items, result);
+}
+
+/* REMOVE for one row in two steps, so every row and item is evaluated
+ * against the graph before the clause (GQLITE-T-0524). The base of each
+ * `(expr).prop` item is evaluated and bound as __rm_k in a copy of the
+ * row's write map. */
+typedef struct {
+    cypher_remove synth;     /* items: borrowed or owned */
+    variable_map *vm;
+    ast_list *owned;         /* the items made here */
+} rw_remove_prep;
+
+static int rw_remove_prepare(cypher_executor *executor, cypher_remove *rm, rw_row *row,
+                             rw_remove_prep *p)
+{
+    memset(p, 0, sizeof(*p));
+    p->synth = *rm;
+    p->vm = rw_write_map(row);
+    if (!p->vm) return -1;
+    bool any = false;
+    for (int k = 0; rm->items && k < rm->items->count; k++) {
+        cypher_remove_item *it = (cypher_remove_item*)rm->items->items[k];
+        if (it && it->target && it->target->type == AST_NODE_PROPERTY &&
+            ((cypher_property*)it->target)->expr &&
+            ((cypher_property*)it->target)->expr->type != AST_NODE_IDENTIFIER) any = true;
+    }
+    if (!any) return 0;
+    ast_list *items = ast_list_create();
+    p->owned = ast_list_create();
+    if (!items || !p->owned) {
+        if (items) ast_list_free(items);
+        if (p->owned) ast_list_free(p->owned);
+        p->owned = NULL;
+        return -1;
+    }
+    int n = 0;
+    for (int k = 0; k < rm->items->count; k++) {
+        cypher_remove_item *it = (cypher_remove_item*)rm->items->items[k];
+        if (!it) continue;
+        cypher_property *pr = it->target && it->target->type == AST_NODE_PROPERTY
+                              ? (cypher_property*)it->target : NULL;
+        if (!pr || !pr->expr || pr->expr->type == AST_NODE_IDENTIFIER) {
+            ast_list_append(items, (ast_node*)it);
+            continue;
+        }
+        char *text = NULL; int type = SQLITE_NULL;
+        rw_eval_cell(executor, pr->expr, row, &text, &type);
+        if (!text) continue;   /* REMOVE null.prop does nothing */
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(executor->db,
+                "SELECT json_extract(?1, '$.id'), json_type(?1, '$.startNode') IS NOT NULL "
+                "WHERE json_valid(?1) AND json_type(?1, '$.id') = 'integer' "
+                "AND json_type(?1, '$.properties') = 'object'", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, text, -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(st) == SQLITE_ROW) {
+                char name[32];
+                snprintf(name, sizeof(name), "__rm_%d", n++);
+                int id = sqlite3_column_int(st, 0);
+                if (sqlite3_column_int(st, 1)) set_variable_edge_id(p->vm, name, id);
+                else set_variable_node_id(p->vm, name, id);
+                cypher_remove_item *ni = make_remove_item((ast_node*)make_property(
+                    (ast_node*)make_identifier(name, 0), pr->property_name, 0));
+                ast_list_append(items, (ast_node*)ni);
+                ast_list_append(p->owned, (ast_node*)ni);
+            }
+            sqlite3_finalize(st);
+        }
+        free(text);
+    }
+    p->synth.items = items;
+    return 0;
+}
+
+static void rw_remove_prep_free(rw_remove_prep *p)
+{
+    if (p->owned) {
+        free(p->synth.items->items);    /* the list, not its borrowed items */
+        free(p->synth.items);
+        ast_list_free(p->owned);
+    }
+    if (p->vm) free_variable_map(p->vm);
+    memset(p, 0, sizeof(*p));
+}
+
+static int rw_remove_apply(cypher_executor *executor, rw_remove_prep *p, cypher_result *result)
+{
+    int rc = execute_remove_operations(executor, &p->synth, p->vm, result);
+    rw_remove_prep_free(p);
     return rc;
 }
 
@@ -6743,7 +6975,7 @@ static char *rw_scalar_json(const rw_scalar *sc)
 
 /* Run the inner query of a CALL for one row. NULL on error (result set). */
 static cypher_result *rw_run_call(cypher_executor *executor, ast_node *inner, rw_row *row,
-                                  cypher_result *result)
+                                  ast_list *outer, cypher_result *result)
 {
     cypher_with *imp = NULL;
     cypher_query *iq = inner && inner->type == AST_NODE_QUERY ? (cypher_query*)inner : NULL;
@@ -6808,7 +7040,14 @@ static cypher_result *rw_run_call(cypher_executor *executor, ast_node *inner, rw
             val = sqlite3_mprintf("%d", nid >= 0 ? nid : eid);
             ast_list_append(with_items, (ast_node*)make_return_item((ast_node*)make_identifier(names[i], 0), NULL));
         } else {
-            val = rw_scalar_json(sc);   /* unbound: null */
+            char *path = (sc && sc->text && sc->type == SQLITE_TEXT && rw_is_match_path(outer, names[i]))
+                         ? rw_hydrate_path(executor, sc->text) : NULL;
+            if (path) {
+                val = sqlite3_mprintf("%s", path);
+                free(path);
+            } else {
+                val = rw_scalar_json(sc);   /* unbound: null */
+            }
             ast_list_append(with_items, (ast_node*)make_return_item((ast_node*)make_parameter(pname, 0), names[i]));
         }
         char *grown = sqlite3_mprintf("%s%s\"%s\":%s", pjson ? pjson : "", pjson ? "," : "", pname, val);
@@ -6939,6 +7178,35 @@ static int rw_eager_slots(ast_list *pattern, rw_eager_slot **out, int *n)
     return found;
 }
 
+/* Rows in output order by their ord key, stably (GQLITE-T-0523). */
+typedef struct { const char *ord; int idx; } rw_ord_ent;
+static int rw_ord_cmp(const void *a, const void *b)
+{
+    const rw_ord_ent *x = a, *y = b;
+    if (x->ord && y->ord) {
+        int c = strcmp(x->ord, y->ord);
+        if (c) return c;
+    } else if (x->ord != y->ord) {
+        return x->ord ? -1 : 1;
+    }
+    return x->idx - y->idx;
+}
+
+static void rw_sort_rows(rw_row *rows, bool *alive, int n)
+{
+    if (n < 2) return;
+    rw_ord_ent *e = malloc((size_t)n * sizeof(*e));
+    rw_row *tmp_rows = malloc((size_t)n * sizeof(*tmp_rows));
+    bool *tmp_alive = malloc((size_t)n * sizeof(*tmp_alive));
+    if (!e || !tmp_rows || !tmp_alive) { free(e); free(tmp_rows); free(tmp_alive); return; }
+    for (int i = 0; i < n; i++) { e[i].ord = rows[i].ord; e[i].idx = i; }
+    qsort(e, (size_t)n, sizeof(*e), rw_ord_cmp);
+    for (int i = 0; i < n; i++) { tmp_rows[i] = rows[e[i].idx]; tmp_alive[i] = alive[e[i].idx]; }
+    memcpy(rows, tmp_rows, (size_t)n * sizeof(*rows));
+    memcpy(alive, tmp_alive, (size_t)n * sizeof(*alive));
+    free(e); free(tmp_rows); free(tmp_alive);
+}
+
 static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags)
 {
@@ -7047,7 +7315,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                         scope_is_entity[c] = true;
                         continue;
                     }
-                    rw_row_add_scalar(row, scope[c], cell, cell ? ty : SQLITE_NULL);
+                    /* A path variable of the prefix MATCH holds its ids:
+                     * hydrate it, as the tail MATCH does (RETURN p gave the
+                     * ids; GQLITE-T-0520). */
+                    char *hp = cell && rw_is_match_path(clauses, scope[c]) ? rw_hydrate_path(executor, cell) : NULL;
+                    rw_row_add_scalar(row, scope[c], hp ? hp : cell, hp ? SQLITE_TEXT : (cell ? ty : SQLITE_NULL));
+                    free(hp);
                 }
                 n_rows++;
             }
@@ -7101,12 +7374,44 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
             rw_eager_slots(((cypher_create*)c)->pattern, NULL, NULL) > 0)
             create_eager[i] = 1;
     }
+    /* A REMOVE right after the prefix: every row's targets first, then the
+     * removals (RemoveAcceptance, row-by-row visibility; GQLITE-T-0524). */
+    for (int i = prefix_end; i < clauses->count && rc >= 0; i++) {
+        ast_node *c = clauses->items[i];
+        if (!c || c->type != AST_NODE_REMOVE) break;
+        rw_remove_prep *rp = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(*rp));
+        if (!rp) { rc = -1; break; }
+        int prepared = 0;
+        for (int r = 0; r < n_rows && rc >= 0; r++, prepared++)
+            rc = rw_remove_prepare(executor, (cypher_remove*)c, &rows[r], &rp[r]);
+        for (int r = 0; r < prepared; r++) {
+            if (rc >= 0) rc = rw_remove_apply(executor, &rp[r], result);
+            else rw_remove_prep_free(&rp[r]);
+        }
+        free(rp);
+        if (eager_done) eager_done[i] = true;
+    }
     for (int i = prefix_end; i < first_merge; i++) {
         ast_node *c = clauses->items[i];
         if (!c || c->type != AST_NODE_DELETE) continue;
-        for (int r = 0; r < n_rows && rc >= 0; r++) {
-            rc = rw_execute_delete(executor, (cypher_delete*)c, &rows[r], clauses, result);
+        /* Every row's targets first, against the graph before the clause,
+         * then the deletes: a row does not see what an earlier row deleted
+         * (DeleteAcceptance, row-by-row visibility; GQLITE-T-0524). */
+        variable_map **dvm = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(*dvm));
+        ast_list **ditems = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(*ditems));
+        if (!dvm || !ditems) rc = -1;
+        int prepared = 0;
+        for (int r = 0; r < n_rows && rc >= 0; r++, prepared++)
+            rc = rw_delete_prepare(executor, (cypher_delete*)c, &rows[r], clauses, &dvm[r], &ditems[r]);
+        for (int r = 0; r < prepared; r++) {
+            if (rc >= 0) {
+                rc = rw_delete_apply(executor, (cypher_delete*)c, &rows[r], dvm[r], ditems[r], result);
+            } else {
+                if (ditems[r]) ast_list_free(ditems[r]);
+                if (dvm[r]) free_variable_map(dvm[r]);
+            }
         }
+        free(dvm); free(ditems);
         if (eager_done) eager_done[i] = true;
         if (rc < 0) break;
     }
@@ -7124,6 +7429,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
      * of the first barrier are grouped into new rows that go on from the
      * clause after it. */
     int scan_from = 0;
+    for (int r = 0; r < n_rows; r++) {
+        char b[16];
+        snprintf(b, sizeof(b), "%08d", r);
+        free(rows[r].ord);
+        rows[r].ord = strdup(b);
+    }
   run_rows:
     for (int r = scan_from; r < n_rows && rc >= 0; r++) {
         row_alive[r] = true;
@@ -7137,6 +7448,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     rc = rw_eval_list(executor, uw->expr, &rows[r], &list_json);
                     if (rc < 0) break;
                     row_alive[r] = false;   /* replaced by its forks */
+                    int n_forked = 0;
                     sqlite3_stmt *st = NULL;
                     if (list_json && sqlite3_prepare_v2(executor->db,
                             "SELECT value, type FROM json_each(?1) WHERE json_valid(?1) AND json_type(?1) = 'array'",
@@ -7173,6 +7485,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                             } else if (jt && strcmp(jt, "text") == 0) ty = GQL_COL_TYPE_STRING;
                             else if (jt && strcmp(jt, "null") != 0) ty = SQLITE_TEXT;   /* list / map */
                             rw_row_add_scalar(nr, uw->alias, ty == SQLITE_NULL ? NULL : jv, ty);
+                            nr->ord = rw_fork_ord(rows[r].ord, n_forked++);
                             row_alive[n_rows] = false;
                             row_start[n_rows] = i + 1;
                             n_rows++;
@@ -7249,6 +7562,8 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     }
                     rw_restore_subs(subs, n_subs);
                     executor->params_json = user_params; sqlite3_free(row_params); sqlite3_free(sink.json);
+                    /* Each match takes its place under the row (GQLITE-T-0535). */
+                    char *base_ord = nm > 1 && rows[r].ord ? strdup(rows[r].ord) : NULL;
                     for (int k = 0; k < nm; k++) {
                         int target = r;
                         if (k > 0) {
@@ -7272,6 +7587,10 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                             row_alive[target] = false;
                             row_start[target] = i + 1;
                         }
+                        if (base_ord) {
+                            free(rows[target].ord);
+                            rows[target].ord = rw_fork_ord(base_ord, k);
+                        }
                         rw_fold_map(rows[target].vm, maps[k].vm);
                         for (int q = 0; q < maps[k].n_scalars; q++)
                             rw_row_add_scalar(&rows[target], maps[k].scalars[q].name,
@@ -7279,6 +7598,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                         if (is_merge && matched_existing && mg->on_match && mg->on_match->count > 0 && rc >= 0)
                             rc = execute_set_items(executor, mg->on_match, rows[target].vm, result);
                     }
+                    free(base_ord);
                     rw_restore_subs(asubs, n_asubs);
                     for (int k = 0; k < nm; k++) rw_row_free(&maps[k]);
                     free(maps);
@@ -7294,9 +7614,11 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     break;
                 }
                 case AST_NODE_REMOVE: {
-                    variable_map *wm = rw_write_map(&rows[r]);
-                    rc = execute_remove_operations(executor, (cypher_remove*)c, wm ? wm : rows[r].vm, result);
-                    if (wm) free_variable_map(wm);
+                    if (eager_done && eager_done[i]) break;
+                    rw_remove_prep rp;
+                    rc = rw_remove_prepare(executor, (cypher_remove*)c, &rows[r], &rp);
+                    if (rc >= 0) rc = rw_remove_apply(executor, &rp, result);
+                    else rw_remove_prep_free(&rp);
                     break;
                 }
                 case AST_NODE_FOREACH: {
@@ -7342,7 +7664,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 case AST_NODE_CALL_SUBQUERY: {
                     cypher_call_subquery *cs = (cypher_call_subquery*)c;
                     ast_node *inner = cs->branches && cs->branches->count > 0 ? cs->branches->items[0] : NULL;
-                    cypher_result *ir = inner ? rw_run_call(executor, inner, &rows[r], result) : NULL;
+                    cypher_result *ir = inner ? rw_run_call(executor, inner, &rows[r], query->clauses, result) : NULL;
                     if (!ir) { rc = -1; break; }
                     result->nodes_created += ir->nodes_created;
                     result->nodes_deleted += ir->nodes_deleted;
@@ -7358,6 +7680,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                     rw_fold_map(base.vm, rows[r].vm);
                     for (int q = 0; q < rows[r].n_scalars; q++)
                         rw_row_add_scalar(&base, rows[r].scalars[q].name, rows[r].scalars[q].text, rows[r].scalars[q].type);
+                    base.ord = rows[r].ord ? strdup(rows[r].ord) : NULL;
                     for (int k = 0; k < ir->row_count && rc >= 0; k++) {
                         int target = r;
                         if (k > 0) {
@@ -7381,6 +7704,8 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                             row_alive[target] = false;
                             row_start[target] = i + 1;
                         }
+                        free(rows[target].ord);
+                        rows[target].ord = rw_fork_ord(base.ord, k);
                         for (int col = 0; col < ir->column_count; col++) {
                             const char *cell = ir->data && ir->data[k] ? ir->data[k][col] : NULL;
                             int ty = ir->data_types && ir->data_types[k] ? ir->data_types[k][col] : SQLITE_TEXT;
@@ -7505,6 +7830,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     if (rc >= 0) {
         result->success = true;
         if (ret_clause && ret_clause->items) {
+            rw_sort_rows(rows, row_alive, n_rows);
             rc = rw_project_return(executor, ret_clause, rows, row_alive, n_rows, result);
         }
         if (rc >= 0 && executor->eval_error[0]) {

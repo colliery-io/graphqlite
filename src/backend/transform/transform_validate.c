@@ -1755,7 +1755,9 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
     if (!expr) return 0;
     if (expr->type == AST_NODE_EXISTS_EXPR) {
         cypher_exists_expr *ex = (cypher_exists_expr *)expr;
-        if (ex->expr_type == EXISTS_TYPE_PATTERN && ex->expr.pattern) {
+        /* The brace form EXISTS { (n:L) } is a subquery: a single node and
+         * new variables are allowed there (GQLITE-T-0520). */
+        if (ex->expr_type == EXISTS_TYPE_PATTERN && ex->expr.pattern && !ex->is_subquery) {
             /* Pattern1 [11]: `WHERE (n)` — pattern predicate with a
              * single-node path (no relationships). openCypher requires
              * pattern predicates to have at least one relationship;
@@ -2423,6 +2425,23 @@ int transform_validate_union(cypher_union *u, char **error_message)
                                     &first_items, error_message);
 }
 
+/* Does a query have a write clause? (GQLITE-T-0522) */
+static bool query_writes(cypher_query *query)
+{
+    for (int i = 0; query->clauses && i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (!c) continue;
+        switch (c->type) {
+            case AST_NODE_CREATE: case AST_NODE_MERGE: case AST_NODE_SET:
+            case AST_NODE_DELETE: case AST_NODE_REMOVE: case AST_NODE_FOREACH:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
 int transform_validate_query(cypher_query *query, char **error_message)
 {
     if (!query || !query->clauses) return 0;
@@ -2444,6 +2463,29 @@ int transform_validate_query(cypher_query *query, char **error_message)
                               "SyntaxError: NoVariablesInScope: RETURN * requires at least one variable in scope");
                     rc = -1;
                     break;
+                }
+                /* RETURN * of a write query: the write handlers read the
+                 * items, which RETURN * leaves empty, so it returned only
+                 * the statistics or [] (GQLITE-T-0522). Expand it to the
+                 * variables in scope, in scope order as the read path does.
+                 * The outputs of CALL { } are not tracked, so not after one. */
+                if (r->return_all && !saw_call_subquery && query_writes(query)) {
+                    ast_list *items = ast_list_create();
+                    for (int bi = 0; items && bi < bound.count; bi++) {
+                        cypher_return_item *it = make_return_item(
+                            (ast_node *)make_identifier((char *)bound.names[bi], r->base.location), NULL);
+                        if (it) {
+                            it->source_text = strdup(bound.names[bi]);
+                            ast_list_append(items, (ast_node *)it);
+                        }
+                    }
+                    if (items && items->count > 0) {
+                        if (r->items) ast_list_free(r->items);
+                        r->items = items;
+                        r->return_all = false;
+                    } else if (items) {
+                        ast_list_free(items);
+                    }
                 }
                 rc = validate_return_clause(r, &vctx, error_message);
                 break;

@@ -96,7 +96,7 @@ def _run_variant(engine: Engine, conn, case: Case, var: Variant) -> Outcome:
     for q in var.queries:
         o = None
         for _ in range(var.repeat):
-            o = engine.run(conn, q)
+            o = engine.run(conn, q, var.params)
             if not o.ok:
                 if var.expect_error:      # GQLITE-T-0526: then compare what is left
                     failed = True

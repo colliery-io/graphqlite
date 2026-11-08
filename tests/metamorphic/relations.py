@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .gen import (Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where,
+from .gen import (AGGS, LABELS, Pattern, Step, aggregate, bare_names, expr, int_expr, label_text, label_where, lit,
                   pattern, predicate, render, v, variables)
 from .space import Chooser, DOMAINS
 
@@ -41,6 +41,7 @@ DOMAINS.update({
     "ec.ctx": ["with", "unwind", "unwind_var", "listidx", "map", "case", "comp", "head",
                "reduce", "call", "order", "limit", "union"],
     "ec.kind": ["prop", "arith", "case", "func", "list", "map", "nullcheck", "entity", "string",
+                "math", "strfn", "listfn",
                 "bool", "nested", "strconv", "float", "literal"],
     "wo.write": ["set_m", "set_a", "create", "create_rel", "set_label"],
     "sf.form": ["replace", "merge_map", "items", "inline_key"],
@@ -50,6 +51,22 @@ DOMAINS.update({
     "wb.form": ["create", "set"],
     "wu.form": ["create", "set", "label", "rel"],
     "wrb.form": ["unwind_create", "set_overflow", "merge_overflow", "rollback"],
+    # GQLITE-T-0506: MERGE in pipelines
+    "mr.end": ["bound", "unbound"],
+    "mo.form": ["node", "rel"],
+    # GQLITE-T-0507: CALL { } subqueries
+    "cs.form": ["uncorrelated", "union_all", "union", "union_count", "correlated_union",
+                "after_agg", "write", "write_union", "alone", "after_write"],
+    # GQLITE-T-0508: write forms
+    "wf.form": ["set_param_merge", "set_param_replace", "set_map_value", "delete_return",
+                "remove_label", "foreach_set", "foreach_merge", "foreach_list"],
+    # GQLITE-T-0509: temporal values
+    "tm.kind": ["date", "datetime", "localdatetime", "localtime", "time", "duration"],
+    "tm.form": ["context", "stored", "roundtrip", "order", "compare", "component", "truncate"],
+    # GQLITE-T-0511: with and without an index
+    "ix.base": ["predicate_move", "tlp_where", "inline_props", "label_disjunction", "optional_filter",
+                "with_star", "merge_direct", "set_readback", "write_expression", "delete_count"],
+    "ix.ddl": ["index", "composite", "unique", "mixed"],
 })
 
 
@@ -64,6 +81,7 @@ class Variant:
     mode: str = "read"                      # read | write (write: compare readback)
     repeat: int = 1
     expect_error: bool = False              # the write must fail and leave nothing
+    params: dict | None = None              # $parameters of every query (GQLITE-T-0508)
 
     @property
     def queries(self) -> list[str]:
@@ -594,10 +612,15 @@ def _write_prefix(ch: Chooser, exclude_new: bool = False):
     if shape == "unwind":
         return shape, "UNWIND [1, 2] AS ⟨i⟩", [], ["i"]
     p = pattern(ch, "c1", ["a", "b"], ["r"], hops=ch.pick("c1.hops", [0, 1]))
+    if exclude_new:
+        # A second run must not match the :M relationships the first made
+        # (GQLITE-T-0506): name each relationship to exclude them.
+        p = _named(p)
     nodes, rels = p.node_vars, p.rel_vars
     m = f"MATCH {p.text()}"
     if exclude_new:
-        m += " WHERE " + " AND ".join(f"NOT {v(x)}:New" for x in nodes)
+        m += " WHERE " + " AND ".join([f"NOT {v(x)}:New" for x in nodes] +
+                                      [f"type({v(x)}) <> 'M'" for x in rels])
     if shape == "match":
         return shape, m, nodes, nodes + rels
     if shape == "match_unwind":
@@ -664,6 +687,75 @@ def merge_direct(ch: Chooser) -> Case:
         Variant("twice", q, mode="write", repeat=2),
         Variant("distinct values", render(f"{pre} RETURN DISTINCT {e} AS k"))],
         write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
+def _merge_prefix(ch: Chooser):
+    """The read part before a MERGE; skips the :New nodes of an earlier run."""
+    shape, pre, nodes, scope = _write_prefix(ch, exclude_new=True)
+    if shape == "create":
+        pre, nodes, scope = "UNWIND [1, 2, 2] AS ⟨i⟩", [], ["i"]
+    e = f"coalesce({write_expr(ch, nodes, 'i' in scope)}, 'none')"
+    return shape, pre, nodes, e
+
+
+def merge_rel(ch: Chooser) -> Case:
+    """MERGE of a relationship (both ends bound, or a new end) once or twice
+    leaves one relationship per distinct key, the same graph as MATCH-else-
+    CREATE (GQLITE-T-0506)."""
+    shape, pre, nodes, e = _merge_prefix(ch)
+    end = ch.pick("mr.end")
+    if len(nodes) >= 2 and end == "bound":
+        a, b = v(nodes[0]), v(nodes[1])
+        merge = f"MERGE ({a})-[:M {{k: {e}}}]->({b})"
+        dist = f"RETURN DISTINCT {a}.id AS a, {b}.id AS b, {e} AS k"
+        alt = (f"WITH DISTINCT {a} AS ⟨x⟩, {b} AS ⟨y⟩, {e} AS ⟨k⟩ "
+               f"WHERE NOT (⟨x⟩)-[:M {{k: ⟨k⟩}}]->(⟨y⟩) CREATE (⟨x⟩)-[:M {{k: ⟨k⟩}}]->(⟨y⟩)")
+        readback = "MATCH (a)-[r:M]->(b) RETURN a.id AS a, b.id AS b, r.k AS k"
+    elif nodes:
+        a = v(nodes[0])
+        merge = f"MERGE ({a})-[:M]->(:New {{k: {e}}})"
+        dist = f"RETURN DISTINCT {a}.id AS a, {e} AS k"
+        alt = (f"WITH DISTINCT {a} AS ⟨x⟩, {e} AS ⟨k⟩ "
+               f"WHERE NOT (⟨x⟩)-[:M]->(:New {{k: ⟨k⟩}}) CREATE (⟨x⟩)-[:M]->(:New {{k: ⟨k⟩}})")
+        readback = "MATCH (a)-[:M]->(n:New) RETURN a.id AS a, n.k AS k"
+    else:
+        merge = f"MERGE (:New {{k: {e}}})-[:M]->(:End)"
+        dist = f"RETURN DISTINCT {e} AS k"
+        alt = f"WITH DISTINCT {e} AS ⟨k⟩ CREATE (:New {{k: ⟨k⟩}})-[:M]->(:End)"
+        readback = "MATCH (n:New)-[:M]->(:End) RETURN n.k AS k"
+    return Case(f"merge_rel/{end if nodes else 'none'}/{shape}", [
+        Variant("once", render(f"{pre} {merge}"), mode="write"),
+        Variant("twice", render(f"{pre} {merge}"), mode="write", repeat=2),
+        Variant("match else create", render(f"{pre} {alt}"), mode="write"),
+        Variant("distinct", render(f"{pre} {dist}"))],
+        write=True, readback=readback)
+
+
+def merge_on(ch: Chooser) -> Case:
+    """MERGE ... ON CREATE SET / ON MATCH SET, run twice: each distinct key
+    is created once and matched by every other row of both runs
+    (GQLITE-T-0506)."""
+    shape, pre, nodes, e = _merge_prefix(ch)
+    form = ch.pick("mo.form")
+    if form == "rel" and len(nodes) >= 2:
+        a, b = v(nodes[0]), v(nodes[1])
+        merge = (f"MERGE ({a})-[⟨m⟩:M {{k: {e}}}]->({b}) ON CREATE SET ⟨m⟩.c = 1 "
+                 f"ON MATCH SET ⟨m⟩.n = coalesce(⟨m⟩.n, 0) + 1")
+        computed = (f"WITH {a}.id AS ⟨x⟩, {b}.id AS ⟨y⟩, {e} AS ⟨k⟩ WITH ⟨x⟩, ⟨y⟩, ⟨k⟩, count(*) AS ⟨cnt⟩ "
+                    f"RETURN ⟨x⟩ AS a, ⟨y⟩ AS b, ⟨k⟩ AS k, 1 AS c, 2 * ⟨cnt⟩ - 1 AS n")
+        readback = "MATCH (a)-[r:M]->(b) RETURN a.id AS a, b.id AS b, r.k AS k, r.c AS c, r.n AS n"
+        form = "rel"
+    else:
+        merge = (f"MERGE (⟨m⟩:New {{k: {e}}}) ON CREATE SET ⟨m⟩.c = 1 "
+                 f"ON MATCH SET ⟨m⟩.n = coalesce(⟨m⟩.n, 0) + 1")
+        computed = (f"WITH {e} AS ⟨k⟩ WITH ⟨k⟩, count(*) AS ⟨cnt⟩ "
+                    f"RETURN ⟨k⟩ AS k, 1 AS c, 2 * ⟨cnt⟩ - 1 AS n")
+        readback = "MATCH (n:New) RETURN n.k AS k, n.c AS c, n.n AS n"
+        form = "node"
+    return Case(f"merge_on/{form}/{shape}", [
+        Variant("twice", render(f"{pre} {merge}"), mode="write", repeat=2),
+        Variant("computed", render(f"{pre} {computed}"))],
+        write=True, readback=readback)
 
 
 def set_readback(ch: Chooser) -> Case:
@@ -765,6 +857,74 @@ def expr_context(ch: Chooser) -> Case:
                 [Variant("return", render(base)), Variant(ctx, render(alt))])
 
 
+# ------------------------------------------------------------ CALL { } subqueries
+
+def call_subquery(ch: Chooser) -> Case:
+    """A query inside CALL { } gives the rows it gives on its own: alone, as
+    a UNION, correlated with UNION branches, after an aggregation, and with
+    writes inside (GQLITE-T-0507)."""
+    form = ch.pick("cs.form")
+    n = ch.randint(1, 3)
+    cols = ", ".join(f"c{i}" for i in range(n))
+    if form in ("uncorrelated", "union_all", "union", "union_count"):
+        q1 = render(chain(ch, n_items=n).query())
+        if form == "uncorrelated":
+            return Case("call_subquery/uncorrelated", [
+                Variant("plain", q1), Variant("call", f"CALL {{ {q1} }} RETURN {cols}")])
+        q2 = render(chain(ch, n_items=n).query())
+        if form == "union_all":
+            return Case("call_subquery/union_all", [
+                Variant("union all", f"{q1} UNION ALL {q2}"),
+                Variant("call", f"CALL {{ {q1} UNION ALL {q2} }} RETURN {cols}")])
+        if form == "union":
+            return Case("call_subquery/union", [
+                Variant("union", f"{q1} UNION {q2}", post=equiv),
+                Variant("call", f"CALL {{ {q1} UNION {q2} }} RETURN {cols}", post=equiv)])
+        return Case("call_subquery/union_count", [
+            Variant("parts", parts=[q1, q2], combine=lambda ps: [{"n": len(ps[0]) + len(ps[1])}]),
+            Variant("call", f"CALL {{ {q1} UNION ALL {q2} }} RETURN count(*) AS n")])
+    p = pattern(ch, "c1", ["a", "b"], ["r"])
+    nodes, rels = p.node_vars, p.rel_vars
+    m = f"MATCH {p.text()}"
+    keys = ", ".join(f"{v(x)}.id AS k{i}" for i, x in enumerate(nodes))
+    keep = ", ".join(v(x) for x in nodes + rels)
+    if form == "correlated_union":
+        e1, e2 = expr(ch, nodes, rels), expr(ch, nodes, rels)
+        return Case("call_subquery/correlated_union", [
+            Variant("unwind", render(f"{m} UNWIND [{e1}, {e2}] AS ⟨x⟩ RETURN {keys}, ⟨x⟩ AS x")),
+            Variant("call", render(f"{m} CALL {{ WITH {keep} RETURN {e1} AS ⟨x⟩ UNION ALL "
+                                   f"WITH {keep} RETURN {e2} AS ⟨x⟩ }} RETURN {keys}, ⟨x⟩ AS x"))])
+    if form == "after_agg":
+        return Case("call_subquery/after_agg", [
+            Variant("inline", render(f"{m} RETURN count(*) * 2 AS m")),
+            Variant("call", render(f"{m} WITH count(*) AS ⟨k⟩ CALL {{ WITH ⟨k⟩ RETURN ⟨k⟩ * 2 AS ⟨y⟩ }} "
+                                   f"RETURN ⟨y⟩ AS m"))])
+    e1 = write_expr(ch, nodes, False)
+    if form == "alone":
+        # The whole query is one CALL (the CALL handler, not the row pipeline).
+        return Case(f"call_subquery/alone/{ch.used['w.kind']}", [
+            Variant("inline", render(f"{m} CREATE (:New {{k: {e1}}})"), mode="write"),
+            Variant("call", render(f"CALL {{ {m} CREATE (:New {{k: {e1}}}) }}"), mode="write")],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    if form == "after_write":
+        # A CALL after a write sees what the write made.
+        return Case("call_subquery/after_write", [
+            Variant("count", render(f"{m} RETURN count(*) AS c")),
+            Variant("call", render(f"{m} CREATE (:New) WITH count(*) AS ⟨w⟩ "
+                                   f"CALL {{ MATCH (⟨z⟩:New) RETURN count(⟨z⟩) AS ⟨y⟩ }} RETURN ⟨y⟩ AS c"))])
+    if form == "write":
+        return Case(f"call_subquery/write/{ch.used['w.kind']}", [
+            Variant("inline", render(f"{m} CREATE (:New {{k: {e1}}})"), mode="write"),
+            Variant("call", render(f"{m} CALL {{ WITH {keep} CREATE (:New {{k: {e1}}}) }}"), mode="write")],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    e2 = write_expr(ch, nodes, False)
+    return Case(f"call_subquery/write_union/{ch.used['w.kind']}", [
+        Variant("two writes", render(f"{m} CREATE (:New {{k: {e1}}}) CREATE (:New {{k: {e2}}})"), mode="write"),
+        Variant("call", render(f"{m} CALL {{ WITH {keep} CREATE (:New {{k: {e1}}}) UNION ALL "
+                               f"WITH {keep} CREATE (:New {{k: {e2}}}) }}"), mode="write")],
+        write=True, readback="MATCH (n:New) RETURN n.k AS k")
+
+
 # ------------------------------------------------- writes after OPTIONAL MATCH
 
 def write_optional(ch: Chooser) -> Case:
@@ -826,6 +986,234 @@ def set_forms(ch: Chooser) -> Case:
     variants = [Variant(f"w{i}", render(q), mode="write") for i, q in enumerate(writes)]
     variants.append(Variant("w0+return", render(writes[0] + " RETURN count(*) AS cnt"), mode="write"))
     return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
+
+
+# ---------------------------------------------------- with and without an index
+
+def _ddl(ch: Chooser) -> list[str]:
+    form = ch.pick("ix.ddl")
+    out = []
+    for _ in range(ch.randint(1, 3)):
+        lab, prop = ch.choice(LABELS), ch.choice(["v", "s", "id", "b"])
+        kind = form if form != "mixed" else ch.choice(["index", "composite", "unique"])
+        if kind == "index":
+            out.append(f"CREATE INDEX IF NOT EXISTS FOR (n:{lab}) ON (n.{prop})")
+        elif kind == "composite":
+            out.append(f"CREATE INDEX IF NOT EXISTS FOR (n:{lab}) ON (n.v, n.s)")
+        else:   # every generated node has its own id
+            out.append(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{lab}) REQUIRE n.id IS UNIQUE")
+    return out
+
+
+def indexed(ch: Chooser) -> Case:
+    """An index or a uniqueness constraint changes the plan, not the answer:
+    each variant of another relation gives the same rows (or leaves the
+    same graph) after CREATE INDEX / CREATE CONSTRAINT (GQLITE-T-0511)."""
+    base = ch.pick("ix.base")
+    case = RELATIONS[base][0](ch)
+    ddl = _ddl(ch)
+    extra = []
+    for var in case.variants:
+        n = len(ddl)
+        comb = (lambda ps, c=var.combine, n=n: c(ps[n:])) if var.combine else (lambda ps: ps[-1])
+        extra.append(Variant(var.label + "+index", parts=ddl + var.queries, combine=comb, post=var.post,
+                             keymap=var.keymap, mode=var.mode, repeat=var.repeat,
+                             expect_error=var.expect_error, params=var.params))
+    case.variants = case.variants + extra
+    case.relation = f"indexed/{ch.used['ix.ddl']}/" + case.relation
+    return case
+
+
+# ---------------------------------------------------- aggregates after a write
+
+def write_agg(ch: Chooser) -> Case:
+    """An aggregate over what a write made equals the aggregate of the
+    values written (the row pipeline aggregates; GQLITE-T-0510)."""
+    shape, pre, nodes, scope = _write_prefix(ch)
+    e = write_expr(ch, nodes, "i" in scope)
+    if shape == "create":
+        e = _sub_i(e, 2)
+    kind = ch.pick("agg.kind")
+    numeric = ch.used.get("w.kind") in ("prop", "arith") and not (nodes and "." in e and e.endswith(".s"))
+    if kind in ("sum", "avg", "stdev", "stdevp", "percentile_cont", "percentile_disc", "min") and not numeric:
+        kind = "count"
+    agg = AGGS[kind]
+    link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
+    return Case(f"write_agg/{kind}/{shape}", [
+        Variant("computed", render(f"{pre} WITH {e} AS ⟨k⟩ RETURN {agg('⟨k⟩', '⟨k⟩', None)} AS a")),
+        Variant("after create", render(f"{pre} CREATE {link}(⟨n⟩:New {{k: {e}}}) "
+                                       f"RETURN {agg('⟨n⟩.k', '⟨n⟩.k', None)} AS a"))],
+        write=True)
+
+
+# ---------------------------------------------------- temporal values
+
+def _temporal(ch: Chooser, kind: str) -> tuple[str, dict]:
+    """A temporal constructor of the kind, from a string or a map, and the
+    components it was built from."""
+    y, mo, d = ch.randint(1990, 2030), ch.randint(1, 12), ch.randint(1, 28)
+    h, mi, s = ch.randint(0, 23), ch.randint(0, 59), ch.randint(0, 59)
+    c = {"year": y, "month": mo, "day": d, "hour": h, "minute": mi, "second": s}
+    by_map = ch.random() < 0.5
+    if kind == "date":
+        return (f"date({{year: {y}, month: {mo}, day: {d}}})" if by_map else
+                f"date('{y:04d}-{mo:02d}-{d:02d}')"), c
+    if kind == "datetime":
+        return (f"datetime({{year: {y}, month: {mo}, day: {d}, hour: {h}, minute: {mi}, second: {s}, "
+                f"timezone: 'Z'}})" if by_map else
+                f"datetime('{y:04d}-{mo:02d}-{d:02d}T{h:02d}:{mi:02d}:{s:02d}Z')"), c
+    if kind == "localdatetime":
+        return (f"localdatetime({{year: {y}, month: {mo}, day: {d}, hour: {h}, minute: {mi}, second: {s}}})"
+                if by_map else f"localdatetime('{y:04d}-{mo:02d}-{d:02d}T{h:02d}:{mi:02d}:{s:02d}')"), c
+    if kind == "localtime":
+        return (f"localtime({{hour: {h}, minute: {mi}, second: {s}}})" if by_map else
+                f"localtime('{h:02d}:{mi:02d}:{s:02d}')"), c
+    if kind == "time":
+        return (f"time({{hour: {h}, minute: {mi}, second: {s}, timezone: '+01:00'}})" if by_map else
+                f"time('{h:02d}:{mi:02d}:{s:02d}+01:00')"), c
+    dd, dh = ch.randint(0, 40), ch.randint(0, 30)
+    return (f"duration({{days: {dd}, hours: {dh}}})" if by_map else f"duration('P{dd}DT{dh}H')"), \
+        {"days": dd, "hours": dh}
+
+
+_FIELDS = {"date": ["year", "month", "day"], "datetime": ["year", "month", "day", "hour", "minute", "second"],
+           "localdatetime": ["year", "month", "day", "hour", "minute", "second"],
+           "localtime": ["hour", "minute", "second"], "time": ["hour", "minute", "second"]}
+
+
+def temporal(ch: Chooser) -> Case:
+    """Temporal values: the same through WITH / UNWIND / a stored property,
+    d + dur - dur = d, ordering and comparison agree with the components,
+    components read back what built the value, truncate agrees with a
+    constructor (GQLITE-T-0509)."""
+    kind = ch.pick("tm.kind")
+    form = ch.pick("tm.form")
+    e, c = _temporal(ch, kind)
+    name = f"temporal/{form}/{kind}"
+    if form == "context":
+        return Case(name, [Variant("return", render(f"RETURN {e} AS t")),
+                           Variant("with", render(f"WITH {e} AS ⟨x⟩ RETURN ⟨x⟩ AS t")),
+                           Variant("unwind", render(f"UNWIND [{e}] AS ⟨x⟩ RETURN ⟨x⟩ AS t")),
+                           Variant("list", render(f"RETURN [{e}][0] AS t"))])
+    if form == "stored":
+        return Case(name, [Variant("write", render(f"CREATE (:New {{k: {e}}})"), mode="write"),
+                           Variant("return", render(f"RETURN {e} AS k"))],
+                    write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    if kind == "duration" and form in ("order", "compare", "truncate"):
+        form, name = "component", f"temporal/component/{kind}"
+    if form == "roundtrip":
+        if kind in ("localtime", "time"):
+            dur = f"duration({{hours: {ch.randint(0, 5)}, minutes: {ch.randint(0, 59)}}})"
+        elif kind == "duration":
+            dur = f"duration({{days: {ch.randint(0, 9)}}})"
+        else:
+            dur = f"duration({{days: {ch.randint(0, 400)}, hours: {ch.randint(0, 30)}}})"
+        return Case(name, [Variant("roundtrip", render(f"WITH {e} AS ⟨x⟩ RETURN (⟨x⟩ + {dur}) - {dur} = ⟨x⟩ AS ok")),
+                           Variant("true", "RETURN true AS ok")])
+    if form == "component":
+        if kind == "duration":
+            checks = [f"⟨x⟩.days = {c['days']}", f"⟨x⟩.hours = {c['hours']}"]
+        else:
+            checks = [f"⟨x⟩.{f} = {c[f]}" for f in _FIELDS[kind]]
+        return Case(name, [Variant("fields", render(f"WITH {e} AS ⟨x⟩ RETURN {' AND '.join(checks)} AS ok")),
+                           Variant("direct", render(f"RETURN {' AND '.join(x.replace('⟨x⟩', '(' + e + ')') for x in checks)} AS ok")),
+                           Variant("true", "RETURN true AS ok")])
+    key = f"⟨x⟩.{_FIELDS[kind][0]}"
+    for f in _FIELDS[kind][1:]:
+        key = f"({key}) * 100 + ⟨x⟩.{f}"
+    if form == "order":
+        es = [e] + [_temporal(ch, kind)[0] for _ in range(ch.randint(1, 3))]
+        return Case(name, [
+            Variant("by value", render(f"UNWIND [{', '.join(es)}] AS ⟨x⟩ RETURN ⟨x⟩ AS t ORDER BY ⟨x⟩")),
+            Variant("by key", render(f"UNWIND [{', '.join(es)}] AS ⟨x⟩ RETURN ⟨x⟩ AS t ORDER BY {key}"))],
+            compare="list")
+    if form == "compare":
+        e2 = _temporal(ch, kind)[0]
+        key2 = key.replace("⟨x⟩", "⟨y⟩")
+        return Case(name, [
+            Variant("values", render(f"WITH {e} AS ⟨x⟩, {e2} AS ⟨y⟩ RETURN ⟨x⟩ < ⟨y⟩ AS lt, ⟨x⟩ = ⟨y⟩ AS eq")),
+            Variant("keys", render(f"WITH {e} AS ⟨x⟩, {e2} AS ⟨y⟩ RETURN {key} < {key2} AS lt, {key} = {key2} AS eq"))])
+    # truncate
+    if kind == "date":
+        tr, alt = "date.truncate('month', ⟨x⟩)", "date({year: ⟨x⟩.year, month: ⟨x⟩.month, day: 1})"
+    elif kind in ("datetime", "localdatetime"):
+        tz = ", timezone: 'Z'" if kind == "datetime" else ""
+        tr = f"{kind}.truncate('day', ⟨x⟩)"
+        alt = f"{kind}({{year: ⟨x⟩.year, month: ⟨x⟩.month, day: ⟨x⟩.day{tz}}})"
+    else:
+        tz = ", timezone: '+01:00'" if kind == "time" else ""
+        tr = f"{kind}.truncate('hour', ⟨x⟩)"
+        alt = f"{kind}({{hour: ⟨x⟩.hour{tz}}})"
+    return Case(name, [Variant("truncate", render(f"WITH {e} AS ⟨x⟩ RETURN {tr} AS t")),
+                       Variant("constructor", render(f"WITH {e} AS ⟨x⟩ RETURN {alt} AS t"))])
+
+
+# ---------------------------------------------------- more write forms
+
+def write_forms(ch: Chooser) -> Case:
+    """SET from a $map or a map value, DELETE ... RETURN, REMOVE of a label
+    and FOREACH (SET, MERGE, over a computed list) equal the plain forms
+    (GQLITE-T-0508)."""
+    form = ch.pick("wf.form")
+    lab = label_text(ch.pick("c1.label"), ch)
+    cond = label_where(lab, "a")
+    a = "⟨a⟩"
+    m = f"MATCH ({a}{lab})"
+    props = "MATCH (n) RETURN properties(n) AS p"
+    if form in ("set_param_merge", "set_param_replace"):
+        k = ch.choice([1, "x", 1.5, True, [1, 2]])
+        if form == "set_param_merge":
+            pm = {"k": k, "t": "q", "v": None}
+            return Case("write_forms/set_param_merge", [
+                Variant("param", render(f"{m} SET {a} += $props"), mode="write", params={"props": pm}),
+                Variant("items", render(f"{m} SET {a}.k = {lit(k)}, {a}.t = 'q' REMOVE {a}.v"), mode="write")],
+                write=True, readback=props)
+        return Case("write_forms/set_param_replace", [
+            Variant("param", render(f"{m} SET {a} = $props"), mode="write", params={"props": {"k": k}}),
+            Variant("items", render(f"{m} REMOVE {a}.id, {a}.v, {a}.s, {a}.b SET {a}.k = {lit(k)}"),
+                    mode="write")],
+            write=True, readback=props)
+    if form == "set_map_value":
+        e = write_expr(ch, ["a"], False)
+        return Case(f"write_forms/set_map_value/{ch.used['w.kind']}", [
+            Variant("map", render(f"{m} WITH {a}, {{k: {e}, w: {a}.id}} AS ⟨mm⟩ SET {a} += ⟨mm⟩"), mode="write"),
+            Variant("items", render(f"{m} SET {a}.k = {e}, {a}.w = {a}.id"), mode="write")],
+            write=True, readback="MATCH (n) RETURN n.id AS id, properties(n) AS p")
+    if form == "delete_return":
+        # Rows of a DELETE ... RETURN (each variant runs on a fresh graph).
+        return Case("write_forms/delete_return", [
+            Variant("count", render(f"MATCH ({a}) WHERE {cond} RETURN count(*) AS c, sum({a}.id) AS s")),
+            Variant("delete", render(f"{m} WITH {a}, {a}.id AS ⟨i⟩ DETACH DELETE {a} "
+                                     f"RETURN count(*) AS c, sum(⟨i⟩) AS s"))],
+            write=True)
+    if form == "remove_label":
+        return Case("write_forms/remove_label", [
+            Variant("remove", render(f"{m} REMOVE {a}:A"), mode="write"),
+            Variant("set+remove", render(f"{m} SET {a}:Tmp REMOVE {a}:A, {a}:Tmp"), mode="write"),
+            Variant("computed", render(f"MATCH ({a}) RETURN {a}.id AS id, CASE WHEN {cond} THEN "
+                                       f"[⟨l⟩ IN labels({a}) WHERE ⟨l⟩ <> 'A'] ELSE labels({a}) END AS l"))],
+            write=True, readback="MATCH (n) RETURN n.id AS id, labels(n) AS l")
+    if form == "foreach_set":
+        e = write_expr(ch, ["a"], False)
+        return Case(f"write_forms/foreach_set/{ch.used['w.kind']}", [
+            Variant("set", render(f"{m} SET {a}.k = {e}"), mode="write"),
+            Variant("foreach", render(f"{m} WITH collect({a}) AS ⟨ns⟩ FOREACH ({a} IN ⟨ns⟩ | SET {a}.k = {e})"),
+                    mode="write")],
+            write=True, readback="MATCH (n) RETURN n.id AS id, n.k AS k")
+    if form == "foreach_merge":
+        xs = [ch.randint(0, 3) for _ in range(ch.randint(1, 4))]
+        return Case("write_forms/foreach_merge", [
+            Variant("unwind", render(f"UNWIND {xs} AS ⟨i⟩ MERGE (:New {{k: ⟨i⟩}})"), mode="write"),
+            Variant("foreach", render(f"FOREACH (⟨i⟩ IN {xs} | MERGE (:New {{k: ⟨i⟩}}))"), mode="write"),
+            Variant("distinct", render(f"UNWIND {xs} AS ⟨i⟩ RETURN DISTINCT ⟨i⟩ AS k"))],
+            write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    src = ch.choice([f"range(0, coalesce({a}.v, 0) % 3)", f"[{a}.id, {a}.id + 1]",
+                     f"[x IN [1, 2, 3] WHERE x <= coalesce({a}.v, 0)]", "[]"])
+    return Case("write_forms/foreach_list", [
+        Variant("unwind", render(f"{m} UNWIND {src} AS ⟨i⟩ CREATE (:New {{k: {a}.id * 10 + ⟨i⟩}})"), mode="write"),
+        Variant("foreach", render(f"{m} FOREACH (⟨i⟩ IN {src} | CREATE (:New {{k: {a}.id * 10 + ⟨i⟩}}))"),
+                mode="write")],
+        write=True, readback="MATCH (n:New) RETURN n.k AS k")
 
 
 # ---------------------------------------------------- write with RETURN
@@ -988,6 +1376,15 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "write_expression": (write_expression, G + C1 + ["w.shape", "w.kind"]),
     "merge_idempotent": (merge_idempotent, G + C1 + ["w.shape", "w.kind"]),
     "merge_direct": (merge_direct, G + C1 + ["w.shape", "w.kind"]),
+    "merge_rel": (merge_rel, G + C1 + ["w.shape", "w.kind", "mr.end"]),
+    "merge_on": (merge_on, G + C1 + ["w.shape", "w.kind", "mo.form"]),
+    "call_subquery": (call_subquery, CHAIN + ["cs.form", "w.kind"]),
+    "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
+    "temporal": (temporal, ["tm.kind", "tm.form"]),
+    "write_agg": (write_agg, G + C1 + ["w.shape", "w.kind", "agg.kind"]),
+    # ret.kind / agg.kind stay out: tlp_where and others need scalar returns
+    "indexed": (indexed, [d for d in CHAIN if d not in ("ret.kind", "agg.kind")]
+                + ["ix.base", "ix.ddl", "pred.kind", "w.shape", "w.kind", "del.form", "ld.form"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),

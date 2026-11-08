@@ -891,7 +891,11 @@ int transform_with_clause(cypher_transform_context *ctx, cypher_with *with)
                  * but never grouped, so an aggregating WITH collapsed all rows
                  * into one group (WithOrderBy4 [11]/[12]). */
                 if (group_count > 0) dbuf_append(&group_buf, ", ");
-                dbuf_append(&group_buf, grp_expr);
+                /* `GROUP BY 2` is the second column to SQLite (GQLITE-T-0520). */
+                if (item->expr->type == AST_NODE_LITERAL)
+                    dbuf_appendf(&group_buf, "COALESCE(%s, NULL)", grp_expr);
+                else
+                    dbuf_append(&group_buf, grp_expr);
                 group_count++;
             }
             free(grp_expr);
@@ -1409,7 +1413,10 @@ with_star_columns_done:
                     free(order_expr);
                 }
             }
-            if ((with->limit || with->skip) && dbuf_len(&ord) > 0) {
+            /* Without SKIP / LIMIT too: a later aggregate reads the rows
+             * in order (`WITH o.id AS i ORDER BY i RETURN collect(i)` lost
+             * the order; GQLITE-T-0524). */
+            if (dbuf_len(&ord) > 0) {
                 char *l = with->limit ? transform_expression_to_string(ctx, with->limit) : NULL;
                 char *o = with->skip ? transform_expression_to_string(ctx, with->skip) : NULL;
                 dynamic_buffer sub;

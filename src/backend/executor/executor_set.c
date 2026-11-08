@@ -391,6 +391,9 @@ int evaluate_function_call_via_sqlite(
     return 0;
 }
 
+static void set_remove_property(cypher_executor *executor, bool is_edge, int entity_id,
+                                const char *key, cypher_result *result);
+
 /* Parse a JSON object string and set each key-value pair as a property.
  * Follows the same hand-rolled JSON parsing pattern as get_param_value(). */
 static int set_properties_from_json_object(
@@ -485,8 +488,10 @@ static int set_properties_from_json_object(
             pv = &json_bool_buf;
             while (*p && *p != ',' && *p != '}') p++;
         } else if (*p == 'n') {
-            /* null — skip this property */
+            /* null removes the property (`SET n += $m` with {v: null} kept
+             * v; GQLITE-T-0508) */
             p += 4;
+            set_remove_property(executor, is_edge, entity_id, key, result);
             continue;
         } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
             const char *num_start = p;
