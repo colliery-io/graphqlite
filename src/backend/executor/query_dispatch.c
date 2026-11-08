@@ -3200,9 +3200,73 @@ static bool unwind_before_create(cypher_query *query)
  * SET, and a WITH after it). Any other shape goes row by row: a clause
  * before the UNWIND (`CREATE (n) WITH n UNWIND ... CREATE ...` ran only
  * the first CREATE), a second CREATE, or a MERGE / DELETE / REMOVE. */
+/* Does an expression mention the variable `name`? (GQLITE-T-0522) */
+static bool ast_mentions(ast_node *e, const char *name)
+{
+    if (!e || !name) return false;
+    switch (e->type) {
+        case AST_NODE_IDENTIFIER: return strcmp(((cypher_identifier *)e)->name, name) == 0;
+        case AST_NODE_PROPERTY: return ast_mentions(((cypher_property *)e)->expr, name);
+        case AST_NODE_BINARY_OP:
+            return ast_mentions(((cypher_binary_op *)e)->left, name) ||
+                   ast_mentions(((cypher_binary_op *)e)->right, name);
+        case AST_NODE_NOT_EXPR: return ast_mentions(((cypher_not_expr *)e)->expr, name);
+        case AST_NODE_NULL_CHECK: return ast_mentions(((cypher_null_check *)e)->expr, name);
+        case AST_NODE_LABEL_EXPR: return ast_mentions(((cypher_label_expr *)e)->expr, name);
+        case AST_NODE_SUBSCRIPT: {
+            cypher_subscript *s = (cypher_subscript *)e;
+            return ast_mentions(s->expr, name) || ast_mentions(s->index, name) ||
+                   ast_mentions(s->slice_start, name) || ast_mentions(s->slice_end, name);
+        }
+        case AST_NODE_FUNCTION_CALL: {
+            ast_list *a = ((cypher_function_call *)e)->args;
+            for (int i = 0; a && i < a->count; i++) if (ast_mentions(a->items[i], name)) return true;
+            return false;
+        }
+        case AST_NODE_LIST: {
+            ast_list *a = ((cypher_list *)e)->items;
+            for (int i = 0; a && i < a->count; i++) if (ast_mentions(a->items[i], name)) return true;
+            return false;
+        }
+        case AST_NODE_MAP: {
+            cypher_map *m = (cypher_map *)e;
+            for (int i = 0; m->pairs && i < m->pairs->count; i++)
+                if (ast_mentions(((cypher_map_pair *)m->pairs->items[i])->value, name)) return true;
+            return false;
+        }
+        case AST_NODE_CASE_EXPR: {
+            cypher_case_expr *c = (cypher_case_expr *)e;
+            if (ast_mentions(c->operand, name) || ast_mentions(c->else_expr, name)) return true;
+            for (int i = 0; c->when_clauses && i < c->when_clauses->count; i++) {
+                cypher_when_clause *w = (cypher_when_clause *)c->when_clauses->items[i];
+                if (ast_mentions(w->condition, name) || ast_mentions(w->result, name)) return true;
+            }
+            return false;
+        }
+        case AST_NODE_LIST_COMPREHENSION: {
+            cypher_list_comprehension *lc = (cypher_list_comprehension *)e;
+            return ast_mentions(lc->list_expr, name) || ast_mentions(lc->where_expr, name) ||
+                   ast_mentions(lc->transform_expr, name);
+        }
+        default:
+            /* anything else: assume it may, so the general pipeline runs */
+            return true;
+    }
+}
+
+static bool items_mention(ast_list *items, const char *name)
+{
+    for (int i = 0; items && i < items->count; i++) {
+        cypher_return_item *it = (cypher_return_item *)items->items[i];
+        if (it && ast_mentions(it->expr, name)) return true;
+    }
+    return false;
+}
+
 static bool unwind_create_needs_pipeline(cypher_query *query)
 {
     int n_unwind = 0, n_create = 0;
+    const char *alias = NULL;
     for (int i = 0; query->clauses && i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
@@ -3210,17 +3274,29 @@ static bool unwind_create_needs_pipeline(cypher_query *query)
             case AST_NODE_UNWIND:
                 if (i != 0 || n_create > 0) return true;
                 n_unwind++;
+                alias = ((cypher_unwind *)c)->alias;
                 break;
             case AST_NODE_CREATE:
                 n_create++;
                 break;
             case AST_NODE_SET:
+                break;
             case AST_NODE_RETURN:
+                /* The fast path binds the UNWIND value only for the CREATE:
+                 * RETURN i gave null (GQLITE-T-0522). */
+                if (alias && (((cypher_return *)c)->return_all ||
+                              items_mention(((cypher_return *)c)->items, alias)))
+                    return true;
                 break;
             case AST_NODE_WITH:
                 /* WITH ... WHERE / aggregation after the CREATE stays on the
-                 * fast path (Create6); a WITH before it does not. */
+                 * fast path (Create6); a WITH before it does not, nor one
+                 * that reads the UNWIND value. */
                 if (n_create == 0) return true;
+                if (alias && (((cypher_with *)c)->pass_all ||
+                              items_mention(((cypher_with *)c)->items, alias) ||
+                              ast_mentions(((cypher_with *)c)->where, alias)))
+                    return true;
                 break;
             default:
                 return true;
