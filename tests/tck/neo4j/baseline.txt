@@ -126,7 +126,6 @@ Create.feature::Dependencies between nodes and relationships two clauses with co
 Create.feature::Dependencies between nodes and relationships two clauses with count single clause
 Create.feature::Dependencies in creating multiple nodes
 Create.feature::Dependencies in creating multiple rels
-DeleteAcceptance.feature::Does not observe item-by-item visibility
 DeleteAcceptance.feature::Does not observe row-by-row visibility
 DeleteAcceptance.feature::Return properties from deleted node
 ExistsExpressionAcceptance.feature::Aggregation with exists in horizon of tail should plan

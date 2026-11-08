@@ -125,7 +125,6 @@ static const transform_func_entry dispatch_table[] = {
     {"haversin",        transform_math_function},
     /* COUNT { ... } subquery (GQLITE-T-0485) */
     {"__gql_count_subquery", transform_count_subquery},
-    {"__gql_collect_subquery", transform_collect_subquery},
 
     {"isNaN",           transform_math_function},
     {"isnan",           transform_math_function},

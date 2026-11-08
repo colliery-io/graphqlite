@@ -318,21 +318,6 @@ int transform_count_subquery(cypher_transform_context *ctx, cypher_function_call
                                "(SELECT count(*) FROM (%s))");
 }
 
-/* COLLECT { ... }: the parser's __gql_collect_subquery(EXISTS { query }),
- * whose query returns collect(...) AS __gql_collect (GQLITE-T-0524). */
-int transform_collect_subquery(cypher_transform_context *ctx, cypher_function_call *fc)
-{
-    if (!fc || !fc->args || fc->args->count != 1 || !fc->args->items[0] ||
-        fc->args->items[0]->type != AST_NODE_EXISTS_EXPR ||
-        ((cypher_exists_expr *)fc->args->items[0])->expr_type != EXISTS_TYPE_QUERY) {
-        ctx->has_error = true;
-        ctx->error_message = strdup("Invalid COLLECT subquery");
-        return -1;
-    }
-    return emit_query_subquery(ctx, (cypher_exists_expr *)fc->args->items[0],
-                               "(SELECT \"__gql_collect\" FROM (%s))");
-}
-
 /* A property map anywhere in a pattern: (n)-[{rel: 1}]->(), ({prop: 42}). */
 static bool pattern_has_properties(ast_list *pattern)
 {
