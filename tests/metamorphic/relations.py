@@ -59,6 +59,9 @@ DOMAINS.update({
     # GQLITE-T-0508: write forms
     "wf.form": ["set_param_merge", "set_param_replace", "set_map_value", "delete_return",
                 "remove_label", "foreach_set", "foreach_merge", "foreach_list"],
+    # GQLITE-T-0509: temporal values
+    "tm.kind": ["date", "datetime", "localdatetime", "localtime", "time", "duration"],
+    "tm.form": ["context", "stored", "roundtrip", "order", "compare", "component", "truncate"],
 })
 
 
@@ -980,6 +983,108 @@ def set_forms(ch: Chooser) -> Case:
     return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
 
 
+# ---------------------------------------------------- temporal values
+
+def _temporal(ch: Chooser, kind: str) -> tuple[str, dict]:
+    """A temporal constructor of the kind, from a string or a map, and the
+    components it was built from."""
+    y, mo, d = ch.randint(1990, 2030), ch.randint(1, 12), ch.randint(1, 28)
+    h, mi, s = ch.randint(0, 23), ch.randint(0, 59), ch.randint(0, 59)
+    c = {"year": y, "month": mo, "day": d, "hour": h, "minute": mi, "second": s}
+    by_map = ch.random() < 0.5
+    if kind == "date":
+        return (f"date({{year: {y}, month: {mo}, day: {d}}})" if by_map else
+                f"date('{y:04d}-{mo:02d}-{d:02d}')"), c
+    if kind == "datetime":
+        return (f"datetime({{year: {y}, month: {mo}, day: {d}, hour: {h}, minute: {mi}, second: {s}, "
+                f"timezone: 'Z'}})" if by_map else
+                f"datetime('{y:04d}-{mo:02d}-{d:02d}T{h:02d}:{mi:02d}:{s:02d}Z')"), c
+    if kind == "localdatetime":
+        return (f"localdatetime({{year: {y}, month: {mo}, day: {d}, hour: {h}, minute: {mi}, second: {s}}})"
+                if by_map else f"localdatetime('{y:04d}-{mo:02d}-{d:02d}T{h:02d}:{mi:02d}:{s:02d}')"), c
+    if kind == "localtime":
+        return (f"localtime({{hour: {h}, minute: {mi}, second: {s}}})" if by_map else
+                f"localtime('{h:02d}:{mi:02d}:{s:02d}')"), c
+    if kind == "time":
+        return (f"time({{hour: {h}, minute: {mi}, second: {s}, timezone: '+01:00'}})" if by_map else
+                f"time('{h:02d}:{mi:02d}:{s:02d}+01:00')"), c
+    dd, dh = ch.randint(0, 40), ch.randint(0, 30)
+    return (f"duration({{days: {dd}, hours: {dh}}})" if by_map else f"duration('P{dd}DT{dh}H')"), \
+        {"days": dd, "hours": dh}
+
+
+_FIELDS = {"date": ["year", "month", "day"], "datetime": ["year", "month", "day", "hour", "minute", "second"],
+           "localdatetime": ["year", "month", "day", "hour", "minute", "second"],
+           "localtime": ["hour", "minute", "second"], "time": ["hour", "minute", "second"]}
+
+
+def temporal(ch: Chooser) -> Case:
+    """Temporal values: the same through WITH / UNWIND / a stored property,
+    d + dur - dur = d, ordering and comparison agree with the components,
+    components read back what built the value, truncate agrees with a
+    constructor (GQLITE-T-0509)."""
+    kind = ch.pick("tm.kind")
+    form = ch.pick("tm.form")
+    e, c = _temporal(ch, kind)
+    name = f"temporal/{form}/{kind}"
+    if form == "context":
+        return Case(name, [Variant("return", render(f"RETURN {e} AS t")),
+                           Variant("with", render(f"WITH {e} AS ⟨x⟩ RETURN ⟨x⟩ AS t")),
+                           Variant("unwind", render(f"UNWIND [{e}] AS ⟨x⟩ RETURN ⟨x⟩ AS t")),
+                           Variant("list", render(f"RETURN [{e}][0] AS t"))])
+    if form == "stored":
+        return Case(name, [Variant("write", render(f"CREATE (:New {{k: {e}}})"), mode="write"),
+                           Variant("return", render(f"RETURN {e} AS k"))],
+                    write=True, readback="MATCH (n:New) RETURN n.k AS k")
+    if kind == "duration" and form in ("order", "compare", "truncate"):
+        form, name = "component", f"temporal/component/{kind}"
+    if form == "roundtrip":
+        if kind in ("localtime", "time"):
+            dur = f"duration({{hours: {ch.randint(0, 5)}, minutes: {ch.randint(0, 59)}}})"
+        elif kind == "duration":
+            dur = f"duration({{days: {ch.randint(0, 9)}}})"
+        else:
+            dur = f"duration({{days: {ch.randint(0, 400)}, hours: {ch.randint(0, 30)}}})"
+        return Case(name, [Variant("roundtrip", render(f"WITH {e} AS ⟨x⟩ RETURN (⟨x⟩ + {dur}) - {dur} = ⟨x⟩ AS ok")),
+                           Variant("true", "RETURN true AS ok")])
+    if form == "component":
+        if kind == "duration":
+            checks = [f"⟨x⟩.days = {c['days']}", f"⟨x⟩.hours = {c['hours']}"]
+        else:
+            checks = [f"⟨x⟩.{f} = {c[f]}" for f in _FIELDS[kind]]
+        return Case(name, [Variant("fields", render(f"WITH {e} AS ⟨x⟩ RETURN {' AND '.join(checks)} AS ok")),
+                           Variant("direct", render(f"RETURN {' AND '.join(x.replace('⟨x⟩', '(' + e + ')') for x in checks)} AS ok")),
+                           Variant("true", "RETURN true AS ok")])
+    key = f"⟨x⟩.{_FIELDS[kind][0]}"
+    for f in _FIELDS[kind][1:]:
+        key = f"({key}) * 100 + ⟨x⟩.{f}"
+    if form == "order":
+        es = [e] + [_temporal(ch, kind)[0] for _ in range(ch.randint(1, 3))]
+        return Case(name, [
+            Variant("by value", render(f"UNWIND [{', '.join(es)}] AS ⟨x⟩ RETURN ⟨x⟩ AS t ORDER BY ⟨x⟩")),
+            Variant("by key", render(f"UNWIND [{', '.join(es)}] AS ⟨x⟩ RETURN ⟨x⟩ AS t ORDER BY {key}"))],
+            compare="list")
+    if form == "compare":
+        e2 = _temporal(ch, kind)[0]
+        key2 = key.replace("⟨x⟩", "⟨y⟩")
+        return Case(name, [
+            Variant("values", render(f"WITH {e} AS ⟨x⟩, {e2} AS ⟨y⟩ RETURN ⟨x⟩ < ⟨y⟩ AS lt, ⟨x⟩ = ⟨y⟩ AS eq")),
+            Variant("keys", render(f"WITH {e} AS ⟨x⟩, {e2} AS ⟨y⟩ RETURN {key} < {key2} AS lt, {key} = {key2} AS eq"))])
+    # truncate
+    if kind == "date":
+        tr, alt = "date.truncate('month', ⟨x⟩)", "date({year: ⟨x⟩.year, month: ⟨x⟩.month, day: 1})"
+    elif kind in ("datetime", "localdatetime"):
+        tz = ", timezone: 'Z'" if kind == "datetime" else ""
+        tr = f"{kind}.truncate('day', ⟨x⟩)"
+        alt = f"{kind}({{year: ⟨x⟩.year, month: ⟨x⟩.month, day: ⟨x⟩.day{tz}}})"
+    else:
+        tz = ", timezone: '+01:00'" if kind == "time" else ""
+        tr = f"{kind}.truncate('hour', ⟨x⟩)"
+        alt = f"{kind}({{hour: ⟨x⟩.hour{tz}}})"
+    return Case(name, [Variant("truncate", render(f"WITH {e} AS ⟨x⟩ RETURN {tr} AS t")),
+                       Variant("constructor", render(f"WITH {e} AS ⟨x⟩ RETURN {alt} AS t"))])
+
+
 # ---------------------------------------------------- more write forms
 
 def write_forms(ch: Chooser) -> Case:
@@ -1212,6 +1317,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "merge_on": (merge_on, G + C1 + ["w.shape", "w.kind", "mo.form"]),
     "call_subquery": (call_subquery, CHAIN + ["cs.form", "w.kind"]),
     "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
+    "temporal": (temporal, ["tm.kind", "tm.form"]),
     "set_readback": (set_readback, G + ["c1.label", "w.kind"]),
     "delete_count": (delete_count, G + ["c1.label", "c1.type", "c1.dir", "del.form"]),
     "expr_context": (expr_context, G + C1 + ["ec.ctx", "ec.kind"]),
