@@ -6,7 +6,28 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-11-09
+
+The first stable release. No new Cypher clauses since 0.12.0: this release
+is about correct answers. A metamorphic query harness, sanitizer and fuzz
+builds, a crash and an upgrade test, and Neo4j's acceptance features found
+the bugs fixed below. The openCypher TCK stays at 3880 / 3880; Neo4j's core
+acceptance files pass 575 of 799 scenarios, and most of the rest is
+Neo4j-only syntax (GraphQLite follows openCypher).
+
 ### Upgrade notes
+
+- **A write that loses the lock** fails with code `BUSY` (SQLite result
+  `SQLITE_BUSY`) and a message to retry or start the write with
+  `BEGIN IMMEDIATE`; it failed as "Failed to create node". Python:
+  `CypherError.retryable`; Rust: `Error::is_busy()`.
+- **Integer overflow is an error** (`9223372036854775807 + 1`); it gave a
+  float, a wrapped value or null.
+- **`range()` with a null argument is null** (it was `[]`).
+- **Graph algorithms report the id as stored:** an integer `id` property is
+  an integer `user_id` (it was null), a node without an id is `null` in every
+  algorithm (some gave `""`), and an integer names a start or end node
+  (`dijkstra(0, 1)`, `bfs(0)`).
 
 - **Bulk import checks constraints:** `insert_nodes_bulk` / `insert_edges_bulk`
   (Python and Rust) now fail and roll back the batch when it breaks a
@@ -30,6 +51,51 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   written, so a stored `'10:30:00'` time is not equal to a new
   `localtime('10:30')`; rewrite such properties (`SET n.t = localtime(n.t)`)
   to compare them.
+
+### Added
+
+- `REMOVE (expr).prop`; `UNWIND` of any expression (a CASE, a list
+  comprehension, a map), and of a value that is not a list (one row).
+- `COUNT { MATCH (p) }`, `EXISTS { (p:L) }` and other subqueries that match
+  only outer variables.
+- `gql_check_storage()` and `gql_check_constraints()`: SQL functions that
+  check the stored graph.
+- Test harnesses as angreal tasks: `test metamorphic`, `test harness-coverage`,
+  `test sanitize`, `test fuzz`, `test crash`, `test upgrade`,
+  `test sqlite-matrix`, `test parity`, `test differential`,
+  `test neo4j-acceptance`, `test algorithms`.
+
+### Fixed
+
+- Writes: `MATCH … CREATE … RETURN` created once per row; writes after two
+  `MATCH` clauses, `SET n = map`, `MERGE` of computed values and of
+  relationship patterns, `FOREACH … SET` of an expression (it stored the
+  internal id for `x.id`), `SET n += $map` with null values, `DELETE` and
+  `REMOVE` evaluated before the clause, and a write before `CALL { }`.
+- Clause order: a `MATCH` or `CALL { }` after a write sees every row's writes
+  (Cypher runs a clause for all rows before the next).
+- `RETURN` after a write: `RETURN *`, `ORDER BY` / `LIMIT` after
+  `UNWIND … CREATE` and `MERGE`, aggregates inside expressions
+  (`count(*) + 1`, `size(collect(x))`), `collect()` of no rows, stDev and the
+  percentiles.
+- `OPTIONAL MATCH`: undirected and multi-hop patterns, anonymous
+  relationships, a `WHERE` on outer variables.
+- Subqueries: `CALL { }` in sequence, row order, paths imported into
+  `CALL`; `EXISTS` / `COUNT { }` with outer variables and property maps.
+- Types: booleans, strings that look like JSON, lists and maps inside lists,
+  `max()` / `min()`, NaN and Infinity in every result, `x.id` of an entity
+  value reads the property.
+- Temporal values: components after `UNWIND`, of a call and of a stored
+  value; one printed form; `timezone: 'Z'`; `localtime.truncate`; `ORDER BY`
+  of times.
+- Memory safety: a heap overflow in the result writer, a double free of a
+  temporary SQL buffer, undefined behaviour in float-to-integer casts.
+
+### Tests
+
+- `tests/functional/` up to `147_temporal_canonical.sql`; `tests/metamorphic`,
+  `tests/algorithms`, `tests/crash`, `tests/upgrade`, `tests/sqlite_matrix`,
+  `tests/parity`, `tests/differential`, `tests/tck/neo4j`.
 
 ## [0.12.0] — 2026-10-17
 

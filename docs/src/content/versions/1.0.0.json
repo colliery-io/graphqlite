@@ -1,0 +1,154 @@
+{
+  "sidebar": [
+    {
+      "label": "Introduction",
+      "link": "/"
+    },
+    {
+      "label": "Tutorials",
+      "items": [
+        {
+          "slug": "tutorials/getting-started",
+          "label": "Getting Started (Python)"
+        },
+        {
+          "slug": "tutorials/sql-getting-started",
+          "label": "Getting Started (SQL)"
+        },
+        {
+          "slug": "tutorials/sql-patterns",
+          "label": "Query Patterns (SQL)"
+        },
+        {
+          "slug": "tutorials/knowledge-graph",
+          "label": "Building a Knowledge Graph"
+        },
+        {
+          "slug": "tutorials/graph-analytics",
+          "label": "Graph Analytics"
+        },
+        {
+          "slug": "tutorials/sql-algorithms",
+          "label": "Graph Algorithms (SQL)"
+        },
+        {
+          "slug": "tutorials/graphrag",
+          "label": "Building a GraphRAG System"
+        }
+      ]
+    },
+    {
+      "label": "How-to guides",
+      "items": [
+        {
+          "slug": "how-to/installation",
+          "label": "Installation"
+        },
+        {
+          "slug": "how-to/multi-graph",
+          "label": "Working with Multiple Graphs"
+        },
+        {
+          "slug": "how-to/cli",
+          "label": "Use the gqlite CLI"
+        },
+        {
+          "slug": "how-to/graph-algorithms",
+          "label": "Use Graph Algorithms"
+        },
+        {
+          "slug": "how-to/special-characters",
+          "label": "Handle Special Characters"
+        },
+        {
+          "slug": "how-to/other-extensions",
+          "label": "Use with Other Extensions"
+        },
+        {
+          "slug": "how-to/parameterized-queries",
+          "label": "Parameterized Queries"
+        },
+        {
+          "slug": "how-to/bulk-import",
+          "label": "Bulk Importing Data"
+        },
+        {
+          "slug": "how-to/building-from-source",
+          "label": "Building from Source"
+        }
+      ]
+    },
+    {
+      "label": "Reference",
+      "items": [
+        {
+          "label": "Cypher Support",
+          "items": [
+            {
+              "slug": "reference/cypher",
+              "label": "Cypher Support"
+            },
+            {
+              "slug": "reference/cypher-clauses",
+              "label": "Clauses"
+            },
+            {
+              "slug": "reference/cypher-functions",
+              "label": "Functions"
+            },
+            {
+              "slug": "reference/cypher-operators",
+              "label": "Operators"
+            }
+          ]
+        },
+        {
+          "slug": "reference/algorithms",
+          "label": "Graph Algorithms"
+        },
+        {
+          "slug": "reference/python-api",
+          "label": "Python API"
+        },
+        {
+          "slug": "reference/rust-api",
+          "label": "Rust API"
+        },
+        {
+          "slug": "reference/sql-interface",
+          "label": "SQL Interface"
+        },
+        {
+          "slug": "reference/database-schema",
+          "label": "Database Schema"
+        },
+        {
+          "slug": "reference/earlier-versions",
+          "label": "Earlier versions"
+        }
+      ]
+    },
+    {
+      "label": "Explanation",
+      "items": [
+        {
+          "slug": "explanation/architecture",
+          "label": "Architecture"
+        },
+        {
+          "slug": "explanation/storage-model",
+          "label": "Storage Model"
+        },
+        {
+          "slug": "explanation/query-dispatch",
+          "label": "Query Dispatch"
+        },
+        {
+          "slug": "explanation/performance",
+          "label": "Performance"
+        }
+      ]
+    }
+  ],
+  "excluded": []
+}
