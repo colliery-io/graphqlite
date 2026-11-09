@@ -810,12 +810,19 @@ static int copy_entity_properties(cypher_executor *executor,
 }
 
 /* #136: is `expr` a FOREACH/UNWIND binding `x`, or `x.key` on one? */
-static bool set_value_is_foreach_binding(ast_node *expr)
+static bool set_value_is_foreach_binding(ast_node *expr, variable_map *var_map)
 {
     if (!expr || !g_foreach_ctx) return false;
     if (expr->type == AST_NODE_PROPERTY) expr = ((cypher_property *)expr)->expr;
     if (!expr || expr->type != AST_NODE_IDENTIFIER) return false;
-    return get_foreach_binding(g_foreach_ctx, ((cypher_identifier *)expr)->name) != NULL;
+    const char *name = ((cypher_identifier *)expr)->name;
+    /* A FOREACH over nodes binds each as the entity too: then x.k is the
+     * property, not a key of the node's JSON (`x.id` gave the internal id;
+     * GQLITE-T-0543). */
+    if (var_map && (get_variable_node_id(var_map, name) >= 0 ||
+                    (is_variable_edge(var_map, name) && get_variable_edge_id(var_map, name) >= 0)))
+        return false;
+    return get_foreach_binding(g_foreach_ctx, name) != NULL;
 }
 
 static const char *set_value_base_name(ast_node *expr)
@@ -1256,8 +1263,11 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             }
 
             int rc;
-            if (has_prop_arg && var_map) {
-                /* Build SQL with FROM clause for property resolution */
+            (void)has_prop_arg;
+            if (var_map) {
+                /* Build SQL with FROM clause for property resolution; the
+                 * reference can sit deeper than an argument, as in
+                 * reverse([n.id, 2]) (GQLITE-T-0543). */
                 rc = evaluate_ast_with_context(executor, (ast_node *)func, var_map,
                                                &prop_type, &set_pv);
             } else {
@@ -1277,7 +1287,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 property_value_free(&set_pv);
                 return -1;
             }
-            if (prop_type == PROP_TYPE_TEXT) {
+            if (prop_type == PROP_TYPE_TEXT || prop_type == PROP_TYPE_JSON) {
+                /* a list or map result (reverse(), split() ...) was dropped
+                 * (GQLITE-T-0543) */
                 prop_value = set_pv.as_str;
             } else if (prop_type == PROP_TYPE_INTEGER) {
                 set_int_buf = set_pv.as_int;
@@ -1289,7 +1301,7 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 set_bool_buf = set_pv.as_bool;
                 prop_value = &set_bool_buf;
             }
-        } else if (g_foreach_ctx && set_value_is_foreach_binding(item->expr)) {
+        } else if (g_foreach_ctx && set_value_is_foreach_binding(item->expr, var_map)) {
             /* `SET n.x = item` or `SET n.x = row.key` where item/row is an
              * UNWIND/FOREACH binding. The value keeps its type: a list or a
              * map is stored as JSON, a boolean as a boolean (#136). A null
@@ -1319,7 +1331,9 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
             } else {
                 prop_value = set_pv.as_str;
             }
-        } else if (item->expr->type == AST_NODE_PROPERTY && var_map) {
+        } else if (item->expr->type == AST_NODE_PROPERTY && var_map &&
+                   ((cypher_property *)item->expr)->expr &&
+                   ((cypher_property *)item->expr)->expr->type == AST_NODE_IDENTIFIER) {
             /* SET n.x = other.k where `other` is a bound node/edge in the
              * var_map. Look up the source property by querying the
              * appropriate node_props_* or edge_props_* table. */
@@ -1406,15 +1420,10 @@ int execute_set_operations(cypher_executor *executor, cypher_set *set, variable_
                 property_value_free(&set_pv);
                 continue;
             }
-        } else if (var_map &&
-                   (item->expr->type == AST_NODE_BINARY_OP ||
-                    item->expr->type == AST_NODE_NOT_EXPR ||
-                    item->expr->type == AST_NODE_NULL_CHECK ||
-                    item->expr->type == AST_NODE_SUBSCRIPT ||
-                    item->expr->type == AST_NODE_LIST ||
-                    item->expr->type == AST_NODE_MAP ||
-                    item->expr->type == AST_NODE_EXISTS_EXPR ||
-                    item->expr->type == AST_NODE_LABEL_EXPR)) {
+        } else if (var_map) {
+            /* Any other expression (CASE, a property of an expression, a
+             * comprehension ...; GQLITE-T-0543: FOREACH ... SET x.k = CASE
+             * ... was refused). */
             /* Arbitrary expression RHS: SET n.num = n.num + 1, etc.
              * Evaluate via SQL with the var_map's nodes joined in. */
             int rc = evaluate_ast_with_context(executor, item->expr, var_map,
