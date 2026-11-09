@@ -7579,6 +7579,28 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
      * { MATCH () }})` gives 0 for both rows, as in openCypher, and a CREATE
      * before it has run for every row. 1 = barrier ahead, 2 = values done. */
     int *create_eager = calloc((size_t)clauses->count, sizeof(int));
+    /* GQLITE-T-0547: a MATCH or CALL { } after a write in the tail is a
+     * barrier. Cypher runs a clause for every row before the next clause:
+     * `UNWIND [1, 2] AS i CREATE (:C) WITH 1 AS x MATCH (b:C)` sees both
+     * nodes on each row; row by row the first row saw one. Every row
+     * reaches the barrier (1), then they go on (2). */
+    int *read_barrier = calloc((size_t)clauses->count, sizeof(int));
+    {
+        /* Once a write has run, each switch between reading (MATCH, CALL)
+         * and writing is a barrier, both ways: the write after the read
+         * must not run before every row has read (Create3 [3]). */
+        int last = 0;   /* 0 nothing yet, 1 read, 2 write */
+        bool write_seen = false;
+        for (int i = prefix_end; read_barrier && i < clauses->count; i++) {
+            ast_node *c = clauses->items[i];
+            if (!c) continue;
+            int kind = rw_is_write_clause(c->type) ? 2
+                     : (c->type == AST_NODE_MATCH || c->type == AST_NODE_CALL_SUBQUERY) ? 1 : 0;
+            if (!kind) continue;
+            if (write_seen && last && kind != last) read_barrier[i] = 1;
+            if (kind == 2) write_seen = true;
+            last = kind;
+        }
     }
     rw_eager_slot *eager_slots = NULL;
     int n_eager_slots = 0;
@@ -7655,6 +7677,11 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         for (int i = row_start[r]; i < clauses->count && rc >= 0 && row_alive[r]; i++) {
             ast_node *c = clauses->items[i];
             if (!c) continue;
+            if (read_barrier && read_barrier[i] == 1) {   /* GQLITE-T-0547 */
+                row_alive[r] = false;
+                row_start[r] = -(i + 1);
+                break;
+            }
             switch (c->type) {
                 case AST_NODE_UNWIND: {
                     cypher_unwind *uw = (cypher_unwind *)c;
@@ -7984,7 +8011,37 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 break;
             }
         }
-        if (barrier >= 0 && clauses->items[barrier]->type == AST_NODE_CREATE) {
+        if (barrier >= 0 && read_barrier && read_barrier[barrier] == 1) {
+            /* every row has written: the parked rows read now, in order */
+            read_barrier[barrier] = 2;
+            int old_n = n_rows, n_parked = 0;
+            for (int r = 0; r < old_n; r++) if (row_start[r] == -(barrier + 1)) n_parked++;
+            if (n_rows + n_parked > rows_cap) {
+                int nc = n_rows + n_parked;
+                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                if (gr) rows = gr;
+                if (ga) row_alive = ga;
+                if (gs) row_start = gs;
+                if (!gr || !ga || !gs) rc = -1;
+                else rows_cap = nc;
+            }
+            if (rc >= 0) {
+                for (int r = 0; r < old_n; r++) {
+                    if (row_start[r] != -(barrier + 1)) continue;
+                    rows[n_rows] = rows[r];
+                    memset(&rows[r], 0, sizeof(rw_row));
+                    row_alive[r] = false;
+                    row_start[r] = clauses->count;
+                    row_alive[n_rows] = false;
+                    row_start[n_rows] = barrier;
+                    n_rows++;
+                }
+                scan_from = old_n;
+                goto run_rows;
+            }
+        } else if (barrier >= 0 && clauses->items[barrier]->type == AST_NODE_CREATE) {
             /* GQLITE-T-0516: each parked row gets the values of the
              * CREATE's graph-reading properties as hidden scalars, the
              * properties then read those, and the rows go on (moved to the
@@ -8075,6 +8132,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     }
     free(eager_done);
     free(agg_done);
+    free(read_barrier);
 
     /* An expression of a row failed (GQLITE-T-0500): the query fails. */
     if (rc >= 0 && executor->eval_error[0]) {
