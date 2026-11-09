@@ -1,4 +1,3 @@
 [
-  {"relation": "^call_subquery/(correlated_union|write_union)", "kind": "error", "error": "no such column|startNode\\(\\) function argument", "task": "GQLITE-T-0537"},
-  {"relation": "^temporal/(component|order|truncate|roundtrip|compare)/", "task": "GQLITE-T-0544"}
+  {"relation": "^call_subquery/(correlated_union|write_union)", "kind": "error", "error": "no such column|startNode\\(\\) function argument", "task": "GQLITE-T-0537"}
 ]

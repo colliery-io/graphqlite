@@ -25,6 +25,6 @@ INSERT INTO _assert SELECT 'a float operand stays a float',
     json(cypher('RETURN 9223372036854775807 + 1.0 AS f')) = json('[{"f":9.2233720368547758e+18}]');
 INSERT INTO _assert SELECT 'time arithmetic wraps by the day',
     json(cypher('RETURN time(''23:30'') + duration({hours: 25}) AS a, time(''01:00'') - duration({hours: 3}) AS b'))
-    = json('[{"a":"00:30+00:00","b":"22:00+00:00"}]');
+    = json('[{"a":"00:30Z","b":"22:00Z"}]');
 
 SELECT 'Test 121 passed: ' || count(*) || ' assertions' AS result FROM _assert;

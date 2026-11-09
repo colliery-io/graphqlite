@@ -820,6 +820,26 @@ void gql_node_prop_func(sqlite3_context *c, int argc, sqlite3_value **argv) {
  * plain map. For a node/rel shape, regular keys live under $.properties and
  * the meta keys (id/labels/type/startNode/endNode) at top level; a plain map
  * uses top-level keys. (Graph6 [4]/[6]/[8].) argv[0]=value, argv[1]=key. */
+void gql_duration_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_temporal_field_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+
+/* The component of a temporal string or a duration value (argv[0], key
+ * argv[1]); false when the value is neither. vw: the text, past spaces. */
+static bool gql_temporal_component(sqlite3_context *context, sqlite3_value **argv,
+                                   const char *vw, int mode)
+{
+    if (!vw || mode == 3) return false;
+    if (*vw == '{') {
+        if (!strstr(vw, "\"_iso8601\"")) return false;
+        gql_duration_field_func(context, 2, argv);
+        return true;
+    }
+    if (*vw == '[' || *vw == '"') return false;
+    if (!((*vw >= '0' && *vw <= '9') || *vw == '-' || *vw == '+')) return false;
+    gql_temporal_field_func(context, 2, argv);
+    return true;
+}
+
 void gql_dyn_prop_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
     if (argc != 2) { sqlite3_result_null(context); return; }
     if (sqlite3_value_type(argv[0]) == SQLITE_NULL ||
@@ -827,6 +847,10 @@ void gql_dyn_prop_func(sqlite3_context *context, int argc, sqlite3_value **argv)
     const char *v = (const char*)sqlite3_value_text(argv[0]);
     if (!v) { sqlite3_result_null(context); return; }
     const char *vw = skip_ws(v);
+    /* A temporal value or a duration: its component (GQLITE-T-0544:
+     * `(date('2024-03-05')).year` and `n.k.year` of a stored date were
+     * null). Not in tag mode: a component is a number and needs no tag. */
+    if (gql_temporal_component(context, argv, vw, sqlite3_user_data(context) ? 3 : 2)) return;
     if (*vw != '{') { sqlite3_result_null(context); return; }  /* not a map/entity */
     sqlite3 *db = sqlite3_context_db_handle(context);
     sqlite3_stmt *st = NULL;
@@ -1283,6 +1307,11 @@ static void gql_map_get_result(sqlite3_context *context, sqlite3_value *obj,
 void gql_map_get_func(sqlite3_context *context, int argc, sqlite3_value **argv)
 {
     if (argc != 3) { sqlite3_result_null(context); return; }
+    if (sqlite3_value_type(argv[0]) == SQLITE_TEXT && sqlite3_value_type(argv[1]) != SQLITE_NULL) {
+        const char *v = (const char*)sqlite3_value_text(argv[0]);
+        /* an UNWIND of dates: x.year (GQLITE-T-0544) */
+        if (v && gql_temporal_component(context, argv, skip_ws(v), sqlite3_value_int(argv[2]))) return;
+    }
     gql_map_get_result(context, argv[0], argv[1], sqlite3_value_int(argv[2]));
 }
 
@@ -1608,16 +1637,15 @@ void gql_order_key_func(
             }
             int tz_consumed = 0;
             int tz_min = parse_tz(s+p, &tz_consumed);
-            if (tz_consumed > 0) {
-                /* Treat as time-of-day; rotate by -tz_min to get UTC time. */
-                int y = 2000, mo = 1, d = 1;
-                apply_offset(&y, &mo, &d, &h, &mi, -tz_min);
-            }
-            char out[32];
+            /* Seconds of the day minus the offset, not wrapped at midnight
+             * (as Neo4j and the < comparison do): 00:06+01:00 sorts before
+             * 08:27+01:00 (GQLITE-T-0544). Shifted by 18 h to stay >= 0. */
+            long secs = (long)h * 3600 + mi * 60 + sec - (tz_consumed > 0 ? (long)tz_min * 60 : 0) + 18L * 3600;
+            char out[40];
             if (frac[0])
-                snprintf(out, sizeof(out), "%02d:%02d:%02d.%s", h, mi, sec, frac);
+                snprintf(out, sizeof(out), "%06ld.%s", secs, frac);
             else
-                snprintf(out, sizeof(out), "%02d:%02d:%02d", h, mi, sec);
+                snprintf(out, sizeof(out), "%06ld", secs);
             sqlite3_result_text(context, out, -1, SQLITE_TRANSIENT);
             return;
         }
@@ -2614,11 +2642,33 @@ static bool is_duration_value(sqlite3_value *v, const char **out_text) {
     return true;
 }
 
+/* How a temporal string wrote its time: whether it wrote seconds, and its
+ * timezone suffix as written ("Z", "+01:00", "+02:00[Europe/Stockholm]",
+ * or ""). The result of arithmetic keeps both, so d + dur - dur prints as
+ * d does and compares equal (GQLITE-T-0544: it printed +00:00 for Z). */
+static void temporal_src_style(const char *t, bool *had_sec, const char **tz_suffix)
+{
+    *had_sec = false; *tz_suffix = "";
+    if (!t) return;
+    const char *T = strchr(t, 'T');
+    const char *p = T ? T + 1 : t;
+    if (!T && strchr(t, '-') == t + 4) return;   /* a date: no time part */
+    int colons = 0;
+    while (*p && ((*p >= '0' && *p <= '9') || *p == ':' || *p == '.')) {
+        if (*p == ':') colons++;
+        p++;
+    }
+    *had_sec = colons >= 2;
+    *tz_suffix = p;
+}
+
 /* Apply a duration to a temporal string. `sign` is +1 (add) or -1 (sub). */
 static void apply_duration_to_temporal(sqlite3_context *ctx, const char *temporal,
                                         const char *duration_json, int sign) {
     tparts p;
     if (!parse_temporal_parts(temporal, &p)) { sqlite3_result_text(ctx, temporal, -1, SQLITE_TRANSIENT); return; }
+    bool had_sec; const char *tz_suffix;
+    temporal_src_style(temporal, &had_sec, &tz_suffix);
     long long add_months, add_days, add_seconds, add_ns_field, add_total_ns, total_months;
     /* Checked: a duration near the integer range overflowed these sums
      * (GQLITE-T-0500). The day and time-of-day sums below are checked too. */
@@ -2695,22 +2745,17 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
                 while (width > 0 && sub % 10 == 0) { sub /= 10; width--; }
                 snprintf(buf + dl, sizeof(buf) - dl, "T%02d:%02d:%02d.%0*lld",
                          new_h, new_mi, new_sec, width, sub);
-            } else if (new_sec) {
+            } else if (new_sec || had_sec) {
                 snprintf(buf + dl, sizeof(buf) - dl, "T%02d:%02d:%02d",
                          new_h, new_mi, new_sec);
             } else {
                 snprintf(buf + dl, sizeof(buf) - dl, "T%02d:%02d",
                          new_h, new_mi);
             }
-            /* Re-attach the tz suffix if the source had one. */
+            /* The tz suffix as the source wrote it. */
             if (p.has_tz) {
-                char tz_buf[16];
-                int oh = p.tz_offset_min / 60;
-                int om2 = p.tz_offset_min - oh * 60;
-                if (om2 < 0) om2 = -om2;
-                snprintf(tz_buf, sizeof(tz_buf), "%+03d:%02d", oh, om2);
                 size_t l = strlen(buf);
-                snprintf(buf + l, sizeof(buf) - l, "%s", tz_buf);
+                snprintf(buf + l, sizeof(buf) - l, "%s", tz_suffix);
             }
             sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
         } else {
@@ -2742,19 +2787,14 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
             while (width > 0 && sub % 10 == 0) { sub /= 10; width--; }
             snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%0*lld",
                      new_h, new_mi, new_sec, width, sub);
-        } else if (new_sec) {
+        } else if (new_sec || had_sec) {
             snprintf(buf, sizeof(buf), "%02d:%02d:%02d", new_h, new_mi, new_sec);
         } else {
             snprintf(buf, sizeof(buf), "%02d:%02d", new_h, new_mi);
         }
         if (p.has_tz) {
-            char tz_buf[16];
-            int oh = p.tz_offset_min / 60;
-            int om2 = p.tz_offset_min - oh * 60;
-            if (om2 < 0) om2 = -om2;
-            snprintf(tz_buf, sizeof(tz_buf), "%+03d:%02d", oh, om2);
             size_t l = strlen(buf);
-            snprintf(buf + l, sizeof(buf) - l, "%s", tz_buf);
+            snprintf(buf + l, sizeof(buf) - l, "%s", tz_suffix);
         }
         sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
         return;
