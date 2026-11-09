@@ -1299,7 +1299,7 @@ static void test_func_time_map(void)
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
             /* Constructed times now carry an explicit UTC zone suffix. */
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "14:30:00Z");
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "14:30Z");  /* zero seconds not printed (GQLITE-T-0550) */
         }
         cypher_result_free(result);
     }
@@ -1347,7 +1347,7 @@ static void test_func_datetime_from_epoch(void)
         if (result->data[0][0]) {
             /* datetimeFromEpoch now emits ISO-8601 UTC form per the
              * openCypher spec (was "1970-01-01 00:00:00"). */
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1970-01-01T00:00:00Z");
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1970-01-01T00:00Z");
         }
         cypher_result_free(result);
     }
@@ -1523,7 +1523,7 @@ static void test_func_datetime_from_epoch_millis(void)
     if (result) {
         CU_ASSERT_TRUE(result->success);
         if (result->data[0][0]) {
-            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1970-01-02T00:00:00Z");
+            CU_ASSERT_STRING_EQUAL(result->data[0][0], "1970-01-02T00:00Z");
         }
         cypher_result_free(result);
     }

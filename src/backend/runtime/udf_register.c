@@ -402,6 +402,11 @@ int graphqlite_register_helper_udfs(sqlite3 *db)
                          gql_normalize_datetime_func, 0, 0);
   if (rc != SQLITE_OK) return rc;
 
+  /* GQLITE-T-0550: one printed form for times and datetimes */
+  rc = sqlite3_create_function(db, "_gql_tcanon", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                         gql_tcanon_func, 0, 0);
+  if (rc != SQLITE_OK) return rc;
+
   rc = sqlite3_create_function(db, "_gql_duration_compose", 10, SQLITE_UTF8, 0,
                          gql_duration_compose_func, 0, 0);
   if (rc != SQLITE_OK) return rc;

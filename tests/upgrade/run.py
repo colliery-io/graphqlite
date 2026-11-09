@@ -83,7 +83,12 @@ WRITES = [
 OLD_WRITES: dict[tuple[int, str], str] = {
     # Up to 0.12.0 a CREATE of 1.0 / 0.0 stored no property at all; the
     # file reads back as written (GQLITE-T-0484 stores Infinity).
-    (0, "v0."): "Infinity / -Infinity were not stored (fixed after 0.12.0, GQLITE-T-0484)",
+    # Up to 0.12.0 a time or datetime kept zero seconds as written
+    # ('10:30:00'); this build prints one form ('10:30', GQLITE-T-0550). The
+    # stored text reads back as it was written.
+    (0, "v0."): "Infinity / -Infinity were not stored (GQLITE-T-0484); zero seconds of stored "
+                "times kept as written (GQLITE-T-0550)",
+    (4, "v0."): "zero seconds of a stored datetime kept as written (GQLITE-T-0550)",
     (5, "v0."): "Infinity / -Infinity were not stored (fixed after 0.12.0, GQLITE-T-0484)",
     # 0.9.4 and 0.10.0 stored the key of `{on: true}` as `On`.
     (1, "v0.9."): "the property key `on` was stored as `On` (fixed in 0.11.0)",
