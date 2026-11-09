@@ -67,6 +67,8 @@ DOMAINS.update({
     "ix.base": ["predicate_move", "tlp_where", "inline_props", "label_disjunction", "optional_filter",
                 "with_star", "merge_direct", "set_readback", "write_expression", "delete_count"],
     "ix.ddl": ["index", "composite", "unique", "mixed"],
+    # GQLITE-T-0548: ORDER BY / LIMIT / DISTINCT after a write
+    "wo2.form": ["order", "order_desc", "limit", "skip", "distinct", "merge"],
 })
 
 
@@ -988,6 +990,28 @@ def set_forms(ch: Chooser) -> Case:
     return Case(f"set_forms/{form}/{ch.used['w.kind']}", variants, write=True, readback=rb)
 
 
+# ---------------------------------------------------- ordered RETURN after a write
+
+def write_ordered(ch: Chooser) -> Case:
+    """A write whose RETURN sorts, pages or dedupes gives the rows a read of
+    the same values gives (GQLITE-T-0548: UNWIND ... CREATE and UNWIND ...
+    MERGE ignored ORDER BY)."""
+    shape, pre, nodes, scope = _write_prefix(ch, exclude_new=True)
+    e = f"coalesce({write_expr(ch, nodes, 'i' in scope)}, 0)"
+    if shape == "create":
+        e = _sub_i(e, 2)
+    form = ch.pick("wo2.form")
+    tail = {"order": "ORDER BY k", "order_desc": "ORDER BY k DESC", "limit": "ORDER BY k LIMIT 2",
+            "skip": "ORDER BY k DESC SKIP 1", "distinct": "ORDER BY k", "merge": "ORDER BY k"}[form]
+    dist = "DISTINCT " if form == "distinct" else ""
+    verb = "MERGE" if form == "merge" else "CREATE"
+    link = "(⟨c⟩)-[:L]->" if shape == "match_match" and verb == "CREATE" else ""
+    return Case(f"write_ordered/{form}/{shape}", [
+        Variant("read", render(f"{pre} WITH {e} AS ⟨v⟩ RETURN {dist}⟨v⟩ AS k {tail}")),
+        Variant("write", render(f"{pre} {verb} {link}(⟨n⟩:New {{k: {e}}}) RETURN {dist}⟨n⟩.k AS k {tail}"))],
+        write=True, compare="list")
+
+
 # ---------------------------------------------------- with and without an index
 
 def _ddl(ch: Chooser) -> list[str]:
@@ -1034,9 +1058,9 @@ def write_agg(ch: Chooser) -> Case:
     if shape == "create":
         e = _sub_i(e, 2)
     kind = ch.pick("agg.kind")
-    numeric = ch.used.get("w.kind") in ("prop", "arith") and not (nodes and "." in e and e.endswith(".s"))
-    if kind in ("sum", "avg", "stdev", "stdevp", "percentile_cont", "percentile_disc", "min") and not numeric:
-        kind = "count"
+    if kind in ("sum", "avg", "stdev", "stdevp", "percentile_cont", "percentile_disc"):
+        # a numeric aggregate of a non-number is an error in Cypher: give it numbers
+        e = f"{v(nodes[0])}.v" if nodes else ("⟨i⟩" if "i" in scope else "2")
     agg = AGGS[kind]
     link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
     return Case(f"write_agg/{kind}/{shape}", [
@@ -1382,6 +1406,7 @@ RELATIONS: dict[str, tuple[Callable, list[str]]] = {
     "write_forms": (write_forms, G + ["c1.label", "w.kind", "wf.form"]),
     "temporal": (temporal, ["tm.kind", "tm.form"]),
     "write_agg": (write_agg, G + C1 + ["w.shape", "w.kind", "agg.kind"]),
+    "write_ordered": (write_ordered, G + C1 + ["w.shape", "w.kind", "wo2.form"]),
     # ret.kind / agg.kind stay out: tlp_where and others need scalar returns
     "indexed": (indexed, [d for d in CHAIN if d not in ("ret.kind", "agg.kind")]
                 + ["ix.base", "ix.ddl", "pred.kind", "w.shape", "w.kind", "del.form", "ld.form"]),

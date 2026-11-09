@@ -228,12 +228,12 @@ graph_algo_result* execute_label_propagation(sqlite3 *db, csr_graph *cached, int
     for (int i = 0; i < n; i++) {
         char entry[512];
         int community_id = label_to_community[labels[i]];
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        const char *user_id = csr_uid(graph, i);
         int entry_len;
 
         if (user_id) {
             entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"user_id\":\"%s\",\"community\":%d}",
+                                 "%s{\"node_id\":%d,\"user_id\":%s,\"community\":%d}",
                                  (i > 0) ? "," : "",
                                  graph->node_ids[i], user_id, community_id);
         } else {

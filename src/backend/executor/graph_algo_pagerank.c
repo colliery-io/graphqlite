@@ -166,7 +166,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, csr_graph *cached, double dampi
 
     for (int i = 0; i < n; i++) {
         results[i].node_id = graph->node_ids[i];
-        results[i].user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        results[i].user_id = csr_uid(graph, i);
         results[i].score = (double)pr[i];
     }
 
@@ -196,7 +196,7 @@ graph_algo_result* execute_pagerank(sqlite3 *db, csr_graph *cached, double dampi
         int entry_len;
         if (results[i].user_id) {
             entry_len = snprintf(entry, sizeof(entry),
-                                 "%s{\"node_id\":%d,\"user_id\":\"%s\",\"score\":%.10g}",
+                                 "%s{\"node_id\":%d,\"user_id\":%s,\"score\":%.10g}",
                                  (i > 0) ? "," : "",
                                  results[i].node_id,
                                  results[i].user_id,

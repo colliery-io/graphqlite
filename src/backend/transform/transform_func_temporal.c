@@ -19,7 +19,9 @@
 #define EMIT(e) do { if (transform_expression(ctx, (e)) < 0) return -1; } while (0)
 #define EMIT_TIME_BASE(s) do { \
     append_sql(ctx, "(CASE WHEN instr("); EMIT(s); append_sql(ctx, ",'T')>0 THEN substr("); EMIT(s); \
-    append_sql(ctx, ", instr("); EMIT(s); append_sql(ctx, ",'T')+1) WHEN length("); EMIT(s); \
+    append_sql(ctx, ", instr("); EMIT(s); append_sql(ctx, ",'T')+1) WHEN substr("); EMIT(s); \
+    append_sql(ctx, ", 3, 1) = ':' THEN "); EMIT(s); /* a localtime: 21:23:49 (GQLITE-T-0544) */ \
+    append_sql(ctx, " WHEN length("); EMIT(s); \
     append_sql(ctx, ")<=10 THEN '00:00:00' ELSE "); EMIT(s); append_sql(ctx, " END || '00:00:00')"); \
 } while(0)
 #define EMIT_HH(s) do { append_sql(ctx, "substr("); EMIT_TIME_BASE(s); append_sql(ctx, ", 1, 2)"); } while(0)
@@ -293,6 +295,11 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
                                  "WHEN json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') IS NULL THEN 'Z' "
+                                 "WHEN json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                /* timezone: 'Z' is UTC, as in a string (GQLITE-T-0544: it
+                 * gave +00:00[Z], which truncate could not read) */
+                append_sql(ctx, "), '$.timezone') = 'Z' THEN 'Z' "
                                  "WHEN substr(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone'),1,1) IN ('+','-') "
@@ -539,6 +546,11 @@ int transform_datetime_function(cypher_transform_context *ctx, cypher_function_c
                                  "WHEN json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone') IS NULL THEN 'Z' "
+                                 "WHEN json_extract(json(");
+                if (transform_expression(ctx, arg) < 0) return -1;
+                /* timezone: 'Z' is UTC, as in a string (GQLITE-T-0544: it
+                 * gave +00:00[Z], which truncate could not read) */
+                append_sql(ctx, "), '$.timezone') = 'Z' THEN 'Z' "
                                  "WHEN substr(json_extract(json(");
                 if (transform_expression(ctx, arg) < 0) return -1;
                 append_sql(ctx, "), '$.timezone'),1,1) IN ('+','-') "
@@ -800,7 +812,9 @@ static int emit_truncate_date_portion(cypher_transform_context *ctx,
  */
 #define EMIT_TIME_BASE(s) do { \
     append_sql(ctx, "(CASE WHEN instr("); EMIT(s); append_sql(ctx, ",'T')>0 THEN substr("); EMIT(s); \
-    append_sql(ctx, ", instr("); EMIT(s); append_sql(ctx, ",'T')+1) WHEN length("); EMIT(s); \
+    append_sql(ctx, ", instr("); EMIT(s); append_sql(ctx, ",'T')+1) WHEN substr("); EMIT(s); \
+    append_sql(ctx, ", 3, 1) = ':' THEN "); EMIT(s); /* a localtime: 21:23:49 (GQLITE-T-0544) */ \
+    append_sql(ctx, " WHEN length("); EMIT(s); \
     append_sql(ctx, ")<=10 THEN '00:00:00' ELSE "); EMIT(s); append_sql(ctx, " END || '00:00:00')"); \
 } while(0)
 #define EMIT_HH(s) do { append_sql(ctx, "substr("); EMIT_TIME_BASE(s); append_sql(ctx, ", 1, 2)"); } while(0)

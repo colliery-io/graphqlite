@@ -229,12 +229,12 @@ graph_algo_result* execute_bfs(sqlite3 *db, csr_graph *cached, const char *start
 
     for (int i = 0; i < count; i++) {
         int node = order[i];
-        const char *user_id = graph->user_ids[node] ? graph->user_ids[node] : "";
+        const char *user_id = csr_uid(graph, node);
 
         if (i > 0) json[pos++] = ',';
 
         int written = snprintf(json + pos, buf_size - pos,
-            "{\"node_id\":%d,\"user_id\":\"%s\",\"depth\":%d,\"order\":%d}",
+            "{\"node_id\":%d,\"user_id\":%s,\"depth\":%d,\"order\":%d}",
             graph->node_ids[node], user_id, depths[i], i);
 
         if (written < 0 || (size_t)written >= buf_size - pos) {
@@ -252,7 +252,7 @@ graph_algo_result* execute_bfs(sqlite3 *db, csr_graph *cached, const char *start
             }
             json = new_json;
             written = snprintf(json + pos, buf_size - pos,
-                "{\"node_id\":%d,\"user_id\":\"%s\",\"depth\":%d,\"order\":%d}",
+                "{\"node_id\":%d,\"user_id\":%s,\"depth\":%d,\"order\":%d}",
                 graph->node_ids[node], user_id, depths[i], i);
         }
         pos += written;
@@ -391,12 +391,12 @@ graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start
 
     for (int i = 0; i < count; i++) {
         int node = order[i];
-        const char *user_id = graph->user_ids[node] ? graph->user_ids[node] : "";
+        const char *user_id = csr_uid(graph, node);
 
         if (i > 0) json[pos++] = ',';
 
         int written = snprintf(json + pos, buf_size - pos,
-            "{\"node_id\":%d,\"user_id\":\"%s\",\"depth\":%d,\"order\":%d}",
+            "{\"node_id\":%d,\"user_id\":%s,\"depth\":%d,\"order\":%d}",
             graph->node_ids[node], user_id, depths[i], i);
 
         if (written < 0 || (size_t)written >= buf_size - pos) {
@@ -414,7 +414,7 @@ graph_algo_result* execute_dfs(sqlite3 *db, csr_graph *cached, const char *start
             }
             json = new_json;
             written = snprintf(json + pos, buf_size - pos,
-                "{\"node_id\":%d,\"user_id\":\"%s\",\"depth\":%d,\"order\":%d}",
+                "{\"node_id\":%d,\"user_id\":%s,\"depth\":%d,\"order\":%d}",
                 graph->node_ids[node], user_id, depths[i], i);
         }
         pos += written;

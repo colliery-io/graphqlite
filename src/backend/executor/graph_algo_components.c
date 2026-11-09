@@ -180,9 +180,9 @@ graph_algo_result* execute_wcc(sqlite3 *db, csr_graph *cached)
     for (int i = 0; i < graph->node_count; i++) {
         if (i > 0) ptr += sprintf(ptr, ",");
 
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        const char *user_id = csr_uid(graph, i);
         if (user_id) {
-            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":\"%s\",\"component\":%d}",
+            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":%s,\"component\":%d}",
                           graph->node_ids[i], user_id, component[i]);
         } else {
             ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":null,\"component\":%d}",
@@ -421,9 +421,9 @@ graph_algo_result* execute_scc(sqlite3 *db, csr_graph *cached)
     for (int i = 0; i < graph->node_count; i++) {
         if (i > 0) ptr += sprintf(ptr, ",");
 
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        const char *user_id = csr_uid(graph, i);
         if (user_id) {
-            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":\"%s\",\"component\":%d}",
+            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":%s,\"component\":%d}",
                           graph->node_ids[i], user_id, t->component[i]);
         } else {
             ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":null,\"component\":%d}",

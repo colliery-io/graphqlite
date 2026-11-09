@@ -92,4 +92,8 @@ void gql_percentile_disc_final(sqlite3_context *ctx);
 void gql_list_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_map_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 
+/* Cypher order of two lists given as JSON array texts: -1, 0, 1, or -2
+ * when undefined (GQLITE-T-0548). */
+int gql_compare_json_lists(sqlite3 *db, const char *a, const char *b);
+
 #endif /* RUNTIME_UDF_HELPERS_H */

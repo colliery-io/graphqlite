@@ -17,6 +17,7 @@
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
 #include "runtime/gql_error.h"
+#include "runtime/udf_helpers.h"
 
 /*
  * Clause extraction helpers - find specific clause types in a query
@@ -722,6 +723,45 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     return (flags & CLAUSE_MATCH) || update_after_merge || agg_tail;
 }
 
+static bool rw_item_aggregates(ast_node **slot);
+static bool rw_is_write_clause(ast_node_type t);
+
+/* A write whose RETURN aggregates inside an expression (size(collect(x)),
+ * count(*) + 1) or has no grouping key (one row even with no input): the
+ * write+RETURN handlers gave null per row, or no row, or null for
+ * collect() (GQLITE-T-0545). The row pipeline groups. */
+static bool write_return_aggregates(cypher_query *query, clause_flags flags)
+{
+    if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
+        return false;
+    if (!query->clauses || query->clauses->count < 2) return false;
+    ast_node *first = query->clauses->items[0];
+    if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
+                    first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH ||
+                    first->type == AST_NODE_MERGE)) return false;
+    bool write = false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (c && rw_is_write_clause(c->type)) write = true;
+    }
+    ast_node *last = query->clauses->items[query->clauses->count - 1];
+    if (!write || !last || last->type != AST_NODE_RETURN) return false;
+    cypher_return *ret = (cypher_return*)last;
+    if (ret->return_all || !ret->items) return false;
+    bool any_agg = false, nested = false, any_key = false;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+        if (!it || !it->expr) continue;
+        if (rw_item_aggregates(&it->expr)) {
+            any_agg = true;
+            if (!aggregating_call_name(it->expr)) nested = true;
+        } else {
+            any_key = true;
+        }
+    }
+    return any_agg && (nested || !any_key);
+}
+
 /* MATCH .. DELETE .. CREATE: the MATCH+DELETE handler ran CREATE first,
  * then matched again for the DELETE, so it deleted what CREATE had just
  * made (`MATCH (a)-[r]->(b) DELETE r CREATE (b)-[:R]->(a)`, Match5 [27]).
@@ -825,6 +865,7 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
     bool merge = false, read_before_merge = false, read_after_write = false, read_seen = false;
     bool only_unwind_read = true;   /* every read clause before the writes is an UNWIND */
     bool later_match_where = false; /* a WHERE on a second MATCH before the writes */
+    bool ret_modifiers = false;     /* RETURN ... ORDER BY / SKIP / LIMIT / DISTINCT */
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
@@ -844,8 +885,12 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
             case AST_NODE_CREATE: case AST_NODE_SET: case AST_NODE_DELETE: case AST_NODE_REMOVE:
                 writes++;
                 break;
-            case AST_NODE_RETURN:
+            case AST_NODE_RETURN: {
+                cypher_return *r = (cypher_return *)c;
+                if ((r->order_by && r->order_by->count > 0) || r->skip || r->limit || r->distinct)
+                    ret_modifiers = true;
                 break;
+            }
             default:
                 return false;
         }
@@ -854,7 +899,9 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
     /* `UNWIND $rows AS r MERGE (n {id: r.id}) ON CREATE SET ...` keeps its
      * batch handler: it is correct there, and 28x faster than row by row
      * (GQLITE-T-0431). */
-    if (writes == 1 && merge && only_unwind_read && !read_after_write) return false;
+    /* ... unless its RETURN sorts, pages or dedupes: the batch handler
+     * ignored ORDER BY (GQLITE-T-0548). */
+    if (writes == 1 && merge && only_unwind_read && !read_after_write && !ret_modifiers) return false;
     /* The MATCH + write handlers bind each MATCH on its own: a second
      * MATCH's WHERE did not see the first one's variables (GQLITE-T-0469),
      * and they kept the first row of each MATCH: `MATCH (a) MATCH
@@ -882,9 +929,12 @@ static bool call_in_rows(cypher_query *query, clause_flags flags)
         if (c->type == AST_NODE_CALL_SUBQUERY) { if (call_pos < 0) call_pos = i; }
     }
     if (call_pos < 0) return false;
+    /* A write before the CALL runs in the rows too; the CALL sees it
+     * (GQLITE-T-0542: `CREATE ... WITH ... CALL { }` did nothing). */
     for (int i = 0; i < call_pos; i++) {
         ast_node_type t = query->clauses->items[i]->type;
-        if (t != AST_NODE_UNWIND && t != AST_NODE_WITH && t != AST_NODE_MATCH) return false;
+        if (t != AST_NODE_UNWIND && t != AST_NODE_WITH && t != AST_NODE_MATCH &&
+            !rw_is_write_clause(t)) return false;
     }
     /* Later CALL { } clauses run per row too: two in sequence returned
      * only the statistics (GQLITE-T-0523). */
@@ -1609,6 +1659,12 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
 
     if (writes_need_rows(query, flags)) {
         CYPHER_DEBUG("Matched shape: writes that need the row pipeline");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
+    if (write_return_aggregates(query, flags)) {
+        CYPHER_DEBUG("Matched shape: write with an aggregating RETURN (row-wise)");
         executor->stmt_capture = false;
         return handle_rowwise_write(executor, query, result, flags);
     }
@@ -3315,6 +3371,14 @@ static bool unwind_create_needs_pipeline(cypher_query *query)
                 if (alias && (((cypher_return *)c)->return_all ||
                               items_mention(((cypher_return *)c)->items, alias)))
                     return true;
+                /* The fast path ignored ORDER BY (and so took LIMIT of the
+                 * unsorted rows): UNWIND [3, 1, 2] AS l CREATE (n {k: l})
+                 * RETURN n.k ORDER BY n.k gave 3, 1, 2 (GQLITE-T-0548). */
+                {
+                    cypher_return *r = (cypher_return *)c;
+                    if ((r->order_by && r->order_by->count > 0) || r->skip || r->limit || r->distinct)
+                        return true;
+                }
                 break;
             case AST_NODE_WITH:
                 /* WITH ... WHERE / aggregation after the CREATE stays on the
@@ -6166,10 +6230,24 @@ static bool rw_rows_equal(const rw_out_row *a, const rw_out_row *b, int cols, co
 
 /* Cypher order of two cells: numbers by value, other values by text,
  * null after every value. */
+/* The database of the running row pipeline, for comparing lists. */
+static GQL_THREAD_LOCAL sqlite3 *g_rw_db;
+
 static int rw_cell_cmp(const char *a, int ta, const char *b, int tb)
 {
     if (!a || ta == SQLITE_NULL) return (!b || tb == SQLITE_NULL) ? 0 : 1;
     if (!b || tb == SQLITE_NULL) return -1;
+    /* Lists in Cypher order, element by element (GQLITE-T-0548: they
+     * compared as JSON text, so [] sorted after [2, 4, 6]); a list sorts
+     * before any other value. */
+    bool la = a[0] == '[' && ta != GQL_COL_TYPE_STRING;
+    bool lb = b[0] == '[' && tb != GQL_COL_TYPE_STRING;
+    if (la && lb) {
+        int c = g_rw_db ? gql_compare_json_lists(g_rw_db, a, b) : -2;
+        if (c != -2) return c;
+        return strcmp(a, b);
+    }
+    if (la != lb) return la ? -1 : 1;
     bool na = (ta == SQLITE_INTEGER || ta == SQLITE_FLOAT);
     bool nb = (tb == SQLITE_INTEGER || tb == SQLITE_FLOAT);
     if (na && nb) {
@@ -6300,7 +6378,70 @@ static int rw_aggregate(cypher_executor *executor, ast_node *call, rw_row *rows,
     bool is_count = strcmp(name, "count") == 0, is_collect = strcmp(name, "collect") == 0;
     bool is_sum = strcmp(name, "sum") == 0, is_avg = strcmp(name, "avg") == 0;
     bool is_min = strcmp(name, "min") == 0, is_max = strcmp(name, "max") == 0;
-    if (!is_count && !is_collect && !is_sum && !is_avg && !is_min && !is_max) return -1;
+    /* GQLITE-T-0545: these gave null after a write */
+    bool is_stdev = strcmp(name, "stdev") == 0, is_stdevp = strcmp(name, "stdevp") == 0;
+    bool is_pcont = strcmp(name, "percentilecont") == 0, is_pdisc = strcmp(name, "percentiledisc") == 0;
+    if (!is_count && !is_collect && !is_sum && !is_avg && !is_min && !is_max &&
+        !is_stdev && !is_stdevp && !is_pcont && !is_pdisc) return -1;
+    if (is_stdev || is_stdevp || is_pcont || is_pdisc) {
+        if (!arg) return -1;
+        double pct = 0;
+        if (is_pcont || is_pdisc) {
+            ast_node *parg = fc->args->count > 1 ? fc->args->items[1] : NULL;
+            if (!parg) return -1;
+            if (parg->type == AST_NODE_LITERAL) {
+                cypher_literal *lit = (cypher_literal*)parg;
+                pct = lit->literal_type == LITERAL_DECIMAL ? lit->value.decimal
+                    : lit->literal_type == LITERAL_INTEGER ? (double)lit->value.integer : 0;
+            } else if (n > 0) {
+                char *pt = NULL; int pty = SQLITE_NULL;
+                rw_eval_cell(executor, parg, &rows[idx[0]], &pt, &pty);
+                pct = pt ? strtod(pt, NULL) : 0;
+                free(pt);
+            }
+        }
+        double *vals = calloc((size_t)(n > 0 ? n : 1), sizeof(double));
+        char **texts = calloc((size_t)(n > 0 ? n : 1), sizeof(char*));
+        int *tys = calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+        int m = 0;
+        for (int k = 0; k < n; k++) {
+            char *t; int ty;
+            rw_eval_cell(executor, arg, &rows[idx[k]], &t, &ty);
+            if (!t || (ty != SQLITE_INTEGER && ty != SQLITE_FLOAT)) { free(t); continue; }
+            vals[m] = strtod(t, NULL); texts[m] = t; tys[m] = ty; m++;
+        }
+        /* sort by value (insertion: groups are small) */
+        for (int a1 = 1; a1 < m; a1++)
+            for (int b1 = a1; b1 > 0 && vals[b1 - 1] > vals[b1]; b1--) {
+                double dv = vals[b1]; vals[b1] = vals[b1 - 1]; vals[b1 - 1] = dv;
+                char *dt = texts[b1]; texts[b1] = texts[b1 - 1]; texts[b1 - 1] = dt;
+                int di = tys[b1]; tys[b1] = tys[b1 - 1]; tys[b1 - 1] = di;
+            }
+        char buf[64];
+        if (is_stdev || is_stdevp) {
+            double mean = 0, ss = 0;
+            for (int k = 0; k < m; k++) mean += vals[k];
+            if (m > 0) mean /= m;
+            for (int k = 0; k < m; k++) ss += (vals[k] - mean) * (vals[k] - mean);
+            double d = is_stdev ? (m > 1 ? ss / (m - 1) : 0) : (m > 0 ? ss / m : 0);
+            gql_format_double(buf, sizeof(buf), sqrt(d));
+            *out_text = strdup(buf); *out_type = SQLITE_FLOAT;
+        } else if (m > 0 && is_pcont) {
+            double pos = pct * (m - 1);
+            int lo = (int)floor(pos), hi = lo + 1 < m ? lo + 1 : lo;
+            double v = vals[lo] + (vals[hi] - vals[lo]) * (pos - lo);
+            gql_format_double(buf, sizeof(buf), v);
+            *out_text = strdup(buf); *out_type = SQLITE_FLOAT;
+        } else if (m > 0) {
+            int at = (int)ceil(pct * m) - 1;
+            if (at < 0) at = 0;
+            if (at >= m) at = m - 1;
+            *out_text = strdup(texts[at]); *out_type = tys[at];
+        }
+        for (int k = 0; k < m; k++) free(texts[k]);
+        free(vals); free(texts); free(tys);
+        return 0;
+    }
     if (!arg) {
         if (!is_count) return -1;
         char buf[32];
@@ -6494,6 +6635,7 @@ static int rw_with_aggregate(cypher_executor *executor, cypher_with *w, rw_row *
                          &keys[k].cells[i], &keys[k].types[i]);
         }
     }
+    for (int i = 0; i < ni; i++) if (!is_agg[i]) any_key = true;   /* also with no rows */
     bool *key_only = calloc((size_t)ni, sizeof(bool));
     for (int i = 0; i < ni; i++) key_only[i] = !is_agg[i];
     bool *used = calloc((size_t)(n > 0 ? n : 1), sizeof(bool));
@@ -6592,6 +6734,66 @@ static int rw_with_aggregate(cypher_executor *executor, cypher_with *w, rw_row *
     return 0;
 }
 
+/* Does an item hold an aggregate anywhere (count(*) + 1, size(collect(x)))? */
+static bool rw_item_aggregates(ast_node **slot)
+{
+    rw_slot *slots = NULL; int n = 0;
+    rw_find_aggregates(slot, &slots, &n);
+    free(slots);
+    return n > 0;
+}
+
+/* An item with aggregates inside an expression, for one group: each
+ * aggregate is computed over the members, then the expression over the
+ * representative row (GQLITE-T-0545). 0, or -1 when it cannot. */
+static int rw_nested_aggregate(cypher_executor *executor, ast_node **slot, rw_row *rows,
+                               const int *members, int k, char **out, int *type)
+{
+    *out = NULL; *type = SQLITE_NULL;
+    rw_slot *slots = NULL; int ns = 0;
+    rw_find_aggregates(slot, &slots, &ns);
+    rw_row ev = {0};
+    rw_row *rep = k > 0 ? &rows[members[0]] : NULL;
+    if (rep) {
+        for (int s = 0; s < rep->n_scalars; s++)
+            rw_row_add_scalar(&ev, rep->scalars[s].name, rep->scalars[s].text, rep->scalars[s].type);
+        for (int v = 0; rep->vm && v < rep->vm->count; v++) {
+            const char *vn = rep->vm->mappings[v].variable;
+            if (!vn || rw_row_scalar(&ev, vn)) continue;
+            ast_node *id = (ast_node*)make_identifier((char*)vn, 0);
+            char *t; int ty;
+            rw_eval_cell(executor, id, rep, &t, &ty);
+            ast_node_free(id);
+            rw_row_add_scalar(&ev, vn, t, ty == SQLITE_NULL ? SQLITE_NULL : SQLITE_TEXT);
+            free(t);
+        }
+    }
+    int rc = 0;
+    ast_node **orig = calloc((size_t)(ns > 0 ? ns : 1), sizeof(ast_node*));
+    for (int s = 0; s < ns && rc == 0; s++) {
+        char *t; int ty;
+        if (rw_aggregate(executor, *slots[s], rows, members, k, &t, &ty) < 0) { rc = -1; break; }
+        char an[32];
+        snprintf(an, sizeof(an), "__rw_agg_%d", s);
+        rw_row_add_scalar(&ev, an, t, ty);
+        free(t);
+        orig[s] = *slots[s];
+        *slots[s] = (ast_node*)make_identifier(an, 0);
+    }
+    if (rc == 0) {
+        int ty = rw_expr_scalar_only(*slot, &ev) ? rw_eval_scalar(executor, *slot, &ev, out) : -1;
+        if (ty < 0) rc = -1; else *type = ty;
+    }
+    for (int s = 0; s < ns; s++) {
+        if (!orig[s]) continue;
+        ast_node_free(*slots[s]);
+        *slots[s] = orig[s];
+    }
+    free(orig); free(slots);
+    rw_row_free(&ev);
+    return rc;
+}
+
 static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_row *rows,
                              const bool *row_alive, int n_rows, cypher_result *result)
 {
@@ -6624,7 +6826,10 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
     aug.items = aug_items;
     ret = &aug;
     int cols = aug_items->count;
-    bool agg = return_has_aggregation(ret);
+    bool agg = false;
+    for (int i = 0; i < cols; i++)
+        if (rw_item_aggregates(&((cypher_return_item*)ret->items->items[i])->expr)) agg = true;
+    int rc_nested = 0;
 
     /* 1. Project the live rows. */
     rw_out_row *out = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(rw_out_row));
@@ -6640,7 +6845,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
     if (agg) {
         bool *key = calloc((size_t)cols, sizeof(bool));
         for (int i = 0; i < cols; i++)
-            key[i] = !aggregating_call_name(((cypher_return_item*)ret->items->items[i])->expr);
+            key[i] = !rw_item_aggregates(&((cypher_return_item*)ret->items->items[i])->expr);
         rw_out_row *groups = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(rw_out_row));
         int n_groups = 0;
         variable_map **maps = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(variable_map*));
@@ -6667,6 +6872,12 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
                 if (key[i]) {
                     grp->cells[i] = out[g].cells[i] ? strdup(out[g].cells[i]) : NULL;
                     grp->types[i] = out[g].types[i];
+                } else if (!aggregating_call_name(it->expr)) {
+                    if (rw_nested_aggregate(executor, &it->expr, rows, member, k,
+                                            &grp->cells[i], &grp->types[i]) < 0) {
+                        set_result_error(result, "Cannot evaluate an aggregating RETURN item after a write");
+                        rc_nested = -1;
+                    }
                 } else if (rw_aggregate(executor, it->expr, rows, member, k,
                                         &grp->cells[i], &grp->types[i]) == 0) {
                     /* computed from the row cells */
@@ -6705,7 +6916,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
         n_out = w;
     }
 
-    int rc = 0;
+    int rc = rc_nested;
     /* 4. ORDER BY */
     if (n_order > 0) {
         bool *desc = calloc((size_t)n_order, sizeof(bool));
@@ -7225,6 +7436,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     }
 
     CYPHER_DEBUG("Executing row-wise write pipeline");
+    g_rw_db = executor->db;
 
     /* --- 1. Split prefix / tail ------------------------------------------ */
     int start = 0;
@@ -7360,12 +7572,36 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         if (clauses->items[i] && (clauses->items[i]->type == AST_NODE_MERGE ||
                                   clauses->items[i]->type == AST_NODE_CREATE)) { first_merge = i; break; }
     bool *eager_done = calloc((size_t)clauses->count, sizeof(bool));
+    bool *agg_done = calloc((size_t)clauses->count, sizeof(bool));   /* aggregating WITHs run */
     /* GQLITE-T-0516: a CREATE whose property values read the graph is a
      * barrier. Every row reaches it, then its values are computed for each
      * row, then the rows create: `UNWIND [1, 2] AS i CREATE (:N {c: COUNT
      * { MATCH () }})` gives 0 for both rows, as in openCypher, and a CREATE
      * before it has run for every row. 1 = barrier ahead, 2 = values done. */
     int *create_eager = calloc((size_t)clauses->count, sizeof(int));
+    /* GQLITE-T-0547: a MATCH or CALL { } after a write in the tail is a
+     * barrier. Cypher runs a clause for every row before the next clause:
+     * `UNWIND [1, 2] AS i CREATE (:C) WITH 1 AS x MATCH (b:C)` sees both
+     * nodes on each row; row by row the first row saw one. Every row
+     * reaches the barrier (1), then they go on (2). */
+    int *read_barrier = calloc((size_t)clauses->count, sizeof(int));
+    {
+        /* Once a write has run, each switch between reading (MATCH, CALL)
+         * and writing is a barrier, both ways: the write after the read
+         * must not run before every row has read (Create3 [3]). */
+        int last = 0;   /* 0 nothing yet, 1 read, 2 write */
+        bool write_seen = false;
+        for (int i = prefix_end; read_barrier && i < clauses->count; i++) {
+            ast_node *c = clauses->items[i];
+            if (!c) continue;
+            int kind = rw_is_write_clause(c->type) ? 2
+                     : (c->type == AST_NODE_MATCH || c->type == AST_NODE_CALL_SUBQUERY) ? 1 : 0;
+            if (!kind) continue;
+            if (write_seen && last && kind != last) read_barrier[i] = 1;
+            if (kind == 2) write_seen = true;
+            last = kind;
+        }
+    }
     rw_eager_slot *eager_slots = NULL;
     int n_eager_slots = 0;
     for (int i = prefix_end; create_eager && i < clauses->count; i++) {
@@ -7441,6 +7677,11 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         for (int i = row_start[r]; i < clauses->count && rc >= 0 && row_alive[r]; i++) {
             ast_node *c = clauses->items[i];
             if (!c) continue;
+            if (read_barrier && read_barrier[i] == 1) {   /* GQLITE-T-0547 */
+                row_alive[r] = false;
+                row_start[r] = -(i + 1);
+                break;
+            }
             switch (c->type) {
                 case AST_NODE_UNWIND: {
                     cypher_unwind *uw = (cypher_unwind *)c;
@@ -7730,7 +7971,77 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         int barrier = -1;
         for (int r = 0; r < n_rows; r++)
             if (row_start[r] < 0 && (barrier < 0 || -row_start[r] - 1 < barrier)) barrier = -row_start[r] - 1;
-        if (barrier >= 0 && clauses->items[barrier]->type == AST_NODE_CREATE) {
+        /* An aggregating WITH that no row reached still runs once, over no
+         * rows: `MATCH (x:None) CREATE () WITH count(*) AS c` is one row
+         * c = 0 (GQLITE-T-0542). With grouping keys it gives no row. */
+        if (barrier < 0 && agg_done) {
+            for (int i = prefix_end; i < clauses->count; i++) {
+                ast_node *c = clauses->items[i];
+                if (!c || c->type != AST_NODE_WITH || agg_done[i] || !rw_with_aggregates((cypher_with*)c)) continue;
+                agg_done[i] = true;
+                rw_row *grouped = NULL; int n_grouped = 0;
+                int dummy = 0;
+                rc = rw_with_aggregate(executor, (cypher_with*)c, rows, &dummy, 0, &grouped, &n_grouped, result);
+                if (rc >= 0 && n_grouped > 0) {
+                    if (n_rows + n_grouped > rows_cap) {
+                        int nc = n_rows + n_grouped;
+                        rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                        bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                        int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                        if (gr) rows = gr;
+                        if (ga) row_alive = ga;
+                        if (gs) row_start = gs;
+                        if (!gr || !ga || !gs) rc = -1;
+                        else rows_cap = nc;
+                    }
+                    if (rc >= 0) {
+                        scan_from = n_rows;
+                        for (int g = 0; g < n_grouped; g++) {
+                            rows[n_rows] = grouped[g];
+                            row_alive[n_rows] = false;
+                            row_start[n_rows] = i + 1;
+                            n_rows++;
+                        }
+                        free(grouped);
+                        goto run_rows;
+                    }
+                }
+                for (int g = 0; g < n_grouped; g++) rw_row_free(&grouped[g]);
+                free(grouped);
+                break;
+            }
+        }
+        if (barrier >= 0 && read_barrier && read_barrier[barrier] == 1) {
+            /* every row has written: the parked rows read now, in order */
+            read_barrier[barrier] = 2;
+            int old_n = n_rows, n_parked = 0;
+            for (int r = 0; r < old_n; r++) if (row_start[r] == -(barrier + 1)) n_parked++;
+            if (n_rows + n_parked > rows_cap) {
+                int nc = n_rows + n_parked;
+                rw_row *gr = realloc(rows, (size_t)nc * sizeof(rw_row));
+                bool *ga = realloc(row_alive, (size_t)nc * sizeof(bool));
+                int *gs = realloc(row_start, (size_t)nc * sizeof(int));
+                if (gr) rows = gr;
+                if (ga) row_alive = ga;
+                if (gs) row_start = gs;
+                if (!gr || !ga || !gs) rc = -1;
+                else rows_cap = nc;
+            }
+            if (rc >= 0) {
+                for (int r = 0; r < old_n; r++) {
+                    if (row_start[r] != -(barrier + 1)) continue;
+                    rows[n_rows] = rows[r];
+                    memset(&rows[r], 0, sizeof(rw_row));
+                    row_alive[r] = false;
+                    row_start[r] = clauses->count;
+                    row_alive[n_rows] = false;
+                    row_start[n_rows] = barrier;
+                    n_rows++;
+                }
+                scan_from = old_n;
+                goto run_rows;
+            }
+        } else if (barrier >= 0 && clauses->items[barrier]->type == AST_NODE_CREATE) {
             /* GQLITE-T-0516: each parked row gets the values of the
              * CREATE's graph-reading properties as hidden scalars, the
              * properties then read those, and the rows go on (moved to the
@@ -7789,6 +8100,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                 if (row_start[r] == -(barrier + 1)) { idx[n_idx++] = r; row_start[r] = clauses->count; }
             }
             rw_row *grouped = NULL; int n_grouped = 0;
+            if (agg_done) agg_done[barrier] = true;
             rc = idx ? rw_with_aggregate(executor, (cypher_with*)clauses->items[barrier], rows, idx, n_idx,
                                          &grouped, &n_grouped, result) : -1;
             free(idx);
@@ -7819,6 +8131,8 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
         }
     }
     free(eager_done);
+    free(agg_done);
+    free(read_barrier);
 
     /* An expression of a row failed (GQLITE-T-0500): the query fails. */
     if (rc >= 0 && executor->eval_error[0]) {

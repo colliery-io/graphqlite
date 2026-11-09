@@ -28,6 +28,8 @@ typedef struct csr_graph {
 
     int *node_ids;        /* Size: node_count. Maps internal index -> original node ID (rowid) */
     char **user_ids;      /* Size: node_count. Maps internal index -> user-defined 'id' property */
+    char **user_id_json;  /* Size: node_count. The id as a JSON value: "null", 42 or "a\"b"
+                           * (GQLITE-T-0546: an integer id was null) */
     int *node_idx;        /* Hash table: original node ID -> internal index (for reverse lookup) */
     int node_idx_size;    /* Size of node_idx hash table */
 
@@ -42,6 +44,14 @@ typedef struct csr_graph {
     int *user_hash;
     int user_hash_size;
 } csr_graph;
+
+/* A node's id as a JSON value, for the result rows. */
+static inline const char *csr_uid(const csr_graph *graph, int idx)
+{
+    if (!graph || !graph->user_id_json || idx < 0 || idx >= graph->node_count ||
+        !graph->user_id_json[idx]) return "null";
+    return graph->user_id_json[idx];
+}
 
 static inline unsigned int csr_hash_str(const char *s)
 {

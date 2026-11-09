@@ -158,10 +158,9 @@ graph_algo_result* execute_knn(sqlite3 *db, csr_graph *cached, const char *node_
     for (int i = 0; i < result_count; i++) {
         if (i > 0) ptr += sprintf(ptr, ",");
 
-        const char *neighbor_id = graph->user_ids[similarities[i].node_idx] ?
-                                  graph->user_ids[similarities[i].node_idx] : "";
+        const char *neighbor_id = csr_uid(graph, similarities[i].node_idx);
 
-        ptr += sprintf(ptr, "{\"neighbor\":\"%s\",\"similarity\":%.6f,\"rank\":%d}",
+        ptr += sprintf(ptr, "{\"neighbor\":%s,\"similarity\":%.6f,\"rank\":%d}",
                        neighbor_id, similarities[i].similarity, i + 1);
     }
 

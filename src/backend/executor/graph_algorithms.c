@@ -34,6 +34,10 @@ void csr_graph_free(csr_graph *graph)
         }
         free(graph->user_ids);
     }
+    if (graph->user_id_json) {
+        for (int i = 0; i < graph->node_count; i++) free(graph->user_id_json[i]);
+        free(graph->user_id_json);
+    }
     free(graph->node_idx);
     free(graph->in_row_ptr);
     free(graph->in_col_idx);
@@ -155,20 +159,32 @@ csr_graph* csr_graph_load(sqlite3 *db)
     /* Step 1b: Load user-defined 'id' property for each node */
     graph->user_ids = calloc(graph->node_count, sizeof(char*));
     if (graph->user_ids) {
+        /* A text id, or an integer id (GQLITE-T-0546: an integer id was
+         * user_id null and could not name a start node). Column 2: the id
+         * as a JSON value for the result rows. */
+        graph->user_id_json = calloc(graph->node_count, sizeof(char*));
         rc = sqlite3_prepare_v2(db,
-            "SELECT np.node_id, np.value FROM node_props_text np "
+            "SELECT np.node_id, np.value, json_quote(np.value) FROM node_props_text np "
+            "JOIN property_keys pk ON pk.id = np.key_id AND pk.key = 'id' "
+            "UNION ALL "
+            "SELECT np.node_id, CAST(np.value AS TEXT), CAST(np.value AS TEXT) FROM node_props_int np "
             "JOIN property_keys pk ON pk.id = np.key_id AND pk.key = 'id'",
             -1, &stmt, NULL);
         if (rc == SQLITE_OK) {
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 int node_id = sqlite3_column_int(stmt, 0);
                 const char *user_id = (const char*)sqlite3_column_text(stmt, 1);
+                const char *uid_json = (const char*)sqlite3_column_text(stmt, 2);
 
                 int h = hash_int(node_id, graph->node_idx_size);
                 while (graph->node_idx[h] != -1) {
                     int idx = graph->node_idx[h];
                     if (graph->node_ids[idx] == node_id) {
-                        graph->user_ids[idx] = user_id ? strdup(user_id) : NULL;
+                        if (!graph->user_ids[idx]) {
+                            graph->user_ids[idx] = user_id ? strdup(user_id) : NULL;
+                            if (graph->user_id_json && uid_json)
+                                graph->user_id_json[idx] = strdup(uid_json);
+                        }
                         break;
                     }
                     h = (h + 1) % graph->node_idx_size;
@@ -379,6 +395,32 @@ static char* resolve_string_arg(ast_node *node, const char *params_json)
     return NULL;
 }
 
+/* A node named by its id property: text, or an integer (GQLITE-T-0546:
+ * dijkstra(0, 1) failed, bfs(0) found nothing). */
+static char* resolve_node_id_arg(ast_node *node, const char *params_json)
+{
+    if (!node) return NULL;
+    if (node->type == AST_NODE_LITERAL && ((cypher_literal *)node)->literal_type == LITERAL_INTEGER) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%lld", (long long)((cypher_literal *)node)->value.integer);
+        return strdup(buf);
+    }
+    if (node->type == AST_NODE_PARAMETER && params_json && ((cypher_parameter *)node)->name) {
+        property_type ptype;
+        property_value pv;
+        property_value_init(&pv);
+        if (get_param_value(params_json, ((cypher_parameter *)node)->name, &ptype, &pv) == 0 &&
+            ptype == PROP_TYPE_INTEGER) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld", (long long)pv.as_int);
+            property_value_free(&pv);
+            return strdup(buf);
+        }
+        property_value_free(&pv);
+    }
+    return resolve_string_arg(node, params_json);
+}
+
 /*
  * Resolve a function argument to an int value.
  * Handles AST_NODE_LITERAL (integer) and AST_NODE_PARAMETER (via params_json).
@@ -551,8 +593,8 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         params.type = GRAPH_ALGO_DIJKSTRA;
 
         if (func->args && func->args->count >= 2) {
-            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
-            params.target_id = resolve_string_arg((ast_node *)func->args->items[1], params_json);
+            params.source_id = resolve_node_id_arg((ast_node *)func->args->items[0], params_json);
+            params.target_id = resolve_node_id_arg((ast_node *)func->args->items[1], params_json);
         }
         if (func->args && func->args->count >= 3) {
             params.weight_prop = resolve_string_arg((ast_node *)func->args->items[2], params_json);
@@ -621,8 +663,8 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
 
         /* astar(source, target) or astar(source, target, lat_prop, lon_prop) */
         if (func->args && func->args->count >= 2) {
-            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
-            params.target_id = resolve_string_arg((ast_node *)func->args->items[1], params_json);
+            params.source_id = resolve_node_id_arg((ast_node *)func->args->items[0], params_json);
+            params.target_id = resolve_node_id_arg((ast_node *)func->args->items[1], params_json);
         }
         /* Optional: lat and lon property names for heuristic */
         if (func->args && func->args->count >= 4) {
@@ -639,7 +681,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         params.max_depth = -1;  /* Unlimited by default */
 
         if (func->args && func->args->count >= 1) {
-            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
+            params.source_id = resolve_node_id_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
             params.max_depth = resolve_int_arg((ast_node *)func->args->items[1], params_json, -1);
@@ -654,7 +696,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
         params.max_depth = -1;  /* Unlimited by default */
 
         if (func->args && func->args->count >= 1) {
-            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
+            params.source_id = resolve_node_id_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
             params.max_depth = resolve_int_arg((ast_node *)func->args->items[1], params_json, -1);
@@ -714,7 +756,7 @@ graph_algo_params detect_graph_algorithm(cypher_return *return_clause, const cha
 
         /* knn(node_id, k) */
         if (func->args && func->args->count >= 1) {
-            params.source_id = resolve_string_arg((ast_node *)func->args->items[0], params_json);
+            params.source_id = resolve_node_id_arg((ast_node *)func->args->items[0], params_json);
         }
         if (func->args && func->args->count >= 2) {
             params.k = resolve_int_arg((ast_node *)func->args->items[1], params_json, params.k);

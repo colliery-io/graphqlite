@@ -261,9 +261,9 @@ graph_algo_result* execute_louvain(sqlite3 *db, csr_graph *cached, double resolu
     for (int i = 0; i < n; i++) {
         if (i > 0) ptr += sprintf(ptr, ",");
 
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        const char *user_id = csr_uid(graph, i);
         if (user_id) {
-            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":\"%s\",\"community\":%d}",
+            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":%s,\"community\":%d}",
                           graph->node_ids[i], user_id, community[i]);
         } else {
             ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":null,\"community\":%d}",

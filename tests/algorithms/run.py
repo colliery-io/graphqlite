@@ -40,9 +40,10 @@ EPS = 1e-6
 
 
 class Graph:
-    def __init__(self, n: int, edges: list[tuple[int, int, int]]):
+    def __init__(self, n: int, edges: list[tuple[int, int, int]], int_ids: bool = False):
         self.n, self.edges = n, edges
-        self.ids = [f"n{i}" for i in range(n)]
+        # text ids, or integer ids (GQLITE-T-0546: those were user_id null)
+        self.ids = list(range(n)) if int_ids else [f"n{i}" for i in range(n)]
 
     def out(self) -> dict[int, list[tuple[int, int]]]:
         adj = defaultdict(list)
@@ -63,7 +64,12 @@ def random_graph(rng: random.Random) -> Graph:
     n = rng.randint(0, 12)
     m = rng.randint(0, 2 * n) if n else 0
     edges = [(rng.randrange(n), rng.randrange(n), rng.randint(1, 5)) for _ in range(m)]
-    return Graph(n, edges)
+    return Graph(n, edges, int_ids=rng.random() < 0.5)
+
+
+def q(v) -> str:
+    """An id as a Cypher literal."""
+    return str(v) if isinstance(v, int) else f"'{v}'"
 
 
 def load(ext: str, g: Graph, order: list[int]) -> sqlite3.Connection:
@@ -72,13 +78,13 @@ def load(ext: str, g: Graph, order: list[int]) -> sqlite3.Connection:
     conn.enable_load_extension(True)
     conn.load_extension(ext)
     for i in order:
-        cy(conn, f"CREATE (:N {{id: '{g.ids[i]}'}})")
+        cy(conn, f"CREATE (:N {{id: {q(g.ids[i])}}})")
     eorder = list(range(len(g.edges)))
     if order != sorted(order):          # the relabelled copy: edges in another order too
         random.Random(len(order) * 7 + 1).shuffle(eorder)
     for k in eorder:
         a, b, c = g.edges[k]
-        cy(conn, f"MATCH (a:N {{id: '{g.ids[a]}'}}), (b:N {{id: '{g.ids[b]}'}}) "
+        cy(conn, f"MATCH (a:N {{id: {q(g.ids[a])}}}), (b:N {{id: {q(g.ids[b])}}}) "
                  f"CREATE (a)-[:R {{cost: {c}}}]->(b)")
     return conn
 
@@ -261,8 +267,8 @@ def check_graph(ext: str, g: Graph, rng: random.Random) -> list[tuple[str, str]]
     for s in rng.sample(range(g.n), min(3, g.n)):
         sid = g.ids[s]
         ref = reach(g, s)
-        bfs = {g.ids.index(r["user_id"]): r["depth"] for r in cy(c1, f"CALL bfs('{sid}')")}
-        dfs = {g.ids.index(r["user_id"]) for r in cy(c1, f"CALL dfs('{sid}')")}
+        bfs = {g.ids.index(r["user_id"]): r["depth"] for r in cy(c1, f"CALL bfs({q(sid)})")}
+        dfs = {g.ids.index(r["user_id"]) for r in cy(c1, f"CALL dfs({q(sid)})")}
         if set(bfs) != set(ref):
             fail("bfs_reach", f"from {sid}: {sorted(bfs)} vs {sorted(ref)}")
         elif bfs != ref:
@@ -272,15 +278,15 @@ def check_graph(ext: str, g: Graph, rng: random.Random) -> list[tuple[str, str]]
         hops, cost = dijkstra_ref(g, s, False), dijkstra_ref(g, s, True)
         for t in rng.sample(range(g.n), min(3, g.n)):
             tid = g.ids[t]
-            d = cy(c1, f"CALL dijkstra('{sid}', '{tid}')")
+            d = cy(c1, f"CALL dijkstra({q(sid)}, {q(tid)})")
             got = d[0]["distance"] if d and d[0].get("found") else None
             if got != hops.get(t):
                 fail("dijkstra_hops", f"{sid}->{tid}: {d} vs {hops.get(t)}")
-            dw = cy(c1, f"CALL dijkstra('{sid}', '{tid}', 'cost')")
+            dw = cy(c1, f"CALL dijkstra({q(sid)}, {q(tid)}, 'cost')")
             gotw = dw[0]["distance"] if dw and dw[0].get("found") else None
             if not close(gotw, cost.get(t)):
                 fail("dijkstra_cost", f"{sid}->{tid}: {dw} vs {cost.get(t)}")
-            da = cy(c1, f"CALL astar('{sid}', '{tid}')")
+            da = cy(c1, f"CALL astar({q(sid)}, {q(tid)})")
             gota = da[0]["distance"] if da and da[0].get("found") else None
             if not close(gota, hops.get(t)):
                 fail("astar", f"{sid}->{tid}: {da} vs {hops.get(t)}")
@@ -326,7 +332,7 @@ def check_graph(ext: str, g: Graph, rng: random.Random) -> list[tuple[str, str]]
     # nodeSimilarity gives the pair
     for src in rng.sample(range(g.n), min(2, g.n)):
         k = rng.randint(1, 4)
-        rows = cy(c1, f"CALL knn('{g.ids[src]}', {k})")
+        rows = cy(c1, f"CALL knn({q(g.ids[src])}, {k})")
         sims = [r["similarity"] for r in rows]
         bad = len(rows) > k or sims != sorted(sims, reverse=True) or any(
             not close(r["similarity"], s1.get(tuple(sorted((g.ids[src], r["neighbor"]))), 0.0))

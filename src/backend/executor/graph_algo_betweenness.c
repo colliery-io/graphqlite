@@ -213,9 +213,9 @@ graph_algo_result* execute_betweenness_centrality(sqlite3 *db, csr_graph *cached
     for (int i = 0; i < n; i++) {
         if (i > 0) ptr += sprintf(ptr, ",");
 
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        const char *user_id = csr_uid(graph, i);
         if (user_id) {
-            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":\"%s\",\"score\":%.6f}",
+            ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":%s,\"score\":%.6f}",
                           graph->node_ids[i], user_id, betweenness[i]);
         } else {
             ptr += sprintf(ptr, "{\"node_id\":%d,\"user_id\":null,\"score\":%.6f}",

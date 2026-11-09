@@ -60,11 +60,11 @@ graph_algo_result* execute_degree_centrality(sqlite3 *db, csr_graph *cached)
         int in_degree = graph->in_row_ptr[i + 1] - graph->in_row_ptr[i];
         int total_degree = out_degree + in_degree;
 
-        const char *user_id = graph->user_ids ? graph->user_ids[i] : NULL;
+        const char *user_id = csr_uid(graph, i);
 
         if (user_id) {
             jbuf_add_item(&jb,
-                "{\"node_id\":%d,\"user_id\":\"%s\",\"in_degree\":%d,\"out_degree\":%d,\"degree\":%d}",
+                "{\"node_id\":%d,\"user_id\":%s,\"in_degree\":%d,\"out_degree\":%d,\"degree\":%d}",
                 graph->node_ids[i], user_id, in_degree, out_degree, total_degree);
         } else {
             jbuf_add_item(&jb,
