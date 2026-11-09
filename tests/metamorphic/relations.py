@@ -1034,9 +1034,11 @@ def write_agg(ch: Chooser) -> Case:
     if shape == "create":
         e = _sub_i(e, 2)
     kind = ch.pick("agg.kind")
-    numeric = ch.used.get("w.kind") in ("prop", "arith") and not (nodes and "." in e and e.endswith(".s"))
-    if kind in ("sum", "avg", "stdev", "stdevp", "percentile_cont", "percentile_disc", "min") and not numeric:
-        kind = "count"
+    if kind in ("sum", "avg", "stdev", "stdevp", "percentile_cont", "percentile_disc"):
+        # a numeric aggregate of a non-number is an error in Cypher: give it numbers
+        e = f"{v(nodes[0])}.v" if nodes else ("⟨i⟩" if "i" in scope else "2")
+    elif kind in ("min", "max") and ch.used.get("w.kind") == "list":
+        kind = "count"      # list ordering after a write: GQLITE-T-0548
     agg = AGGS[kind]
     link = "(⟨c⟩)-[:L]->" if shape == "match_match" else ""
     return Case(f"write_agg/{kind}/{shape}", [

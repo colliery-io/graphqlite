@@ -722,6 +722,45 @@ static bool unwind_feeds_write(cypher_query *query, clause_flags flags)
     return (flags & CLAUSE_MATCH) || update_after_merge || agg_tail;
 }
 
+static bool rw_item_aggregates(ast_node **slot);
+static bool rw_is_write_clause(ast_node_type t);
+
+/* A write whose RETURN aggregates inside an expression (size(collect(x)),
+ * count(*) + 1) or has no grouping key (one row even with no input): the
+ * write+RETURN handlers gave null per row, or no row, or null for
+ * collect() (GQLITE-T-0545). The row pipeline groups. */
+static bool write_return_aggregates(cypher_query *query, clause_flags flags)
+{
+    if (flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))
+        return false;
+    if (!query->clauses || query->clauses->count < 2) return false;
+    ast_node *first = query->clauses->items[0];
+    if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
+                    first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH ||
+                    first->type == AST_NODE_MERGE)) return false;
+    bool write = false;
+    for (int i = 0; i < query->clauses->count; i++) {
+        ast_node *c = query->clauses->items[i];
+        if (c && rw_is_write_clause(c->type)) write = true;
+    }
+    ast_node *last = query->clauses->items[query->clauses->count - 1];
+    if (!write || !last || last->type != AST_NODE_RETURN) return false;
+    cypher_return *ret = (cypher_return*)last;
+    if (ret->return_all || !ret->items) return false;
+    bool any_agg = false, nested = false, any_key = false;
+    for (int i = 0; i < ret->items->count; i++) {
+        cypher_return_item *it = (cypher_return_item*)ret->items->items[i];
+        if (!it || !it->expr) continue;
+        if (rw_item_aggregates(&it->expr)) {
+            any_agg = true;
+            if (!aggregating_call_name(it->expr)) nested = true;
+        } else {
+            any_key = true;
+        }
+    }
+    return any_agg && (nested || !any_key);
+}
+
 /* MATCH .. DELETE .. CREATE: the MATCH+DELETE handler ran CREATE first,
  * then matched again for the DELETE, so it deleted what CREATE had just
  * made (`MATCH (a)-[r]->(b) DELETE r CREATE (b)-[:R]->(a)`, Match5 [27]).
@@ -1612,6 +1651,12 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
 
     if (writes_need_rows(query, flags)) {
         CYPHER_DEBUG("Matched shape: writes that need the row pipeline");
+        executor->stmt_capture = false;
+        return handle_rowwise_write(executor, query, result, flags);
+    }
+
+    if (write_return_aggregates(query, flags)) {
+        CYPHER_DEBUG("Matched shape: write with an aggregating RETURN (row-wise)");
         executor->stmt_capture = false;
         return handle_rowwise_write(executor, query, result, flags);
     }
@@ -6303,7 +6348,70 @@ static int rw_aggregate(cypher_executor *executor, ast_node *call, rw_row *rows,
     bool is_count = strcmp(name, "count") == 0, is_collect = strcmp(name, "collect") == 0;
     bool is_sum = strcmp(name, "sum") == 0, is_avg = strcmp(name, "avg") == 0;
     bool is_min = strcmp(name, "min") == 0, is_max = strcmp(name, "max") == 0;
-    if (!is_count && !is_collect && !is_sum && !is_avg && !is_min && !is_max) return -1;
+    /* GQLITE-T-0545: these gave null after a write */
+    bool is_stdev = strcmp(name, "stdev") == 0, is_stdevp = strcmp(name, "stdevp") == 0;
+    bool is_pcont = strcmp(name, "percentilecont") == 0, is_pdisc = strcmp(name, "percentiledisc") == 0;
+    if (!is_count && !is_collect && !is_sum && !is_avg && !is_min && !is_max &&
+        !is_stdev && !is_stdevp && !is_pcont && !is_pdisc) return -1;
+    if (is_stdev || is_stdevp || is_pcont || is_pdisc) {
+        if (!arg) return -1;
+        double pct = 0;
+        if (is_pcont || is_pdisc) {
+            ast_node *parg = fc->args->count > 1 ? fc->args->items[1] : NULL;
+            if (!parg) return -1;
+            if (parg->type == AST_NODE_LITERAL) {
+                cypher_literal *lit = (cypher_literal*)parg;
+                pct = lit->literal_type == LITERAL_DECIMAL ? lit->value.decimal
+                    : lit->literal_type == LITERAL_INTEGER ? (double)lit->value.integer : 0;
+            } else if (n > 0) {
+                char *pt = NULL; int pty = SQLITE_NULL;
+                rw_eval_cell(executor, parg, &rows[idx[0]], &pt, &pty);
+                pct = pt ? strtod(pt, NULL) : 0;
+                free(pt);
+            }
+        }
+        double *vals = calloc((size_t)(n > 0 ? n : 1), sizeof(double));
+        char **texts = calloc((size_t)(n > 0 ? n : 1), sizeof(char*));
+        int *tys = calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+        int m = 0;
+        for (int k = 0; k < n; k++) {
+            char *t; int ty;
+            rw_eval_cell(executor, arg, &rows[idx[k]], &t, &ty);
+            if (!t || (ty != SQLITE_INTEGER && ty != SQLITE_FLOAT)) { free(t); continue; }
+            vals[m] = strtod(t, NULL); texts[m] = t; tys[m] = ty; m++;
+        }
+        /* sort by value (insertion: groups are small) */
+        for (int a1 = 1; a1 < m; a1++)
+            for (int b1 = a1; b1 > 0 && vals[b1 - 1] > vals[b1]; b1--) {
+                double dv = vals[b1]; vals[b1] = vals[b1 - 1]; vals[b1 - 1] = dv;
+                char *dt = texts[b1]; texts[b1] = texts[b1 - 1]; texts[b1 - 1] = dt;
+                int di = tys[b1]; tys[b1] = tys[b1 - 1]; tys[b1 - 1] = di;
+            }
+        char buf[64];
+        if (is_stdev || is_stdevp) {
+            double mean = 0, ss = 0;
+            for (int k = 0; k < m; k++) mean += vals[k];
+            if (m > 0) mean /= m;
+            for (int k = 0; k < m; k++) ss += (vals[k] - mean) * (vals[k] - mean);
+            double d = is_stdev ? (m > 1 ? ss / (m - 1) : 0) : (m > 0 ? ss / m : 0);
+            gql_format_double(buf, sizeof(buf), sqrt(d));
+            *out_text = strdup(buf); *out_type = SQLITE_FLOAT;
+        } else if (m > 0 && is_pcont) {
+            double pos = pct * (m - 1);
+            int lo = (int)floor(pos), hi = lo + 1 < m ? lo + 1 : lo;
+            double v = vals[lo] + (vals[hi] - vals[lo]) * (pos - lo);
+            gql_format_double(buf, sizeof(buf), v);
+            *out_text = strdup(buf); *out_type = SQLITE_FLOAT;
+        } else if (m > 0) {
+            int at = (int)ceil(pct * m) - 1;
+            if (at < 0) at = 0;
+            if (at >= m) at = m - 1;
+            *out_text = strdup(texts[at]); *out_type = tys[at];
+        }
+        for (int k = 0; k < m; k++) free(texts[k]);
+        free(vals); free(texts); free(tys);
+        return 0;
+    }
     if (!arg) {
         if (!is_count) return -1;
         char buf[32];
@@ -6596,6 +6704,66 @@ static int rw_with_aggregate(cypher_executor *executor, cypher_with *w, rw_row *
     return 0;
 }
 
+/* Does an item hold an aggregate anywhere (count(*) + 1, size(collect(x)))? */
+static bool rw_item_aggregates(ast_node **slot)
+{
+    rw_slot *slots = NULL; int n = 0;
+    rw_find_aggregates(slot, &slots, &n);
+    free(slots);
+    return n > 0;
+}
+
+/* An item with aggregates inside an expression, for one group: each
+ * aggregate is computed over the members, then the expression over the
+ * representative row (GQLITE-T-0545). 0, or -1 when it cannot. */
+static int rw_nested_aggregate(cypher_executor *executor, ast_node **slot, rw_row *rows,
+                               const int *members, int k, char **out, int *type)
+{
+    *out = NULL; *type = SQLITE_NULL;
+    rw_slot *slots = NULL; int ns = 0;
+    rw_find_aggregates(slot, &slots, &ns);
+    rw_row ev = {0};
+    rw_row *rep = k > 0 ? &rows[members[0]] : NULL;
+    if (rep) {
+        for (int s = 0; s < rep->n_scalars; s++)
+            rw_row_add_scalar(&ev, rep->scalars[s].name, rep->scalars[s].text, rep->scalars[s].type);
+        for (int v = 0; rep->vm && v < rep->vm->count; v++) {
+            const char *vn = rep->vm->mappings[v].variable;
+            if (!vn || rw_row_scalar(&ev, vn)) continue;
+            ast_node *id = (ast_node*)make_identifier((char*)vn, 0);
+            char *t; int ty;
+            rw_eval_cell(executor, id, rep, &t, &ty);
+            ast_node_free(id);
+            rw_row_add_scalar(&ev, vn, t, ty == SQLITE_NULL ? SQLITE_NULL : SQLITE_TEXT);
+            free(t);
+        }
+    }
+    int rc = 0;
+    ast_node **orig = calloc((size_t)(ns > 0 ? ns : 1), sizeof(ast_node*));
+    for (int s = 0; s < ns && rc == 0; s++) {
+        char *t; int ty;
+        if (rw_aggregate(executor, *slots[s], rows, members, k, &t, &ty) < 0) { rc = -1; break; }
+        char an[32];
+        snprintf(an, sizeof(an), "__rw_agg_%d", s);
+        rw_row_add_scalar(&ev, an, t, ty);
+        free(t);
+        orig[s] = *slots[s];
+        *slots[s] = (ast_node*)make_identifier(an, 0);
+    }
+    if (rc == 0) {
+        int ty = rw_expr_scalar_only(*slot, &ev) ? rw_eval_scalar(executor, *slot, &ev, out) : -1;
+        if (ty < 0) rc = -1; else *type = ty;
+    }
+    for (int s = 0; s < ns; s++) {
+        if (!orig[s]) continue;
+        ast_node_free(*slots[s]);
+        *slots[s] = orig[s];
+    }
+    free(orig); free(slots);
+    rw_row_free(&ev);
+    return rc;
+}
+
 static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_row *rows,
                              const bool *row_alive, int n_rows, cypher_result *result)
 {
@@ -6628,7 +6796,10 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
     aug.items = aug_items;
     ret = &aug;
     int cols = aug_items->count;
-    bool agg = return_has_aggregation(ret);
+    bool agg = false;
+    for (int i = 0; i < cols; i++)
+        if (rw_item_aggregates(&((cypher_return_item*)ret->items->items[i])->expr)) agg = true;
+    int rc_nested = 0;
 
     /* 1. Project the live rows. */
     rw_out_row *out = calloc((size_t)(n_rows > 0 ? n_rows : 1), sizeof(rw_out_row));
@@ -6644,7 +6815,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
     if (agg) {
         bool *key = calloc((size_t)cols, sizeof(bool));
         for (int i = 0; i < cols; i++)
-            key[i] = !aggregating_call_name(((cypher_return_item*)ret->items->items[i])->expr);
+            key[i] = !rw_item_aggregates(&((cypher_return_item*)ret->items->items[i])->expr);
         rw_out_row *groups = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(rw_out_row));
         int n_groups = 0;
         variable_map **maps = calloc((size_t)(n_out > 0 ? n_out : 1), sizeof(variable_map*));
@@ -6671,6 +6842,12 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
                 if (key[i]) {
                     grp->cells[i] = out[g].cells[i] ? strdup(out[g].cells[i]) : NULL;
                     grp->types[i] = out[g].types[i];
+                } else if (!aggregating_call_name(it->expr)) {
+                    if (rw_nested_aggregate(executor, &it->expr, rows, member, k,
+                                            &grp->cells[i], &grp->types[i]) < 0) {
+                        set_result_error(result, "Cannot evaluate an aggregating RETURN item after a write");
+                        rc_nested = -1;
+                    }
                 } else if (rw_aggregate(executor, it->expr, rows, member, k,
                                         &grp->cells[i], &grp->types[i]) == 0) {
                     /* computed from the row cells */
@@ -6709,7 +6886,7 @@ static int rw_project_return(cypher_executor *executor, cypher_return *ret, rw_r
         n_out = w;
     }
 
-    int rc = 0;
+    int rc = rc_nested;
     /* 4. ORDER BY */
     if (n_order > 0) {
         bool *desc = calloc((size_t)n_order, sizeof(bool));
