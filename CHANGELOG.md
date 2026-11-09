@@ -22,6 +22,15 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   set to `Infinity` or `-Infinity` (for example `1.0 / 0.0`) was not stored
   up to 0.12.0, and 0.9.4 and 0.10.0 stored the property key `on` as `On`.
 
+- **Times and datetimes print one form:** no zero seconds, no trailing
+  zeros in a fraction, `Z` for a zero offset (`time('13:53:00+01:00')` is
+  `13:53+01:00`, `localtime('10:30:00.500')` is `10:30:00.5`). A value built
+  from a string, from a map, by arithmetic or by truncate now prints the same
+  and compares equal. Values stored by earlier releases read back as they were
+  written, so a stored `'10:30:00'` time is not equal to a new
+  `localtime('10:30')`; rewrite such properties (`SET n.t = localtime(n.t)`)
+  to compare them.
+
 ## [0.12.0] — 2026-10-17
 
 New Cypher: `LOAD CSV`, `PROFILE`, `CALL algorithm() YIELD`, label

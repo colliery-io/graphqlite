@@ -71,6 +71,7 @@ void gql_duration_field_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
 void gql_normalize_date_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+void gql_tcanon_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 void gql_temporal_diff_ns_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
 
 /* Regex + Cypher reflection */

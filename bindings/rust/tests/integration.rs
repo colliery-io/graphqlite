@@ -3652,7 +3652,7 @@ fn test_duration_map() {
 fn test_datetime_from_epoch() {
     let conn = test_connection();
     let r = conn.cypher("RETURN datetimeFromEpoch(0) AS r").unwrap();
-    assert_eq!(r[0].get::<String>("r").unwrap(), "1970-01-01T00:00:00Z");
+    assert_eq!(r[0].get::<String>("r").unwrap(), "1970-01-01T00:00Z");  // GQLITE-T-0550
 }
 
 #[test]

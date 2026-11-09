@@ -199,7 +199,7 @@ int transform_date_function(cypher_transform_context *ctx, cypher_function_call 
  * time(string) - parse ISO time string
  * time({hour, minute, second}) - construct from map
  */
-int transform_time_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+static int transform_time_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming time() function");
 
@@ -343,7 +343,7 @@ int transform_time_function(cypher_transform_context *ctx, cypher_function_call 
  * datetime(string) - parse ISO datetime string
  * datetime({year, month, day, hour, minute, second}) - construct from map
  */
-int transform_datetime_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+static int transform_datetime_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming datetime() function");
 
@@ -654,7 +654,7 @@ int transform_duration_function(cypher_transform_context *ctx, cypher_function_c
 /* Transform datetime.fromEpoch(seconds, nanoseconds) and datetime.fromEpochMillis(ms)
  * These are dispatched as function calls: datetimeFromEpoch, datetimeFromEpochMillis
  */
-int transform_datetime_from_epoch_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+static int transform_datetime_from_epoch_function_inner(cypher_transform_context *ctx, cypher_function_call *func_call)
 {
     CYPHER_DEBUG("Transforming datetime.fromEpoch function");
 
@@ -991,7 +991,18 @@ static int emit_truncate_tz_portion(cypher_transform_context *ctx, ast_node *src
 }
 
 /* Common implementation for datetime/localdatetime/time/localtime truncate. */
+static int transform_datetime_truncate_impl_inner(cypher_transform_context *ctx,
+                                             cypher_function_call *func_call,
+                                             bool emit_date, bool emit_tz);
 static int transform_datetime_truncate_impl(cypher_transform_context *ctx,
+                                             cypher_function_call *func_call,
+                                             bool emit_date, bool emit_tz) {
+    append_sql(ctx, "_gql_tcanon(");   /* GQLITE-T-0550 */
+    int rc = transform_datetime_truncate_impl_inner(ctx, func_call, emit_date, emit_tz);
+    append_sql(ctx, ")");
+    return rc;
+}
+static int transform_datetime_truncate_impl_inner(cypher_transform_context *ctx,
                                              cypher_function_call *func_call,
                                              bool emit_date, bool emit_tz) {
     if (!func_call->args || (func_call->args->count != 2 && func_call->args->count != 3)) {
@@ -1204,3 +1215,30 @@ int transform_date_add_function(cypher_transform_context *ctx, cypher_function_c
     return 0;
 }
 
+
+/* GQLITE-T-0550: the value in its one printed form. */
+int transform_time_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    append_sql(ctx, "_gql_tcanon(");
+    int rc = transform_time_function_inner(ctx, func_call);
+    append_sql(ctx, ")");
+    return rc;
+}
+
+/* GQLITE-T-0550: the value in its one printed form. */
+int transform_datetime_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    append_sql(ctx, "_gql_tcanon(");
+    int rc = transform_datetime_function_inner(ctx, func_call);
+    append_sql(ctx, ")");
+    return rc;
+}
+
+/* GQLITE-T-0550: the value in its one printed form. */
+int transform_datetime_from_epoch_function(cypher_transform_context *ctx, cypher_function_call *func_call)
+{
+    append_sql(ctx, "_gql_tcanon(");
+    int rc = transform_datetime_from_epoch_function_inner(ctx, func_call);
+    append_sql(ctx, ")");
+    return rc;
+}

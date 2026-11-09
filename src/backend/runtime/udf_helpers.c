@@ -2670,6 +2670,66 @@ static void temporal_src_style(const char *t, bool *had_sec, const char **tz_suf
     *tz_suffix = p;
 }
 
+/* GQLITE-T-0550: the one printed form of a time or a datetime, so equal
+ * values print the same and compare equal: trailing zeros of a fraction
+ * dropped (and the fraction when nothing is left), zero seconds without a
+ * fraction dropped, a zero offset without a zone name written Z. Dates,
+ * durations and other text are copied as they are. Writes into out. */
+static void gql_tcanon_into(const char *s, char *out, size_t outsz)
+{
+    snprintf(out, outsz, "%s", s ? s : "");
+    if (!s || !*s || s[0] == '{' || s[0] == '[') return;
+    const char *t = NULL;
+    const char *T = strchr(s, 'T');
+    if (T && T > s && T[-1] >= '0' && T[-1] <= '9') t = T + 1;
+    else if (strlen(s) >= 5 && s[2] == ':') t = s;
+    if (!t) return;
+    if (!(t[0] >= '0' && t[0] <= '9' && t[1] >= '0' && t[1] <= '9' && t[2] == ':' &&
+          t[3] >= '0' && t[3] <= '9' && t[4] >= '0' && t[4] <= '9')) return;
+    const char *p = t + 5;
+    char sec[3] = "";
+    char frac[16] = "";
+    if (p[0] == ':' && p[1] >= '0' && p[1] <= '9' && p[2] >= '0' && p[2] <= '9') {
+        sec[0] = p[1]; sec[1] = p[2]; sec[2] = 0;
+        p += 3;
+        if (*p == '.') {
+            p++;
+            int n = 0;
+            while (*p >= '0' && *p <= '9' && n < 15) frac[n++] = *p++;
+            while (*p >= '0' && *p <= '9') p++;
+            frac[n] = 0;
+            while (n > 0 && frac[n - 1] == '0') frac[--n] = 0;
+        }
+    }
+    const char *tz = p;
+    char tzbuf[96];
+    if (strcmp(tz, "+00:00") == 0 || strcmp(tz, "-00:00") == 0) snprintf(tzbuf, sizeof(tzbuf), "Z");
+    else snprintf(tzbuf, sizeof(tzbuf), "%s", tz);
+    size_t head = (size_t)(t - s) + 5;
+    if (head >= outsz) return;
+    char res[160];
+    if (head >= sizeof(res)) return;
+    memcpy(res, s, head);
+    res[head] = 0;
+    size_t l = head;
+    if (frac[0]) l += (size_t)snprintf(res + l, sizeof(res) - l, ":%s.%s", sec[0] ? sec : "00", frac);
+    else if (sec[0] && strcmp(sec, "00") != 0) l += (size_t)snprintf(res + l, sizeof(res) - l, ":%s", sec);
+    snprintf(res + l, sizeof(res) - l, "%s", tzbuf);
+    snprintf(out, outsz, "%s", res);
+}
+
+/* _gql_tcanon(x): the canonical printed form of a temporal text. */
+void gql_tcanon_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
+{
+    if (argc != 1 || sqlite3_value_type(argv[0]) != SQLITE_TEXT) {
+        if (argc == 1) sqlite3_result_value(ctx, argv[0]); else sqlite3_result_null(ctx);
+        return;
+    }
+    char out[160];
+    gql_tcanon_into((const char *)sqlite3_value_text(argv[0]), out, sizeof(out));
+    sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+}
+
 /* Apply a duration to a temporal string. `sign` is +1 (add) or -1 (sub). */
 static void apply_duration_to_temporal(sqlite3_context *ctx, const char *temporal,
                                         const char *duration_json, int sign) {
@@ -2677,6 +2737,7 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
     if (!parse_temporal_parts(temporal, &p)) { sqlite3_result_text(ctx, temporal, -1, SQLITE_TRANSIENT); return; }
     bool had_sec; const char *tz_suffix;
     temporal_src_style(temporal, &had_sec, &tz_suffix);
+    (void)had_sec;   /* zero seconds are not printed (GQLITE-T-0550) */
     long long add_months, add_days, add_seconds, add_ns_field, add_total_ns, total_months;
     /* Checked: a duration near the integer range overflowed these sums
      * (GQLITE-T-0500). The day and time-of-day sums below are checked too. */
@@ -2753,7 +2814,7 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
                 while (width > 0 && sub % 10 == 0) { sub /= 10; width--; }
                 snprintf(buf + dl, sizeof(buf) - dl, "T%02d:%02d:%02d.%0*lld",
                          new_h, new_mi, new_sec, width, sub);
-            } else if (new_sec || had_sec) {
+            } else if (new_sec) {
                 snprintf(buf + dl, sizeof(buf) - dl, "T%02d:%02d:%02d",
                          new_h, new_mi, new_sec);
             } else {
@@ -2765,7 +2826,7 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
                 size_t l = strlen(buf);
                 snprintf(buf + l, sizeof(buf) - l, "%s", tz_suffix);
             }
-            sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+            { char cb[160]; gql_tcanon_into(buf, cb, sizeof(cb)); sqlite3_result_text(ctx, cb, -1, SQLITE_TRANSIENT); }
         } else {
             /* date-only output. */
             char buf[32];
@@ -2795,7 +2856,7 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
             while (width > 0 && sub % 10 == 0) { sub /= 10; width--; }
             snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%0*lld",
                      new_h, new_mi, new_sec, width, sub);
-        } else if (new_sec || had_sec) {
+        } else if (new_sec) {
             snprintf(buf, sizeof(buf), "%02d:%02d:%02d", new_h, new_mi, new_sec);
         } else {
             snprintf(buf, sizeof(buf), "%02d:%02d", new_h, new_mi);
@@ -2804,7 +2865,7 @@ static void apply_duration_to_temporal(sqlite3_context *ctx, const char *tempora
             size_t l = strlen(buf);
             snprintf(buf + l, sizeof(buf) - l, "%s", tz_suffix);
         }
-        sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        { char cb[160]; gql_tcanon_into(buf, cb, sizeof(cb)); sqlite3_result_text(ctx, cb, -1, SQLITE_TRANSIENT); }
         return;
     }
     sqlite3_result_text(ctx, temporal, -1, SQLITE_TRANSIENT);
@@ -3942,7 +4003,7 @@ void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
         }
     }
 
-    /* Compose output. Drop seconds + sub-second when zero & not in source. */
+    /* Compose output. Zero seconds without a fraction are not printed. */
     char out[80];
     char *o = out;
     if (subsec_digits > 0) {
@@ -3953,13 +4014,14 @@ void gql_normalize_time_func(sqlite3_context *ctx, int argc, sqlite3_value **arg
         for (int i = width; i < 9; i++) divisor *= 10;
         shown = ns / divisor;
         o += snprintf(o, sizeof(out), "%02d:%02d:%02d.%0*lld", h, mi, sec, width, (long long)shown);
-    } else if (has_colon ? (sscanf(s, "%*d:%*d:%d", &sec) == 1) : (main_len == 6)) {
+    } else if ((has_colon ? (sscanf(s, "%*d:%*d:%d", &sec) == 1) : (main_len == 6)) && sec != 0) {
+        /* zero seconds are not printed (GQLITE-T-0550) */
         o += snprintf(o, sizeof(out), "%02d:%02d:%02d", h, mi, sec);
     } else {
         o += snprintf(o, sizeof(out), "%02d:%02d", h, mi);
     }
     o += snprintf(o, sizeof(out) - (o - out), "%s", tz_out);
-    sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+    { char cb[160]; gql_tcanon_into(out, cb, sizeof(cb)); sqlite3_result_text(ctx, cb, -1, SQLITE_TRANSIENT); }
 }
 
 /* Normalize a datetime string: date portion + 'T' + time portion. */
@@ -4155,13 +4217,15 @@ void gql_normalize_datetime_func(sqlite3_context *ctx, int argc, sqlite3_value *
             for (int i = width; i < 9; i++) divisor *= 10;
             o += snprintf(o, sizeof(out) - (o - out), "%02d:%02d:%02d.%0*lld",
                           h, mi, sec, width, (long long)(ns / divisor));
-        } else if (has_seconds) {
+        } else if (has_seconds && sec != 0) {
+            /* zero seconds are not printed (GQLITE-T-0550: one form for
+             * equal values, as a map constructor and Neo4j print them) */
             o += snprintf(o, sizeof(out) - (o - out), "%02d:%02d:%02d", h, mi, sec);
         } else {
             o += snprintf(o, sizeof(out) - (o - out), "%02d:%02d", h, mi);
         }
         o += snprintf(o, sizeof(out) - (o - out), "%s", tz_out);
-        sqlite3_result_text(ctx, out, -1, SQLITE_TRANSIENT);
+        { char cb[160]; gql_tcanon_into(out, cb, sizeof(cb)); sqlite3_result_text(ctx, cb, -1, SQLITE_TRANSIENT); }
     }
 }
 
