@@ -401,6 +401,14 @@ static int gql_cmp_json_arrays(sqlite3 *db, const char *aa, const char *ab) {
     return la < lb ? -1 : 1;
 }
 
+/* Cypher order of two lists (JSON array texts): -1, 0, 1, or -2 when it
+ * is undefined (a null or an unorderable element decides). For the row
+ * pipeline's sorts and min/max (GQLITE-T-0548). */
+int gql_compare_json_lists(sqlite3 *db, const char *a, const char *b)
+{
+    return gql_cmp_json_arrays(db, a, b);
+}
+
 static int gql_cmp_json_vals(sqlite3 *db,
                              const char *ja, const char *jta,
                              const char *jb, const char *jtb) {

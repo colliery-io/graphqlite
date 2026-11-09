@@ -197,9 +197,22 @@ static int evaluate_ast_with_context_raw(
      * JSON boolean) in value mode (GQLITE-T-0407). */
     ctx->in_comparison = !(expr->type == AST_NODE_LIST || expr->type == AST_NODE_MAP);
     append_sql(ctx, "SELECT ");
+    size_t value_start = ctx->sql_size;
     if (transform_expression(ctx, expr) < 0) {
         cypher_transform_free_context(ctx);
         return -1;
+    }
+    /* The value's type tag as a second column (GQLITE-T-0548: a boolean
+     * from coalesce(x IS NULL, 0) was stored as the integer 0). */
+    {
+        char *value_sql = strdup(ctx->sql_buffer + value_start);
+        bool saved = ctx->in_comparison;
+        ctx->in_comparison = false;
+        char *tag = value_sql ? cypher_expr_tag_sql(ctx, expr, value_sql) : NULL;
+        ctx->in_comparison = saved;
+        append_sql(ctx, ", %s", tag ? tag : "NULL");
+        free(tag);
+        free(value_sql);
     }
 
     /* Build full SQL: SELECT func(...) FROM nodes AS n_0 WHERE n_0.id = X */
@@ -242,6 +255,15 @@ static int evaluate_ast_with_context_raw(
     int col_type = sqlite3_column_type(stmt, 0);
     sqlite3_value *cv0 = sqlite3_column_value(stmt, 0);
     bool json_sub = cv0 && sqlite3_value_subtype(cv0) == GQL_SUBTYPE_JSON;
+    const char *vtag = (const char*)sqlite3_column_text(stmt, 1);
+    if (col_type != SQLITE_NULL && vtag && strcmp(vtag, "bool") == 0) {
+        const char *t = (const char*)sqlite3_column_text(stmt, 0);
+        *out_type = PROP_TYPE_BOOLEAN;
+        out_value->as_bool = col_type == SQLITE_TEXT ? (t && strcmp(t, "true") == 0)
+                                                     : sqlite3_column_int64(stmt, 0) != 0;
+        sqlite3_finalize(stmt);
+        return 0;
+    }
     switch (col_type) {
         case SQLITE_INTEGER:
             *out_type = PROP_TYPE_INTEGER;
@@ -328,9 +350,20 @@ int evaluate_function_call_via_sqlite(
     executor_register_foreach_values(ctx);
 
     append_sql(ctx, "SELECT ");
+    size_t value_start = ctx->sql_size;
     if (transform_expression(ctx, (ast_node*)func_call) < 0) {
         cypher_transform_free_context(ctx);
         return -1;
+    }
+    /* The value's type tag as a second column: a boolean result such as
+     * coalesce(x IS NULL, 0) came back as the integer 0 and was stored as
+     * one (GQLITE-T-0548). */
+    {
+        char *value_sql = strdup(ctx->sql_buffer + value_start);
+        char *tag = value_sql ? cypher_expr_tag_sql(ctx, (ast_node*)func_call, value_sql) : NULL;
+        append_sql(ctx, ", %s", tag ? tag : "NULL");
+        free(tag);
+        free(value_sql);
     }
 
     sqlite3_stmt *stmt;
@@ -354,6 +387,15 @@ int evaluate_function_call_via_sqlite(
     }
 
     int col_type = sqlite3_column_type(stmt, 0);
+    const char *vtag = (const char*)sqlite3_column_text(stmt, 1);
+    if (col_type != SQLITE_NULL && vtag && strcmp(vtag, "bool") == 0) {
+        const char *t = (const char*)sqlite3_column_text(stmt, 0);
+        *out_type = PROP_TYPE_BOOLEAN;
+        out_value->as_bool = col_type == SQLITE_TEXT ? (t && strcmp(t, "true") == 0)
+                                                     : sqlite3_column_int64(stmt, 0) != 0;
+        sqlite3_finalize(stmt);
+        return 0;
+    }
     switch (col_type) {
         case SQLITE_INTEGER:
             *out_type = PROP_TYPE_INTEGER;

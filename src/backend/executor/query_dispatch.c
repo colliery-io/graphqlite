@@ -17,6 +17,7 @@
 #include "executor/graph_algorithms.h"
 #include "parser/cypher_debug.h"
 #include "runtime/gql_error.h"
+#include "runtime/udf_helpers.h"
 
 /*
  * Clause extraction helpers - find specific clause types in a query
@@ -864,6 +865,7 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
     bool merge = false, read_before_merge = false, read_after_write = false, read_seen = false;
     bool only_unwind_read = true;   /* every read clause before the writes is an UNWIND */
     bool later_match_where = false; /* a WHERE on a second MATCH before the writes */
+    bool ret_modifiers = false;     /* RETURN ... ORDER BY / SKIP / LIMIT / DISTINCT */
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
@@ -883,8 +885,12 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
             case AST_NODE_CREATE: case AST_NODE_SET: case AST_NODE_DELETE: case AST_NODE_REMOVE:
                 writes++;
                 break;
-            case AST_NODE_RETURN:
+            case AST_NODE_RETURN: {
+                cypher_return *r = (cypher_return *)c;
+                if ((r->order_by && r->order_by->count > 0) || r->skip || r->limit || r->distinct)
+                    ret_modifiers = true;
                 break;
+            }
             default:
                 return false;
         }
@@ -893,7 +899,9 @@ static bool writes_need_rows(cypher_query *query, clause_flags flags)
     /* `UNWIND $rows AS r MERGE (n {id: r.id}) ON CREATE SET ...` keeps its
      * batch handler: it is correct there, and 28x faster than row by row
      * (GQLITE-T-0431). */
-    if (writes == 1 && merge && only_unwind_read && !read_after_write) return false;
+    /* ... unless its RETURN sorts, pages or dedupes: the batch handler
+     * ignored ORDER BY (GQLITE-T-0548). */
+    if (writes == 1 && merge && only_unwind_read && !read_after_write && !ret_modifiers) return false;
     /* The MATCH + write handlers bind each MATCH on its own: a second
      * MATCH's WHERE did not see the first one's variables (GQLITE-T-0469),
      * and they kept the first row of each MATCH: `MATCH (a) MATCH
@@ -3363,6 +3371,14 @@ static bool unwind_create_needs_pipeline(cypher_query *query)
                 if (alias && (((cypher_return *)c)->return_all ||
                               items_mention(((cypher_return *)c)->items, alias)))
                     return true;
+                /* The fast path ignored ORDER BY (and so took LIMIT of the
+                 * unsorted rows): UNWIND [3, 1, 2] AS l CREATE (n {k: l})
+                 * RETURN n.k ORDER BY n.k gave 3, 1, 2 (GQLITE-T-0548). */
+                {
+                    cypher_return *r = (cypher_return *)c;
+                    if ((r->order_by && r->order_by->count > 0) || r->skip || r->limit || r->distinct)
+                        return true;
+                }
                 break;
             case AST_NODE_WITH:
                 /* WITH ... WHERE / aggregation after the CREATE stays on the
@@ -6214,10 +6230,24 @@ static bool rw_rows_equal(const rw_out_row *a, const rw_out_row *b, int cols, co
 
 /* Cypher order of two cells: numbers by value, other values by text,
  * null after every value. */
+/* The database of the running row pipeline, for comparing lists. */
+static GQL_THREAD_LOCAL sqlite3 *g_rw_db;
+
 static int rw_cell_cmp(const char *a, int ta, const char *b, int tb)
 {
     if (!a || ta == SQLITE_NULL) return (!b || tb == SQLITE_NULL) ? 0 : 1;
     if (!b || tb == SQLITE_NULL) return -1;
+    /* Lists in Cypher order, element by element (GQLITE-T-0548: they
+     * compared as JSON text, so [] sorted after [2, 4, 6]); a list sorts
+     * before any other value. */
+    bool la = a[0] == '[' && ta != GQL_COL_TYPE_STRING;
+    bool lb = b[0] == '[' && tb != GQL_COL_TYPE_STRING;
+    if (la && lb) {
+        int c = g_rw_db ? gql_compare_json_lists(g_rw_db, a, b) : -2;
+        if (c != -2) return c;
+        return strcmp(a, b);
+    }
+    if (la != lb) return la ? -1 : 1;
     bool na = (ta == SQLITE_INTEGER || ta == SQLITE_FLOAT);
     bool nb = (tb == SQLITE_INTEGER || tb == SQLITE_FLOAT);
     if (na && nb) {
@@ -7406,6 +7436,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     }
 
     CYPHER_DEBUG("Executing row-wise write pipeline");
+    g_rw_db = executor->db;
 
     /* --- 1. Split prefix / tail ------------------------------------------ */
     int start = 0;
@@ -7548,6 +7579,7 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
      * { MATCH () }})` gives 0 for both rows, as in openCypher, and a CREATE
      * before it has run for every row. 1 = barrier ahead, 2 = values done. */
     int *create_eager = calloc((size_t)clauses->count, sizeof(int));
+    }
     rw_eager_slot *eager_slots = NULL;
     int n_eager_slots = 0;
     for (int i = prefix_end; create_eager && i < clauses->count; i++) {
