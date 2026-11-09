@@ -188,12 +188,12 @@ graph_algo_result* execute_dijkstra(sqlite3 *db, csr_graph *cached, const char *
     size_t json_len = strlen(json);
 
     for (int i = 0; i < path_len; i++) {
-        const char *user_id = graph->user_ids ? graph->user_ids[path[i]] : NULL;
+        const char *user_id = csr_uid(graph, path[i]);
         char entry[128];
         int entry_len;
 
-        if (user_id) {
-            entry_len = snprintf(entry, sizeof(entry), "%s\"%s\"",
+        if (strcmp(user_id, "null") != 0) {
+            entry_len = snprintf(entry, sizeof(entry), "%s%s",
                                  (i > 0) ? "," : "", user_id);
         } else {
             entry_len = snprintf(entry, sizeof(entry), "%s%d",

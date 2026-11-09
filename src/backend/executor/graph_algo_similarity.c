@@ -138,8 +138,8 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, csr_graph *cached, const
         char *json = malloc(256);
         if (json) {
             snprintf(json, 256,
-                "[{\"node1\":\"%s\",\"node2\":\"%s\",\"similarity\":%.6f}]",
-                node1_id, node2_id, sim);
+                "[{\"node1\":%s,\"node2\":%s,\"similarity\":%.6f}]",
+                csr_uid(graph, idx1), csr_uid(graph, idx2), sim);
             result->json_result = json;
             result->success = true;
         } else {
@@ -260,12 +260,10 @@ graph_algo_result* execute_node_similarity(sqlite3 *db, csr_graph *cached, const
     for (int i = 0; i < pair_count; i++) {
         if (i > 0) ptr += sprintf(ptr, ",");
 
-        const char *id1 = graph->user_ids[pairs[i].node1] ?
-                          graph->user_ids[pairs[i].node1] : "";
-        const char *id2 = graph->user_ids[pairs[i].node2] ?
-                          graph->user_ids[pairs[i].node2] : "";
+        const char *id1 = csr_uid(graph, pairs[i].node1);
+        const char *id2 = csr_uid(graph, pairs[i].node2);
 
-        ptr += sprintf(ptr, "{\"node1\":\"%s\",\"node2\":\"%s\",\"similarity\":%.6f}",
+        ptr += sprintf(ptr, "{\"node1\":%s,\"node2\":%s,\"similarity\":%.6f}",
                        id1, id2, pairs[i].similarity);
     }
 

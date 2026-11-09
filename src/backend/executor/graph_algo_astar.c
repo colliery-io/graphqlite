@@ -391,11 +391,11 @@ graph_algo_result* execute_astar(sqlite3 *db, csr_graph *cached, const char *sou
         size_t pos = strlen(json);
 
         for (int i = path_len - 1; i >= 0; i--) {
-            const char *uid = graph->user_ids[path[i]] ? graph->user_ids[path[i]] : "";
+            const char *uid = csr_uid(graph, path[i]);
             if (i < path_len - 1) {
                 json[pos++] = ',';
             }
-            int written = snprintf(json + pos, buf_size - pos, "\"%s\"", uid);
+            int written = snprintf(json + pos, buf_size - pos, "%s", uid);
             pos += written;
         }
 

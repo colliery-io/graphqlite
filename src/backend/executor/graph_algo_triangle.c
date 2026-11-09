@@ -177,14 +177,14 @@ graph_algo_result* execute_triangle_count(sqlite3 *db, csr_graph *cached) {
         }
 
         /* Get user_id */
-        const char *user_id = graph->user_ids[i] ? graph->user_ids[i] : "";
+        const char *user_id = csr_uid(graph, i);
 
         if (i > 0) {
             json[pos++] = ',';
         }
 
         int written = snprintf(json + pos, buf_size - pos,
-            "{\"node_id\":%d,\"user_id\":\"%s\",\"triangles\":%d,\"clustering_coefficient\":%.6f}",
+            "{\"node_id\":%d,\"user_id\":%s,\"triangles\":%d,\"clustering_coefficient\":%.6f}",
             graph->node_ids[i], user_id, triangles[i], clustering);
 
         if (written < 0 || (size_t)written >= buf_size - pos) {
@@ -201,7 +201,7 @@ graph_algo_result* execute_triangle_count(sqlite3 *db, csr_graph *cached) {
             }
             json = new_json;
             written = snprintf(json + pos, buf_size - pos,
-                "{\"node_id\":%d,\"user_id\":\"%s\",\"triangles\":%d,\"clustering_coefficient\":%.6f}",
+                "{\"node_id\":%d,\"user_id\":%s,\"triangles\":%d,\"clustering_coefficient\":%.6f}",
                 graph->node_ids[i], user_id, triangles[i], clustering);
         }
         pos += written;

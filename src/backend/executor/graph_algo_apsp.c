@@ -146,15 +146,15 @@ graph_algo_result* execute_apsp(sqlite3 *db, csr_graph *cached)
             double d = dist[i * n + j];
             if (d >= APSP_INF) continue;  /* Skip unreachable pairs */
 
-            const char *source_id = graph->user_ids ? graph->user_ids[i] : NULL;
-            const char *target_id = graph->user_ids ? graph->user_ids[j] : NULL;
+            const char *source_id = csr_uid(graph, i);
+            const char *target_id = csr_uid(graph, j);
 
             char entry[256];
             int entry_len;
 
             if (source_id && target_id) {
                 entry_len = snprintf(entry, sizeof(entry),
-                                     "%s{\"source\":\"%s\",\"target\":\"%s\",\"distance\":%.10g}",
+                                     "%s{\"source\":%s,\"target\":%s,\"distance\":%.10g}",
                                      first ? "" : ",",
                                      source_id, target_id, d);
             } else {
