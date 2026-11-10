@@ -11,7 +11,7 @@ and each release since the docs moved to this site.
 
 Up to v0.9.2 the docs were an mdBook book. Its copy of v0.9.2 stays as it was:
 
-* [v0.9.2](../../v0.9.2/)
+* [v0.9.2](../../../v0.9.2/)
 
 ## Earlier releases
 
