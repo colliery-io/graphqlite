@@ -322,6 +322,7 @@ void ast_node_free(ast_node *node)
                     free(pattern->variable);
                 }
                 if (pattern->label_alternatives) ast_list_free(pattern->label_alternatives);
+                ast_node_free(pattern->where);
                 if (pattern->labels) {
                     CYPHER_DEBUG("Freeing labels list with %d items", pattern->labels->count);
                     ast_list_free(pattern->labels);
@@ -342,6 +343,7 @@ void ast_node_free(ast_node *node)
                 ast_list_free(pattern->types);
                 ast_node_free(pattern->properties);
                 ast_node_free(pattern->varlen);
+                ast_node_free(pattern->where);
             }
             break;
             

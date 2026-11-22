@@ -6,6 +6,22 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`WHERE` inside a pattern:** `(n:Person WHERE n.age > 30)` and
+  `(a)-[r WHERE r.w > 1]->(b)`, in `MATCH`, `EXISTS { }`, `COUNT { }`,
+  pattern predicates and pattern comprehensions (GQLITE-T-0538).
+
+### Fixed
+
+- **`EXPLAIN` of a query with `MERGE`** failed with "Unsupported clause
+  type"; it gives the lookup SQL and what the `MERGE` does. `EXPLAIN` and
+  `PROFILE` name the row pipeline (`ROW_PIPELINE`) when it runs the query
+  (GQLITE-T-0541).
+- **`FOREACH` next to `MERGE`:** `MATCH … FOREACH … WITH … MERGE` skipped
+  the `FOREACH`; `MERGE … WITH … FOREACH` and a leading `FOREACH` before
+  `MERGE … WITH` failed (GQLITE-T-0541).
+
 ## [1.0.0] — 2026-11-09
 
 The first stable release. No new Cypher clauses since 0.12.0: this release

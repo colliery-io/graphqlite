@@ -75,6 +75,10 @@ CountExpressionAcceptance.feature::COUNT subquery with aggregation inside should
 CountExpressionAcceptance.feature::COUNT subquery with empty node
 CountExpressionAcceptance.feature::COUNT works in conjunction with algebraic operations
 CountExpressionAcceptance.feature::Count can be nested inside another count
+CountExpressionAcceptance.feature::Count inlined in node pattern with label expression on named node should be supported
+CountExpressionAcceptance.feature::Count inlined in node pattern with label expression on unnamed node should be supported
+CountExpressionAcceptance.feature::Count inlined in relationship pattern with label expression on named node should be supported
+CountExpressionAcceptance.feature::Count inlined in relationship pattern with label expression on unnamed node should be supported
 CountExpressionAcceptance.feature::Count should allow shadowing of variables not yet introduced in outer scope
 CountExpressionAcceptance.feature::Count should allow the shadowing of introduced variables
 CountExpressionAcceptance.feature::Count subquery with FINISH should fail
@@ -97,26 +101,38 @@ CountExpressionAcceptance.feature::Inner query with merge should fail with synta
 CountExpressionAcceptance.feature::Inner query with set should fail with syntax error
 CountExpressionAcceptance.feature::Multiple patterns in inner MATCH should work
 CountExpressionAcceptance.feature::Multiple patterns with relationships in inner MATCH should work
+CountExpressionAcceptance.feature::Nested inlined XOR between count and other predicate in node pattern should be supported
+CountExpressionAcceptance.feature::Nested inlined XOR between count and other predicate in relationship pattern should be supported
+CountExpressionAcceptance.feature::Nested inlined count in node pattern should be supported
+CountExpressionAcceptance.feature::Nested inlined count in relationship pattern should be supported
 CountExpressionAcceptance.feature::Simple COUNT with MATCH keyword
 CountExpressionAcceptance.feature::Simple COUNT with single node
+CountExpressionAcceptance.feature::Simple COUNT with single node with inlined predicate
 CountExpressionAcceptance.feature::Simple COUNT with single node with inlined property map predicate
 CountExpressionAcceptance.feature::Simple COUNT with single node with label predicate
 CountExpressionAcceptance.feature::Simple COUNT with single node with predicate
 CountExpressionAcceptance.feature::Simple COUNT with single unbound node
 CountExpressionAcceptance.feature::Simple COUNT with single unbound node with inlined property map predicate
+CountExpressionAcceptance.feature::Simple COUNT with where clause in a node
 CountExpressionAcceptance.feature::Simple COUNT with where clause outside the node
 CountExpressionAcceptance.feature::Simple COUNT without where clause
 CountExpressionAcceptance.feature::Standalone COUNT with RETURN *
 Create.feature::Create with reverse of toStringOrNull
 Create.feature::Creating patterns first evaluates all contained count expressions (example 1)
 Create.feature::Creating patterns first evaluates all contained count expressions (example 2)
+Create.feature::Creating patterns first evaluates all contained count expressions (example 3)
 Create.feature::Creating patterns first evaluates all contained count expressions (example 4)
 Create.feature::Creating patterns first evaluates all contained count expressions (example 5)
+Create.feature::Creating patterns first evaluates all contained count expressions (example 6)
+Create.feature::Creating patterns first evaluates all contained count expressions (example 7)
 Create.feature::Creating patterns first evaluates all contained count expressions on all inputs
 Create.feature::Creating patterns first evaluates all contained exists expressions (example 1)
 Create.feature::Creating patterns first evaluates all contained exists expressions (example 2)
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 3)
 Create.feature::Creating patterns first evaluates all contained exists expressions (example 4)
 Create.feature::Creating patterns first evaluates all contained exists expressions (example 5)
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 6)
+Create.feature::Creating patterns first evaluates all contained exists expressions (example 7)
 Create.feature::Creating patterns first evaluates all contained pattern comprehensions
 Create.feature::Creating patterns first evaluates all contained pattern expressions
 Create.feature::Dependencies between nodes and relationships longer pattern
@@ -168,8 +184,14 @@ ExistsExpressionAcceptance.feature::Exists as a WITH and with an inside Exists s
 ExistsExpressionAcceptance.feature::Exists can be nested inside another exists
 ExistsExpressionAcceptance.feature::Exists deep in RETURN should work
 ExistsExpressionAcceptance.feature::Exists exists subquery with predicate should work
+ExistsExpressionAcceptance.feature::Exists function inlined in node pattern with label expression should be supported
+ExistsExpressionAcceptance.feature::Exists function inlined in relationship pattern with label expression should be supported
 ExistsExpressionAcceptance.feature::Exists in MATCH in horizon without where clause should work
 ExistsExpressionAcceptance.feature::Exists in RETURN should work
+ExistsExpressionAcceptance.feature::Exists inlined in node pattern with label expression on named node should be supported
+ExistsExpressionAcceptance.feature::Exists inlined in node pattern with label expression on unnamed node should be supported
+ExistsExpressionAcceptance.feature::Exists inlined in relationship pattern with label expression on named node should be supported
+ExistsExpressionAcceptance.feature::Exists inlined in relationship pattern with label expression on unnamed node should be supported
 ExistsExpressionAcceptance.feature::Exists inside a WITH should work
 ExistsExpressionAcceptance.feature::Exists is valid as part of an equality check
 ExistsExpressionAcceptance.feature::Exists on the right side of an OR should work
@@ -228,6 +250,10 @@ ExistsExpressionAcceptance.feature::Multiple patterns in inner MATCH with WHERE 
 ExistsExpressionAcceptance.feature::Multiple patterns in inner MATCH without external variables should be supported
 ExistsExpressionAcceptance.feature::Multiple patterns in outer MATCH should be supported
 ExistsExpressionAcceptance.feature::NOT EXISTS with single node should work should work
+ExistsExpressionAcceptance.feature::Nested inlined XOR between exists and other predicate in node pattern should be supported
+ExistsExpressionAcceptance.feature::Nested inlined XOR between exists and other predicate in relationship pattern should be supported
+ExistsExpressionAcceptance.feature::Nested inlined exists in node pattern should be supported
+ExistsExpressionAcceptance.feature::Nested inlined exists in relationship pattern should be supported
 ExistsExpressionAcceptance.feature::Nesting with NOT EXISTS should work
 ExistsExpressionAcceptance.feature::Not Exists is valid as part of an equality check
 ExistsExpressionAcceptance.feature::Not Exists should work
@@ -362,6 +388,17 @@ NaNAcceptance.feature::with NOT of an inequality with NaN in a property
 NaNAcceptance.feature::with NOT of an inequality with NaN in a variable
 NaNAcceptance.feature::with NOT of an inequality with NaN on both sides
 NaNAcceptance.feature::with chained numerical function value
+NodePatternPredicatesAcceptance.feature::Pattern comprehension with predicate on a single node
+NodePatternPredicatesAcceptance.feature::Pattern comprehension with predicates on multiple nodes
+NodePatternPredicatesAcceptance.feature::Predicate on a single node
+NodePatternPredicatesAcceptance.feature::Predicates on multiple nodes
+NodePatternPredicatesAcceptance.feature::Should allow arbitrary search conditions
+NodePatternPredicatesAcceptance.feature::Should allow mixing property specification and WHERE clause
+NodePatternPredicatesAcceptance.feature::Should allow reference to earlier elements of the pattern
+NodePatternPredicatesAcceptance.feature::Should allow reference to later elements of the pattern
+NodePatternPredicatesAcceptance.feature::Should allow reference to self and earlier and later elements of the pattern
+NodePatternPredicatesAcceptance.feature::Should allow references other elements of the pattern in a pattern comprehension
+NodePatternPredicatesAcceptance.feature::shortestPath with node pattern predicate
 NullIfFunctionAcceptance.feature::Can be used as a filter
 NullIfFunctionAcceptance.feature::Null as first param returns null
 NullIfFunctionAcceptance.feature::Null as second param doesn't return null
@@ -450,6 +487,15 @@ PatternPredicates.feature::Returning a relationship from a pattern predicate
 PatternPredicates.feature::Using a pattern predicate after aggregation 1
 PatternPredicates.feature::Using a pattern predicate after aggregation 2
 PatternPredicates.feature::Using pattern predicate
+RelationshipPatternPredicatesAcceptance.feature::Pattern comprehension with predicate on a relationship
+RelationshipPatternPredicatesAcceptance.feature::Predicate on a relationship
+RelationshipPatternPredicatesAcceptance.feature::Should allow arbitrary search conditions
+RelationshipPatternPredicatesAcceptance.feature::Should allow mixing property specification and WHERE clause
+RelationshipPatternPredicatesAcceptance.feature::Should allow projected variables in relationship predicate
+RelationshipPatternPredicatesAcceptance.feature::Should allow reference to earlier elements of the pattern
+RelationshipPatternPredicatesAcceptance.feature::Should allow reference to later elements of the pattern
+RelationshipPatternPredicatesAcceptance.feature::Should allow references to earlier elements of the pattern in a pattern comprehension
+RelationshipPatternPredicatesAcceptance.feature::Should allow references to later elements of the pattern in a pattern comprehension
 RemoveAcceptance.feature::Does not observe item-by-item visibility
 RemoveAcceptance.feature::Does not observe row-by-row visibility
 ReturnAcceptance.feature::Accessing a list with null as lower bound should return null

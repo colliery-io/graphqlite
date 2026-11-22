@@ -10,7 +10,7 @@ title: Cypher Clauses
 MATCH pattern [WHERE condition]
 ```
 
-Reads nodes and relationships matching the given pattern. Binds variables to matched entities. Multiple comma-separated patterns in one `MATCH` form a cross-product constrained by shared variables. A `WHERE` clause immediately following `MATCH` filters before joining subsequent clauses.
+Reads nodes and relationships matching the given pattern. Binds variables to matched entities. Multiple comma-separated patterns in one `MATCH` form a cross-product constrained by shared variables. A `WHERE` clause immediately following `MATCH` filters before joining subsequent clauses. A node or relationship pattern can hold its own `WHERE`; it has the same effect as that predicate in the `WHERE` of the clause. This form is also valid in `EXISTS { }`, `COUNT { }` and pattern comprehensions, and not in `CREATE` or `MERGE`.
 
 **Pattern forms**
 
@@ -23,6 +23,7 @@ Reads nodes and relationships matching the given pattern. Binds variables to mat
 | Named path | `p = (a)-[*]->(b)` |
 | Multiple labels | `(n:Person:Employee)` |
 | Property filter | `(n:Person {name: 'Alice'})` |
+| Predicate in a pattern | `(n:Person WHERE n.age > 30)`, `(a)-[r WHERE r.since > 2020]->(b)` |
 
 **Examples**
 

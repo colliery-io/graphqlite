@@ -299,6 +299,8 @@ typedef struct cypher_node_pattern {
     ast_node *properties; /* Property map (optional) */
     ast_list *label_alternatives; /* `:A|B|C`: the node has one of these labels
                                    * (string literals; labels is NULL then) */
+    ast_node *where;      /* (n WHERE expr): set by the parser only until the
+                           * clause takes it into its own WHERE (GQLITE-T-0538) */
 } cypher_node_pattern;
 
 /* Relationship pattern: -[var:TYPE {props}]-> */
@@ -311,6 +313,7 @@ typedef struct cypher_rel_pattern {
     bool left_arrow;      /* <- direction */
     bool right_arrow;     /* -> direction */
     ast_node *varlen;     /* Variable length range (optional) */
+    ast_node *where;      /* -[r WHERE expr]-: as for a node pattern */
 } cypher_rel_pattern;
 
 /* Variable-length range: [*1..5], [*], [*2..], [*..3] */
