@@ -162,7 +162,9 @@ static void set_merge_node_props(cypher_executor *executor, int node_id,
             set_node_prop_from_param(executor, node_id, pair->key, (cypher_parameter*)pair->value, result);
         } else if (pair->value->type == AST_NODE_LITERAL) {
             cypher_literal *lit = (cypher_literal*)pair->value;
-            int b = lit->value.boolean;
+            /* the union holds a boolean only for a boolean literal (UBSan:
+             * "load of value 112, which is not a valid value for type 'bool'") */
+            int b = lit->literal_type == LITERAL_BOOLEAN ? lit->value.boolean : 0;
             property_type t;
             const void *v;
             switch (lit->literal_type) {
