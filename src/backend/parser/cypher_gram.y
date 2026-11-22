@@ -1886,7 +1886,7 @@ function_call:
             if (ee) { ee->where_clause = take_pattern_wheres($3, NULL); ee->is_subquery = true; }
             $$ = (ast_node*)ee;
         }
-    | EXISTS '{' single_query '}'
+    | EXISTS '{' union_query '}'
         {
             /* GQLITE-T-0139: full existential subquery
              * EXISTS { MATCH (n)-->(m) [WITH ... WHERE ...] RETURN true }
@@ -1915,7 +1915,7 @@ function_call:
             $$ = make_count_subquery(context, $1, $3, $5, NULL, &@1);
             if (!$$) YYERROR;
         }
-    | IDENTIFIER '{' single_query '}'
+    | IDENTIFIER '{' union_query '}'
         {
             /* COUNT { MATCH ... [RETURN ...] }: the number of rows. */
             $$ = make_count_subquery(context, $1, NULL, NULL, $3, &@1);

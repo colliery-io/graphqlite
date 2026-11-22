@@ -789,6 +789,7 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                  * mixing) before transform. */
                 {
                     char *uerr = NULL;
+                    cypher_union_align_columns(ast);
                     if (transform_validate_union((cypher_union *)ast, &uerr) < 0) {
                         set_result_error_ex(result, uerr ? uerr : "UNION validation failed",
                                             GQL_ERR_VALIDATION, 0, 0);

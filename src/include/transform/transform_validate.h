@@ -20,5 +20,8 @@ int transform_validate_query(cypher_query *query, char **error_message);
 /* Validate a UNION tree: column-name agreement across branches, and no
  * mixing of UNION with UNION ALL. */
 int transform_validate_union(cypher_union *u, char **error_message);
+/* Put the RETURN items of each later UNION branch in the column order of the
+ * first branch, when the names are the same in another order. */
+void cypher_union_align_columns(ast_node *root);
 
 #endif

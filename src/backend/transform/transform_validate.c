@@ -2324,6 +2324,9 @@ static const char *column_name_of(cypher_return_item *it)
     if (!it) return NULL;
     if (it->alias) return it->alias;
     if (!it->expr) return NULL;
+    /* An unaliased item is named by its text: RETURN 5 UNION ALL RETURN 5
+     * (GQLITE-T-0540). */
+    if (it->source_text) return it->source_text;
     if (it->expr->type == AST_NODE_IDENTIFIER) {
         return ((cypher_identifier *)it->expr)->name;
     }
@@ -2413,6 +2416,65 @@ static int validate_union_recursive(cypher_union *u, bool *first_all_seen,
         }
     }
     return 0;
+}
+
+/* The queries of a UNION chain, left to right. */
+static int union_branches(ast_node *n, cypher_query **out, int cap, int count)
+{
+    if (!n) return count;
+    if (n->type == AST_NODE_UNION) {
+        count = union_branches(((cypher_union *)n)->left, out, cap, count);
+        return union_branches(((cypher_union *)n)->right, out, cap, count);
+    }
+    if ((n->type == AST_NODE_QUERY || n->type == AST_NODE_SINGLE_QUERY) && count < cap)
+        out[count++] = (cypher_query *)n;
+    return count;
+}
+
+/* UNION matches the columns of its branches by name, not by position:
+ * `RETURN 1 AS x, 2 AS y UNION RETURN 3 AS y, 2 AS x` (GQLITE-T-0537). SQL
+ * matches by position, so the RETURN items of a later branch that has the
+ * names of the first branch in another order are put in the order of the
+ * first. A branch with other names is left for the validation to refuse. */
+void cypher_union_align_columns(ast_node *root)
+{
+    if (!root || root->type != AST_NODE_UNION) return;
+    cypher_query *br[64];
+    int n = union_branches(root, br, 64, 0);
+    if (n < 2) return;
+    cypher_return *first = find_terminal_return(br[0]);
+    if (!first || !first->items || first->items->count < 2 || first->items->count > 64) return;
+    int cols = first->items->count;
+    char *names[64];
+    for (int i = 0; i < cols; i++) {
+        const char *nm = column_name_of((cypher_return_item *)first->items->items[i]);
+        if (!nm) { for (int k = 0; k < i; k++) free(names[k]); return; }
+        names[i] = strdup(nm);
+    }
+    for (int b = 1; b < n; b++) {
+        cypher_return *r = find_terminal_return(br[b]);
+        if (!r || !r->items || r->items->count != cols) continue;
+        ast_node *ordered[64];
+        bool used[64] = {false};
+        bool ok = true, moved = false;
+        for (int i = 0; i < cols && ok; i++) {
+            ordered[i] = NULL;
+            for (int j = 0; j < cols; j++) {
+                if (used[j]) continue;
+                const char *nm = column_name_of((cypher_return_item *)r->items->items[j]);
+                if (nm && strcmp(nm, names[i]) == 0) {
+                    ordered[i] = r->items->items[j];
+                    used[j] = true;
+                    if (j != i) moved = true;
+                    break;
+                }
+            }
+            if (!ordered[i]) ok = false;
+        }
+        if (ok && moved)
+            for (int i = 0; i < cols; i++) r->items->items[i] = ordered[i];
+    }
+    for (int i = 0; i < cols; i++) free(names[i]);
 }
 
 int transform_validate_union(cypher_union *u, char **error_message)

@@ -12,8 +12,17 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   `(a)-[r WHERE r.w > 1]->(b)`, in `MATCH`, `EXISTS { }`, `COUNT { }`,
   pattern predicates and pattern comprehensions (GQLITE-T-0538).
 
+- **`UNION` inside `COUNT { }` and `EXISTS { }`** (GQLITE-T-0537).
+
 ### Fixed
 
+- **`CALL { … UNION … }`:** a branch did not see the imported variables
+  ("no such table: _gql_pipe_0", "no such column: p"), a write in a branch
+  did not run for each row, and `ORDER BY … LIMIT` in a branch was an SQL
+  error. Each branch runs as its own subquery (GQLITE-T-0537).
+- **`UNION` matches columns by name:** `RETURN 1 AS x, 2 AS y UNION RETURN
+  3 AS y, 2 AS x` gives x = 2, y = 3 for the second row (it was refused),
+  and `RETURN 5 UNION ALL RETURN 5` is accepted (GQLITE-T-0537).
 - **`EXPLAIN` of a query with `MERGE`** failed with "Unsupported clause
   type"; it gives the lookup SQL and what the `MERGE` does. `EXPLAIN` and
   `PROFILE` name the row pipeline (`ROW_PIPELINE`) when it runs the query

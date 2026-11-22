@@ -84,7 +84,13 @@ CountExpressionAcceptance.feature::Count should allow the shadowing of introduce
 CountExpressionAcceptance.feature::Count subquery with FINISH should fail
 CountExpressionAcceptance.feature::Count subquery with updating procedure should fail
 CountExpressionAcceptance.feature::Count used in a nested plan
+CountExpressionAcceptance.feature::Count used in an expression with a Union
+CountExpressionAcceptance.feature::Count with UNION ALL and no returns should work
+CountExpressionAcceptance.feature::Count with UNION ALL should work
+CountExpressionAcceptance.feature::Count with UNION should work
+CountExpressionAcceptance.feature::Count with UNION that references outer variable should work
 CountExpressionAcceptance.feature::Count with a RETURNING case
+CountExpressionAcceptance.feature::Count with a union made of RETURNs
 CountExpressionAcceptance.feature::Count with function use should work
 CountExpressionAcceptance.feature::Count with shadowing of an outer variable should result in error
 CountExpressionAcceptance.feature::Full COUNT with MATCH keyword
@@ -222,6 +228,11 @@ ExistsExpressionAcceptance.feature::Exists with Nesting should work
 ExistsExpressionAcceptance.feature::Exists with RETURN *
 ExistsExpressionAcceptance.feature::Exists with RETURN that is null
 ExistsExpressionAcceptance.feature::Exists with a RETURNING case should work
+ExistsExpressionAcceptance.feature::Exists with a Union ALL and no returns should work
+ExistsExpressionAcceptance.feature::Exists with a Union ALL should work
+ExistsExpressionAcceptance.feature::Exists with a Union and no Returns should work
+ExistsExpressionAcceptance.feature::Exists with a Union should work
+ExistsExpressionAcceptance.feature::Exists with a union made of RETURNs should work
 ExistsExpressionAcceptance.feature::Exists with create should fail with syntax error
 ExistsExpressionAcceptance.feature::Exists with delete should fail with syntax error
 ExistsExpressionAcceptance.feature::Exists with inner aggregation and using outer variable should work
@@ -517,6 +528,7 @@ ReturnAcceptance.feature::Return a map with null
 ReturnAcceptance.feature::Return a nested list with null
 ReturnAcceptance.feature::Return null in list with nested lists and maps
 ReturnAcceptance.feature::Return null in map with nested lists and maps
+ReturnAcceptance.feature::Unaliased return items in a top level union should be accepted
 SkipLimitAcceptance.feature::Combining LIMIT and aggregation
 SkipLimitAcceptance.feature::Limit before distinct
 SkipLimitAcceptance.feature::Limit before sort
@@ -530,20 +542,26 @@ SkipLimitAcceptance.feature::Skipping more than Integer.Max rows should be allow
 SkipLimitAcceptance.feature::Stand alone limit in the return clause
 SkipLimitAcceptance.feature::Top with limit 0
 SubqueryAcceptance.feature::Accessing variables from outer query
+SubqueryAcceptance.feature::Aggregating top and bottom results
 SubqueryAcceptance.feature::Aggregation on imported variables
 SubqueryAcceptance.feature::CALL around single query - using returned var in outer query
 SubqueryAcceptance.feature::CALL around union query - using returned var in outer query
+SubqueryAcceptance.feature::CALL around union query with different return column orders - using returned vars in outer query
 SubqueryAcceptance.feature::CALLs in sequence
+SubqueryAcceptance.feature::Correlated union unit subquery
 SubqueryAcceptance.feature::Correlated unit subquery
 SubqueryAcceptance.feature::Each execution of a CALL subquery can observe changes from previous executions, projections should capture the state of the current execution
 SubqueryAcceptance.feature::Embedded nested unit subquery call
 SubqueryAcceptance.feature::Ending nested unit subquery call
+SubqueryAcceptance.feature::Ending union unit subquery call
 SubqueryAcceptance.feature::Ending unit subquery call
 SubqueryAcceptance.feature::Executes subquery for all incoming rows
 SubqueryAcceptance.feature::Importing path expressions into subqueries
+SubqueryAcceptance.feature::Importing path expressions into union subqueries
 SubqueryAcceptance.feature::Map projections in correlated single subquery are OK
 SubqueryAcceptance.feature::Map projections in correlated union subquery are OK
 SubqueryAcceptance.feature::Map projections in uncorrelated single subquery are OK
+SubqueryAcceptance.feature::Map projections in uncorrelated union subquery are OK
 SubqueryAcceptance.feature::Nested subqueries
 SubqueryAcceptance.feature::Post-processing of a subquery result
 SubqueryAcceptance.feature::Should allow importing variables into a subquery

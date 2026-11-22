@@ -10,6 +10,7 @@
 #include <ctype.h>
 
 #include "executor/query_patterns.h"
+#include "transform/transform_validate.h"
 #include "gql_thread_local.h"
 #include "entity_json_sql.h"
 #include "executor/executor_internal.h"
@@ -6904,9 +6905,107 @@ static char *rw_scalar_json(const rw_scalar *sc)
     return buf ? buf : sqlite3_mprintf("null");
 }
 
-/* Run the inner query of a CALL for one row. NULL on error (result set). */
+static cypher_result *rw_run_call_one(cypher_executor *executor, ast_node *inner, rw_row *row,
+                                      ast_list *outer, cypher_result *result);
+
+/* The queries of a UNION chain, left to right. */
+static int rw_union_branches(ast_node *n, ast_node **out, int cap, int count)
+{
+    if (!n) return count;
+    if (n->type == AST_NODE_UNION) {
+        count = rw_union_branches(((cypher_union*)n)->left, out, cap, count);
+        return rw_union_branches(((cypher_union*)n)->right, out, cap, count);
+    }
+    if (count < cap) out[count++] = n;
+    return count;
+}
+
+/* Run the inner query of a CALL for one row. NULL on error (result set).
+ *
+ * CALL { A UNION B } (GQLITE-T-0537): each branch runs as its own inner
+ * query, with its own importing WITH, its writes, and its ORDER BY / LIMIT;
+ * the rows are put together, and UNION (not ALL) drops the equal ones. The
+ * union went to the read-only transform as one query before: a branch did
+ * not see the imported variables, and a write in a branch did not run. */
 static cypher_result *rw_run_call(cypher_executor *executor, ast_node *inner, rw_row *row,
                                   ast_list *outer, cypher_result *result)
+{
+    if (!inner || inner->type != AST_NODE_UNION)
+        return rw_run_call_one(executor, inner, row, outer, result);
+
+    cypher_union_align_columns(inner);
+    char *uerr = NULL;
+    if (transform_validate_union((cypher_union*)inner, &uerr) < 0) {
+        set_result_error(result, uerr ? uerr : "UNION validation failed");
+        free(uerr);
+        return NULL;
+    }
+    ast_node *branches[64];
+    int nb = rw_union_branches(inner, branches, 64, 0);
+    bool all = ((cypher_union*)inner)->all;
+    cypher_result *acc = create_empty_result();
+    if (!acc) return NULL;
+    acc->success = true;
+    for (int b = 0; b < nb; b++) {
+        cypher_result *ir = rw_run_call_one(executor, branches[b], row, outer, result);
+        if (!ir) { cypher_result_free(acc); return NULL; }
+        acc->nodes_created += ir->nodes_created;
+        acc->nodes_deleted += ir->nodes_deleted;
+        acc->relationships_created += ir->relationships_created;
+        acc->relationships_deleted += ir->relationships_deleted;
+        acc->properties_set += ir->properties_set;
+        if (ir->column_count > 0 && ir->column_names) {
+            if (!acc->column_names) {
+                acc->column_names = ir->column_names;
+                acc->column_count = ir->column_count;
+                ir->column_names = NULL;
+            } else if (ir->column_count != acc->column_count) {
+                set_result_error(result, "SyntaxError: DifferentColumnsInUnion: UNION branches must return the same columns");
+                cypher_result_free(ir); cypher_result_free(acc);
+                return NULL;
+            }
+            int total = acc->row_count + ir->row_count;
+            char ***nd = realloc(acc->data, (size_t)(total > 0 ? total : 1) * sizeof(char**));
+            if (nd) acc->data = nd;
+            int **nt = realloc(acc->data_types, (size_t)(total > 0 ? total : 1) * sizeof(int*));
+            if (nt) acc->data_types = nt;
+            if (!nd || !nt) { cypher_result_free(ir); cypher_result_free(acc); return NULL; }
+            for (int k = 0; k < ir->row_count; k++) {
+                char **cells = ir->data ? ir->data[k] : NULL;
+                int *types = ir->data_types ? ir->data_types[k] : NULL;
+                if (!types) {
+                    types = calloc((size_t)acc->column_count, sizeof(int));
+                    for (int c = 0; types && c < acc->column_count; c++)
+                        types[c] = cells && cells[c] ? SQLITE_TEXT : SQLITE_NULL;
+                }
+                /* UNION: skip a row that is already there */
+                bool dup = false;
+                for (int e = 0; !all && cells && e < acc->row_count && !dup; e++) {
+                    dup = true;
+                    for (int c = 0; c < acc->column_count && dup; c++) {
+                        const char *x = acc->data[e][c], *y = cells[c];
+                        if ((x == NULL) != (y == NULL) || (x && strcmp(x, y) != 0)) dup = false;
+                        else if (types && acc->data_types[e] && acc->data_types[e][c] != types[c]) dup = false;
+                    }
+                }
+                if (dup || !cells) {
+                    if (!ir->data_types || !ir->data_types[k]) free(types);
+                    continue;                       /* ir still owns the row */
+                }
+                acc->data[acc->row_count] = cells;
+                acc->data_types[acc->row_count] = types;
+                acc->row_count++;
+                ir->data[k] = NULL;
+                if (ir->data_types) ir->data_types[k] = NULL;
+            }
+        }
+        cypher_result_free(ir);
+    }
+    return acc;
+}
+
+static cypher_result *rw_run_call_one(cypher_executor *executor, ast_node *inner, rw_row *row,
+                                      ast_list *outer, cypher_result *result)
 {
     cypher_with *imp = NULL;
     cypher_query *iq = inner && inner->type == AST_NODE_QUERY ? (cypher_query*)inner : NULL;

@@ -4316,6 +4316,7 @@ static int validate_parsed_ast(ast_node *ast, char **error_message) {
         return transform_validate_query((cypher_query *)ast, error_message);
     }
     if (ast->type == AST_NODE_UNION) {
+        cypher_union_align_columns(ast);
         return transform_validate_union((cypher_union *)ast, error_message);
     }
     return 0;
