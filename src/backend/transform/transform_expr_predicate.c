@@ -319,6 +319,20 @@ static char *subquery_branch_sql(cypher_transform_context *ctx, cypher_query *q,
         if (transform_var_is_projected(ctx->var_ctx, v->name)) {
             if (outer_ref && !*outer_ref) *outer_ref = strdup(alias);
             transform_var_register_projected(sub->var_ctx, v->name, alias);
+            /* Its table (`_je_0` of `_je_0.value`, `_with_0` of `_with_0.x`)
+             * is of the outer query: the body must not put it in its own
+             * FROM. `[x IN nodes | COUNT { (x)-->() }]` was "no such table:
+             * _je_0" (GQLITE-T-0553). */
+            if (outer_tokens) {
+                const char *dot = strchr(alias, '.');
+                const char *start = dot;
+                while (dot && start > alias && (isalnum((unsigned char)start[-1]) || start[-1] == '_')) start--;
+                if (dot && dot > start) {
+                    size_t tl = (size_t)(dot - start);
+                    char *tok = malloc(tl + 1);
+                    if (tok) { memcpy(tok, start, tl); tok[tl] = '\0'; outer_tokens[outer_token_count++] = tok; }
+                }
+            }
             transform_var_set_bound(sub->var_ctx, v->name, true);
             if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
                 transform_var_set_scalar_value(sub->var_ctx, v->name, true);
@@ -543,7 +557,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                         bool first_table = true;
                         char node_aliases[10][32];  /* Support up to 10 nodes in pattern */
-                        char node_ids[10][72];      /* each node's id expression */
+                        char node_ids[10][400];     /* each node's id expression */
                         bool node_is_external[10];  /* Track which nodes are from outer context */
                         int node_count = 0;
 
@@ -578,9 +592,19 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                      * body (`<alias>.id`, GQLITE-T-0139), or a node
                                      * carried through WITH / UNWIND (`_with_0.a`,
                                      * GQLITE-T-0450). Otherwise the id is `<alias>.id`. */
-                                    if (transform_var_alias_is_id(ctx->var_ctx, node->variable) ||
-                                        transform_var_is_projected(ctx->var_ctx, node->variable)) {
+                                    if (transform_var_alias_is_id(ctx->var_ctx, node->variable)) {
                                         snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s", outer_alias);
+                                    } else if (transform_var_is_projected(ctx->var_ctx, node->variable)) {
+                                        /* An id, or a node held as a value: the
+                                         * variable of a list comprehension or of a
+                                         * list predicate. `[x IN nodes WHERE
+                                         * (x)-->()]` compared the relationship with
+                                         * the JSON text and kept nothing
+                                         * (GQLITE-T-0553). */
+                                        snprintf(node_ids[node_count], sizeof(node_ids[node_count]),
+                                                 "(CASE WHEN typeof(%s) = 'text' AND json_valid(%s) "
+                                                 "THEN json_extract(%s, '$.id') ELSE %s END)",
+                                                 outer_alias, outer_alias, outer_alias, outer_alias);
                                     } else {
                                         snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", outer_alias);
                                     }

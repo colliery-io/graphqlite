@@ -119,7 +119,16 @@ static int emit_registered_path_members(cypher_transform_context *ctx, transform
             prev_varlen = NULL;
             if (!want_nodes) continue;
             if (dbuf_len(&u) > 0) dbuf_append(&u, " UNION ALL ");
-            if (a) dbuf_appendf(&u, a_is_id ? "SELECT %d AS seg, 0 AS k, %s AS v"
+            /* A node held as a value (the variable of a list
+             * comprehension): the id of the value. nodes(q) of `[q =
+             * (x)-->() | ...]` gave the whole node as the id
+             * (GQLITE-T-0553). */
+            bool a_is_value = a && np->variable && !transform_var_alias_is_id(ctx->var_ctx, np->variable) &&
+                              transform_var_is_projected(ctx->var_ctx, np->variable);
+            if (a && a_is_value)
+                dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, (CASE WHEN typeof(%s) = 'text' AND json_valid(%s) "
+                                 "THEN json_extract(%s, '$.id') ELSE %s END) AS v", seg, a, a, a, a);
+            else if (a) dbuf_appendf(&u, a_is_id ? "SELECT %d AS seg, 0 AS k, %s AS v"
                                             : "SELECT %d AS seg, 0 AS k, %s.id AS v", seg, a);
             else dbuf_appendf(&u, "SELECT %d AS seg, 0 AS k, NULL AS v", seg);
             /* After a zero-hop segment this node is the node before it. */

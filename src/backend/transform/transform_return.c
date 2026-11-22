@@ -1679,8 +1679,22 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                                     first_n = false;
                                     if (!a) { append_sql(ctx, "null"); continue; }
                                     {
-                                        char id_expr[300];
-                                        snprintf(id_expr, sizeof(id_expr), "%s.id", a);
+                                        /* The id of the node: `<alias>.id` of its
+                                         * table, the alias itself when it is an id
+                                         * column, or the id of a node held as a
+                                         * value (the variable of a list
+                                         * comprehension: `[x IN nodes(q) | [p =
+                                         * (x)-->() | p]]` read `_je_0.value.id`,
+                                         * GQLITE-T-0553). */
+                                        char id_expr[900];
+                                        if (transform_var_alias_is_id(ctx->var_ctx, np->variable))
+                                            snprintf(id_expr, sizeof(id_expr), "%s", a);
+                                        else if (transform_var_is_projected(ctx->var_ctx, np->variable))
+                                            snprintf(id_expr, sizeof(id_expr),
+                                                     "(CASE WHEN typeof(%s) = 'text' AND json_valid(%s) "
+                                                     "THEN json_extract(%s, '$.id') ELSE %s END)", a, a, a, a);
+                                        else
+                                            snprintf(id_expr, sizeof(id_expr), "%s.id", a);
                                         char *nj = gql_sql_node_json_expr("", id_expr);
                                         if (!nj) return -1;
                                         append_sql(ctx, "%s", nj);
@@ -2483,6 +2497,12 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* Save current variable count to restore later */
                 int saved_var_count = transform_var_count(ctx->var_ctx);
+                /* A path variable with the name of an outer one (`[p =
+                 * (x)-->() | p]` inside `MATCH p = ...`) is bound inside the
+                 * comprehension only. It replaced the outer path, which was
+                 * then a path of nulls (GQLITE-T-0553). */
+                transform_var *saved_path_var = comp->path_var
+                    ? transform_var_save(ctx->var_ctx, comp->path_var) : NULL;
 
                 /* Track node aliases and whether they're external */
                 char node_aliases[10][32];
@@ -2893,6 +2913,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* Restore variable count (remove pattern-local variables) */
                 transform_var_truncate_to(ctx->var_ctx, saved_var_count);
+                if (saved_path_var) transform_var_restore(ctx->var_ctx, comp->path_var, saved_path_var);
                 g_pc_depth--;
             }
             break;

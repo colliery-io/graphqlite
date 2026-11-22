@@ -48,6 +48,13 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
   `OPTIONAL MATCH (b)-[e]->(z)` gave `z = b`. The new nodes are now the
   ends of the relationship, or null. An optional pattern whose variables
   are all bound keeps the row when it does not match (GQLITE-T-0552).
+- **A pattern on the variable of a list comprehension, `reduce()` or a
+  list predicate** (a node held as a value): a pattern predicate was always
+  false (`[x IN nodes(p) WHERE (x)-->(:L)]` kept nothing, `any(x IN ns
+  WHERE (x)-->())` was false); a pattern comprehension with a path
+  variable and `COUNT { }` / `EXISTS { }` failed. A path variable inside a
+  pattern comprehension with the name of an outer path replaced the outer
+  path (GQLITE-T-0553).
 - **`coalesce(x, false) = false` was false:** a boolean literal in
   `coalesce()` was the integer 0 or 1, which is not equal to a boolean. So
   `WHERE coalesce(n.deleted, false) = false` matched nothing

@@ -476,6 +476,7 @@ PatternExpressionAcceptance.feature::Nested pattern comprehensions 2
 PatternExpressionAcceptance.feature::Nested pattern comprehensions 3
 PatternExpressionAcceptance.feature::Nested pattern comprehensions 4
 PatternExpressionAcceptance.feature::Pattern comprehension with a NULL variable
+PatternExpressionAcceptance.feature::Pattern expression inside list comprehension
 PatternExpressionAcceptance.feature::Pattern expressions and ORDER BY
 PatternExpressionAcceptance.feature::Returning a pattern expression
 PatternExpressionAcceptance.feature::Returning a pattern expression with bound nodes
