@@ -260,6 +260,19 @@ static void optional_lift_inline_properties(cypher_transform_context *ctx, cyphe
         if (!pn || pn->type != AST_NODE_PATH) continue;
         cypher_path *path = (cypher_path*)pn;
         if (!path->elements || path->elements->count < 3) continue;
+        /* An anonymous node between two relationships gets a hidden name:
+         * the emission that joins the whole pattern as one unit needs a
+         * name for it, and without one a pattern whose last node failed
+         * its label gave a null row for each first hop (GQLITE-T-0555). */
+        for (int ei = 2; ei < path->elements->count - 2; ei += 2) {
+            ast_node *el = path->elements->items[ei];
+            if (!el || el->type != AST_NODE_NODE_PATTERN) continue;
+            cypher_node_pattern *np = (cypher_node_pattern*)el;
+            if (np->variable) continue;
+            char gen[48];
+            snprintf(gen, sizeof(gen), "__gql_opt_%d", ctx->global_alias_counter++);
+            np->variable = strdup(gen);
+        }
         for (int ei = 0; ei < path->elements->count; ei++) {
             ast_node *el = path->elements->items[ei];
             if (!el) continue;
@@ -1323,7 +1336,14 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 break;
             }
         }
-        if (all_eligible && !has_path_var && n_rels >= 2 && intermediates_named) {
+        /* The derived table joins to the rows of the clauses before. An
+         * OPTIONAL MATCH that starts the query has none: this emission gave
+         * a SELECT with no FROM ("no such column"), for any leading
+         * `OPTIONAL MATCH (a)-->(b)-->(c)` with a named middle node
+         * (GQLITE-T-0555). The per-relationship emission groups a leading
+         * optional pattern as one unit. */
+        bool has_outer_rows = ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from);
+        if (all_eligible && !has_path_var && n_rels >= 2 && intermediates_named && has_outer_rows) {
             path_combined_exists = true;
             path_has_user_rel_var = has_user_rel_var;
         }
@@ -3014,14 +3034,26 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
          * optional doesn't match. Instead, fold the label into the deferred
          * target's LEFT JOIN ON as a correlated EXISTS (built below). */
         char deferred_tgt_label_cond[512] = "";
+        /* The same label conditions on the end of the walk itself
+         * (`<walk>.end_id`), for the ON of the walk's LEFT JOIN. On the end
+         * node's join alone, a walk that ends at a node without the label
+         * kept its row, with a null end node: `OPTIONAL MATCH
+         * (a)-[:T*1..2]->(c:L)` gave a null row next to its matches
+         * (GQLITE-T-0555). */
+        dynamic_buffer walk_end_cond;
+        dbuf_init(&walk_end_cond);
+        char walk_end_id[160];
+        snprintf(walk_end_id, sizeof(walk_end_id), "%s.end_id", edge_alias);
         {
             const char *tid = get_node_id_ref(ctx, target_alias, target_node->variable);
             char *alt = label_alternatives_cond(ctx, target_node, tid);
             if (alt) {
-                if (optional && tgt_deferred)
+                if (optional && tgt_deferred) {
                     strncat(deferred_tgt_label_cond, alt,
                             sizeof(deferred_tgt_label_cond) - strlen(deferred_tgt_label_cond) - 1);
-                else
+                    char *alt2 = label_alternatives_cond(ctx, target_node, walk_end_id);
+                    if (alt2) { dbuf_append(&walk_end_cond, alt2); free(alt2); }
+                } else
                     sql_where(ctx->unified_builder, alt + 5);
                 free(alt);
             }
@@ -3042,6 +3074,11 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                     free(esc_label);
                     strncat(deferred_tgt_label_cond, one,
                             sizeof(deferred_tgt_label_cond) - strlen(deferred_tgt_label_cond) - 1);
+                    char *esc2 = escape_sql_string(label);
+                    dbuf_appendf(&walk_end_cond,
+                        " AND EXISTS (SELECT 1 FROM %s WHERE node_id = %s AND label = '%s')",
+                        get_graph_table(ctx, "node_labels"), walk_end_id, esc2 ? esc2 : label);
+                    free(esc2);
                 }
             } else {
                 for (int i = 0; i < target_node->labels->count; i++) {
@@ -3114,6 +3151,27 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 " AND %s.visited = (SELECT ',' || group_concat(COALESCE(json_extract(value, '$.id'), value), ',') || ',' "
                 "FROM json_each(%s))", edge_alias, bound_rels);
         }
+        if (optional && tgt_deferred && dbuf_len(&walk_end_cond) > 0)
+            dbuf_append(&on_cond, dbuf_get(&walk_end_cond));
+        dbuf_free(&walk_end_cond);
+        /* The labels of a start node that this pattern brings in
+         * (`OPTIONAL MATCH (x:L)<-[:T*]-(t)` with t bound): on the start of
+         * the walk. They were not applied at all (GQLITE-T-0555). */
+        if (optional && src_deferred) {
+            char walk_start_id[160];
+            snprintf(walk_start_id, sizeof(walk_start_id), "%s.start_id", edge_alias);
+            char *alt = label_alternatives_cond(ctx, source_node, walk_start_id);
+            if (alt) { dbuf_append(&on_cond, alt); free(alt); }
+            for (int i = 0; has_labels(source_node) && i < source_node->labels->count; i++) {
+                const char *label = get_label_string(source_node->labels->items[i]);
+                if (!label) continue;
+                char *esc = escape_sql_string(label);
+                dbuf_appendf(&on_cond,
+                    " AND EXISTS (SELECT 1 FROM %s WHERE node_id = %s AND label = '%s')",
+                    get_graph_table(ctx, "node_labels"), walk_start_id, esc ? esc : label);
+                free(esc);
+            }
+        }
 
         /* Add shortest path filtering based on path type */
         if (ptype == PATH_TYPE_SHORTEST || ptype == PATH_TYPE_ALL_SHORTEST) {
@@ -3151,6 +3209,8 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                         (strlen(js0) >= slen &&
                          strcmp(js0 + strlen(js0) - slen, suffix) == 0))) already = true;
             if (!already) {
+                /* a WHERE on this node filters the walk (GQLITE-T-0555) */
+                cypher_transform_record_defer_pair(ctx, edge_alias, source_alias, "start_id");
                 char src_cond[256];
                 snprintf(src_cond, sizeof(src_cond),
                          "%s.id = %s.start_id", source_alias, edge_alias);
@@ -3173,6 +3233,11 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                         (strlen(js0) >= slen &&
                          strcmp(js0 + strlen(js0) - slen, suffix) == 0))) already = true;
             if (!already) {
+                /* A WHERE on the end node filters the walk, not only the end
+                 * node's join: `OPTIONAL MATCH (a)-[:T*]->(c) WHERE c.k = 1`
+                 * gave a null row for each walk that ends elsewhere
+                 * (GQLITE-T-0555). */
+                cypher_transform_record_defer_pair(ctx, edge_alias, target_alias, "end_id");
                 char tgt_cond[768];
                 snprintf(tgt_cond, sizeof(tgt_cond),
                          "%s.id = %s.end_id%s", target_alias, edge_alias,
@@ -3369,6 +3434,16 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 }
             }
             bool effective_src_defer = src_deferred && !src_alias_already_in_scope;
+            /* A source node that is a table of this pattern and is not
+             * joined yet cannot be named in the edge's ON: join it after the
+             * edge, on the edge's source. A leading `OPTIONAL MATCH
+             * (a)<-[:R]-(b)` puts `b` here (the left arrow makes it the
+             * source), and it was "no such column" (GQLITE-T-0555). */
+            if (!effective_src_defer && !src_alias_already_in_scope && !strchr(source_alias, '.') &&
+                !(source_node->variable &&
+                  (transform_var_is_projected(ctx->var_ctx, source_node->variable) ||
+                   transform_var_alias_is_id(ctx->var_ctx, source_node->variable))))
+                effective_src_defer = true;
             /* An undirected relationship from a bound source to a new
              * target matches an edge either way round: the far end is
              * whichever end is not the source (GQLITE-T-0449; the target

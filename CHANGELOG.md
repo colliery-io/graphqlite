@@ -42,6 +42,16 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 
 ### Fixed
 
+- **`OPTIONAL MATCH` gave extra null rows for a partial match:** a
+  variable-length pattern with a label, a `WHERE` or a property on its end
+  node (`OPTIONAL MATCH (a)-[:R*1..2]->(b:L)`) gave a null row for each
+  walk that ended elsewhere, next to the real matches, and the labels of a
+  new start node were not applied. Two hops with a label on the end and an
+  anonymous middle node gave one null row for each first hop
+  (GQLITE-T-0555).
+- **A query that starts with `OPTIONAL MATCH` and an incoming
+  relationship** (`OPTIONAL MATCH (a)<-[:R]-(b) …`) failed with "no such
+  column" (GQLITE-T-0555).
 - **Inline properties in `OPTIONAL MATCH` were not applied:** `MATCH (a)
   OPTIONAL MATCH (a)-[:R]->(b {name: 'x'})` gave every neighbour of `a`,
   whatever its name. The same for a property map on the relationship

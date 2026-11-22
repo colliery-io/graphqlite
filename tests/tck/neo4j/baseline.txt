@@ -392,6 +392,7 @@ MiscAcceptance.feature::Github issue number 13432 query 2
 MiscAcceptance.feature::Github issue number 13432 query 3
 MiscAcceptance.feature::Github issue number 13484
 MiscAcceptance.feature::Issue aZDSO5do example 1
+MiscAcceptance.feature::Issue aZDSO5do example 2
 MiscAcceptance.feature::Issue with generated code and value population
 MiscAcceptance.feature::Should not discard re-used variable names
 NaNAcceptance.feature::using a NaN value
