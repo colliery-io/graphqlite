@@ -1042,12 +1042,104 @@ handle_where_clause:
     return 0;
 }
 
+/* A variable that holds a relationship as a value (out of a list or a map:
+ * `WITH last(relationships(p)) AS e MATCH (a)-[e]->(b)`, `UNWIND rels AS e`)
+ * binds the pattern to that relationship (GQLITE-T-0552; it was refused as
+ * a value). Before the path is transformed, the relationship's row is
+ * joined by the id of the value, and the variable becomes the id column of
+ * that row, as a relationship carried by `WITH r` is (`_with_0.r`). A value
+ * that is not a relationship, or null, has no row: a MATCH finds nothing
+ * for it, an OPTIONAL MATCH gives nulls. A literal stays a
+ * VariableTypeConflict (Match2 [13]). */
+static void bind_relationship_values(cypher_transform_context *ctx, cypher_path *path, bool optional)
+{
+    for (int i = 0; path->elements && i < path->elements->count; i++) {
+        ast_node *el = path->elements->items[i];
+        if (!el || el->type != AST_NODE_REL_PATTERN) continue;
+        cypher_rel_pattern *rel = (cypher_rel_pattern*)el;
+        if (!rel->variable || rel->varlen) continue;
+        transform_var *rv = transform_var_lookup(ctx->var_ctx, rel->variable);
+        /* A relationship bound by an earlier MATCH, in an OPTIONAL MATCH:
+         * `MATCH (a)-[e]->(b) OPTIONAL MATCH (x)-[e]->(y)`. Its alias is a
+         * table of the earlier clause, and the optional pattern joined its
+         * new nodes ON 1=1: x was every node (GQLITE-T-0552). As an id
+         * column it takes the path of a relationship carried by WITH,
+         * which joins the pattern as one unit on the id. */
+        /* (a variable that exists before its pattern is transformed was
+         * bound by an earlier clause) */
+        if (optional && rv && rv->kind == VAR_KIND_EDGE && !rv->alias_is_id &&
+            rv->table_alias && !strchr(rv->table_alias, '.') && !rv->cte_name) {
+            char id_col[96];
+            snprintf(id_col, sizeof(id_col), "%s.id", rv->table_alias);
+            transform_var_register_edge(ctx->var_ctx, rel->variable, id_col, NULL);
+            transform_var_set_alias_is_id(ctx->var_ctx, rel->variable, true);
+            transform_var_set_bound(ctx->var_ctx, rel->variable, true);
+            /* That path asks which end node is in scope. A node of an
+             * earlier MATCH is: its table is joined already. Say so now,
+             * before this pattern joins its own new nodes. */
+            for (int k = i - 1; k <= i + 1; k += 2) {
+                if (k < 0 || k >= path->elements->count) continue;
+                ast_node *ne = path->elements->items[k];
+                if (!ne || ne->type != AST_NODE_NODE_PATTERN) continue;
+                cypher_node_pattern *np = (cypher_node_pattern*)ne;
+                if (!np->variable || !transform_var_lookup(ctx->var_ctx, np->variable)) continue;
+                if (optional_path_node_is_bound(ctx, np, transform_var_get_alias(ctx->var_ctx, np->variable)))
+                    transform_var_set_bound(ctx->var_ctx, np->variable, true);
+            }
+            continue;
+        }
+        if (!rv || rv->kind != VAR_KIND_PROJECTED || rv->is_scalar_value) continue;
+        const char *val = transform_var_get_alias(ctx->var_ctx, rel->variable);
+        if (!val) continue;
+        char *fresh = get_next_default_alias(ctx);
+        char *on = fresh ? sqlite3_mprintf(
+            "%s.id = (CASE WHEN typeof(%s) = 'text' AND json_valid(%s) AND "
+            "json_type(%s, '$.startNode') IS NOT NULL THEN json_extract(%s, '$.id') END)",
+            fresh, val, val, val, val) : NULL;
+        if (!on) { free(fresh); continue; }
+        /* The value is a column of a WITH / UNWIND table (`_with_0.e`): that
+         * table must be in FROM before the relationship's row joins it. */
+        char src[64] = "";
+        const char *dot = strchr(val, '.');
+        if (dot) {
+            const char *start = dot;
+            while (start > val && (isalnum((unsigned char)start[-1]) || start[-1] == '_')) start--;
+            size_t len = (size_t)(dot - start);
+            if (len > 0 && len < sizeof(src)) { memcpy(src, start, len); src[len] = '\0'; }
+        }
+        bool in_from = src[0] && !dbuf_is_empty(&ctx->unified_builder->from) &&
+                       strstr(dbuf_get(&ctx->unified_builder->from), src) != NULL;
+        bool in_joins = src[0] && !dbuf_is_empty(&ctx->unified_builder->joins) &&
+                        strstr(dbuf_get(&ctx->unified_builder->joins), src) != NULL;
+        bool outer_ref = false;
+        for (int oi = 0; src[0] && oi < ctx->correlated_outer_count; oi++)
+            if (ctx->correlated_outer_aliases[oi] && strcmp(ctx->correlated_outer_aliases[oi], src) == 0)
+                outer_ref = true;
+        if (src[0] && !in_from && !in_joins && !outer_ref) {
+            if (!dbuf_is_empty(&ctx->unified_builder->from))
+                sql_join(ctx->unified_builder, SQL_JOIN_CROSS, src, NULL, NULL);
+            else
+                sql_from(ctx->unified_builder, src, NULL);
+        }
+        sql_join(ctx->unified_builder, SQL_JOIN_LEFT, "edges", fresh, on);
+        char id_col[96];
+        snprintf(id_col, sizeof(id_col), "%s.id", fresh);
+        transform_var_register_edge(ctx->var_ctx, rel->variable, id_col, NULL);
+        transform_var_set_alias_is_id(ctx->var_ctx, rel->variable, true);
+        transform_var_set_bound(ctx->var_ctx, rel->variable, true);
+        sqlite3_free(on);
+        free(fresh);
+    }
+}
+
 /* Transform a single pattern (path) */
 static int transform_match_pattern(cypher_transform_context *ctx, ast_node *pattern, bool optional)
 {
     cypher_path *path = (cypher_path*)pattern;
 
     CYPHER_DEBUG("Transforming %s path with %d elements", optional ? "OPTIONAL" : "regular", path->elements->count);
+
+    bind_relationship_values(ctx, path, optional);
 
     /* Allocate a fresh range of anon-node alias indices for this pattern
      * so anonymous `n_<j>` aliases don't collide with anon nodes from
@@ -3075,7 +3167,12 @@ skip_target_node_join: ;  /* null statement: a label may not precede a
                 transform_var_is_bound(ctx->var_ctx, target_node->variable) ||
                 transform_var_alias_is_id(ctx->var_ctx, target_node->variable));
             bool exactly_one_fresh = (src_in_scope != tgt_in_scope);
-            if (optional && exactly_one_fresh) {
+            if (optional && src_in_scope && tgt_in_scope) {
+                /* Every variable of the optional pattern is bound: it brings
+                 * in nothing, so it keeps each row as it is, match or not
+                 * (`MATCH (a)-[e]->(b) OPTIONAL MATCH (a)<-[e]-(b)` dropped
+                 * the row; GQLITE-T-0552). */
+            } else if (optional && exactly_one_fresh) {
                 transform_ctx_append_pending_optional_on(ctx, cond);
             } else {
                 sql_where(ctx->unified_builder, cond);

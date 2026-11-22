@@ -13,6 +13,13 @@ All notable changes to GraphQLite are documented here. Format loosely follows
   pattern predicates and pattern comprehensions (GQLITE-T-0538).
 
 - **`UNION` inside `COUNT { }` and `EXISTS { }`** (GQLITE-T-0537).
+- **A relationship value as the relationship of a pattern:** `WITH
+  last(relationships(p)) AS e MATCH (a)-[e]->(b)`, `UNWIND rels AS e MATCH
+  (a)-[e]->(b)` bind the pattern to that relationship; they were a
+  `VariableTypeConflict` (GQLITE-T-0552).
+- **`datetime({epochMillis: …})` and `datetime({epochSeconds: … [,
+  nanosecond: …]})`.** The keys were ignored: the result was 1 January of
+  the current year (GQLITE-T-0552).
 
 ### Changed
 
@@ -36,6 +43,11 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 
 ### Fixed
 
+- **`OPTIONAL MATCH` with a relationship bound by an earlier `MATCH`:**
+  `MATCH (a)-[e]->(b) OPTIONAL MATCH (x)-[e]->(y)` gave every node as `x`;
+  `OPTIONAL MATCH (b)-[e]->(z)` gave `z = b`. The new nodes are now the
+  ends of the relationship, or null. An optional pattern whose variables
+  are all bound keeps the row when it does not match (GQLITE-T-0552).
 - **`coalesce(x, false) = false` was false:** a boolean literal in
   `coalesce()` was the integer 0 or 1, which is not equal to a boolean. So
   `WHERE coalesce(n.deleted, false) = false` matched nothing
