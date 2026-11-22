@@ -1873,7 +1873,7 @@ function_call:
         {
             /* EXISTS((pattern)) - check for relationship/path existence */
             cypher_exists_expr *ee = make_exists_pattern_expr($3, @1.first_line);
-            if (ee) ee->where_clause = take_pattern_wheres($3, NULL);
+            if (ee) { ee->where_clause = take_pattern_wheres($3, NULL); ee->explicit_call = true; }
             $$ = (ast_node*)ee;
         }
     | EXISTS '{' pattern_list '}'

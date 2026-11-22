@@ -766,6 +766,22 @@ static void gql_entity_accessor(sqlite3_context *context, sqlite3_value *v,
     sqlite3_result_error(context, err, -1);
 }
 
+/* trim(), ltrim(), rtrim() and btrim() take a string (GQLITE-T-0539: a
+ * number was trimmed as its text). Gives the argument back; a number is a
+ * TypeError. argv[1] is the name of the function. */
+void gql_string_arg_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    if (argc != 2) { sqlite3_result_null(context); return; }
+    int t = sqlite3_value_type(argv[0]);
+    if (t == SQLITE_INTEGER || t == SQLITE_FLOAT) {
+        char *msg = sqlite3_mprintf("TypeError: InvalidArgumentValue: %s() requires a String",
+                                    (const char *)sqlite3_value_text(argv[1]));
+        sqlite3_result_error(context, msg ? msg : "TypeError: InvalidArgumentValue", -1);
+        sqlite3_free(msg);
+        return;
+    }
+    sqlite3_result_value(context, argv[0]);
+}
+
 void gql_labels_func(sqlite3_context *context, int argc, sqlite3_value **argv) {
     if (argc != 1) { sqlite3_result_null(context); return; }
     gql_entity_accessor(context, argv[0], "$.labels", true,

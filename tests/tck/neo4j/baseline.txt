@@ -309,6 +309,9 @@ ForeachAcceptance.feature::Merging inside a FOREACH using two previously merged 
 ForeachAcceptance.feature::Merging inside a FOREACH using two previously merged nodes that also depend on WITH
 ForeachAcceptance.feature::Should handle running merge inside a foreach loop
 IsEmptyFunctionAcceptance.feature::isEmpty should be null-in-null-out
+IsEmptyFunctionAcceptance.feature::isEmpty should not work for node
+IsEmptyFunctionAcceptance.feature::isEmpty should not work for path
+IsEmptyFunctionAcceptance.feature::isEmpty should not work for relationship
 IsEmptyFunctionAcceptance.feature::isEmpty should return false for non-empty list
 IsEmptyFunctionAcceptance.feature::isEmpty should return false for non-empty list containing null
 IsEmptyFunctionAcceptance.feature::isEmpty should return false for non-empty map
@@ -344,6 +347,15 @@ MapProjectionAcceptance.feature::Should use custom key in node and relationship 
 MapProjectionAcceptance.feature::Should use custom key in node map projection
 MapProjectionAcceptance.feature::Should use custom key in relationship map projection
 MatchAcceptance.feature::Expand on a node stored in a map
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 1)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 2)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 3)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 4)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 5)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 6)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 7)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 8)
+MatchAcceptance.feature::Fail to match <prop> properties as nodes (example 9)
 MatchAcceptance.feature::Filter on path nodes
 MatchAcceptance.feature::Filter with AND/OR
 MatchAcceptance.feature::Handle filtering with empty properties map
@@ -444,6 +456,8 @@ OrderByAcceptance.feature::Ordering is well defined across all types, ascending
 OrderByAcceptance.feature::Ordering is well defined across all types, descending
 PatternExpressionAcceptance.feature::Aggregating on pattern expression
 PatternExpressionAcceptance.feature::Equals with a size of pattern comprehension with a NULL variable
+PatternExpressionAcceptance.feature::Failing when introducing new node variable in pattern expression
+PatternExpressionAcceptance.feature::Failing when introducing new relationship variable in pattern expression
 PatternExpressionAcceptance.feature::Get node degree via size of pattern expression
 PatternExpressionAcceptance.feature::Get node degree via size of pattern expression that specifies a relationship type
 PatternExpressionAcceptance.feature::Get node degree via size of pattern expression that specifies multiple relationship types
@@ -463,6 +477,7 @@ PatternExpressionAcceptance.feature::Returning a pattern expression
 PatternExpressionAcceptance.feature::Returning a pattern expression with bound nodes
 PatternExpressionAcceptance.feature::Returning a pattern expression with label predicate
 PatternExpressionAcceptance.feature::Returning list comprehension
+PatternExpressionAcceptance.feature::Returning pattern expression in `exists()`
 PatternExpressionAcceptance.feature::Size of pattern comprehension with a NULL variable
 PatternExpressionAcceptance.feature::Using `size()` on incoming pattern expression
 PatternExpressionAcceptance.feature::Using `size()` on outgoing pattern expression
@@ -530,6 +545,14 @@ ReturnAcceptance.feature::Return null in list with nested lists and maps
 ReturnAcceptance.feature::Return null in map with nested lists and maps
 ReturnAcceptance.feature::Unaliased return items in a top level union should be accepted
 SkipLimitAcceptance.feature::Combining LIMIT and aggregation
+SkipLimitAcceptance.feature::Graph touching LIMIT should fail with a syntax exception
+SkipLimitAcceptance.feature::Graph touching LIMIT should fail with a syntax exception 2
+SkipLimitAcceptance.feature::Graph touching LIMIT should fail with a syntax exception 3
+SkipLimitAcceptance.feature::Graph touching LIMIT should fail with a syntax exception 4
+SkipLimitAcceptance.feature::Graph touching SKIP should fail with a syntax exception
+SkipLimitAcceptance.feature::Graph touching SKIP should fail with a syntax exception 2
+SkipLimitAcceptance.feature::Graph touching SKIP should fail with a syntax exception 3
+SkipLimitAcceptance.feature::Graph touching SKIP should fail with a syntax exception 4
 SkipLimitAcceptance.feature::Limit before distinct
 SkipLimitAcceptance.feature::Limit before sort
 SkipLimitAcceptance.feature::Limit before top
@@ -564,7 +587,13 @@ SubqueryAcceptance.feature::Map projections in uncorrelated single subquery are 
 SubqueryAcceptance.feature::Map projections in uncorrelated union subquery are OK
 SubqueryAcceptance.feature::Nested subqueries
 SubqueryAcceptance.feature::Post-processing of a subquery result
+SubqueryAcceptance.feature::Return items in correlated single subquery must be aliased
+SubqueryAcceptance.feature::Return items in correlated union subquery must be aliased
+SubqueryAcceptance.feature::Return items in uncorrelated single subquery must be aliased
+SubqueryAcceptance.feature::Return items in uncorrelated union subquery must be aliased
 SubqueryAcceptance.feature::Should allow importing variables into a subquery
+SubqueryAcceptance.feature::Should allow to remove imported variables from subquery scope
+SubqueryAcceptance.feature::Should not allow to use unimported variables in a subquery
 SubqueryAcceptance.feature::Should treat variables with the same name but different scopes correctly
 SubqueryAcceptance.feature::Should work with preceding MATCH and aggregation
 SubqueryAcceptance.feature::Side effects from unit subquery are visible after subquery
@@ -607,6 +636,10 @@ TernaryEqualityAcceptance.feature::equality between different types should yield
 TernaryEqualityAcceptance.feature::equality between different types should yield false (example 2)
 TernaryEqualityAcceptance.feature::equality between different types should yield false (example 3)
 TernaryEqualityAcceptance.feature::equality between different types should yield false (example 4)
+TrimFunctionsAcceptance.feature::Trim functions should fail with wrong type
+TrimFunctionsAcceptance.feature::Trim functions should fail with wrong type (1)
+TrimFunctionsAcceptance.feature::Trim functions should fail with wrong type (2)
+TrimFunctionsAcceptance.feature::Trim functions should fail with wrong type (3)
 TrimFunctionsAcceptance.feature::Trim functions trimming whitespace strings
 TrimFunctionsAcceptance.feature::Trim functions with null handling for 1 argument options
 UnionDistinct.feature::Failing when UNION has different columns (example 2)

@@ -425,6 +425,8 @@ typedef struct cypher_exists_expr {
     bool is_subquery;            /* true for the brace form EXISTS { ... }, which
                                   * (unlike the paren pattern-predicate) MAY
                                   * introduce fresh pattern variables */
+    bool explicit_call;          /* written as exists(pattern), not as a bare
+                                  * pattern: a value, valid in RETURN and WITH */
 } cypher_exists_expr;
 
 /* List predicate: all/any/none/single(x IN list WHERE predicate) */

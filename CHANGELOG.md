@@ -14,8 +14,31 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 
 - **`UNION` inside `COUNT { }` and `EXISTS { }`** (GQLITE-T-0537).
 
+### Changed
+
+Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
+
+- **`CALL { }` body:** a variable that the leading `WITH` did not import is
+  `UndefinedVariable` when the query is checked (it failed only when the
+  body ran). A `RETURN` item that is not a variable needs an alias
+  (`CALL { RETURN 5 }` is `NoExpressionAlias`); a map projection `n {.a}`
+  has the name `n`.
+- **`trim()`, `ltrim()`, `rtrim()`, `btrim()` of a number** are a
+  `TypeError` (the number was trimmed as its text). Use `toString()` first.
+- **`isEmpty()` of a node, a relationship or a path** is an error (it gave
+  `false`).
+- **`SKIP` / `LIMIT` that read the graph** (`LIMIT size(()-->())`, a
+  `reduce()` over a variable) are `NonConstantExpression`.
+- **A property value used as a node:** `WITH a.prop AS p MATCH (b)<--(p)` is
+  `VariableTypeConflict` (it matched any node).
+- **A pattern expression with a new variable** in `RETURN` is
+  `UndefinedVariable` (it was `UnexpectedSyntax`).
+
 ### Fixed
 
+- **`exists(pattern)` as a value:** `RETURN n, exists((n)--()) AS b` was
+  refused ("a path pattern is not a valid expression in RETURN")
+  (GQLITE-T-0540).
 - **`CALL { … UNION … }`:** a branch did not see the imported variables
   ("no such table: _gql_pipe_0", "no such column: p"), a write in a branch
   did not run for each row, and `ORDER BY … LIMIT` in a branch was an SQL
