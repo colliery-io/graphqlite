@@ -52,6 +52,7 @@ INSERT INTO _good VALUES
  ('CALL: WITH *, item keeps the scope', 'MATCH (a) CALL { WITH a WITH *, 2 AS t RETURN a.prop + t AS c } RETURN c'),
  ('CALL: a variable of the body', 'MATCH (a) CALL { WITH a MATCH (a)-->(b) RETURN b } RETURN b'),
  ('CALL: UNWIND and a path variable in the body', 'MATCH (a) CALL { WITH a UNWIND [1, 2] AS i MATCH p = (a) RETURN i, length(p) AS l } RETURN i, l'),
+ ('CALL: an unaliased property keeps its text as the name', 'CALL { MATCH (n) RETURN n.name ORDER BY n.name }'),
  ('CALL: a map projection has the name of its variable', 'CALL { MATCH (n) RETURN n {.prop} } RETURN n'),
  ('LIMIT of a constant expression', 'MATCH (p) RETURN p.name AS name LIMIT toInteger(ceil(1.7))'),
  ('LIMIT of reduce() over constants', 'MATCH (p) RETURN p.name AS name LIMIT reduce(s = 0, x IN [1, 2] | s + x)'),

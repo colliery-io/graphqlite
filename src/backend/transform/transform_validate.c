@@ -2677,9 +2677,14 @@ static int validate_call_body(ast_node *body, const name_set *outer, char **erro
                         if (base && base->type == AST_NODE_IDENTIFIER)
                             it->alias = strdup(((cypher_identifier *)base)->name);
                     }
-                    if (!it->alias && it->expr->type != AST_NODE_IDENTIFIER) {
+                    /* Neo4j takes only a variable without an alias.
+                     * GraphQLite ran `CALL { MATCH (n) RETURN n.name }`
+                     * with the column `n.name` (a test of the Rust binding
+                     * has it), so a property stays valid. */
+                    if (!it->alias && it->expr->type != AST_NODE_IDENTIFIER &&
+                        it->expr->type != AST_NODE_PROPERTY) {
                         set_error(error_message,
-                                  "SyntaxError: NoExpressionAlias: every RETURN item of a CALL subquery that is not a variable must be aliased");
+                                  "SyntaxError: NoExpressionAlias: every RETURN item of a CALL subquery that is not a variable or a property must be aliased");
                         rc = -1;
                         break;
                     }

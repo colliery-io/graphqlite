@@ -20,9 +20,9 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 
 - **`CALL { }` body:** a variable that the leading `WITH` did not import is
   `UndefinedVariable` when the query is checked (it failed only when the
-  body ran). A `RETURN` item that is not a variable needs an alias
-  (`CALL { RETURN 5 }` is `NoExpressionAlias`); a map projection `n {.a}`
-  has the name `n`.
+  body ran). A `RETURN` item that is not a variable or a property needs an
+  alias (`CALL { RETURN 5 }` is `NoExpressionAlias`); a map projection
+  `n {.a}` has the name `n`.
 - **`trim()`, `ltrim()`, `rtrim()`, `btrim()` of a number** are a
   `TypeError` (the number was trimmed as its text). Use `toString()` first.
 - **`isEmpty()` of a node, a relationship or a path** is an error (it gave
