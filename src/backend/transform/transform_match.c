@@ -852,7 +852,16 @@ handle_where_clause:
          * For OPTIONAL MATCH, append to the last LEFT JOIN's ON clause
          * rather than the outer WHERE, so NULL rows are preserved (issue #34b). */
         if (ctx->sql_size > 0) {
-            if (match->optional) {
+            if (match->optional && sql_builder_joins_len(ctx->unified_builder) == joins_at_start) {
+                /* OPTIONAL MATCH of variables that are all bound, with a
+                 * WHERE: `MATCH (p) OPTIONAL MATCH (p) WHERE p.x IS NULL`
+                 * (GQLITE-T-0540). The pattern added no join, so the WHERE
+                 * went onto the last join of an earlier clause (it filtered
+                 * the rows of that clause) or after the FROM ("near AND").
+                 * An OPTIONAL MATCH keeps each row, and nulls only the
+                 * variables it brings in; it brings in none here, so it
+                 * and its WHERE change nothing. */
+            } else if (match->optional) {
                 sql_join_append_on(ctx->unified_builder, ctx->sql_buffer);
 
                 /* T-0320: for each defer pair recorded by the rel
@@ -1782,7 +1791,18 @@ skip_combined_exists:
                          * Previously the entire node attach was skipped,
                          * silently dropping the predicate. Emit each label
                          * as an EXISTS WHERE condition against node_labels. */
-                        { char *alt = label_alternatives_cond(ctx, node, alias);
+                        /* The variable holds the node's id (`WITH a`) or the
+                         * node as a value (`WITH {k: a} AS m WITH m.k AS a`,
+                         * `UNWIND [a] AS a`). The label check compared the
+                         * value with node_id, so `MATCH (a:L)` had no rows
+                         * for a node that came out of a list or a map
+                         * (GQLITE-T-0540). */
+                        char *label_id = sqlite3_mprintf(
+                            "(CASE WHEN typeof(%s) = 'text' AND json_valid(%s) "
+                            "THEN json_extract(%s, '$.id') ELSE %s END)",
+                            alias, alias, alias, alias);
+                        const char *lid = label_id ? label_id : alias;
+                        { char *alt = label_alternatives_cond(ctx, node, lid);
                           if (alt) { sql_where(ctx->unified_builder, alt + 5 /* skip " AND " */); free(alt); } }
                         if (has_labels(node)) {
                             const char *graph_prefix = ctx->current_graph ? ctx->current_graph : "";
@@ -1790,15 +1810,16 @@ skip_combined_exists:
                                 const char *label = get_label_string(node->labels->items[li]);
                                 if (!label) continue;
                                 char *esc_label = escape_sql_string(label);
-                                char where_buf[512];
-                                snprintf(where_buf, sizeof(where_buf),
+                                char *where_buf = sqlite3_mprintf(
                                     "EXISTS (SELECT 1 FROM %snode_labels WHERE node_id = %s AND label = '%s')",
-                                    graph_prefix, alias,
+                                    graph_prefix, lid,
                                     esc_label ? esc_label : label);
                                 free(esc_label);
-                                sql_where(ctx->unified_builder, where_buf);
+                                if (where_buf) sql_where(ctx->unified_builder, where_buf);
+                                sqlite3_free(where_buf);
                             }
                         }
+                        sqlite3_free(label_id);
                     } else {
                         /* Regular variable - reuse alias, check if we need FROM clause */
                         alias = transform_var_get_alias(ctx->var_ctx, node->variable);

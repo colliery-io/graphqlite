@@ -759,6 +759,39 @@ int transform_return_clause(cypher_transform_context *ctx, cypher_return *ret)
         return -1;
     }
 
+    /* RETURN * with no FROM: a subquery body that matches only outer
+     * variables, `COUNT { MATCH (p) RETURN * }` (GQLITE-T-0540). The path
+     * below for a RETURN with no FROM reads ret->items, which RETURN * leaves
+     * NULL: the query did not come back. Expand the * to the named variables
+     * here, as the path with a FROM does. */
+    if (ret->return_all && !(ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from))) {
+        ast_list *items = ast_list_create();
+        int var_count = transform_var_count(ctx->var_ctx);
+        for (int vi = 0; items && vi < var_count; vi++) {
+            transform_var *var = transform_var_at(ctx->var_ctx, vi);
+            if (!var || !var->is_visible || !var->name) continue;
+            if (strncmp(var->name, "_gql_default_alias_", 19) == 0 ||
+                strncmp(var->name, "__unnamed_rel_", 14) == 0 ||
+                strncmp(var->name, "_pv_n", 5) == 0 ||
+                strncmp(var->name, "_pv_e", 5) == 0 ||
+                strncmp(var->name, "__gql_", 6) == 0) continue;
+            cypher_return_item *it = make_return_item(
+                (ast_node *)make_identifier(var->name, ret->base.location), NULL);
+            if (!it) continue;
+            it->source_text = strdup(var->name);
+            ast_list_append(items, (ast_node *)it);
+        }
+        if (!items || items->count == 0) {
+            if (items) ast_list_free(items);
+            ctx->has_error = true;
+            ctx->error_message = strdup("SyntaxError: NoVariablesInScope: RETURN * requires at least one variable in scope");
+            return -1;
+        }
+        if (ret->items) ast_list_free(ret->items);
+        ret->items = items;
+        ret->return_all = false;
+    }
+
     /*
      * NEW: Unified builder path for MATCH + RETURN
      * When unified_builder is active and has FROM clause content,

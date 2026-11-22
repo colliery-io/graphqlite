@@ -36,6 +36,28 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 
 ### Fixed
 
+- **`coalesce(x, false) = false` was false:** a boolean literal in
+  `coalesce()` was the integer 0 or 1, which is not equal to a boolean. So
+  `WHERE coalesce(n.deleted, false) = false` matched nothing
+  (GQLITE-T-0540).
+- **`MATCH (n:Label)` of a node that came out of a list or a map** had no
+  rows: `UNWIND nodes AS n MATCH (n:Label)`, `WITH m.node AS n MATCH
+  (n:Label)-->(x)` (GQLITE-T-0540).
+- **Undirected pattern predicates:** `WHERE (a)--(b)` and `WHERE
+  (a)-[r]-(b)` failed with "syntax is ambiguous". A pattern predicate with
+  two relationships let one relationship match twice: `(a)--(b)--()` was
+  true for a `b` with one relationship (GQLITE-T-0540).
+- **`OPTIONAL MATCH` of variables that are all bound, with a `WHERE`**
+  (`MATCH (a) OPTIONAL MATCH (a) WHERE …`): an SQL error after a `WITH`,
+  and without one the `WHERE` filtered the rows of the clause before. It
+  now changes nothing, as in Cypher (GQLITE-T-0540).
+- **`COUNT { MATCH (p) RETURN * }`** with only outer variables did not
+  come back; **`COUNT { (n) }` of a null `n`** was 1 (GQLITE-T-0540).
+- **A `reduce()` or `any()` / `all()` / `none()` / `single()` variable with
+  the name of an outer variable** broke that variable after the expression
+  ("no such column") (GQLITE-T-0540).
+- **`… UNION … RETURN *`:** the columns of `RETURN *` are matched by name
+  (GQLITE-T-0540).
 - **`exists(pattern)` as a value:** `RETURN n, exists((n)--()) AS b` was
   refused ("a path pattern is not a valid expression in RETURN")
   (GQLITE-T-0540).

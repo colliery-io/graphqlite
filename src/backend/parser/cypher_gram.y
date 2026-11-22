@@ -1598,7 +1598,10 @@ expr:
         }
     }
     | expr '+' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_ADD, $1, $3, @2.first_line); }
-    | expr '-' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_SUB, $1, $3, @2.first_line); }
+    /* %dprec: `(a)--(b)` and `(a)-[r]-(b)` in WHERE are patterns, not
+     * `a - (-b)` and `a - [r] - b`; without it GLR found two parses and
+     * gave "syntax is ambiguous" (GQLITE-T-0540). */
+    | expr '-' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_SUB, $1, $3, @2.first_line); } %dprec 1
     | expr '*' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MUL, $1, $3, @2.first_line); }
     | expr '/' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_DIV, $1, $3, @2.first_line); }
     | expr '%' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MOD, $1, $3, @2.first_line); }

@@ -2490,6 +2490,39 @@ void cypher_union_align_columns(ast_node *root)
     cypher_query *br[64];
     int n = union_branches(root, br, 64, 0);
     if (n < 2) return;
+    /* RETURN * right after a WITH with items: the columns are the names of
+     * that WITH (`… UNION WITH 2 AS x, 1 AS y RETURN *`, GQLITE-T-0540). As
+     * items they can be matched by name. */
+    for (int b = 0; b < n; b++) {
+        ast_list *cl = br[b]->clauses;
+        if (!cl || cl->count < 2) continue;
+        ast_node *last = cl->items[cl->count - 1], *prev = cl->items[cl->count - 2];
+        if (!last || last->type != AST_NODE_RETURN || !prev || prev->type != AST_NODE_WITH) continue;
+        cypher_return *r = (cypher_return *)last;
+        cypher_with *w = (cypher_with *)prev;
+        if (!r->return_all || w->pass_all || w->star_plus || !w->items) continue;
+        ast_list *items = ast_list_create();
+        bool ok = items != NULL;
+        for (int wi = 0; ok && wi < w->items->count; wi++) {
+            cypher_return_item *wit = (cypher_return_item *)w->items->items[wi];
+            const char *nm = wit ? (wit->alias ? wit->alias
+                                   : (wit->expr && wit->expr->type == AST_NODE_IDENTIFIER
+                                      ? ((cypher_identifier *)wit->expr)->name : NULL)) : NULL;
+            if (!nm) { ok = false; break; }
+            cypher_return_item *it = make_return_item(
+                (ast_node *)make_identifier((char *)nm, r->base.location), NULL);
+            if (!it) { ok = false; break; }
+            it->source_text = strdup(nm);
+            ast_list_append(items, (ast_node *)it);
+        }
+        if (ok && items->count > 0) {
+            if (r->items) ast_list_free(r->items);
+            r->items = items;
+            r->return_all = false;
+        } else if (items) {
+            ast_list_free(items);
+        }
+    }
     cypher_return *first = find_terminal_return(br[0]);
     if (!first || !first->items || first->items->count < 2 || first->items->count > 64) return;
     int cols = first->items->count;

@@ -434,6 +434,24 @@ static bool pattern_has_properties(ast_list *pattern)
     return false;
 }
 
+/* Two or more relationships in one path: `(a)--(b)--()`. Each must be a
+ * different relationship, as in MATCH; the pattern emitter below let one
+ * relationship match twice, so `(a)--(b)--()` was true for a `b` with one
+ * relationship (GQLITE-T-0540). The MATCH transform keeps them apart. */
+static bool pattern_has_two_relationships(ast_list *pattern)
+{
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *p = pattern->items[i];
+        if (!p || p->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path *)p;
+        int rels = 0;
+        for (int j = 0; path->elements && j < path->elements->count; j++)
+            if (path->elements->items[j] && path->elements->items[j]->type == AST_NODE_REL_PATTERN) rels++;
+        if (rels >= 2) return true;
+    }
+    return false;
+}
+
 /* One node and nothing else: `EXISTS { (p:L) }` emitted a WHERE with no
  * FROM (GQLITE-T-0520). */
 static bool pattern_is_single_node(ast_list *pattern)
@@ -493,6 +511,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                     return -1;
                 }
                 if (pattern_has_properties(exists_expr->expr.pattern) ||
+                    pattern_has_two_relationships(exists_expr->expr.pattern) ||
                     pattern_is_single_node(exists_expr->expr.pattern))
                     return emit_pattern_as_query(ctx, exists_expr);
 
@@ -819,9 +838,16 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
         return -1;
     }
 
-    /* Save the old alias if this variable name already exists */
-    const char *old_alias = transform_var_get_alias(ctx->var_ctx, pred->variable);
-    char *saved_alias = old_alias ? strdup(old_alias) : NULL;
+    /* The list reads the outer binding of the name (`any(x IN x.l WHERE
+     * ...)`): translate it first. */
+    char *list_sql = cypher_transform_capture_expression(ctx, pred->list_expr);
+    if (!list_sql) return -1;
+
+    /* The variable is bound inside the predicate only: save the outer
+     * binding and put it back after. Only its alias was put back, as a
+     * value: after `any(d IN [1, 2] WHERE d > 1)` a node `d` was a column
+     * that did not exist (GQLITE-T-0540). */
+    transform_var *saved_var = transform_var_save(ctx->var_ctx, pred->variable);
 
     /* Give this level's json_each a unique alias so nested quantifiers
      * (e.g. single(x IN ... WHERE none(y IN x ...))) don't shadow each
@@ -835,8 +861,6 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     /* Register the predicate variable to map to <alias>.value, with the
      * element's type tag (a boolean stays a boolean). */
     transform_var_register_projected(ctx->var_ctx, pred->variable, je_value);
-    const char *old_tag = transform_var_get_tag(ctx->var_ctx, pred->variable);
-    char *saved_tag = old_tag ? strdup(old_tag) : NULL;
     {
         char tag[256];
         snprintf(tag, sizeof(tag),
@@ -888,26 +912,11 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
                 break;
         }
         append_sql(ctx, "END FROM (SELECT (");
-        if (transform_condition(ctx, pred->predicate) < 0) {
-            if (saved_alias) free(saved_alias);
-            free(saved_tag);
-            return -1;
-        }
-        append_sql(ctx, ") AS p FROM json_each(");
-        if (transform_expression(ctx, pred->list_expr) < 0) {
-            if (saved_alias) free(saved_alias);
-            free(saved_tag);
-            return -1;
-        }
-        append_sql(ctx, ") AS %s))", je_alias);
-    }
-
-    /* Restore the old alias and tag if we saved them */
-    transform_var_set_tag(ctx->var_ctx, pred->variable, saved_tag);
-    free(saved_tag);
-    if (saved_alias) {
-        transform_var_register_projected(ctx->var_ctx, pred->variable, saved_alias);
-        free(saved_alias);
+        int prc = transform_condition(ctx, pred->predicate);
+        if (prc >= 0) append_sql(ctx, ") AS p FROM json_each(%s) AS %s))", list_sql, je_alias);
+        free(list_sql);
+        transform_var_restore(ctx->var_ctx, pred->variable, saved_var);
+        if (prc < 0) return -1;
     }
 
     return 0;
@@ -940,22 +949,22 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_reduce_%d", ctx->reduce_counter++);
 
-    /* Save existing aliases for accumulator and variable names */
-    const char *old_acc_alias = transform_var_get_alias(ctx->var_ctx, reduce->accumulator);
-    const char *old_var_alias = transform_var_get_alias(ctx->var_ctx, reduce->variable);
-    char *saved_acc_alias = old_acc_alias ? strdup(old_acc_alias) : NULL;
-    char *saved_var_alias = old_var_alias ? strdup(old_var_alias) : NULL;
+    /* The start value and the list read the outer bindings of the two
+     * names: translate them first. */
+    char *init_sql = cypher_transform_capture_expression(ctx, reduce->initial_value);
+    if (!init_sql) return -1;
+    char *list_sql = cypher_transform_capture_expression(ctx, reduce->list_expr);
+    if (!list_sql) { free(init_sql); return -1; }
 
-    append_sql(ctx, "(WITH RECURSIVE %s AS (SELECT ", cte_name);
+    /* The accumulator and the variable are bound inside reduce() only: save
+     * the outer bindings and put them back after. Only the alias was put
+     * back, as a value: after `reduce(acc = 0, r IN [1, 2] | acc + r)` a
+     * relationship `r` was a column that did not exist (GQLITE-T-0540). */
+    transform_var *saved_acc = transform_var_save(ctx->var_ctx, reduce->accumulator);
+    transform_var *saved_var = transform_var_save(ctx->var_ctx, reduce->variable);
 
-    /* Transform initial value */
-    if (transform_expression(ctx, reduce->initial_value) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
-
-    append_sql(ctx, " AS acc, 0 AS idx UNION ALL SELECT (");
+    append_sql(ctx, "(WITH RECURSIVE %s AS (SELECT %s AS acc, 0 AS idx UNION ALL SELECT (", cte_name, init_sql);
+    free(init_sql);
 
     /* Register variables for the expression:
      * - accumulator maps to cte_name.acc
@@ -969,47 +978,21 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
     snprintf(each_alias, sizeof(each_alias), "%s_e", cte_name);
     char var_ref[64];
     snprintf(var_ref, sizeof(var_ref), "%s.value", each_alias);
-    /* Register in unified system */
     transform_var_register_projected(ctx->var_ctx, reduce->accumulator, acc_ref);
     transform_var_register_projected(ctx->var_ctx, reduce->variable, var_ref);
 
     /* Transform the expression that computes new accumulator value */
-    if (transform_expression(ctx, reduce->expression) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
+    int rc = transform_expression(ctx, reduce->expression);
+    if (rc >= 0)
+        append_sql(ctx, "), %s.idx + 1 FROM %s, json_each(%s) AS %s WHERE %s.idx = %s.key) "
+                        "SELECT acc FROM %s WHERE idx = json_array_length(%s))",
+                   cte_name, cte_name, list_sql, each_alias, cte_name, each_alias, cte_name, list_sql);
+    free(list_sql);
 
-    append_sql(ctx, "), %s.idx + 1 FROM %s, json_each(", cte_name, cte_name);
+    /* the variable first: when both have one name, the accumulator's
+     * saved binding is the outer one */
+    transform_var_restore(ctx->var_ctx, reduce->variable, saved_var);
+    transform_var_restore(ctx->var_ctx, reduce->accumulator, saved_acc);
 
-    /* Transform list expression */
-    if (transform_expression(ctx, reduce->list_expr) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
-
-    append_sql(ctx, ") AS %s WHERE %s.idx = %s.key) SELECT acc FROM %s WHERE idx = json_array_length(",
-               each_alias, cte_name, each_alias, cte_name);
-
-    /* Transform list expression again for length check */
-    if (transform_expression(ctx, reduce->list_expr) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
-
-    append_sql(ctx, "))");
-
-    /* Restore old aliases */
-    if (saved_acc_alias) {
-        transform_var_register_projected(ctx->var_ctx, reduce->accumulator, saved_acc_alias);
-        free(saved_acc_alias);
-    }
-    if (saved_var_alias) {
-        transform_var_register_projected(ctx->var_ctx, reduce->variable, saved_var_alias);
-        free(saved_var_alias);
-    }
-
-    return 0;
+    return rc < 0 ? -1 : 0;
 }

@@ -700,7 +700,34 @@ int cypher_transform_read_query_sql(cypher_transform_context *ctx, cypher_query 
         if (i > 0) transform_var_mark_inherited(ctx->var_ctx);
         int rc = 0;
         switch (clause->type) {
-            case AST_NODE_MATCH:  rc = transform_match_clause(ctx, (cypher_match*)clause); break;
+            case AST_NODE_MATCH: {
+                cypher_match *m = (cypher_match*)clause;
+                rc = transform_match_clause(ctx, m);
+                /* A MATCH of an outer node that is null has no rows:
+                 * `OPTIONAL MATCH (n:None) RETURN COUNT { (n) }` is 0, it
+                 * gave 1 (GQLITE-T-0540). The node is bound, so the MATCH
+                 * adds no table that could drop the row. */
+                for (int pi = 0; rc >= 0 && !m->optional && m->pattern && pi < m->pattern->count; pi++) {
+                    ast_node *pt = m->pattern->items[pi];
+                    if (!pt || pt->type != AST_NODE_PATH) continue;
+                    ast_list *els = ((cypher_path*)pt)->elements;
+                    for (int ej = 0; els && ej < els->count; ej++) {
+                        ast_node *el = els->items[ej];
+                        if (!el || el->type != AST_NODE_NODE_PATTERN) continue;
+                        const char *vn = ((cypher_node_pattern*)el)->variable;
+                        if (!vn) continue;
+                        for (int oi = 0; oi < ctx->outer_var_count; oi++) {
+                            const struct subquery_outer_var *o = &ctx->outer_vars[oi];
+                            if (o->projected || o->edge || strcmp(o->name, vn) != 0) continue;
+                            char cond[400];
+                            snprintf(cond, sizeof(cond), "(%s) IS NOT NULL", o->alias);
+                            sql_where(ctx->unified_builder, cond);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
             case AST_NODE_WITH: {
                 /* A WITH in the body may not rebind a name of the outer
                  * scope to another value (Neo4j: SyntaxError). */

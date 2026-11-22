@@ -61,6 +61,7 @@ CountExpressionAcceptance.feature::COUNT on the right side of an XOR should work
 CountExpressionAcceptance.feature::COUNT on the right side of an XOR with a NOT should work
 CountExpressionAcceptance.feature::COUNT should allow omission of RETURN in more complex queries
 CountExpressionAcceptance.feature::COUNT should have same results with a RETURN as one without
+CountExpressionAcceptance.feature::COUNT should return zero for NULL nodes
 CountExpressionAcceptance.feature::COUNT should return zero for NULL relationships
 CountExpressionAcceptance.feature::COUNT should work as grouping key
 CountExpressionAcceptance.feature::COUNT should work in a SET statement
@@ -73,6 +74,7 @@ CountExpressionAcceptance.feature::COUNT subquery as property inside node
 CountExpressionAcceptance.feature::COUNT subquery in join key
 CountExpressionAcceptance.feature::COUNT subquery with aggregation inside should work
 CountExpressionAcceptance.feature::COUNT subquery with empty node
+CountExpressionAcceptance.feature::COUNT with RETURN *
 CountExpressionAcceptance.feature::COUNT works in conjunction with algebraic operations
 CountExpressionAcceptance.feature::Count can be nested inside another count
 CountExpressionAcceptance.feature::Count inlined in node pattern with label expression on named node should be supported
@@ -367,6 +369,8 @@ MatchAcceptance.feature::Should allow AND and OR with inequality predicates
 MatchAcceptance.feature::Should allow AND and OR with regex predicates
 MatchAcceptance.feature::Should allow OR with regex predicates
 MatchAcceptance.feature::Should handle complex IS NOT NULL on node property when node is null
+MatchAcceptance.feature::Should handle simple IS NOT NULL on node property when node is null
+MatchAcceptance.feature::Should handle simple IS NULL on node property when node is null
 MatchAcceptance.feature::Variable length path with both sides already bound
 MatchAcceptance.feature::difficult to plan query number 1
 MatchAcceptance.feature::difficult to plan query number 2
@@ -507,9 +511,12 @@ PatternPredicates.feature::Matching named path with variable length pattern and 
 PatternPredicates.feature::Matching using pattern predicate
 PatternPredicates.feature::Matching using pattern predicate with multiple relationship types
 PatternPredicates.feature::Matching with complex composite pattern predicate
+PatternPredicates.feature::Pattern predicate should uphold the relationship uniqueness constraint
 PatternPredicates.feature::Pattern predicates and parameterised predicate
 PatternPredicates.feature::Pattern predicates on missing optionally matched nodes should simply evaluate to false
 PatternPredicates.feature::Returning a relationship from a pattern predicate
+PatternPredicates.feature::Undirected NOOP path predicate 1
+PatternPredicates.feature::Undirected NOOP path predicate 2
 PatternPredicates.feature::Using a pattern predicate after aggregation 1
 PatternPredicates.feature::Using a pattern predicate after aggregation 2
 PatternPredicates.feature::Using pattern predicate
@@ -543,6 +550,7 @@ ReturnAcceptance.feature::Return a map with null
 ReturnAcceptance.feature::Return a nested list with null
 ReturnAcceptance.feature::Return null in list with nested lists and maps
 ReturnAcceptance.feature::Return null in map with nested lists and maps
+ReturnAcceptance.feature::UNION with different RETURN order
 ReturnAcceptance.feature::Unaliased return items in a top level union should be accepted
 SkipLimitAcceptance.feature::Combining LIMIT and aggregation
 SkipLimitAcceptance.feature::Graph touching LIMIT should fail with a syntax exception
