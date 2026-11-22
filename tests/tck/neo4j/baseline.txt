@@ -596,10 +596,6 @@ SubqueryAcceptance.feature::Map projections in uncorrelated single subquery are 
 SubqueryAcceptance.feature::Map projections in uncorrelated union subquery are OK
 SubqueryAcceptance.feature::Nested subqueries
 SubqueryAcceptance.feature::Post-processing of a subquery result
-SubqueryAcceptance.feature::Return items in correlated single subquery must be aliased
-SubqueryAcceptance.feature::Return items in correlated union subquery must be aliased
-SubqueryAcceptance.feature::Return items in uncorrelated single subquery must be aliased
-SubqueryAcceptance.feature::Return items in uncorrelated union subquery must be aliased
 SubqueryAcceptance.feature::Should allow importing variables into a subquery
 SubqueryAcceptance.feature::Should allow to remove imported variables from subquery scope
 SubqueryAcceptance.feature::Should not allow to use unimported variables in a subquery

@@ -2612,9 +2612,8 @@ static int check_pattern_value_vars(ast_list *patterns, const name_set *bound,
 }
 
 /* The body of CALL { } (GQLITE-T-0539). It sees only the variables that its
- * leading WITH imports, and each RETURN item that is not a variable needs
- * an alias. The errors came at run time, so not at all when the outer query
- * had no rows. `outer` is NULL when the outer scope is not all known.
+ * leading WITH imports. The error came at run time, so not at all when the
+ * outer query had no rows. `outer` is NULL when the outer scope is not all known.
  * Conservative: a clause this does not follow ends the check. */
 static int validate_call_body(ast_node *body, const name_set *outer, char **error_message)
 {
@@ -2710,17 +2709,11 @@ static int validate_call_body(ast_node *body, const name_set *outer, char **erro
                         if (base && base->type == AST_NODE_IDENTIFIER)
                             it->alias = strdup(((cypher_identifier *)base)->name);
                     }
-                    /* Neo4j takes only a variable without an alias.
-                     * GraphQLite ran `CALL { MATCH (n) RETURN n.name }`
-                     * with the column `n.name` (a test of the Rust binding
-                     * has it), so a property stays valid. */
-                    if (!it->alias && it->expr->type != AST_NODE_IDENTIFIER &&
-                        it->expr->type != AST_NODE_PROPERTY) {
-                        set_error(error_message,
-                                  "SyntaxError: NoExpressionAlias: every RETURN item of a CALL subquery that is not a variable or a property must be aliased");
-                        rc = -1;
-                        break;
-                    }
+                    /* No alias is asked for. Neo4j refuses an unaliased
+                     * expression here (NoExpressionAlias); openCypher has
+                     * no CALL { } and asks for aliases only in WITH, and
+                     * GraphQLite 1.0.0 ran `CALL { RETURN 5 }` with the
+                     * column `5` (decision on GQLITE-T-0539, 2026-11-22). */
                     rc = check_undef_in_expr(it->expr, &scope, "RETURN", error_message);
                 }
                 break;

@@ -2,8 +2,8 @@
 -- Test 151: semantic errors that were missing (GQLITE-T-0539)
 -- ========================================================================
 -- PURPOSE: queries that Cypher refuses and GraphQLite ran: a CALL { } body
---          that reads a variable it did not import, or has an unaliased
---          RETURN item; SKIP / LIMIT that read the graph; isEmpty() of a
+--          that reads a variable it did not import; SKIP / LIMIT that read
+--          the graph; isEmpty() of a
 --          node, relationship or path; a pattern expression that brings in
 --          a variable; a property value used as a node.
 --          Each is a validation error, so cypher_validate() reports it
@@ -24,9 +24,6 @@ INSERT INTO _bad VALUES
  ('CALL body reads a variable it did not import', 'MATCH (a), (b) CALL { WITH a RETURN b AS c } RETURN c', 'UndefinedVariable'),
  ('CALL body: a WITH drops the imported variable', 'MATCH (a) CALL { WITH a WITH 1 AS b RETURN a AS c } RETURN c', 'UndefinedVariable'),
  ('CALL body imports a variable that is not there', 'MATCH (a) CALL { WITH zz RETURN 1 AS c } RETURN c', 'UndefinedVariable'),
- ('CALL: unaliased RETURN item', 'CALL { RETURN 5 } RETURN `5` AS five', 'NoExpressionAlias'),
- ('CALL: unaliased RETURN item, correlated', 'MATCH (n) CALL { WITH n RETURN n.x + 1 } RETURN n', 'NoExpressionAlias'),
- ('CALL: unaliased RETURN item in a union', 'MATCH (n) CALL { WITH n RETURN 5 + 5 UNION WITH n RETURN 5 + 5 } RETURN `5 + 5` AS plus', 'NoExpressionAlias'),
  ('LIMIT of a pattern count', 'MATCH (p) RETURN p.name AS name LIMIT size(()-->())', 'NonConstantExpression'),
  ('SKIP of a pattern comprehension', 'MATCH (p) RETURN p.name AS name SKIP size([(a)-->(b) | b.age])', 'NonConstantExpression'),
  ('LIMIT of reduce() over a variable', 'MATCH (p) RETURN p.name AS name LIMIT reduce(sum = 0, x IN [p.age] | sum + x)', 'NonConstantExpression'),
@@ -53,6 +50,8 @@ INSERT INTO _good VALUES
  ('CALL: a variable of the body', 'MATCH (a) CALL { WITH a MATCH (a)-->(b) RETURN b } RETURN b'),
  ('CALL: UNWIND and a path variable in the body', 'MATCH (a) CALL { WITH a UNWIND [1, 2] AS i MATCH p = (a) RETURN i, length(p) AS l } RETURN i, l'),
  ('CALL: an unaliased property keeps its text as the name', 'CALL { MATCH (n) RETURN n.name ORDER BY n.name }'),
+ ('CALL: an unaliased expression keeps its text as the name', 'CALL { RETURN 5 } RETURN `5` AS five'),
+ ('CALL: the same in a union', 'MATCH (n) CALL { WITH n RETURN 5 + 5 UNION WITH n RETURN 5 + 5 } RETURN `5 + 5` AS plus'),
  ('CALL: a map projection has the name of its variable', 'CALL { MATCH (n) RETURN n {.prop} } RETURN n'),
  ('LIMIT of a constant expression', 'MATCH (p) RETURN p.name AS name LIMIT toInteger(ceil(1.7))'),
  ('LIMIT of reduce() over constants', 'MATCH (p) RETURN p.name AS name LIMIT reduce(s = 0, x IN [1, 2] | s + x)'),
@@ -71,5 +70,8 @@ INSERT INTO _assert SELECT 'exists(pattern) as a RETURN value',
 
 INSERT INTO _assert SELECT 'CALL: a map projection is named by its variable',
     json(cypher('CALL { MATCH (n:A151) RETURN n {.prop, .foo} } RETURN n')) = json('[{"n":{"prop":1,"foo":null}}]');
+
+INSERT INTO _assert SELECT 'CALL: an unaliased expression is a column named by its text',
+    json(cypher('CALL { RETURN 5 } RETURN `5` AS five')) = json('[{"five":5}]');
 
 SELECT 'Test 151 passed: ' || count(*) || ' assertions' AS result FROM _assert;
