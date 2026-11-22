@@ -43,6 +43,15 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 
 ### Fixed
 
+- **Inline properties in `OPTIONAL MATCH` were not applied:** `MATCH (a)
+  OPTIONAL MATCH (a)-[:R]->(b {name: 'x'})` gave every neighbour of `a`,
+  whatever its name. The same for a property map on the relationship
+  (GQLITE-T-0554).
+- **Two variable-length patterns in one query:** `MATCH (a)-[:R*]->(b)
+  MATCH (a)-[:S*]->(c)` failed with "duplicate WITH table name:
+  _varlen_path_1" (GQLITE-T-0554).
+- **`WITH DISTINCT k, collect(x)` after a `CALL { }` or a write** was
+  refused (GQLITE-T-0554).
 - **`OPTIONAL MATCH` with a relationship bound by an earlier `MATCH`:**
   `MATCH (a)-[e]->(b) OPTIONAL MATCH (x)-[e]->(y)` gave every node as `x`;
   `OPTIONAL MATCH (b)-[e]->(z)` gave `z = b`. The new nodes are now the

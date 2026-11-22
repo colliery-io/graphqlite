@@ -6330,8 +6330,11 @@ static int rw_with_aggregate(cypher_executor *executor, cypher_with *w, rw_row *
                              rw_row **out, int *n_out, cypher_result *result)
 {
     *out = NULL; *n_out = 0;
-    if (w->order_by || w->skip || w->limit || w->distinct) {
-        set_result_error(result, "WITH with an aggregate, ORDER BY, SKIP, LIMIT or DISTINCT after a write is not supported");
+    /* DISTINCT changes nothing here: each group gives one row, and the
+     * groups differ in their grouping items (GQLITE-T-0554; `WITH DISTINCT
+     * k, collect(x)` after a CALL { } was refused). */
+    if (w->order_by || w->skip || w->limit) {
+        set_result_error(result, "WITH with an aggregate and ORDER BY, SKIP or LIMIT after a write or a CALL { } is not supported");
         return -1;
     }
     int ni = w->items->count;

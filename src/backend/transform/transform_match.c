@@ -244,8 +244,69 @@ char *label_alternatives_cond(cypher_transform_context *ctx, cypher_node_pattern
 }
 
 /* Transform a MATCH clause into SQL */
+/* OPTIONAL MATCH (a)-[:R]->(b {k: v}): the inline properties of an optional
+ * pattern with a relationship were not applied at all. The new node was
+ * joined on the relationship only, so every neighbour came back (1.0.0:
+ * `MATCH (r) OPTIONAL MATCH (r)-[:OUT]->(t {name: 'o1'})` gave o1 and o2;
+ * GQLITE-T-0554). `(b {k: v})` means `(b) WHERE b.k = v`, and the WHERE of
+ * an OPTIONAL MATCH is applied where it belongs (the ON of the optional
+ * joins), so each inline property moves there. An anonymous element gets
+ * a hidden name. Variable-length relationships keep their map. */
+static void optional_lift_inline_properties(cypher_transform_context *ctx, cypher_match *match)
+{
+    ast_node *lifted = NULL;
+    for (int pi = 0; match->pattern && pi < match->pattern->count; pi++) {
+        ast_node *pn = match->pattern->items[pi];
+        if (!pn || pn->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path*)pn;
+        if (!path->elements || path->elements->count < 3) continue;
+        for (int ei = 0; ei < path->elements->count; ei++) {
+            ast_node *el = path->elements->items[ei];
+            if (!el) continue;
+            ast_node **props = NULL;
+            char **var = NULL;
+            if (el->type == AST_NODE_NODE_PATTERN) {
+                props = &((cypher_node_pattern*)el)->properties;
+                var = &((cypher_node_pattern*)el)->variable;
+            } else if (el->type == AST_NODE_REL_PATTERN && !((cypher_rel_pattern*)el)->varlen) {
+                props = &((cypher_rel_pattern*)el)->properties;
+                var = &((cypher_rel_pattern*)el)->variable;
+            }
+            if (!props || !*props || (*props)->type != AST_NODE_MAP) continue;
+            cypher_map *map = (cypher_map*)*props;
+            if (!map->pairs || map->pairs->count == 0) continue;
+            if (!*var) {
+                char gen[48];
+                snprintf(gen, sizeof(gen), "__gql_opt_%d", ctx->global_alias_counter++);
+                *var = strdup(gen);
+                if (!*var) continue;
+            }
+            for (int k = 0; k < map->pairs->count; k++) {
+                cypher_map_pair *pair = (cypher_map_pair*)map->pairs->items[k];
+                if (!pair || !pair->key || !pair->value) continue;
+                ast_node *lhs = (ast_node*)make_property((ast_node*)make_identifier(*var, el->location),
+                                                        pair->key, el->location);
+                ast_node *eq = (ast_node*)make_binary_op(BINARY_OP_EQ, lhs, pair->value, el->location);
+                pair->value = NULL;                      /* moved */
+                lifted = lifted ? (ast_node*)make_binary_op(BINARY_OP_AND, lifted, eq, el->location) : eq;
+            }
+            ast_node_free(*props);
+            *props = NULL;
+        }
+    }
+    if (!lifted) return;
+    if (match->where) {
+        match->where->parenthesized = true;
+        match->where = (ast_node*)make_binary_op(BINARY_OP_AND, lifted, match->where, match->where->location);
+    } else {
+        match->where = lifted;
+    }
+}
+
 int transform_match_clause(cypher_transform_context *ctx, cypher_match *match)
 {
+    if (ctx && match && match->optional) optional_lift_inline_properties(ctx, match);
+
     /* Joins before this clause: only a MATCH that starts the query groups its
      * leading-OPTIONAL joins (Graph6 [6], not Aggregation5 [2]). */
     size_t joins_at_start = sql_builder_joins_len(ctx->unified_builder);
@@ -2728,9 +2789,23 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
     if (rel->varlen) {
         CYPHER_DEBUG("Handling variable-length relationship");
 
-        /* Generate unique CTE name */
+        /* Generate unique CTE name. The number was the position of the
+         * relationship in its pattern, so two MATCH clauses with a
+         * variable-length relationship at the same position made two CTEs
+         * of one name: `MATCH (a)-[:R*]->(b) MATCH (a)-[:S*]->(c)` was
+         * "duplicate WITH table name: _varlen_path_1" (GQLITE-T-0554). A
+         * name that the query has already gets the next free number. */
         char cte_name[64];
-        snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", rel_index);
+        int vl_no = rel_index;
+        for (;;) {
+            char probe[72];
+            snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", vl_no);
+            snprintf(probe, sizeof(probe), "%s(", cte_name);
+            const char *c1 = dbuf_get(&ctx->unified_builder->cte);
+            const char *c2 = dbuf_get(&ctx->unified_builder->pre_cte);
+            if (!((c1 && strstr(c1, probe)) || (c2 && strstr(c2, probe)))) break;
+            vl_no += 100;
+        }
 
         /* T-0309: mark this rel variable as varlen-bound so the RETURN
          * projector emits a list-of-edges JSON array (and the result
@@ -2788,12 +2863,12 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
         char fresh_target_alias[64];
         if (edge_alias_is_colref) {
             snprintf(fresh_cte_alias, sizeof(fresh_cte_alias),
-                     "_vp_inner_%d", rel_index);
+                     "_vp_inner_%d", vl_no);
             edge_alias = fresh_cte_alias;
         }
         if (target_alias_is_colref) {
             snprintf(fresh_target_alias, sizeof(fresh_target_alias),
-                     "_vp_tgt_%d", rel_index);
+                     "_vp_tgt_%d", vl_no);
         }
 
         /* Join the main query with the CTE result using unified builder.
