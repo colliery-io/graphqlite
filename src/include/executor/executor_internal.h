@@ -174,8 +174,6 @@ int execute_foreach_clause_vm(cypher_executor *executor, cypher_foreach *foreach
 int execute_merge_clause(cypher_executor *executor, cypher_merge *merge,
                          cypher_result *result, variable_map *external_vars,
                          variable_map **out_var_map);
-int execute_merge_with_variables(cypher_executor *executor, cypher_merge *merge,
-                                 variable_map *var_map, cypher_result *result);
 int execute_set_clause(cypher_executor *executor, cypher_set *set, cypher_result *result);
 int execute_match_clause(cypher_executor *executor, cypher_match *match, cypher_result *result);
 
@@ -215,15 +213,12 @@ int execute_multi_match_create_query(cypher_executor *executor, cypher_query *qu
                                      variable_map ***out_row_maps, int *out_row_count);
 int bind_match_clause_into_varmap(cypher_executor *executor, cypher_match *match,
                                   variable_map *var_map, cypher_result *result);
-int execute_match_merge_query_with_varmap(cypher_executor *executor, cypher_match *match, cypher_merge *merge,
-                                          cypher_result *result, variable_map **out_var_map);
 int execute_match_create_return_query(cypher_executor *executor, cypher_match *match, cypher_create *create, cypher_return *return_clause, cypher_result *result);
 int execute_match_set_query(cypher_executor *executor, cypher_match *match, cypher_set *set, cypher_result *result);
 int execute_match_delete_query(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause, cypher_result *result);
 /* GQLITE-T-0253: 1 if the MATCH binds a non-null entity for any DELETE
  * target, 0 if none, -1 on error. */
 int delete_targets_bound(cypher_executor *executor, cypher_match *match, cypher_delete *delete_clause);
-int execute_match_merge_query(cypher_executor *executor, cypher_match *match, cypher_merge *merge, cypher_result *result);
 int execute_match_remove_query(cypher_executor *executor, cypher_match *match, cypher_remove *remove, cypher_result *result);
 
 /* REMOVE operations with variable map */
@@ -236,8 +231,6 @@ int execute_delete_operations(cypher_executor *executor, cypher_delete *del, var
 
 /* Pattern matching functions */
 int find_node_by_pattern(cypher_executor *executor, cypher_node_pattern *node_pattern);
-int find_edge_by_pattern(cypher_executor *executor, int source_id, int target_id,
-                         const char *type, cypher_rel_pattern *rel_pattern);
 
 /* DELETE functions */
 int delete_edge_by_id(cypher_executor *executor, int64_t edge_id);
@@ -263,8 +256,6 @@ int handle_generic_transform(cypher_executor *executor, cypher_query *query,
                              cypher_result *result, clause_flags flags);
 int handle_call_subquery(cypher_executor *executor, cypher_query *query,
                          cypher_result *result, clause_flags flags);
-int handle_merge_with_pipeline(cypher_executor *executor, cypher_query *query,
-                               cypher_result *result, clause_flags flags);
 
 /* RETURN-projection + aggregation helpers (executor_result_project.c, I-0040 M3) */
 bool synthesize_delete_return(cypher_return *ret, cypher_result *result);

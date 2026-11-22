@@ -24,7 +24,6 @@ The full pattern table, ordered from highest to lowest priority:
 | 90 | `MATCH+SET` | MATCH, SET | — |
 | 90 | `MATCH+DELETE` | MATCH, DELETE | — |
 | 90 | `MATCH+REMOVE` | MATCH, REMOVE | — |
-| 90 | `MATCH+MERGE` | MATCH, MERGE | — |
 | 90 | `MATCH+CREATE` | MATCH, CREATE | RETURN |
 | 80 | `OPTIONAL_MATCH+RETURN` | MATCH, OPTIONAL, RETURN | CREATE, SET, DELETE, MERGE |
 | 80 | `MULTI_MATCH+RETURN` | MATCH, MULTI_MATCH, RETURN | CREATE, SET, DELETE, MERGE |
@@ -37,6 +36,8 @@ The full pattern table, ordered from highest to lowest priority:
 | 40 | `MATCH` | MATCH | RETURN, CREATE, SET, DELETE, MERGE, REMOVE |
 | 10 | `RETURN` | RETURN | MATCH, UNWIND, WITH |
 | 0 | `GENERIC` | — | — |
+
+Before the table, the dispatch function tests the query for the shapes that the row pipeline runs: a `MERGE` after a `MATCH` or a `WITH`, more than one write clause with a `MERGE`, a read after a write, a `CALL { }` subquery with other clauses, a `FOREACH` with other clauses. The row pipeline evaluates the read clauses once, then runs each row through the write clauses in order. `EXPLAIN` and `PROFILE` name this route `ROW_PIPELINE`.
 
 The `GENERIC` pattern at priority 0 is the catch-all: it has no required or forbidden clauses, so it matches any query. It uses the full transform pipeline, which handles complex multi-clause queries including WITH chains.
 

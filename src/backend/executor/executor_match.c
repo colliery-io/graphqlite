@@ -908,14 +908,12 @@ agtype_value* build_path_from_ids(cypher_executor *executor, cypher_transform_co
  * Current callers:
  *   - executor_match.c::execute_match_create_query_with_varmap (multi-MATCH CREATE).
  *   - query_dispatch.c::handle_match_set (multi-MATCH branch).
- *   - query_dispatch.c::handle_match_merge (T-0317 MATCH+WITH+MERGE).
  *
  * Latent duplicates (functions that build their OWN inline copy
  * instead of reusing this helper):
  *   - execute_match_create_query (executor_match.c:949)
  *   - execute_match_set_query    (executor_set.c:~390)
  *   - execute_match_remove_query (executor_remove.c:~16)
- *   - execute_match_merge_query_with_varmap (executor_merge.c:~975)
  *
  * Each duplicates the same six-step pattern with subtle variations
  * (single-row vs all-rows iteration, what to do per row). A clean

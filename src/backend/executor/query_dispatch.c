@@ -142,8 +142,6 @@ static int handle_match_delete(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
 static int handle_match_remove(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
-static int handle_match_merge(cypher_executor *executor, cypher_query *query,
-                              cypher_result *result, clause_flags flags);
 static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags);
 static int handle_match_create(cypher_executor *executor, cypher_query *query,
@@ -169,7 +167,6 @@ static int handle_unwind_merge(cypher_executor *executor, cypher_query *query,
                                cypher_result *result, clause_flags flags);
 static int handle_return_only(cypher_executor *executor, cypher_query *query,
                               cypher_result *result, clause_flags flags);
-/* handle_merge_with_pipeline moved to executor_merge_pipeline.c (I-0040 M2) — decl in executor_internal.h */
 /* handle_call_subquery moved to executor_call_subquery.c (I-0040 M1) — decl in executor_internal.h */
 static int handle_create_return(cypher_executor *executor, cypher_query *query,
                                 cypher_result *result, clause_flags flags);
@@ -225,10 +222,9 @@ static const query_pattern patterns[] = {
     {
         .name = "WITH+MATCH+RETURN",
         .required = CLAUSE_WITH | CLAUSE_MATCH | CLAUSE_RETURN,
-        /* T-0317: MERGE has no case in transform_single_query_sql,
-         * so a query with MERGE here would error "Unsupported clause
-         * type". Forbid CLAUSE_MERGE to route MATCH+WITH+MERGE+...
-         * to the dedicated handler (Merge5 [16]/[17]/[18]/[19]). */
+        /* MERGE has no case in transform_single_query_sql: a query with
+         * MERGE here would fail with "Unsupported clause type". The row
+         * pipeline runs MATCH + WITH + MERGE. */
         .forbidden = CLAUSE_MERGE,
         .handler = handle_generic_transform,
         .priority = 100
@@ -304,24 +300,6 @@ static const query_pattern patterns[] = {
         .forbidden = CLAUSE_NONE,
         .handler = handle_match_remove,
         .priority = 90
-    },
-    {
-        .name = "MATCH+MERGE",
-        .required = CLAUSE_MATCH | CLAUSE_MERGE,
-        .forbidden = CLAUSE_WITH,
-        .handler = handle_match_merge,
-        .priority = 90
-    },
-    {
-        /* T-0317: MATCH+WITH+MERGE — pre-WITH MATCH(es) bind a var_map,
-         * WITH renames it, MERGE uses the scoped var_map. Routes via
-         * handle_match_merge which has been extended to detect WITH
-         * and process it. */
-        .name = "MATCH+WITH+MERGE",
-        .required = CLAUSE_MATCH | CLAUSE_WITH | CLAUSE_MERGE,
-        .forbidden = CLAUSE_NONE,
-        .handler = handle_match_merge,
-        .priority = 91
     },
     {
         .name = "MATCH+CREATE",
@@ -401,13 +379,6 @@ static const query_pattern patterns[] = {
         .forbidden = CLAUSE_MATCH | CLAUSE_UNWIND | CLAUSE_RETURN,
         .handler = handle_create,
         .priority = 50
-    },
-    {
-        .name = "MERGE+WITH",
-        .required = CLAUSE_MERGE | CLAUSE_WITH,
-        .forbidden = CLAUSE_NONE,
-        .handler = handle_merge_with_pipeline,
-        .priority = 55
     },
     {
         .name = "MERGE+RETURN",
@@ -954,29 +925,28 @@ static bool foreach_after_read(cypher_query *query, clause_flags flags)
     ast_node *first = query->clauses->items[0];
     /* GQLITE-T-0423: a leading CREATE too (`CREATE (a) FOREACH (... |
      * CREATE (a)-[:R]->(:B))` ran the FOREACH without `a`). */
+    /* GQLITE-T-0541: a leading MERGE or FOREACH too, and a MATCH or UNWIND
+     * after the FOREACH. The MATCH + MERGE and MERGE + WITH handlers took
+     * these and skipped the FOREACH, or refused the query. */
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
-                    first->type == AST_NODE_WITH || first->type == AST_NODE_CREATE)) {
+                    first->type == AST_NODE_WITH || first->type == AST_NODE_CREATE ||
+                    first->type == AST_NODE_MERGE || first->type == AST_NODE_FOREACH)) {
         return false;
     }
-    bool write_seen = false;
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *c = query->clauses->items[i];
         if (!c) continue;
         switch (c->type) {
             case AST_NODE_MATCH:
             case AST_NODE_UNWIND:
-                if (write_seen) return false;
-                break;
             case AST_NODE_WITH:
             case AST_NODE_RETURN:
-                break;
             case AST_NODE_FOREACH:
             case AST_NODE_CREATE:
             case AST_NODE_MERGE:
             case AST_NODE_SET:
             case AST_NODE_REMOVE:
             case AST_NODE_DELETE:
-                write_seen = true;
                 break;
             default:
                 return false;
@@ -1618,6 +1588,46 @@ static int handle_load_csv(cypher_executor *executor, cypher_query *query, cyphe
     return rc;
 }
 
+/* The shapes that the row pipeline runs, tested before the pattern table.
+ * Gives the name of the shape, or NULL when the pattern table decides. */
+static const char *row_pipeline_shape(cypher_query *query, clause_flags flags)
+{
+    if (call_in_rows(query, flags)) return "CALL { } in the row pipeline";
+    if (writes_need_rows(query, flags)) return "writes that need the row pipeline";
+    if (write_return_aggregates(query, flags)) return "write with an aggregating RETURN";
+    if (delete_of_value(query, flags)) return "DELETE of a path or an expression";
+    if (delete_then_create(query, flags)) return "MATCH .. DELETE .. CREATE";
+    /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
+     * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
+     * `row` as unbound) or the UNWIND itself (every node was updated). */
+    if (unwind_feeds_write(query, flags)) return "UNWIND feeding a write";
+    /* A leading MERGE with a RETURN: every match of the pattern is a row
+     * (`MERGE (b) RETURN count(*)` counted one row for two nodes). */
+    if (query->clauses && query->clauses->count >= 2 && query->clauses->items[0] &&
+        query->clauses->items[0]->type == AST_NODE_MERGE && (flags & CLAUSE_RETURN) &&
+        !(flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN)))
+        return "MERGE .. RETURN";
+    /* #135: FOREACH after a MATCH / UNWIND / WITH runs per row of that
+     * prefix; the FOREACH handler ignored the prefix. */
+    if (foreach_after_read(query, flags)) return "FOREACH with other clauses";
+    return NULL;
+}
+
+/* The name of the route that dispatch_query_pattern takes for a query, for
+ * EXPLAIN and PROFILE (GQLITE-T-0541: they named the pattern table entry
+ * even when a row pipeline shape ran the query). */
+const char *dispatch_route_name(cypher_query *query)
+{
+    if (!query || !query->clauses || query->clauses->count == 0) return "NONE";
+    clause_flags flags = analyze_query_clauses(query) & ~(clause_flags)CLAUSE_EXPLAIN;
+    ast_node *first = query->clauses->items[0];
+    if (first && first->type == AST_NODE_CALL_PROCEDURE) return "CALL procedure";
+    if (first && first->type == AST_NODE_LOAD_CSV) return "LOAD CSV";
+    if (row_pipeline_shape(query, flags)) return "ROW_PIPELINE";
+    const query_pattern *pattern = find_matching_pattern(flags);
+    return pattern ? pattern->name : "NONE";
+}
+
 int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
                            cypher_result *result)
 {
@@ -1639,9 +1649,6 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
         return handle_load_csv(executor, query, result);
     }
 
-    /* #136: an UNWIND that feeds a MATCH + write, or a MERGE + SET, runs
-     * row by row: the per-pattern handlers drop the UNWIND variable (SET saw
-     * `row` as unbound) or the UNWIND itself (every node was updated). */
     /* A procedure CALL after other clauses fell through to the generic path
      * and failed with "`x` is not defined" for its YIELD (GQLITE-T-0447). */
     for (int i = 1; query->clauses && i < query->clauses->count; i++) {
@@ -1651,55 +1658,9 @@ int dispatch_query_pattern(cypher_executor *executor, cypher_query *query,
         }
     }
 
-    if (call_in_rows(query, flags)) {
-        CYPHER_DEBUG("Matched shape: CALL { } in the row pipeline");
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    if (writes_need_rows(query, flags)) {
-        CYPHER_DEBUG("Matched shape: writes that need the row pipeline");
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    if (write_return_aggregates(query, flags)) {
-        CYPHER_DEBUG("Matched shape: write with an aggregating RETURN (row-wise)");
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    if (delete_of_value(query, flags)) {
-        CYPHER_DEBUG("Matched shape: DELETE of a path or an expression (row-wise)");
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    if (delete_then_create(query, flags)) {
-        CYPHER_DEBUG("Matched shape: MATCH .. DELETE .. CREATE (row-wise)");
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    if (unwind_feeds_write(query, flags)) {
-        CYPHER_DEBUG("Matched shape: UNWIND feeding a write (row-wise)");
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    /* A leading MERGE with a RETURN: every match of the pattern is a row
-     * (`MERGE (b) RETURN count(*)` counted one row for two nodes). */
-    if (query->clauses && query->clauses->count >= 2 && query->clauses->items[0] &&
-        query->clauses->items[0]->type == AST_NODE_MERGE && (flags & CLAUSE_RETURN) &&
-        !(flags & (CLAUSE_CALL | CLAUSE_FOREACH | CLAUSE_UNION | CLAUSE_LOAD_CSV | CLAUSE_EXPLAIN))) {
-        executor->stmt_capture = false;
-        return handle_rowwise_write(executor, query, result, flags);
-    }
-
-    /* #135: FOREACH after a MATCH / UNWIND / WITH runs per row of that
-     * prefix; the FOREACH handler ignored the prefix. */
-    if (foreach_after_read(query, flags)) {
-        CYPHER_DEBUG("Matched shape: FOREACH after a read prefix (row-wise)");
+    const char *shape = row_pipeline_shape(query, flags);
+    if (shape) {
+        CYPHER_DEBUG("Matched shape: %s", shape);
         executor->stmt_capture = false;
         return handle_rowwise_write(executor, query, result, flags);
     }
@@ -2547,247 +2508,6 @@ static int handle_match_remove(cypher_executor *executor, cypher_query *query,
         }
     }
     row_pin_release(&pin);
-    return rc;
-}
-
-/* GQLITE-T-0338: generate_node_match (transform_match.c) consumes a node's
- * first inline property by nulling the map pair's key once it has been
- * folded into the FROM/JOIN anchor. handle_match_merge transforms the same
- * pattern AST twice — once to execute the MERGE, once for the RETURN
- * re-match over the combined MATCH+MERGE pattern — so the second pass used
- * to lose the `{id: ..}` filters and an undirected MERGE re-match doubled
- * its rows (Merge5 [12]/[13]). Snapshot every inline property key before
- * the first pass and put the nulled ones back before the second. The keys
- * are never freed by the consumer, so restoring the pointer is safe. */
-typedef struct {
-    cypher_map_pair **pairs;
-    char **keys;
-    int count;
-    int cap;
-} prop_key_snapshot;
-
-static void snapshot_add(prop_key_snapshot *snap, cypher_map_pair *pair)
-{
-    if (snap->count == snap->cap) {
-        int cap = snap->cap ? snap->cap * 2 : 8;
-        cypher_map_pair **pp = realloc(snap->pairs, (size_t)cap * sizeof(*pp));
-        char **kk = realloc(snap->keys, (size_t)cap * sizeof(*kk));
-        if (!pp || !kk) { free(pp); free(kk); return; }
-        snap->pairs = pp; snap->keys = kk; snap->cap = cap;
-    }
-    snap->pairs[snap->count] = pair;
-    snap->keys[snap->count] = pair->key;
-    snap->count++;
-}
-
-static void snapshot_props(prop_key_snapshot *snap, ast_node *props)
-{
-    if (!props || props->type != AST_NODE_MAP) return;
-    cypher_map *m = (cypher_map*)props;
-    if (!m->pairs) return;
-    for (int i = 0; i < m->pairs->count; i++) {
-        cypher_map_pair *pair = (cypher_map_pair*)m->pairs->items[i];
-        if (pair && pair->key) snapshot_add(snap, pair);
-    }
-}
-
-static void snapshot_pattern_prop_keys(ast_list *pattern, prop_key_snapshot *snap)
-{
-    if (!pattern) return;
-    for (int i = 0; i < pattern->count; i++) {
-        ast_node *item = pattern->items[i];
-        if (!item) continue;
-        if (item->type == AST_NODE_NODE_PATTERN) {
-            snapshot_props(snap, ((cypher_node_pattern*)item)->properties);
-        } else if (item->type == AST_NODE_PATH) {
-            cypher_path *path = (cypher_path*)item;
-            if (!path->elements) continue;
-            for (int j = 0; j < path->elements->count; j++) {
-                ast_node *el = path->elements->items[j];
-                if (!el) continue;
-                if (el->type == AST_NODE_NODE_PATTERN)
-                    snapshot_props(snap, ((cypher_node_pattern*)el)->properties);
-                else if (el->type == AST_NODE_REL_PATTERN)
-                    snapshot_props(snap, ((cypher_rel_pattern*)el)->properties);
-            }
-        }
-    }
-}
-
-static void restore_pattern_prop_keys(prop_key_snapshot *snap)
-{
-    for (int i = 0; i < snap->count; i++) {
-        if (snap->pairs[i]->key == NULL) snap->pairs[i]->key = snap->keys[i];
-    }
-    free(snap->pairs);
-    free(snap->keys);
-    snap->pairs = NULL; snap->keys = NULL; snap->count = snap->cap = 0;
-}
-
-static int handle_match_merge(cypher_executor *executor, cypher_query *query,
-                              cypher_result *result, clause_flags flags)
-{
-    cypher_match *match = find_match_clause(query);
-    cypher_merge *merge = find_merge_clause(query);
-    cypher_set *set = find_set_clause(query);
-
-    CYPHER_DEBUG("Executing MATCH+MERGE via pattern dispatch");
-
-    /* GQLITE-T-0338: see prop_key_snapshot above. */
-    prop_key_snapshot snap = {0};
-    snapshot_pattern_prop_keys(match ? match->pattern : NULL, &snap);
-    snapshot_pattern_prop_keys(merge ? merge->pattern : NULL, &snap);
-
-    /* T-0317: MATCH+WITH+MERGE — bind each pre-WITH MATCH into a
-     * var_map, process WITH item renames (`a AS x` etc.), then run
-     * MERGE against the renamed map. This covers Merge5 [16]-[19]
-     * (aliasing of existing nodes) which previously fell through to
-     * handle_generic_transform → "Unsupported clause type". */
-    bool has_with = (flags & CLAUSE_WITH) != 0;
-    if (has_with) {
-        variable_map *vm = create_variable_map();
-        if (!vm) { restore_pattern_prop_keys(&snap); set_result_error(result, "OOM"); return -1; }
-
-        /* Bind every pre-WITH MATCH clause into vm. */
-        for (int i = 0; i < query->clauses->count; i++) {
-            ast_node *c = query->clauses->items[i];
-            if (!c) continue;
-            if (c->type == AST_NODE_WITH) break;
-            if (c->type != AST_NODE_MATCH) continue;
-            if (bind_match_clause_into_varmap(executor, (cypher_match*)c, vm, result) < 0) {
-                free_variable_map(vm);
-                restore_pattern_prop_keys(&snap);
-                return -1;
-            }
-        }
-
-        /* Apply WITH renames: for each `X AS Y` (or bare X), copy vm
-         * entries to a fresh scoped map under the target alias. */
-        variable_map *scoped = create_variable_map();
-        if (!scoped) { free_variable_map(vm); restore_pattern_prop_keys(&snap); set_result_error(result, "OOM"); return -1; }
-        for (int i = 0; i < query->clauses->count; i++) {
-            ast_node *c = query->clauses->items[i];
-            if (!c || c->type != AST_NODE_WITH) continue;
-            cypher_with *w = (cypher_with*)c;
-            if (!w->items) break;
-            for (int wi = 0; wi < w->items->count; wi++) {
-                cypher_return_item *it = (cypher_return_item*)w->items->items[wi];
-                if (!it || !it->expr) continue;
-                if (it->expr->type != AST_NODE_IDENTIFIER) continue;
-                const char *src = ((cypher_identifier*)it->expr)->name;
-                const char *dst = it->alias ? it->alias : src;
-                int nid = get_variable_node_id(vm, src);
-                int eid = is_variable_edge(vm, src) ? get_variable_edge_id(vm, src) : -1;
-                if (nid >= 0) set_variable_node_id(scoped, dst, nid);
-                else if (eid >= 0) set_variable_edge_id(scoped, dst, eid);
-            }
-            break;
-        }
-        free_variable_map(vm);
-
-        /* Also bind POST-WITH MATCH clauses into scoped. After WITH,
-         * variables not passed through are out of scope, but NEW
-         * MATCH clauses after WITH introduce fresh bindings. Without
-         * this, `MATCH (a) WITH a MATCH (b) MERGE (a)-[:R]->(b)`
-         * leaves `b` unbound and MERGE collapses the edge into a
-         * self-loop on `a`. */
-        bool past_with = false;
-        for (int i = 0; i < query->clauses->count; i++) {
-            ast_node *c = query->clauses->items[i];
-            if (!c) continue;
-            if (c->type == AST_NODE_WITH) { past_with = true; continue; }
-            if (!past_with) continue;
-            if (c->type != AST_NODE_MATCH) continue;
-            if (bind_match_clause_into_varmap(executor, (cypher_match*)c,
-                                              scoped, result) < 0) {
-                free_variable_map(scoped);
-                restore_pattern_prop_keys(&snap);
-                return -1;
-            }
-        }
-
-        /* Run MERGE against the scoped (WITH-renamed + post-WITH MATCH) var_map. */
-        int rc = execute_merge_clause(executor, merge, result, scoped, NULL);
-        free_variable_map(scoped);
-        restore_pattern_prop_keys(&snap);   /* T-0338: re-match sees the inline props */
-        if (rc < 0) return rc;
-
-        result->success = true;
-        if (flags & CLAUSE_RETURN) {
-            cypher_return *ret = find_return_clause(query);
-            if (ret) {
-                /* RETURN sees the post-MERGE state via the combined
-                 * pattern. Use the synth-match (combined MATCH+MERGE
-                 * pattern) trick already used by the non-WITH branch.
-                 * NOTE: the WITH renames may make some return items
-                 * reference the renamed aliases (a, b) rather than the
-                 * original (n, m). For Merge5 [16] the RETURN reads
-                 * a.id, b.id — which we don't currently rewrite.
-                 * Acceptance check below will surface gaps. */
-                ast_list *combined = ast_list_create();
-                if (match->pattern) {
-                    for (int i = 0; i < match->pattern->count; i++)
-                        ast_list_append(combined, match->pattern->items[i]);
-                }
-                if (merge->pattern) {
-                    for (int i = 0; i < merge->pattern->count; i++)
-                        ast_list_append(combined, merge->pattern->items[i]);
-                }
-                cypher_match *synth = make_cypher_match(combined,
-                                                       match->where, false, NULL);
-                rc = execute_match_return_query(executor, synth, ret, result);
-                if (synth) free(synth);
-            }
-        }
-        return rc;
-    }
-
-    /* Capture the MATCH+MERGE var_map when a trailing SET needs it. */
-    variable_map *mm_vars = NULL;
-    int rc = execute_match_merge_query_with_varmap(executor, match, merge, result, set ? &mm_vars : NULL);
-    restore_pattern_prop_keys(&snap);   /* T-0338: re-match sees the inline props */
-    if (rc < 0) {
-        if (mm_vars) free_variable_map(mm_vars);
-        return rc;
-    }
-
-    if (set && mm_vars) {
-        rc = execute_set_operations(executor, set, mm_vars, result);
-        if (rc < 0) {
-            free_variable_map(mm_vars);
-            return rc;
-        }
-    }
-    if (mm_vars) free_variable_map(mm_vars);
-
-    result->success = true;
-    if (flags & CLAUSE_RETURN) {
-        cypher_return *ret = find_return_clause(query);
-        if (ret) {
-            /* For RETURN after MERGE, the merged variables (r, etc.) must
-             * be visible. Construct a synthetic MATCH whose pattern is the
-             * union of the original MATCH and MERGE patterns, then re-query.
-             * The MERGE has already created/matched whatever was needed; the
-             * combined MATCH simply observes the resulting state. */
-            ast_list *combined_pattern = ast_list_create();
-            if (match->pattern) {
-                for (int i = 0; i < match->pattern->count; i++) {
-                    ast_list_append(combined_pattern, match->pattern->items[i]);
-                }
-            }
-            if (merge->pattern) {
-                for (int i = 0; i < merge->pattern->count; i++) {
-                    ast_list_append(combined_pattern, merge->pattern->items[i]);
-                }
-            }
-            cypher_match *synth_match = make_cypher_match(combined_pattern,
-                                                          match->where, false, NULL);
-            rc = execute_match_return_query(executor, synth_match, ret, result);
-            free(synth_match);
-            free(combined_pattern->items);
-            free(combined_pattern);
-        }
-    }
     return rc;
 }
 
@@ -7430,8 +7150,12 @@ static int handle_rowwise_write(cypher_executor *executor, cypher_query *query,
     ast_node *first = clauses->items[0];
     if (!first || !(first->type == AST_NODE_MATCH || first->type == AST_NODE_UNWIND ||
                     first->type == AST_NODE_CREATE || first->type == AST_NODE_WITH ||
-                    first->type == AST_NODE_MERGE || first->type == AST_NODE_CALL_SUBQUERY)) {
-        if (flags & CLAUSE_WITH) return handle_merge_with_pipeline(executor, query, result, flags);
+                    first->type == AST_NODE_MERGE || first->type == AST_NODE_CALL_SUBQUERY ||
+                    first->type == AST_NODE_FOREACH)) {
+        if (flags & CLAUSE_WITH) {
+            set_result_error(result, "A write query must start with MATCH, OPTIONAL MATCH, UNWIND, WITH, CREATE, MERGE, FOREACH or CALL");
+            return -1;
+        }
         return handle_merge_return(executor, query, result, flags);
     }
 

@@ -455,7 +455,7 @@ EXPLAIN query
 PROFILE query
 ```
 
-`EXPLAIN` gives the generated SQL and does not run the query. `PROFILE` runs the query and gives one row with the columns `pattern`, `clauses`, `sql`, `plan` (the SQLite query plan), `rows`, `time_ms` and the write counters.
+`EXPLAIN` gives the route (`Pattern`), the clauses and the generated SQL, and does not run the query. For a query with `MERGE`, the SQL is the lookup that finds the pattern for each row, and a `MERGE` line says what a row with no match and a row with a match do. `PROFILE` runs the query and gives one row with the columns `pattern`, `clauses`, `sql`, `plan` (the SQLite query plan), `rows`, `time_ms` and the write counters.
 
 **Example**
 

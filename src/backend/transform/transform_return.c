@@ -1099,8 +1099,8 @@ return_star_done:
         sql_builder_flush_deferred_joins(ctx->unified_builder);
 
         /* T-0311 (E2): finalize moved to end of transform_single_query_sql.
-         * External callers (executor_match.c, executor_merge_pipeline.c)
-         * that invoke transform_return_clause directly add their own
+         * External callers (executor_match.c) that invoke
+         * transform_return_clause directly add their own
          * explicit finalize. */
 
         CYPHER_DEBUG("Unified builder path complete (finalize deferred)");
