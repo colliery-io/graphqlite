@@ -1116,6 +1116,22 @@ handle_where_clause:
     return 0;
 }
 
+/* A name for the CTE of a variable-length relationship that the query does
+ * not have yet: `_varlen_path_<no>`, from `no` up in steps of 100
+ * (GQLITE-T-0554). Gives the number used. */
+static int varlen_cte_free_name(cypher_transform_context *ctx, int no, char *out, size_t out_size)
+{
+    for (;;) {
+        char probe[72];
+        snprintf(out, out_size, "_varlen_path_%d", no);
+        snprintf(probe, sizeof(probe), "%s(", out);
+        const char *c1 = dbuf_get(&ctx->unified_builder->cte);
+        const char *c2 = dbuf_get(&ctx->unified_builder->pre_cte);
+        if (!((c1 && strstr(c1, probe)) || (c2 && strstr(c2, probe)))) return no;
+        no += 100;
+    }
+}
+
 /* A variable that holds a relationship as a value (out of a list or a map:
  * `WITH last(relationships(p)) AS e MATCH (a)-[e]->(b)`, `UNWIND rels AS e`)
  * binds the pattern to that relationship (GQLITE-T-0552; it was refused as
@@ -1295,6 +1311,13 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
      * 'all-or-none' OPTIONAL semantics. */
     bool path_combined_exists = false;
     bool path_has_user_rel_var = false;
+    /* GQLITE-T-0556: a variable-length relationship next to other
+     * relationships. Each relationship had its own LEFT JOIN, so a later hop
+     * that failed left the row of the walk: `OPTIONAL MATCH
+     * (a)-[:R*]->(b)-[:S]->(c)` gave b with a null c. The walk goes into the
+     * derived table below with the other hops; a walk with a variable is
+     * joined back to its row after it. */
+    bool path_has_varlen = false;
     if (optional && path->elements && path->elements->count >= 5) {
         int n_rels = 0;
         bool all_eligible = true;
@@ -1303,7 +1326,14 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             ast_node *el = path->elements->items[j];
             if (el->type != AST_NODE_REL_PATTERN) continue;
             cypher_rel_pattern *r = (cypher_rel_pattern *)el;
-            if (r->varlen) { all_eligible = false; break; }
+            if (r->varlen) {
+                /* a walk variable bound before (a list of relationships
+                 * from a WITH) pins the walk: not here */
+                if (r->variable && transform_var_lookup(ctx->var_ctx, r->variable)) { all_eligible = false; break; }
+                path_has_varlen = true;
+                n_rels++;
+                continue;
+            }
             /* A named relationship is bound back from the derived table
              * below (GQLITE-T-0463); the legacy EXISTS form cannot, and
              * falls back to per-relationship emission. */
@@ -1343,9 +1373,11 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
          * (GQLITE-T-0555). The per-relationship emission groups a leading
          * optional pattern as one unit. */
         bool has_outer_rows = ctx->unified_builder && !dbuf_is_empty(&ctx->unified_builder->from);
-        if (all_eligible && !has_path_var && n_rels >= 2 && intermediates_named && has_outer_rows) {
+        if (all_eligible && (!has_path_var || path_has_varlen) && n_rels >= 2 && n_rels <= 16 && intermediates_named && has_outer_rows) {
             path_combined_exists = true;
             path_has_user_rel_var = has_user_rel_var;
+        } else {
+            path_has_varlen = false;
         }
     }
     /* GQLITE-T-0336 (P3, MatchWhere6 [5]): a single BOUND relationship
@@ -1526,7 +1558,7 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                     if (np->properties) derived_ok = false;
                 }
             }
-            if (derived_ok && unbound_count >= 2) {
+            if (derived_ok && (unbound_count >= 2 || (path_has_varlen && unbound_count >= 1))) {
                 char *dt_alias = get_next_default_alias(ctx);
                 if (!dt_alias) {
                     ctx->has_error = true;
@@ -1550,11 +1582,33 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                 dbuf_append(&dt, "__EXTRA_SEL__");
                 dbuf_append(&dt, " FROM ");
                 int ri = 0;
+                bool dt_rel_is_walk[64] = {0};
+                char dt_walk_cte[16][64];
+                bool dt_fail = false;
                 for (int j = 0; j < path->elements->count; j++) {
                     if (path->elements->items[j]->type != AST_NODE_REL_PATTERN) continue;
+                    cypher_rel_pattern *wr = (cypher_rel_pattern *)path->elements->items[j];
                     if (ri > 0) dbuf_append(&dt, ", ");
-                    dbuf_appendf(&dt, "%s _ce%d", get_graph_table(ctx, "edges"), ri);
+                    if (wr->varlen && ri < 64) {
+                        /* the walk, as its recursive CTE (in the direction
+                         * of the pattern: start_id is the node on the left) */
+                        char walk_cte[64];
+                        varlen_cte_free_name(ctx, j, walk_cte, sizeof(walk_cte));
+                        if (generate_varlen_cte(ctx, wr, NULL, NULL, walk_cte, NULL) < 0) dt_fail = true;
+                        dbuf_appendf(&dt, "%s _ce%d", walk_cte, ri);
+                        dt_rel_is_walk[ri] = true;
+                        if (ri < 16) snprintf(dt_walk_cte[ri], sizeof(dt_walk_cte[ri]), "%s", walk_cte);
+                    } else {
+                        dbuf_appendf(&dt, "%s _ce%d", get_graph_table(ctx, "edges"), ri);
+                    }
                     ri++;
+                }
+                if (dt_fail) {
+                    ctx->has_error = true;
+                    ctx->error_message = strdup("Failed to generate variable-length CTE");
+                    dbuf_free(&dt); dbuf_free(&bound_rel_on); dbuf_free(&dt_extra_sel);
+                    free(dt_alias); free(combined_node_skip); free(defer_to_rel);
+                    return -1;
                 }
                 int dt_rels = ri;
                 for (int j = 0; j < n_count; j++) {
@@ -1570,6 +1624,22 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                     cypher_rel_pattern *r = (cypher_rel_pattern *)el;
                     if (!first_c) dbuf_append(&dt, " AND ");
                     first_c = false;
+                    if (r->varlen) {
+                        cypher_varlen_range *range = (cypher_varlen_range *)r->varlen;
+                        int min_h = range->min_hops >= 0 ? range->min_hops : 1;
+                        int max_h = range->max_hops;   /* -1: no upper bound */
+                        dbuf_appendf(&dt, "(_ce%d.start_id = _n%d.id AND _ce%d.end_id = _n%d.id AND _ce%d.depth >= %d",
+                                     ri, j - 1, ri, j + 1, ri, min_h);
+                        if (max_h >= 0) dbuf_appendf(&dt, " AND _ce%d.depth <= %d", ri, max_h);
+                        if (max_h >= 0 && min_h > max_h) dbuf_append(&dt, " AND 0");
+                        dbuf_append(&dt, ")");
+                        /* a walk with a variable: its list of relationship
+                         * ids comes out, to find the walk's row again */
+                        if (r->variable)
+                            dbuf_appendf(&dt_extra_sel, ", _ce%d.visited AS _ce%d_vis", ri, ri);
+                        ri++;
+                        continue;      /* type and properties are in the CTE */
+                    }
                     if (r->left_arrow && !r->right_arrow) {
                         dbuf_appendf(&dt, "(_ce%d.source_id = _n%d.id AND _ce%d.target_id = _n%d.id)",
                                      ri, j + 1, ri, j - 1);
@@ -1612,8 +1682,18 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                     ri++;
                 }
                 for (int a = 0; a < dt_rels; a++)
-                    for (int b = a + 1; b < dt_rels; b++)
-                        dbuf_appendf(&dt, " AND _ce%d.id <> _ce%d.id", a, b);
+                    for (int b = a + 1; b < dt_rels; b++) {
+                        bool wa = a < 64 && dt_rel_is_walk[a], wb = b < 64 && dt_rel_is_walk[b];
+                        if (!wa && !wb)
+                            dbuf_appendf(&dt, " AND _ce%d.id <> _ce%d.id", a, b);
+                        else if (wa != wb)
+                            /* a walk does not use the relationship of a
+                             * fixed hop of the same pattern */
+                            dbuf_appendf(&dt, " AND _ce%d.visited NOT LIKE '%%,' || _ce%d.id || ',%%'",
+                                         wa ? a : b, wa ? b : a);
+                        /* two walks: not checked against each other, as in
+                         * the per-relationship emission */
+                    }
                 /* Labels of the unbound chain nodes live inside the chain. */
                 for (int j = 0; j < n_count; j++) {
                     ast_node *el = path->elements->items[j];
@@ -1683,6 +1763,23 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
                         ast_node *el = path->elements->items[j];
                         if (el->type != AST_NODE_REL_PATTERN) continue;
                         cypher_rel_pattern *r = (cypher_rel_pattern *)el;
+                        if (r->varlen) {
+                            /* The walk variable is the walk's row: join the
+                             * CTE again on its ends and its relationships. */
+                            char *wa = r->variable && rj < 16 ? get_next_default_alias(ctx) : NULL;
+                            if (wa) {
+                                char on_w[400];
+                                snprintf(on_w, sizeof(on_w),
+                                         "%s.start_id = %s.p%d AND %s.end_id = %s.p%d AND %s.visited = %s._ce%d_vis",
+                                         wa, dt_alias, j - 1, wa, dt_alias, j + 1, wa, dt_alias, rj);
+                                sql_join(ctx->unified_builder, SQL_JOIN_LEFT, dt_walk_cte[rj], wa, on_w);
+                                transform_var_register_edge(ctx->var_ctx, r->variable, wa, r->type);
+                                transform_var_set_cte(ctx->var_ctx, r->variable, dt_walk_cte[rj]);
+                                free(wa);
+                            }
+                            rj++;
+                            continue;
+                        }
                         if (r->variable && !transform_var_alias_is_id(ctx->var_ctx, r->variable) &&
                             strncmp(r->variable, "_gql_default_alias_", 19) != 0) {
                             char *ea = get_next_default_alias(ctx);
@@ -1728,9 +1825,10 @@ static int transform_match_pattern(cypher_transform_context *ctx, ast_node *patt
             }
         }
 
-        if (path_has_user_rel_var) {
+        if (path_has_user_rel_var || path_has_varlen) {
             /* The EXISTS form cannot bind a named relationship: emit the
-             * relationships one by one (GQLITE-T-0463). */
+             * relationships one by one (GQLITE-T-0463). It has no walk
+             * either. */
             free(combined_node_skip);
             combined_node_skip = NULL;
             path_combined_exists = false;
@@ -2816,16 +2914,7 @@ static int generate_relationship_match(cypher_transform_context *ctx, cypher_rel
          * "duplicate WITH table name: _varlen_path_1" (GQLITE-T-0554). A
          * name that the query has already gets the next free number. */
         char cte_name[64];
-        int vl_no = rel_index;
-        for (;;) {
-            char probe[72];
-            snprintf(cte_name, sizeof(cte_name), "_varlen_path_%d", vl_no);
-            snprintf(probe, sizeof(probe), "%s(", cte_name);
-            const char *c1 = dbuf_get(&ctx->unified_builder->cte);
-            const char *c2 = dbuf_get(&ctx->unified_builder->pre_cte);
-            if (!((c1 && strstr(c1, probe)) || (c2 && strstr(c2, probe)))) break;
-            vl_no += 100;
-        }
+        int vl_no = varlen_cte_free_name(ctx, rel_index, cte_name, sizeof(cte_name));
 
         /* T-0309: mark this rel variable as varlen-bound so the RETURN
          * projector emits a list-of-edges JSON array (and the result

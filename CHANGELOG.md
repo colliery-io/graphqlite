@@ -52,6 +52,11 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 - **A query that starts with `OPTIONAL MATCH` and an incoming
   relationship** (`OPTIONAL MATCH (a)<-[:R]-(b) …`) failed with "no such
   column" (GQLITE-T-0555).
+- **`OPTIONAL MATCH` of a pattern that mixes a variable-length
+  relationship with others** kept a partial match: `OPTIONAL MATCH
+  (a)-[:R*]->(b)-[:S]->(c)` gave `b` with a null `c` when no `S`
+  relationship followed. The pattern now matches as one unit
+  (GQLITE-T-0556).
 - **Inline properties in `OPTIONAL MATCH` were not applied:** `MATCH (a)
   OPTIONAL MATCH (a)-[:R]->(b {name: 'x'})` gave every neighbour of `a`,
   whatever its name. The same for a property map on the relationship
