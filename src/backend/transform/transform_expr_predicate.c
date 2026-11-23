@@ -900,7 +900,9 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
      * that conflict no longer exists — Precedence1 stays 55/55 under strict
      * 3VL, and strict 3VL fixes Quantifier4 [10].) */
     {
-        append_sql(ctx, "(SELECT CASE ");
+        /* all / any / none / single over null is null (GQLITE-T-0557; they
+         * gave the answer for an empty list). */
+        append_sql(ctx, "(CASE WHEN (%s) IS NULL THEN NULL ELSE (SELECT CASE ", list_sql);
         switch (pred->pred_type) {
             case LIST_PRED_ALL:
                 /* F>0 → FALSE ; N>0 → NULL ; else TRUE (strict 3VL,
@@ -937,7 +939,7 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
         }
         append_sql(ctx, "END FROM (SELECT (");
         int prc = transform_condition(ctx, pred->predicate);
-        if (prc >= 0) append_sql(ctx, ") AS p FROM json_each(%s) AS %s))", list_sql, je_alias);
+        if (prc >= 0) append_sql(ctx, ") AS p FROM json_each(%s) AS %s)) END)", list_sql, je_alias);
         free(list_sql);
         transform_var_restore(ctx->var_ctx, pred->variable, saved_var);
         if (prc < 0) return -1;

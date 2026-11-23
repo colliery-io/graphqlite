@@ -2397,7 +2397,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* Build the subquery; json() outside it keeps the list
                  * subtype (SQLite 3.54.1, GQLITE-A-0007). */
-                append_sql(ctx, "json((SELECT json_group_array(");
+                /* A list comprehension over null is null, not []
+                 * (GQLITE-T-0557): json(NULL) is NULL. */
+                append_sql(ctx, "json(CASE WHEN (%s) IS NULL THEN NULL ELSE (SELECT json_group_array(", list_sql);
 
                 int comp_rc = 0;
                 /* The result expression - either the transform or the element itself */
@@ -2436,7 +2438,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     if (transform_condition(ctx, comp->where_expr) < 0) comp_rc = -1;
                 }
 
-                append_sql(ctx, "))");
+                append_sql(ctx, ") END)");
 
                 transform_var_restore(ctx->var_ctx, comp_var, saved_var);
                 if (comp_rc < 0) return -1;

@@ -33,6 +33,11 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
   `TypeError` (the number was trimmed as its text). Use `toString()` first.
 - **`isEmpty()` of a node, a relationship or a path** is an error (it gave
   `false`).
+- **List operations over null are null** (GQLITE-T-0557): `[x IN null |
+  x]` gave `[]`, and `any()` / `all()` / `none()` / `single()` over null
+  gave the answer for an empty list. So `WHERE none(x IN n.missing WHERE
+  …)` no longer keeps the row; use `coalesce(…, true)` for the old
+  result.
 - **`SKIP` / `LIMIT` that read the graph** (`LIMIT size(()-->())`, a
   `reduce()` over a variable) are `NonConstantExpression`.
 - **A property value used as a node:** `WITH a.prop AS p MATCH (b)<--(p)` is
