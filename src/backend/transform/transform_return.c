@@ -1477,7 +1477,8 @@ static char *pc_varlen_table(cypher_transform_context *ctx, cypher_rel_pattern *
     dbuf_appendf(&b, " UNION ALL SELECT c.start_id, %s, c.depth + 1, c.visited || e.id || ',', "
                      "json_insert(c.node_ids, '$[#]', %s), json_insert(c.edge_ids, '$[#]', e.id), "
                      "c.elem_ids || ',' || e.id || ',' || %s "
-                     "FROM %s c JOIN edges e ON %s WHERE instr(c.visited, ',' || e.id || ',') = 0%s",
+                     /* CROSS JOIN: the walk is the outer loop (GQLITE-T-0558) */
+                     "FROM %s c CROSS JOIN edges e ON %s WHERE instr(c.visited, ',' || e.id || ',') = 0%s",
                  next, next, next, cte, join, tc);
     if (max_hops >= 0) dbuf_appendf(&b, " AND c.depth < %d", max_hops);
     dbuf_appendf(&b, ") SELECT start_id, end_id, node_ids, edge_ids, elem_ids FROM %s WHERE depth >= %d",

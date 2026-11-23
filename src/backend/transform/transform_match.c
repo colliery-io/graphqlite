@@ -2737,6 +2737,28 @@ static bool build_anchor_ids_sql(cypher_transform_context *ctx, const char *alia
         }
     }
 
+    /* The labels of the start node, written in this pattern or where the
+     * variable was matched: the walk starts only at nodes that have them
+     * (GQLITE-T-0558). The join on the start node checks them again. */
+    if (ctx && node) {
+        const char *one_label = NULL;
+        if (!has_labels(node) && node->variable) {
+            transform_var *v = transform_var_lookup(ctx->var_ctx, node->variable);
+            if (v && v->kind == VAR_KIND_NODE && v->label && v->label[0]) one_label = v->label;
+        }
+        int n_labels = has_labels(node) ? node->labels->count : (one_label ? 1 : 0);
+        for (int li = 0; li < n_labels; li++) {
+            const char *label = has_labels(node) ? get_label_string(node->labels->items[li]) : one_label;
+            if (!label) continue;
+            char *esc = escape_sql_string(label);
+            if (emitted > 0) dbuf_append(out, " INTERSECT ");
+            dbuf_appendf(out, "SELECT node_id FROM %s WHERE label = '%s'",
+                         get_graph_table(ctx, "node_labels"), esc ? esc : label);
+            free(esc);
+            emitted++;
+        }
+    }
+
     if (!node || !node->properties || node->properties->type != AST_NODE_MAP) return emitted > 0;
     cypher_map *map = (cypher_map*)node->properties;
     if (!map->pairs) return emitted > 0;

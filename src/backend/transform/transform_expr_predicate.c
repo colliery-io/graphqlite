@@ -123,14 +123,15 @@ static bool emit_exists_varlen_path(cypher_transform_context *ctx, cypher_path *
         const char *other = "(CASE WHEN e.source_id = cte.end_id THEN e.target_id ELSE e.source_id END)";
         append_sql(ctx,
             "SELECT cte.start_id, %s, cte.depth + 1, cte.visited || %s || ',' "
-            "FROM %s cte JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
+            /* CROSS JOIN: the walk is the outer loop (GQLITE-T-0558) */
+            "FROM %s cte CROSS JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
             "WHERE cte.depth >= 1 AND cte.depth < %d "
             "AND cte.visited NOT LIKE '%%,' || CAST(%s AS TEXT) || ',%%'",
             other, other, cte, max_hops, other);
     } else {
         append_sql(ctx,
             "SELECT cte.start_id, e.%s, cte.depth + 1, cte.visited || e.%s || ',' "
-            "FROM %s cte JOIN edges e ON e.%s = cte.end_id "
+            "FROM %s cte CROSS JOIN edges e ON e.%s = cte.end_id "
             "WHERE cte.depth >= 1 AND cte.depth < %d "
             "AND cte.visited NOT LIKE '%%,' || CAST(e.%s AS TEXT) || ',%%'",
             tgt_col, tgt_col, cte, src_col, max_hops, tgt_col);
