@@ -122,6 +122,7 @@ typedef enum {
     VTYPE_NODE,
     VTYPE_EDGE,
     VTYPE_PATH,
+    VTYPE_VALUE,    /* a value that is not a node, a relationship or a path: n.prop */
 } var_type;
 
 typedef struct {
@@ -196,6 +197,7 @@ static const char *var_type_name(var_type t) {
         case VTYPE_NODE:    return "Node";
         case VTYPE_EDGE:    return "Relationship";
         case VTYPE_PATH:    return "Path";
+        case VTYPE_VALUE:   return "Value";
         case VTYPE_UNKNOWN: return "Unknown";
     }
     return "Unknown";
@@ -696,8 +698,8 @@ static int validate_subscript(cypher_subscript *sub, const var_type_ctx *vctx,
         }
 
         /* Nothing to validate if either side is unknown or null. */
-        if (idx_t == VTYPE_UNKNOWN || idx_t == VTYPE_NULL) return 0;
-        if (t == VTYPE_UNKNOWN || t == VTYPE_NULL) return 0;
+        if (idx_t == VTYPE_UNKNOWN || idx_t == VTYPE_NULL || idx_t == VTYPE_VALUE) return 0;
+        if (t == VTYPE_UNKNOWN || t == VTYPE_NULL || t == VTYPE_VALUE) return 0;
 
         if (t == VTYPE_LIST) {
             if (idx_t != VTYPE_INTEGER) {
@@ -757,6 +759,24 @@ static int validate_expr_typed(ast_node *expr, const var_type_ctx *vctx, char **
                                  "SyntaxError: InvalidArgumentType: length() does not accept %s arguments",
                                  t == VTYPE_NODE ? "Node" : "Relationship");
                         set_error(error_message, "%s", buf);
+                        return -1;
+                    }
+                }
+            }
+            /* isEmpty() takes a string, a list or a map (GQLITE-T-0539; it
+             * gave false for a node, a relationship and a path). */
+            if (func->function_name && strcasecmp(func->function_name, "isEmpty") == 0 &&
+                func->args && func->args->count == 1) {
+                ast_node *a = func->args->items[0];
+                if (a && a->type == AST_NODE_IDENTIFIER) {
+                    var_type t = vctx_lookup(vctx, ((cypher_identifier *)a)->name);
+                    if (t == VTYPE_PATH) {
+                        set_error(error_message, "SyntaxError: InvalidArgumentType: isEmpty() does not accept Path arguments");
+                        return -1;
+                    }
+                    if (t == VTYPE_NODE || t == VTYPE_EDGE) {
+                        set_error(error_message, "TypeError: InvalidArgumentValue: isEmpty() does not accept %s arguments",
+                                  t == VTYPE_NODE ? "Node" : "Relationship");
                         return -1;
                     }
                 }
@@ -833,6 +853,23 @@ static bool expr_has_var_reference(const ast_node *expr)
             }
             return false;
         }
+        /* An expression that reads the graph is not constant: LIMIT
+         * size(()-->()), SKIP size([(a)-->(b) | b.age]) (GQLITE-T-0539). */
+        case AST_NODE_EXISTS_EXPR:
+        case AST_NODE_PATTERN_COMPREHENSION:
+        case AST_NODE_PATH:
+            return true;
+        /* The variables of reduce() and of a list comprehension are its
+         * own; what it reads from outside is in the list and the start
+         * value: LIMIT reduce(sum = 0, x IN [p.age] | sum + x). */
+        case AST_NODE_REDUCE_EXPR: {
+            const cypher_reduce_expr *r = (const cypher_reduce_expr *)expr;
+            return expr_has_var_reference(r->initial_value) || expr_has_var_reference(r->list_expr);
+        }
+        case AST_NODE_LIST_COMPREHENSION:
+            return expr_has_var_reference(((const cypher_list_comprehension *)expr)->list_expr);
+        case AST_NODE_LIST_PREDICATE:
+            return expr_has_var_reference(((const cypher_list_predicate *)expr)->list_expr);
         default:
             return false;
     }
@@ -1496,6 +1533,7 @@ static int validate_return_clause(cypher_return *ret, const var_type_ctx *vctx,
                 (item->expr->type == AST_NODE_PATH ||
                  (item->expr->type == AST_NODE_EXISTS_EXPR &&
                   ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN &&
+                  !((cypher_exists_expr *)item->expr)->explicit_call &&
                   !((cypher_exists_expr *)item->expr)->is_subquery))) {
                 set_error(error_message,
                           "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in RETURN");
@@ -1558,6 +1596,7 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
             if (item->expr->type == AST_NODE_PATH ||
                 (item->expr->type == AST_NODE_EXISTS_EXPR &&
                  ((cypher_exists_expr *)item->expr)->expr_type == EXISTS_TYPE_PATTERN &&
+                 !((cypher_exists_expr *)item->expr)->explicit_call &&
                  !((cypher_exists_expr *)item->expr)->is_subquery)) {
                 set_error(error_message,
                           "SyntaxError: UnexpectedSyntax: a path pattern is not a valid expression in WITH");
@@ -1606,8 +1645,17 @@ static int validate_with_clause(cypher_with *with, var_type_ctx *vctx_out,
             }
             /* Track the alias's bound type for downstream clauses. */
             if (item->alias) {
-                vctx_register(vctx_out, item->alias,
-                              type_of_literal_expr(item->expr));
+                var_type at = type_of_literal_expr(item->expr);
+                /* a property is never a node or a relationship */
+                if (at == VTYPE_UNKNOWN && item->expr->type == AST_NODE_PROPERTY) {
+                    /* ... of a node or a relationship; a map can hold one */
+                    ast_node *base = ((cypher_property *)item->expr)->expr;
+                    if (base && base->type == AST_NODE_IDENTIFIER) {
+                        var_type bt = vctx_lookup(vctx_out, ((cypher_identifier *)base)->name);
+                        if (bt == VTYPE_NODE || bt == VTYPE_EDGE) at = VTYPE_VALUE;
+                    }
+                }
+                vctx_register(vctx_out, item->alias, at);
             }
         }
         nset_free(&seen);
@@ -1809,7 +1857,7 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
                 if (var && !nset_contains(bound, var)) {
                     char buf[256];
                     snprintf(buf, sizeof(buf),
-                             "SyntaxError: UndefinedVariable: pattern in WHERE introduces fresh variable `%s`",
+                             "SyntaxError: UndefinedVariable: a pattern expression may not bring in the new variable `%s`",
                              var);
                     set_error(error_message, "%s", buf);
                     return -1;
@@ -1819,7 +1867,7 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
         if (p->var_name && !nset_contains(bound, p->var_name)) {
             char buf[256];
             snprintf(buf, sizeof(buf),
-                     "SyntaxError: UndefinedVariable: pattern in WHERE introduces fresh path variable `%s`",
+                     "SyntaxError: UndefinedVariable: a pattern expression may not bring in the new path variable `%s`",
                      p->var_name);
             set_error(error_message, "%s", buf);
             return -1;
@@ -1833,7 +1881,7 @@ static int validate_where_pattern_vars(ast_node *expr, const name_set *bound,
         if (var && !nset_contains(bound, var)) {
             char buf[256];
             snprintf(buf, sizeof(buf),
-                     "SyntaxError: UndefinedVariable: pattern in WHERE introduces fresh variable `%s`",
+                     "SyntaxError: UndefinedVariable: a pattern expression may not bring in the new variable `%s`",
                      var);
             set_error(error_message, "%s", buf);
             return -1;
@@ -2324,6 +2372,9 @@ static const char *column_name_of(cypher_return_item *it)
     if (!it) return NULL;
     if (it->alias) return it->alias;
     if (!it->expr) return NULL;
+    /* An unaliased item is named by its text: RETURN 5 UNION ALL RETURN 5
+     * (GQLITE-T-0540). */
+    if (it->source_text) return it->source_text;
     if (it->expr->type == AST_NODE_IDENTIFIER) {
         return ((cypher_identifier *)it->expr)->name;
     }
@@ -2415,6 +2466,98 @@ static int validate_union_recursive(cypher_union *u, bool *first_all_seen,
     return 0;
 }
 
+/* The queries of a UNION chain, left to right. */
+static int union_branches(ast_node *n, cypher_query **out, int cap, int count)
+{
+    if (!n) return count;
+    if (n->type == AST_NODE_UNION) {
+        count = union_branches(((cypher_union *)n)->left, out, cap, count);
+        return union_branches(((cypher_union *)n)->right, out, cap, count);
+    }
+    if ((n->type == AST_NODE_QUERY || n->type == AST_NODE_SINGLE_QUERY) && count < cap)
+        out[count++] = (cypher_query *)n;
+    return count;
+}
+
+/* UNION matches the columns of its branches by name, not by position:
+ * `RETURN 1 AS x, 2 AS y UNION RETURN 3 AS y, 2 AS x` (GQLITE-T-0537). SQL
+ * matches by position, so the RETURN items of a later branch that has the
+ * names of the first branch in another order are put in the order of the
+ * first. A branch with other names is left for the validation to refuse. */
+void cypher_union_align_columns(ast_node *root)
+{
+    if (!root || root->type != AST_NODE_UNION) return;
+    cypher_query *br[64];
+    int n = union_branches(root, br, 64, 0);
+    if (n < 2) return;
+    /* RETURN * right after a WITH with items: the columns are the names of
+     * that WITH (`… UNION WITH 2 AS x, 1 AS y RETURN *`, GQLITE-T-0540). As
+     * items they can be matched by name. */
+    for (int b = 0; b < n; b++) {
+        ast_list *cl = br[b]->clauses;
+        if (!cl || cl->count < 2) continue;
+        ast_node *last = cl->items[cl->count - 1], *prev = cl->items[cl->count - 2];
+        if (!last || last->type != AST_NODE_RETURN || !prev || prev->type != AST_NODE_WITH) continue;
+        cypher_return *r = (cypher_return *)last;
+        cypher_with *w = (cypher_with *)prev;
+        if (!r->return_all || w->pass_all || w->star_plus || !w->items) continue;
+        ast_list *items = ast_list_create();
+        bool ok = items != NULL;
+        for (int wi = 0; ok && wi < w->items->count; wi++) {
+            cypher_return_item *wit = (cypher_return_item *)w->items->items[wi];
+            const char *nm = wit ? (wit->alias ? wit->alias
+                                   : (wit->expr && wit->expr->type == AST_NODE_IDENTIFIER
+                                      ? ((cypher_identifier *)wit->expr)->name : NULL)) : NULL;
+            if (!nm) { ok = false; break; }
+            cypher_return_item *it = make_return_item(
+                (ast_node *)make_identifier((char *)nm, r->base.location), NULL);
+            if (!it) { ok = false; break; }
+            it->source_text = strdup(nm);
+            ast_list_append(items, (ast_node *)it);
+        }
+        if (ok && items->count > 0) {
+            if (r->items) ast_list_free(r->items);
+            r->items = items;
+            r->return_all = false;
+        } else if (items) {
+            ast_list_free(items);
+        }
+    }
+    cypher_return *first = find_terminal_return(br[0]);
+    if (!first || !first->items || first->items->count < 2 || first->items->count > 64) return;
+    int cols = first->items->count;
+    char *names[64];
+    for (int i = 0; i < cols; i++) {
+        const char *nm = column_name_of((cypher_return_item *)first->items->items[i]);
+        if (!nm) { for (int k = 0; k < i; k++) free(names[k]); return; }
+        names[i] = strdup(nm);
+    }
+    for (int b = 1; b < n; b++) {
+        cypher_return *r = find_terminal_return(br[b]);
+        if (!r || !r->items || r->items->count != cols) continue;
+        ast_node *ordered[64];
+        bool used[64] = {false};
+        bool ok = true, moved = false;
+        for (int i = 0; i < cols && ok; i++) {
+            ordered[i] = NULL;
+            for (int j = 0; j < cols; j++) {
+                if (used[j]) continue;
+                const char *nm = column_name_of((cypher_return_item *)r->items->items[j]);
+                if (nm && strcmp(nm, names[i]) == 0) {
+                    ordered[i] = r->items->items[j];
+                    used[j] = true;
+                    if (j != i) moved = true;
+                    break;
+                }
+            }
+            if (!ordered[i]) ok = false;
+        }
+        if (ok && moved)
+            for (int i = 0; i < cols; i++) r->items->items[i] = ordered[i];
+    }
+    for (int i = 0; i < cols; i++) free(names[i]);
+}
+
 int transform_validate_union(cypher_union *u, char **error_message)
 {
     if (!u) return 0;
@@ -2442,6 +2585,149 @@ static bool query_writes(cypher_query *query)
     return false;
 }
 
+/* A variable that holds a value, used as a node or a relationship of a
+ * pattern: `WITH a.prop AS prop MATCH (b)<--(prop)` (GQLITE-T-0539). */
+static int check_pattern_value_vars(ast_list *patterns, const name_set *bound,
+                                    const var_type_ctx *vctx, char **error_message)
+{
+    for (int i = 0; patterns && i < patterns->count; i++) {
+        ast_node *node = patterns->items[i];
+        if (!node || node->type != AST_NODE_PATH) continue;
+        ast_list *els = ((cypher_path *)node)->elements;
+        for (int j = 0; els && j < els->count; j++) {
+            ast_node *el = els->items[j];
+            const char *var = NULL;
+            bool is_node = false;
+            if (el && el->type == AST_NODE_NODE_PATTERN) { var = ((cypher_node_pattern *)el)->variable; is_node = true; }
+            else if (el && el->type == AST_NODE_REL_PATTERN) var = ((cypher_rel_pattern *)el)->variable;
+            if (!var || !nset_contains(bound, var)) continue;
+            if (vctx_lookup(vctx, var) != VTYPE_VALUE) continue;
+            set_error(error_message,
+                      "SyntaxError: VariableTypeConflict: Variable `%s` is already bound to a value and cannot be used as a %s",
+                      var, is_node ? "node" : "relationship");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* The body of CALL { } (GQLITE-T-0539). It sees only the variables that its
+ * leading WITH imports. The error came at run time, so not at all when the
+ * outer query had no rows. `outer` is NULL when the outer scope is not all known.
+ * Conservative: a clause this does not follow ends the check. */
+static int validate_call_body(ast_node *body, const name_set *outer, char **error_message)
+{
+    if (!body) return 0;
+    if (body->type == AST_NODE_UNION) {
+        cypher_union *u = (cypher_union *)body;
+        if (validate_call_body(u->left, outer, error_message) < 0) return -1;
+        return validate_call_body(u->right, outer, error_message);
+    }
+    if (body->type != AST_NODE_QUERY) return 0;
+    cypher_query *q = (cypher_query *)body;
+    if (!q->clauses) return 0;
+    name_set scope; nset_init(&scope);
+    int rc = 0;
+    for (int i = 0; rc == 0 && i < q->clauses->count; i++) {
+        ast_node *c = q->clauses->items[i];
+        if (!c) continue;
+        switch (c->type) {
+            case AST_NODE_WITH: {
+                cypher_with *w = (cypher_with *)c;
+                if (i == 0) {
+                    /* The leading WITH reads the outer scope. Neo4j takes
+                     * only bare variables here; GraphQLite also ran `WITH a
+                     * AS b` and `WITH a, a.x AS y`, so they stay valid. */
+                    if (w->pass_all || w->star_plus) {
+                        nset_free(&scope);      /* every outer variable: not followed */
+                        return 0;
+                    }
+                    for (int wi = 0; rc == 0 && w->items && wi < w->items->count; wi++) {
+                        cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                        if (!it || !it->expr) continue;
+                        if (outer) {
+                            if (it->expr->type == AST_NODE_IDENTIFIER &&
+                                !nset_contains(outer, ((cypher_identifier *)it->expr)->name)) {
+                                set_error(error_message, "SyntaxError: UndefinedVariable: `%s` is not defined",
+                                          ((cypher_identifier *)it->expr)->name);
+                                rc = -1;
+                            } else {
+                                rc = check_undef_in_expr(it->expr, outer, "WITH", error_message);
+                            }
+                        }
+                        if (it->alias) nset_add(&scope, it->alias);
+                        else if (it->expr->type == AST_NODE_IDENTIFIER)
+                            nset_add(&scope, ((cypher_identifier *)it->expr)->name);
+                    }
+                    break;
+                }
+                if (w->pass_all || w->star_plus) {
+                    /* WITH * [, items]: the scope stays, and gets the items */
+                    for (int wi = 0; rc == 0 && w->items && wi < w->items->count; wi++) {
+                        cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                        if (!it || !it->expr) continue;
+                        rc = check_undef_in_expr(it->expr, &scope, "WITH", error_message);
+                        if (it->alias) nset_add(&scope, it->alias);
+                    }
+                    break;
+                }
+                name_set next; nset_init(&next);
+                for (int wi = 0; rc == 0 && w->items && wi < w->items->count; wi++) {
+                    cypher_return_item *it = (cypher_return_item *)w->items->items[wi];
+                    if (!it || !it->expr) continue;
+                    rc = check_undef_in_expr(it->expr, &scope, "WITH", error_message);
+                    if (it->alias) nset_add(&next, it->alias);
+                    else if (it->expr->type == AST_NODE_IDENTIFIER)
+                        nset_add(&next, ((cypher_identifier *)it->expr)->name);
+                }
+                nset_free(&scope);
+                scope = next;
+                break;
+            }
+            case AST_NODE_MATCH:
+                collect_pattern_names(((cypher_match *)c)->pattern, &scope);
+                break;
+            case AST_NODE_CREATE:
+                collect_pattern_names(((cypher_create *)c)->pattern, &scope);
+                break;
+            case AST_NODE_MERGE:
+                collect_pattern_names(((cypher_merge *)c)->pattern, &scope);
+                break;
+            case AST_NODE_UNWIND:
+                if (((cypher_unwind *)c)->alias) nset_add(&scope, ((cypher_unwind *)c)->alias);
+                break;
+            case AST_NODE_SET: case AST_NODE_DELETE: case AST_NODE_REMOVE:
+                break;
+            case AST_NODE_RETURN: {
+                cypher_return *r = (cypher_return *)c;
+                for (int ri = 0; rc == 0 && r->items && ri < r->items->count; ri++) {
+                    cypher_return_item *it = (cypher_return_item *)r->items->items[ri];
+                    if (!it || !it->expr) continue;
+                    /* n {.a, .b} has the name of its variable */
+                    if (!it->alias && it->expr->type == AST_NODE_MAP_PROJECTION) {
+                        ast_node *base = ((cypher_map_projection *)it->expr)->base_expr;
+                        if (base && base->type == AST_NODE_IDENTIFIER)
+                            it->alias = strdup(((cypher_identifier *)base)->name);
+                    }
+                    /* No alias is asked for. Neo4j refuses an unaliased
+                     * expression here (NoExpressionAlias); openCypher has
+                     * no CALL { } and asks for aliases only in WITH, and
+                     * GraphQLite 1.0.0 ran `CALL { RETURN 5 }` with the
+                     * column `5` (decision on GQLITE-T-0539, 2026-11-22). */
+                    rc = check_undef_in_expr(it->expr, &scope, "RETURN", error_message);
+                }
+                break;
+            }
+            default:
+                /* CALL, FOREACH, LOAD CSV, ...: not followed */
+                nset_free(&scope);
+                return 0;
+        }
+    }
+    nset_free(&scope);
+    return rc;
+}
+
 int transform_validate_query(cypher_query *query, char **error_message)
 {
     if (!query || !query->clauses) return 0;
@@ -2453,10 +2739,26 @@ int transform_validate_query(cypher_query *query, char **error_message)
     for (int i = 0; i < query->clauses->count; i++) {
         ast_node *clause = query->clauses->items[i];
         if (!clause) { continue; }
-        if (clause->type == AST_NODE_CALL_SUBQUERY) saw_call_subquery = true;
         switch (clause->type) {
+            case AST_NODE_CALL_SUBQUERY: {
+                cypher_call_subquery *cs = (cypher_call_subquery *)clause;
+                /* The outputs of an earlier CALL { } are not in `bound`. */
+                for (int bi = 0; rc == 0 && cs->branches && bi < cs->branches->count; bi++)
+                    rc = validate_call_body(cs->branches->items[bi],
+                                            saw_call_subquery ? NULL : &bound, error_message);
+                saw_call_subquery = true;
+                break;
+            }
             case AST_NODE_RETURN: {
                 cypher_return *r = (cypher_return *)clause;
+                /* A pattern expression may not bring in a variable; say so
+                 * before "not valid in RETURN" (GQLITE-T-0539). */
+                for (int ri = 0; rc == 0 && r->items && ri < r->items->count; ri++) {
+                    cypher_return_item *it = (cypher_return_item *)r->items->items[ri];
+                    if (it && it->expr && it->expr->type == AST_NODE_EXISTS_EXPR && !saw_call_subquery)
+                        rc = validate_where_pattern_vars(it->expr, &bound, error_message);
+                }
+                if (rc != 0) break;
                 /* RETURN * requires at least one variable in scope. */
                 if (r->return_all && bound.count == 0) {
                     set_error(error_message,
@@ -2551,6 +2853,8 @@ int transform_validate_query(cypher_query *query, char **error_message)
                 /* Register the MATCH pattern's variable types BEFORE
                  * validating its WHERE expression, so type-aware checks
                  * (e.g. "WHERE n where n is a node") can see n's type. */
+                rc = check_pattern_value_vars(m->pattern, &bound, &vctx, error_message);
+                if (rc != 0) break;
                 collect_pattern_names(m->pattern, &bound);
                 register_pattern_kinds(m->pattern, &vctx);
                 rc = validate_match_clause(m, &vctx, error_message);

@@ -367,6 +367,35 @@ static int transform_datetime_function_inner(cypher_transform_context *ctx, cyph
              * the generated SQL has a fixed printf format. This avoids
              * deep CASE expressions at runtime. */
             cypher_map *map = (cypher_map *)arg;
+            /* datetime({epochMillis: ms}) and datetime({epochSeconds: s [,
+             * nanosecond: n]}): the instant, in UTC (GQLITE-T-0552). The
+             * keys were ignored, so the result was midnight of 1 January of
+             * this year. Built as datetime(datetime.fromEpochMillis(ms)),
+             * which gives the one printed form of a datetime. */
+            if (!is_local && map->pairs) {
+                ast_node *ms = NULL, *secs = NULL, *nanos = NULL;
+                for (int i = 0; i < map->pairs->count; i++) {
+                    cypher_map_pair *p = (cypher_map_pair *)map->pairs->items[i];
+                    if (!p || !p->key) continue;
+                    if (strcmp(p->key, "epochMillis") == 0) ms = p->value;
+                    else if (strcmp(p->key, "epochSeconds") == 0) secs = p->value;
+                    else if (strcmp(p->key, "nanosecond") == 0) nanos = p->value;
+                }
+                if (ms || secs) {
+                    ast_list *in_args = ast_list_create();
+                    ast_list_append(in_args, ms ? ms : secs);
+                    if (!ms && nanos) ast_list_append(in_args, nanos);
+                    cypher_function_call *inner = make_function_call(
+                        (char *)(ms ? "datetimeFromEpochMillis" : "datetimeFromEpoch"), in_args, false, 0);
+                    ast_list *out_args = ast_list_create();
+                    ast_list_append(out_args, (ast_node *)inner);
+                    cypher_function_call *outer = make_function_call((char *)"datetime", out_args, false, 0);
+                    int erc = outer ? transform_datetime_function_inner(ctx, outer) : -1;
+                    in_args->count = 0;          /* the values belong to the map */
+                    ast_node_free((ast_node *)outer);
+                    return erc;
+                }
+            }
             bool has_week=false, has_ordinal=false, has_quarter=false;
             bool has_hour=false, has_minute=false, has_second=false;
             bool has_ms=false, has_us=false, has_ns=false;

@@ -17,6 +17,7 @@
 #include "transform/cypher_transform.h"
 #include "transform/transform_expr_predicate.h"
 #include "transform/transform_helpers.h"
+#include "transform/transform_validate.h"
 #include "parser/cypher_ast.h"
 #include "parser/cypher_debug.h"
 
@@ -180,9 +181,106 @@ static bool emit_exists_varlen_path(cypher_transform_context *ctx, cypher_path *
 /* The SQL of a subquery EXISTS { <query> } in `wrap` (a format with one
  * %s): "EXISTS (%s)" for EXISTS, "(SELECT count(*) FROM (%s))" for COUNT
  * { } (GQLITE-T-0485). */
+static char *subquery_branch_sql(cypher_transform_context *ctx, cypher_query *q, char **outer_ref);
+
+static cypher_return *subquery_return(cypher_query *q)
+{
+    for (int i = 0; q && q->clauses && i < q->clauses->count; i++)
+        if (q->clauses->items[i] && q->clauses->items[i]->type == AST_NODE_RETURN)
+            return (cypher_return *)q->clauses->items[i];
+    return NULL;
+}
+
+/* EXISTS { A UNION B } and COUNT { A UNION [ALL] B } (GQLITE-T-0537): each
+ * branch is transformed as its own subquery, with the outer variables; the
+ * branches are joined with UNION or UNION ALL.
+ *
+ * A branch with no RETURN has no columns in Cypher. It gets `RETURN 1` for
+ * the transform, so UNION keeps one row of it and UNION ALL keeps each row.
+ *
+ * A branch whose RETURN has ORDER BY, SKIP or LIMIT is wrapped in a SELECT
+ * (SQL takes them only after the last branch). SQLite 3.53 then runs a
+ * UNION ALL of such wrapped branches once for all outer rows when the only
+ * outer references are inside the wrapped SELECTs; a reference to an outer
+ * variable beside the wrapper keeps it correlated. */
+static char *subquery_union_sql(cypher_transform_context *ctx, ast_node *node)
+{
+    if (!node) return NULL;
+    if (node->type == AST_NODE_QUERY) {
+        cypher_query *q = (cypher_query *)node;
+        cypher_return *ret = subquery_return(q);
+        if (!ret) {
+            ast_list *items = ast_list_create();
+            ast_list_append(items, (ast_node *)make_return_item(
+                (ast_node *)make_integer_literal(1, 0), strdup("_gql_row")));
+            cypher_return *made = make_cypher_return(false, items, NULL, NULL, NULL);
+            ast_list_append(q->clauses, (ast_node *)made);
+            char *sql = subquery_branch_sql(ctx, q, NULL);
+            q->clauses->count--;
+            ast_node_free((ast_node *)made);
+            return sql;
+        }
+        bool paged = (ret->order_by && ret->order_by->count > 0) || ret->skip || ret->limit;
+        char *outer_ref = NULL;
+        char *sql = subquery_branch_sql(ctx, q, paged ? &outer_ref : NULL);
+        if (!sql || !paged) { free(outer_ref); return sql; }
+        char *wrapped = outer_ref
+            ? sqlite3_mprintf("SELECT * FROM (%s) WHERE typeof(%s) IS NOT NULL", sql, outer_ref)
+            : sqlite3_mprintf("SELECT * FROM (%s)", sql);
+        free(sql); free(outer_ref);
+        char *out = wrapped ? strdup(wrapped) : NULL;
+        sqlite3_free(wrapped);
+        return out;
+    }
+    if (node->type != AST_NODE_UNION) return NULL;
+    cypher_union *u = (cypher_union *)node;
+    char *l = subquery_union_sql(ctx, u->left);
+    if (!l) return NULL;
+    char *r = subquery_union_sql(ctx, u->right);
+    if (!r) { free(l); return NULL; }
+    char *joined = sqlite3_mprintf("%s %s %s", l, u->all ? "UNION ALL" : "UNION", r);
+    free(l); free(r);
+    char *out = joined ? strdup(joined) : NULL;
+    sqlite3_free(joined);
+    return out;
+}
+
 static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr *exists_expr,
                                const char *wrap)
 {
+    ast_node *body = exists_expr->expr.query;
+    char *sql = NULL;
+    if (body && body->type == AST_NODE_UNION) {
+        cypher_union_align_columns(body);
+        char *verr = NULL;
+        if (transform_validate_union((cypher_union *)body, &verr) < 0) {
+            ctx->has_error = true;
+            free(ctx->error_message);
+            ctx->error_message = verr ? verr : strdup("Invalid UNION in a subquery");
+            return -1;
+        }
+        sql = subquery_union_sql(ctx, body);
+    } else {
+        sql = subquery_branch_sql(ctx, (cypher_query *)body, NULL);
+    }
+    if (!sql) {
+        if (!ctx->has_error) {
+            ctx->has_error = true;
+            ctx->error_message = strdup("Failed to transform EXISTS subquery");
+        }
+        return -1;
+    }
+    append_sql(ctx, wrap, sql);
+    free(sql);
+    return 0;
+}
+
+/* The SQL of one query of a subquery body; NULL with the error in ctx.
+ * `outer_ref`, when given, gets an SQL expression of one outer variable
+ * (NULL when the outer scope has none). */
+static char *subquery_branch_sql(cypher_transform_context *ctx, cypher_query *q, char **outer_ref)
+{
+    if (outer_ref) *outer_ref = NULL;
     /* GQLITE-T-0139: EXISTS { <read-only query> }. Transform the
      * body in a CHILD context whose variable scope is seeded with
      * every outer variable, bound to its outer alias, so the body's
@@ -190,17 +288,16 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
      * references. Counters continue from the outer values so inner
      * aliases and CTE names cannot shadow outer ones. The result
      * is embedded as EXISTS (<sql>). Nested EXISTS { } recurse. */
-    cypher_query *q = (cypher_query*)exists_expr->expr.query;
-    if (!q || !q->clauses || q->clauses->count == 0) {
+    if (!q || q->base.type != AST_NODE_QUERY || !q->clauses || q->clauses->count == 0) {
         ctx->has_error = true;
         ctx->error_message = strdup("EXISTS subquery is empty");
-        return -1;
+        return NULL;
     }
     cypher_transform_context *sub = cypher_transform_create_context_ex(ctx->db, false);
     if (!sub) {
         ctx->has_error = true;
         ctx->error_message = strdup("Out of memory in EXISTS subquery");
-        return -1;
+        return NULL;
     }
     sub->global_alias_counter = ctx->global_alias_counter + 1;
     sub->with_cte_counter = ctx->with_cte_counter + 100;
@@ -220,7 +317,22 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
         const char *alias = transform_var_get_alias(ctx->var_ctx, v->name);
         if (!alias) continue;
         if (transform_var_is_projected(ctx->var_ctx, v->name)) {
+            if (outer_ref && !*outer_ref) *outer_ref = strdup(alias);
             transform_var_register_projected(sub->var_ctx, v->name, alias);
+            /* Its table (`_je_0` of `_je_0.value`, `_with_0` of `_with_0.x`)
+             * is of the outer query: the body must not put it in its own
+             * FROM. `[x IN nodes | COUNT { (x)-->() }]` was "no such table:
+             * _je_0" (GQLITE-T-0553). */
+            if (outer_tokens) {
+                const char *dot = strchr(alias, '.');
+                const char *start = dot;
+                while (dot && start > alias && (isalnum((unsigned char)start[-1]) || start[-1] == '_')) start--;
+                if (dot && dot > start) {
+                    size_t tl = (size_t)(dot - start);
+                    char *tok = malloc(tl + 1);
+                    if (tok) { memcpy(tok, start, tl); tok[tl] = '\0'; outer_tokens[outer_token_count++] = tok; }
+                }
+            }
             transform_var_set_bound(sub->var_ctx, v->name, true);
             if (transform_var_is_scalar_value(ctx->var_ctx, v->name)) {
                 transform_var_set_scalar_value(sub->var_ctx, v->name, true);
@@ -245,6 +357,7 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
         } else {
             snprintf(id_expr, sizeof(id_expr), "%s.id", alias);
         }
+        if (outer_ref && !*outer_ref) *outer_ref = strdup(id_expr);
         if (transform_var_is_edge(ctx->var_ctx, v->name)) {
             transform_var_register_edge(sub->var_ctx, v->name, id_expr, NULL);
         } else {
@@ -295,12 +408,12 @@ static int emit_query_subquery(cypher_transform_context *ctx, cypher_exists_expr
         ctx->error_message = strdup(sub->error_message ? sub->error_message
                                                        : "Failed to transform EXISTS subquery");
         cypher_transform_free_context(sub);
-        return -1;
+        return NULL;
     }
     ctx->global_alias_counter = sub->global_alias_counter + 1;
-    append_sql(ctx, wrap, sub->sql_buffer);
+    char *out = strdup(sub->sql_buffer);
     cypher_transform_free_context(sub);
-    return 0;
+    return out;
 }
 
 /* COUNT { ... }: the parser's __gql_count_subquery(EXISTS { query })
@@ -331,6 +444,24 @@ static bool pattern_has_properties(ast_list *pattern)
             if (e->type == AST_NODE_NODE_PATTERN && ((cypher_node_pattern *)e)->properties) return true;
             if (e->type == AST_NODE_REL_PATTERN && ((cypher_rel_pattern *)e)->properties) return true;
         }
+    }
+    return false;
+}
+
+/* Two or more relationships in one path: `(a)--(b)--()`. Each must be a
+ * different relationship, as in MATCH; the pattern emitter below let one
+ * relationship match twice, so `(a)--(b)--()` was true for a `b` with one
+ * relationship (GQLITE-T-0540). The MATCH transform keeps them apart. */
+static bool pattern_has_two_relationships(ast_list *pattern)
+{
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *p = pattern->items[i];
+        if (!p || p->type != AST_NODE_PATH) continue;
+        cypher_path *path = (cypher_path *)p;
+        int rels = 0;
+        for (int j = 0; path->elements && j < path->elements->count; j++)
+            if (path->elements->items[j] && path->elements->items[j]->type == AST_NODE_REL_PATTERN) rels++;
+        if (rels >= 2) return true;
     }
     return false;
 }
@@ -394,6 +525,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                     return -1;
                 }
                 if (pattern_has_properties(exists_expr->expr.pattern) ||
+                    pattern_has_two_relationships(exists_expr->expr.pattern) ||
                     pattern_is_single_node(exists_expr->expr.pattern))
                     return emit_pattern_as_query(ctx, exists_expr);
 
@@ -425,7 +557,7 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
 
                         bool first_table = true;
                         char node_aliases[10][32];  /* Support up to 10 nodes in pattern */
-                        char node_ids[10][72];      /* each node's id expression */
+                        char node_ids[10][400];     /* each node's id expression */
                         bool node_is_external[10];  /* Track which nodes are from outer context */
                         int node_count = 0;
 
@@ -460,9 +592,19 @@ int transform_exists_expression(cypher_transform_context *ctx, cypher_exists_exp
                                      * body (`<alias>.id`, GQLITE-T-0139), or a node
                                      * carried through WITH / UNWIND (`_with_0.a`,
                                      * GQLITE-T-0450). Otherwise the id is `<alias>.id`. */
-                                    if (transform_var_alias_is_id(ctx->var_ctx, node->variable) ||
-                                        transform_var_is_projected(ctx->var_ctx, node->variable)) {
+                                    if (transform_var_alias_is_id(ctx->var_ctx, node->variable)) {
                                         snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s", outer_alias);
+                                    } else if (transform_var_is_projected(ctx->var_ctx, node->variable)) {
+                                        /* An id, or a node held as a value: the
+                                         * variable of a list comprehension or of a
+                                         * list predicate. `[x IN nodes WHERE
+                                         * (x)-->()]` compared the relationship with
+                                         * the JSON text and kept nothing
+                                         * (GQLITE-T-0553). */
+                                        snprintf(node_ids[node_count], sizeof(node_ids[node_count]),
+                                                 "(CASE WHEN typeof(%s) = 'text' AND json_valid(%s) "
+                                                 "THEN json_extract(%s, '$.id') ELSE %s END)",
+                                                 outer_alias, outer_alias, outer_alias, outer_alias);
                                     } else {
                                         snprintf(node_ids[node_count], sizeof(node_ids[node_count]), "%s.id", outer_alias);
                                     }
@@ -720,9 +862,16 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
         return -1;
     }
 
-    /* Save the old alias if this variable name already exists */
-    const char *old_alias = transform_var_get_alias(ctx->var_ctx, pred->variable);
-    char *saved_alias = old_alias ? strdup(old_alias) : NULL;
+    /* The list reads the outer binding of the name (`any(x IN x.l WHERE
+     * ...)`): translate it first. */
+    char *list_sql = cypher_transform_capture_expression(ctx, pred->list_expr);
+    if (!list_sql) return -1;
+
+    /* The variable is bound inside the predicate only: save the outer
+     * binding and put it back after. Only its alias was put back, as a
+     * value: after `any(d IN [1, 2] WHERE d > 1)` a node `d` was a column
+     * that did not exist (GQLITE-T-0540). */
+    transform_var *saved_var = transform_var_save(ctx->var_ctx, pred->variable);
 
     /* Give this level's json_each a unique alias so nested quantifiers
      * (e.g. single(x IN ... WHERE none(y IN x ...))) don't shadow each
@@ -736,8 +885,6 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
     /* Register the predicate variable to map to <alias>.value, with the
      * element's type tag (a boolean stays a boolean). */
     transform_var_register_projected(ctx->var_ctx, pred->variable, je_value);
-    const char *old_tag = transform_var_get_tag(ctx->var_ctx, pred->variable);
-    char *saved_tag = old_tag ? strdup(old_tag) : NULL;
     {
         char tag[256];
         snprintf(tag, sizeof(tag),
@@ -789,26 +936,11 @@ int transform_list_predicate(cypher_transform_context *ctx, cypher_list_predicat
                 break;
         }
         append_sql(ctx, "END FROM (SELECT (");
-        if (transform_condition(ctx, pred->predicate) < 0) {
-            if (saved_alias) free(saved_alias);
-            free(saved_tag);
-            return -1;
-        }
-        append_sql(ctx, ") AS p FROM json_each(");
-        if (transform_expression(ctx, pred->list_expr) < 0) {
-            if (saved_alias) free(saved_alias);
-            free(saved_tag);
-            return -1;
-        }
-        append_sql(ctx, ") AS %s))", je_alias);
-    }
-
-    /* Restore the old alias and tag if we saved them */
-    transform_var_set_tag(ctx->var_ctx, pred->variable, saved_tag);
-    free(saved_tag);
-    if (saved_alias) {
-        transform_var_register_projected(ctx->var_ctx, pred->variable, saved_alias);
-        free(saved_alias);
+        int prc = transform_condition(ctx, pred->predicate);
+        if (prc >= 0) append_sql(ctx, ") AS p FROM json_each(%s) AS %s))", list_sql, je_alias);
+        free(list_sql);
+        transform_var_restore(ctx->var_ctx, pred->variable, saved_var);
+        if (prc < 0) return -1;
     }
 
     return 0;
@@ -841,22 +973,22 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
     char cte_name[32];
     snprintf(cte_name, sizeof(cte_name), "_reduce_%d", ctx->reduce_counter++);
 
-    /* Save existing aliases for accumulator and variable names */
-    const char *old_acc_alias = transform_var_get_alias(ctx->var_ctx, reduce->accumulator);
-    const char *old_var_alias = transform_var_get_alias(ctx->var_ctx, reduce->variable);
-    char *saved_acc_alias = old_acc_alias ? strdup(old_acc_alias) : NULL;
-    char *saved_var_alias = old_var_alias ? strdup(old_var_alias) : NULL;
+    /* The start value and the list read the outer bindings of the two
+     * names: translate them first. */
+    char *init_sql = cypher_transform_capture_expression(ctx, reduce->initial_value);
+    if (!init_sql) return -1;
+    char *list_sql = cypher_transform_capture_expression(ctx, reduce->list_expr);
+    if (!list_sql) { free(init_sql); return -1; }
 
-    append_sql(ctx, "(WITH RECURSIVE %s AS (SELECT ", cte_name);
+    /* The accumulator and the variable are bound inside reduce() only: save
+     * the outer bindings and put them back after. Only the alias was put
+     * back, as a value: after `reduce(acc = 0, r IN [1, 2] | acc + r)` a
+     * relationship `r` was a column that did not exist (GQLITE-T-0540). */
+    transform_var *saved_acc = transform_var_save(ctx->var_ctx, reduce->accumulator);
+    transform_var *saved_var = transform_var_save(ctx->var_ctx, reduce->variable);
 
-    /* Transform initial value */
-    if (transform_expression(ctx, reduce->initial_value) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
-
-    append_sql(ctx, " AS acc, 0 AS idx UNION ALL SELECT (");
+    append_sql(ctx, "(WITH RECURSIVE %s AS (SELECT %s AS acc, 0 AS idx UNION ALL SELECT (", cte_name, init_sql);
+    free(init_sql);
 
     /* Register variables for the expression:
      * - accumulator maps to cte_name.acc
@@ -870,47 +1002,21 @@ int transform_reduce_expr(cypher_transform_context *ctx, cypher_reduce_expr *red
     snprintf(each_alias, sizeof(each_alias), "%s_e", cte_name);
     char var_ref[64];
     snprintf(var_ref, sizeof(var_ref), "%s.value", each_alias);
-    /* Register in unified system */
     transform_var_register_projected(ctx->var_ctx, reduce->accumulator, acc_ref);
     transform_var_register_projected(ctx->var_ctx, reduce->variable, var_ref);
 
     /* Transform the expression that computes new accumulator value */
-    if (transform_expression(ctx, reduce->expression) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
+    int rc = transform_expression(ctx, reduce->expression);
+    if (rc >= 0)
+        append_sql(ctx, "), %s.idx + 1 FROM %s, json_each(%s) AS %s WHERE %s.idx = %s.key) "
+                        "SELECT acc FROM %s WHERE idx = json_array_length(%s))",
+                   cte_name, cte_name, list_sql, each_alias, cte_name, each_alias, cte_name, list_sql);
+    free(list_sql);
 
-    append_sql(ctx, "), %s.idx + 1 FROM %s, json_each(", cte_name, cte_name);
+    /* the variable first: when both have one name, the accumulator's
+     * saved binding is the outer one */
+    transform_var_restore(ctx->var_ctx, reduce->variable, saved_var);
+    transform_var_restore(ctx->var_ctx, reduce->accumulator, saved_acc);
 
-    /* Transform list expression */
-    if (transform_expression(ctx, reduce->list_expr) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
-
-    append_sql(ctx, ") AS %s WHERE %s.idx = %s.key) SELECT acc FROM %s WHERE idx = json_array_length(",
-               each_alias, cte_name, each_alias, cte_name);
-
-    /* Transform list expression again for length check */
-    if (transform_expression(ctx, reduce->list_expr) < 0) {
-        if (saved_acc_alias) free(saved_acc_alias);
-        if (saved_var_alias) free(saved_var_alias);
-        return -1;
-    }
-
-    append_sql(ctx, "))");
-
-    /* Restore old aliases */
-    if (saved_acc_alias) {
-        transform_var_register_projected(ctx->var_ctx, reduce->accumulator, saved_acc_alias);
-        free(saved_acc_alias);
-    }
-    if (saved_var_alias) {
-        transform_var_register_projected(ctx->var_ctx, reduce->variable, saved_var_alias);
-        free(saved_var_alias);
-    }
-
-    return 0;
+    return rc < 0 ? -1 : 0;
 }

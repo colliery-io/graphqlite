@@ -43,7 +43,16 @@ int transform_coalesce_function(cypher_transform_context *ctx, cypher_function_c
         if (i > 0) {
             append_sql(ctx, ", ");
         }
-        if (transform_expression(ctx, func_call->args->items[i]) < 0) {
+        /* A boolean literal is a boolean value here, as a stored boolean
+         * is: `coalesce(n.flag, false) = false` compared the integer 0 with
+         * a boolean and was false (GQLITE-T-0540). */
+        ast_node *arg = func_call->args->items[i];
+        if (arg && arg->type == AST_NODE_LITERAL &&
+            ((cypher_literal*)arg)->literal_type == LITERAL_BOOLEAN) {
+            append_sql(ctx, ((cypher_literal*)arg)->value.boolean ? "_gql_bool_str(1)" : "_gql_bool_str(0)");
+            continue;
+        }
+        if (transform_expression(ctx, arg) < 0) {
             return -1;
         }
     }

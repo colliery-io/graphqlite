@@ -10,7 +10,7 @@ title: Cypher Clauses
 MATCH pattern [WHERE condition]
 ```
 
-Reads nodes and relationships matching the given pattern. Binds variables to matched entities. Multiple comma-separated patterns in one `MATCH` form a cross-product constrained by shared variables. A `WHERE` clause immediately following `MATCH` filters before joining subsequent clauses.
+Reads nodes and relationships matching the given pattern. Binds variables to matched entities. Multiple comma-separated patterns in one `MATCH` form a cross-product constrained by shared variables. A `WHERE` clause immediately following `MATCH` filters before joining subsequent clauses. A node or relationship pattern can hold its own `WHERE`; it has the same effect as that predicate in the `WHERE` of the clause. This form is also valid in `EXISTS { }`, `COUNT { }` and pattern comprehensions, and not in `CREATE` or `MERGE`.
 
 **Pattern forms**
 
@@ -23,6 +23,7 @@ Reads nodes and relationships matching the given pattern. Binds variables to mat
 | Named path | `p = (a)-[*]->(b)` |
 | Multiple labels | `(n:Person:Employee)` |
 | Property filter | `(n:Person {name: 'Alice'})` |
+| Predicate in a pattern | `(n:Person WHERE n.age > 30)`, `(a)-[r WHERE r.since > 2020]->(b)` |
 
 **Examples**
 
@@ -455,7 +456,7 @@ EXPLAIN query
 PROFILE query
 ```
 
-`EXPLAIN` gives the generated SQL and does not run the query. `PROFILE` runs the query and gives one row with the columns `pattern`, `clauses`, `sql`, `plan` (the SQLite query plan), `rows`, `time_ms` and the write counters.
+`EXPLAIN` gives the route (`Pattern`), the clauses and the generated SQL, and does not run the query. For a query with `MERGE`, the SQL is the lookup that finds the pattern for each row, and a `MERGE` line says what a row with no match and a row with a match do. `PROFILE` runs the query and gives one row with the columns `pattern`, `clauses`, `sql`, `plan` (the SQLite query plan), `rows`, `time_ms` and the write counters.
 
 **Example**
 

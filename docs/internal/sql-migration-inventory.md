@@ -93,7 +93,6 @@ builder's CTE buffers onto the front of the SQL buffer. Defined in
   UNION variants of both)
 - `executor_match.c`
 - `executor_call_subquery.c`
-- `executor_merge_pipeline.c`
 
 ## S3 — Capability gap analysis
 

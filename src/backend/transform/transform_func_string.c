@@ -136,12 +136,18 @@ int transform_string_function(cypher_transform_context *ctx, cypher_function_cal
         return -1;
     }
 
-    append_sql(ctx, "%s(", sql_func);
+    bool is_trim = strcmp(sql_func, "TRIM") == 0 || strcmp(sql_func, "LTRIM") == 0 ||
+                   strcmp(sql_func, "RTRIM") == 0;
+    append_sql(ctx, is_trim ? "%s(_gql_string_arg(" : "%s(", sql_func);
     if (transform_expression(ctx, func_call->args->items[0]) < 0) {
         return -1;
     }
-    if (strcmp(sql_func, "TRIM") == 0 || strcmp(sql_func, "LTRIM") == 0 ||
-        strcmp(sql_func, "RTRIM") == 0) {
+    if (is_trim) {
+        append_sql(ctx, ", ");
+        append_string_literal(ctx, func_call->function_name);
+        append_sql(ctx, ")");
+    }
+    if (is_trim) {
         /* Whitespace as Java's Character.isWhitespace, as in Neo4j: the
          * Unicode space and line separators other than the no-break
          * spaces, and the ASCII controls (GQLITE-T-0519; only ' ' was

@@ -425,14 +425,82 @@ static double profile_now_ms(sqlite3 *db)
     return (double)t;
 }
 
+/* EXPLAIN of a query with MERGE (GQLITE-T-0541). MERGE has no SQL in the
+ * transform: the executor finds the pattern for each row and creates it when
+ * no row matches. The plan gives the SQL of that lookup (the clauses before
+ * the first MERGE, then the MERGE pattern as a MATCH) and says what the
+ * MERGE does with it. Nothing runs. */
+static void explain_merge(cypher_executor *executor, cypher_query *query,
+                          const char *pattern_name, const char *flags_str,
+                          cypher_result *result)
+{
+    ast_list *clauses = query->clauses;
+    int merge_pos = -1;
+    bool reads_only = true;   /* only read clauses before the first MERGE */
+    cypher_merge *merge = NULL;
+    for (int i = 0; i < clauses->count && merge_pos < 0; i++) {
+        ast_node *c = clauses->items[i];
+        if (!c) continue;
+        if (c->type == AST_NODE_MERGE) { merge_pos = i; merge = (cypher_merge *)c; }
+        else if (c->type != AST_NODE_MATCH && c->type != AST_NODE_WITH && c->type != AST_NODE_UNWIND)
+            reads_only = false;
+    }
+
+    char *lookup = NULL;
+    if (merge && reads_only && merge->pattern) {
+        ast_list *pre = ast_list_create();
+        cypher_match *as_match = make_cypher_match(merge->pattern, NULL, false, NULL);
+        cypher_query *pq = pre && as_match ? make_cypher_query(pre, false) : NULL;
+        cypher_transform_context *ctx = pq ? cypher_transform_create_context_ex(executor->db, false) : NULL;
+        if (ctx) {
+            for (int i = 0; i < merge_pos; i++) ast_list_append(pre, clauses->items[i]);
+            ast_list_append(pre, (ast_node *)as_match);
+            if (cypher_transform_generate_sql(ctx, pq) >= 0 && !ctx->has_error && ctx->sql_buffer)
+                lookup = strdup(ctx->sql_buffer);
+            cypher_transform_free_context(ctx);
+        }
+        /* The clauses and the pattern are shared with `query`. */
+        if (pre) { free(pre->items); free(pre); }
+        free(as_match);
+        free(pq);
+    }
+
+    const char *on_create = merge && merge->on_create && merge->on_create->count > 0
+        ? ", then runs ON CREATE SET" : "";
+    const char *on_match = merge && merge->on_match && merge->on_match->count > 0
+        ? "; a row with a match runs ON MATCH SET" : "";
+    char *out = sqlite3_mprintf(
+        "Pattern: %s\nClauses: %s\nSQL: %s\n"
+        "MERGE: %s; a row with no match creates the pattern%s%s",
+        pattern_name, flags_str,
+        lookup ? lookup : "(none: each clause runs its own statements for each row)",
+        lookup ? "the SQL finds the pattern for each row"
+               : "a lookup finds the pattern for each row",
+        on_create, on_match);
+    free(lookup);
+    if (!out) { set_result_error(result, "EXPLAIN: out of memory"); return; }
+
+    result->data = malloc(sizeof(char **));
+    if (result->data) result->data[0] = malloc(sizeof(char *));
+    if (!result->data || !result->data[0]) {
+        sqlite3_free(out);
+        set_result_error(result, "EXPLAIN: out of memory");
+        return;
+    }
+    result->column_count = 1;
+    result->row_count = 1;
+    result->data[0][0] = strdup(out);
+    sqlite3_free(out);
+    result->success = true;
+}
+
 /* PROFILE <query> (GQLITE-T-0135): run the query, then give one row: the
  * dispatch pattern, the clauses, the SQL of the transform and its SQLite
  * plan (EXPLAIN QUERY PLAN), the row count, the time and the writes. */
 static void execute_profile(cypher_executor *executor, cypher_query *query, cypher_result *result)
 {
     clause_flags flags = analyze_query_clauses(query);
-    const query_pattern *pattern = find_matching_pattern(flags);
-    const char *pattern_name = pattern ? pattern->name : "NONE";
+    const char *pattern_name = dispatch_route_name(query);
     char *flags_str = strdup(clause_flags_to_string(flags));
 
     /* the SQL and its plan; a write pipeline may run other statements */
@@ -637,9 +705,14 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
 
                         /* Analyze query to find matched pattern */
                         clause_flags flags = analyze_query_clauses(query);
-                        const query_pattern *pattern = find_matching_pattern(flags);
-                        const char *pattern_name = pattern ? pattern->name : "NONE";
+                        const char *pattern_name = dispatch_route_name(query);
                         const char *flags_str = clause_flags_to_string(flags);
+
+                        /* The transform has no SQL for MERGE (GQLITE-T-0541). */
+                        if (flags & CLAUSE_MERGE) {
+                            explain_merge(executor, query, pattern_name, flags_str, result);
+                            return result;
+                        }
 
                         cypher_transform_context *ctx = cypher_transform_create_context_ex(executor->db, false);
                         if (!ctx) {
@@ -716,6 +789,7 @@ cypher_result* cypher_executor_execute_ast(cypher_executor *executor, ast_node *
                  * mixing) before transform. */
                 {
                     char *uerr = NULL;
+                    cypher_union_align_columns(ast);
                     if (transform_validate_union((cypher_union *)ast, &uerr) < 0) {
                         set_result_error_ex(result, uerr ? uerr : "UNION validation failed",
                                             GQL_ERR_VALIDATION, 0, 0);

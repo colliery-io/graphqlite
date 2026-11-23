@@ -1775,6 +1775,48 @@ static void test_func_percentile_error(void)
     }
 }
 
+/* GQLITE-T-0539: trim(), ltrim(), rtrim() and btrim() of a number are a
+ * TypeError at run time (the number was trimmed as its text); a string and
+ * null are as before. */
+static void test_func_trim_type_error(void)
+{
+    cypher_result *setup = cypher_executor_execute(executor,
+        "CREATE (:TrimT {num: 1234, flt: 5.7, str: '  x  '})");
+    CU_ASSERT_PTR_NOT_NULL(setup);
+    if (setup) { CU_ASSERT_TRUE(setup->success); cypher_result_free(setup); }
+
+    const char *bad[] = {
+        "MATCH (n:TrimT) RETURN trim(n.num) AS t",
+        "MATCH (n:TrimT) RETURN ltrim(n.num) AS t",
+        "MATCH (n:TrimT) RETURN rtrim(n.flt) AS t",
+        "MATCH (n:TrimT) RETURN btrim(n.num) AS t",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        cypher_result *r = cypher_executor_execute(executor, bad[i]);
+        CU_ASSERT_PTR_NOT_NULL(r);
+        if (r) {
+            CU_ASSERT_FALSE(r->success);
+            CU_ASSERT_PTR_NOT_NULL(r->error_message);
+            if (r->error_message) CU_ASSERT_PTR_NOT_NULL(strstr(r->error_message, "TypeError"));
+            cypher_result_free(r);
+        }
+    }
+
+    cypher_result *ok = cypher_executor_execute(executor,
+        "MATCH (n:TrimT) RETURN trim(n.str) AS t, trim(null) AS z");
+    CU_ASSERT_PTR_NOT_NULL(ok);
+    if (ok) {
+        CU_ASSERT_TRUE(ok->success);
+        if (ok->success && ok->row_count == 1) {
+            CU_ASSERT_STRING_EQUAL(ok->data[0][0], "x");
+            CU_ASSERT_PTR_NULL(ok->data[0][1]);
+        } else {
+            CU_FAIL("trim of a string: one row expected");
+        }
+        cypher_result_free(ok);
+    }
+}
+
 /* ============================================================
  * Issue #50: startNode(r)/endNode(r) regression tests
  * ============================================================ */
@@ -2083,6 +2125,7 @@ int init_executor_functions_suite(void)
         /* Missing coverage */
         !CU_add_test(suite, "coth()", test_func_coth) ||
         !CU_add_test(suite, "percentile error handling", test_func_percentile_error) ||
+        !CU_add_test(suite, "T-0539: trim of a number is a TypeError", test_func_trim_type_error) ||
 
         /* Issue #50: startNode/endNode regression */
         !CU_add_test(suite, "Issue #50: startNode+endNode same RETURN", test_startnode_endnode_same_return) ||

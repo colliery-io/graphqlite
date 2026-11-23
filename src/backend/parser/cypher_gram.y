@@ -41,6 +41,50 @@ static ast_list *comp_pattern(cypher_node_pattern *first, ast_list *steps)
     return pattern;
 }
 
+/* (n WHERE expr) and -[r WHERE expr]- (GQLITE-T-0538): the predicate of an
+ * element belongs to the WHERE of the clause or subquery that holds the
+ * pattern. Takes each one out of `pattern` and gives them ANDed in front of
+ * `where` (which may be NULL). */
+static ast_node *take_pattern_wheres(ast_list *pattern, ast_node *where)
+{
+    ast_node *acc = NULL;
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *item = pattern->items[i];
+        if (!item || item->type != AST_NODE_PATH) continue;
+        ast_list *els = ((cypher_path*)item)->elements;
+        for (int j = 0; els && j < els->count; j++) {
+            ast_node *el = els->items[j];
+            ast_node **slot = NULL;
+            if (el && el->type == AST_NODE_NODE_PATTERN) slot = &((cypher_node_pattern*)el)->where;
+            else if (el && el->type == AST_NODE_REL_PATTERN) slot = &((cypher_rel_pattern*)el)->where;
+            if (!slot || !*slot) continue;
+            ast_node *w = *slot;
+            *slot = NULL;
+            w->parenthesized = true;
+            acc = acc ? (ast_node*)make_binary_op(BINARY_OP_AND, acc, w, w->location) : w;
+        }
+    }
+    if (!acc) return where;
+    if (!where) return acc;
+    where->parenthesized = true;
+    return (ast_node*)make_binary_op(BINARY_OP_AND, acc, where, where->location);
+}
+
+static bool pattern_has_where(ast_list *pattern)
+{
+    for (int i = 0; pattern && i < pattern->count; i++) {
+        ast_node *item = pattern->items[i];
+        if (!item || item->type != AST_NODE_PATH) continue;
+        ast_list *els = ((cypher_path*)item)->elements;
+        for (int j = 0; els && j < els->count; j++) {
+            ast_node *el = els->items[j];
+            if (el && el->type == AST_NODE_NODE_PATTERN && ((cypher_node_pattern*)el)->where) return true;
+            if (el && el->type == AST_NODE_REL_PATTERN && ((cypher_rel_pattern*)el)->where) return true;
+        }
+    }
+    return false;
+}
+
 /* COUNT { pattern [WHERE expr] } or COUNT { query } (GQLITE-T-0485): the
  * internal call __gql_count_subquery(EXISTS { query }), whose transform
  * counts the rows of the subquery. A pattern becomes MATCH pattern [WHERE].
@@ -57,7 +101,7 @@ static ast_node *make_count_subquery(cypher_parser_context *context, char *name,
     free(name);
     if (!query) {
         ast_list *clauses = ast_list_create();
-        ast_list_append(clauses, (ast_node*)make_cypher_match(pattern, where, false, NULL));
+        ast_list_append(clauses, (ast_node*)make_cypher_match(pattern, take_pattern_wheres(pattern, where), false, NULL));
         query = (ast_node*)make_cypher_query(clauses, false);
     }
     cypher_exists_expr *ee = make_exists_query_expr(query, loc->first_line);
@@ -126,7 +170,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
  * expression until it sees more context (e.g., a following rel_pattern).
  */
 %expect 11  /* +2: `n:A|B` as an expression inside FOREACH (x IN … | …): the | after a label is another label or the FOREACH body; GLR picks the parse that completes (GQLITE-T-0485) */
-%expect-rr 8  /* a name in parentheses: an expression or a node variable (IDENTIFIER, soft_kw, BQIDENT, END_P); GLR picks the parse that completes */
+%expect-rr 10  /* a name in parentheses: an expression or a node variable (IDENTIFIER, soft_kw, BQIDENT, END_P); GLR picks the parse that completes. +2: a name before WHERE, `(n WHERE ...)` or `[x IN n WHERE ...]` (IDENTIFIER, soft_kw; GQLITE-T-0538) */
 
 %union {
     int64_t integer;
@@ -233,7 +277,7 @@ static char *keyword_text_at(cypher_parser_context *context, int line, int col,
 %type <string> variable_opt from_graph_opt non_reserved_kw soft_kw var_name
 %type <boolean> optional_opt distinct_opt
 %type <list> order_by_opt order_by_list rel_type_list
-%type <node> skip_opt limit_opt where_opt
+%type <node> skip_opt limit_opt where_opt elem_where_opt
 %type <order_by_item> order_by_item
 
 /* Operator precedence (lowest to highest) */
@@ -346,7 +390,7 @@ clause:
 match_clause:
     optional_opt MATCH pattern_list from_graph_opt where_opt
         {
-            $$ = make_cypher_match($3, $5, $1, $4);
+            $$ = make_cypher_match($3, take_pattern_wheres($3, $5), $1, $4);
         }
     ;
 
@@ -786,6 +830,10 @@ set_item:
 create_clause:
     CREATE pattern_list
         {
+            if (pattern_has_where($2)) {
+                cypher_yyerror(&@2, context, "WHERE in a node or relationship pattern is only valid in MATCH, a subquery or a pattern comprehension, not in CREATE");
+                YYERROR;
+            }
             $$ = make_cypher_create($2);
         }
     ;
@@ -794,22 +842,42 @@ create_clause:
 merge_clause:
     MERGE pattern_list
         {
+            if (pattern_has_where($2)) {
+                cypher_yyerror(&@2, context, "WHERE in a node or relationship pattern is only valid in MATCH, a subquery or a pattern comprehension, not in MERGE");
+                YYERROR;
+            }
             $$ = make_cypher_merge($2, NULL, NULL);
         }
     | MERGE pattern_list on_create_clause
         {
+            if (pattern_has_where($2)) {
+                cypher_yyerror(&@2, context, "WHERE in a node or relationship pattern is only valid in MATCH, a subquery or a pattern comprehension, not in MERGE");
+                YYERROR;
+            }
             $$ = make_cypher_merge($2, $3, NULL);
         }
     | MERGE pattern_list on_match_clause
         {
+            if (pattern_has_where($2)) {
+                cypher_yyerror(&@2, context, "WHERE in a node or relationship pattern is only valid in MATCH, a subquery or a pattern comprehension, not in MERGE");
+                YYERROR;
+            }
             $$ = make_cypher_merge($2, NULL, $3);
         }
     | MERGE pattern_list on_create_clause on_match_clause
         {
+            if (pattern_has_where($2)) {
+                cypher_yyerror(&@2, context, "WHERE in a node or relationship pattern is only valid in MATCH, a subquery or a pattern comprehension, not in MERGE");
+                YYERROR;
+            }
             $$ = make_cypher_merge($2, $3, $4);
         }
     | MERGE pattern_list on_match_clause on_create_clause
         {
+            if (pattern_has_where($2)) {
+                cypher_yyerror(&@2, context, "WHERE in a node or relationship pattern is only valid in MATCH, a subquery or a pattern comprehension, not in MERGE");
+                YYERROR;
+            }
             $$ = make_cypher_merge($2, $4, $3);
         }
     ;
@@ -1094,10 +1162,17 @@ path:
     ;
 
 node_pattern:
-    '(' variable_opt label_opt properties_opt ')'
+    '(' variable_opt label_opt properties_opt elem_where_opt ')'
         {
             $$ = make_node_pattern($2, $3, (ast_node*)$4);
+            if ($$) $$->where = $5;
         }
+    ;
+
+/* The predicate of one pattern element: (n WHERE n.x > 1), -[r WHERE r.w > 1]-> */
+elem_where_opt:
+    /* empty */     { $$ = NULL; }
+    | WHERE expr    { $$ = $2; }
     ;
 
 /* Relationship patterns - supports fixed and variable-length relationships
@@ -1109,113 +1184,133 @@ node_pattern:
  */
 rel_pattern:
     /* Outgoing relationships: -[...]-> */
-    '-' '[' variable_opt varlen_range_opt properties_opt ']' '-' '>'
+    '-' '[' variable_opt varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($3, NULL, (ast_node*)$5, false, true, (ast_node*)$4);
+            if ($$) $$->where = $6;
         }
-    | '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-' '>'
+    | '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
             free($5);
+            if ($$) $$->where = $8;
         }
-    | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-' '>'
+    | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
             free($5);
+            if ($$) $$->where = $8;
         }
-    | '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-' '>'
+    | '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             /* T-0326: keyword-named rel types (CONTAINS/STARTS/ENDS/etc.). */
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, true, (ast_node*)$6);
             free($5);
+            if ($$) $$->where = $8;
         }
-    | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-' '>'
+    | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, true);
             if (p) p->varlen = (ast_node*)$6;
             $$ = p;
+            if ($$) $$->where = $8;
         }
     /* Incoming relationships: <-[...]- */
-    | '<' '-' '[' variable_opt varlen_range_opt properties_opt ']' '-'
+    | '<' '-' '[' variable_opt varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($4, NULL, (ast_node*)$6, true, false, (ast_node*)$5);
+            if ($$) $$->where = $7;
         }
-    | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-'
+    | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
             free($6);
+            if ($$) $$->where = $9;
         }
-    | '<' '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-'
+    | '<' '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
             free($6);
+            if ($$) $$->where = $9;
         }
-    | '<' '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-'
+    | '<' '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             /* T-0326: keyword-named rel types (CONTAINS/STARTS/ENDS/etc.). */
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, true, false, (ast_node*)$7);
             free($6);
+            if ($$) $$->where = $9;
         }
-    | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-'
+    | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($4, $6, (ast_node*)$8, true, false);
             if (p) p->varlen = (ast_node*)$7;
             $$ = p;
+            if ($$) $$->where = $9;
         }
     /* Bidirectional bracketed: <-[...]-> (Match5 [27]) — equivalent to
      * undirected `-[...]-`. Per openCypher, both arrows present means "any
      * direction"; pass false/false to make_rel_pattern_varlen. */
-    | '<' '-' '[' variable_opt varlen_range_opt properties_opt ']' '-' '>'
+    | '<' '-' '[' variable_opt varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($4, NULL, (ast_node*)$6, false, false, (ast_node*)$5);
+            if ($$) $$->where = $7;
         }
-    | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-' '>'
+    | '<' '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, false, false, (ast_node*)$7);
             free($6);
+            if ($$) $$->where = $9;
         }
-    | '<' '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-' '>'
+    | '<' '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, false, false, (ast_node*)$7);
             free($6);
+            if ($$) $$->where = $9;
         }
-    | '<' '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-' '>'
+    | '<' '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             $$ = make_rel_pattern_varlen($4, $6, (ast_node*)$8, false, false, (ast_node*)$7);
             free($6);
+            if ($$) $$->where = $9;
         }
-    | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-' '>'
+    | '<' '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt elem_where_opt ']' '-' '>'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($4, $6, (ast_node*)$8, false, false);
             if (p) p->varlen = (ast_node*)$7;
             $$ = p;
+            if ($$) $$->where = $9;
         }
     /* Undirected relationships: -[...]- */
-    | '-' '[' variable_opt varlen_range_opt properties_opt ']' '-'
+    | '-' '[' variable_opt varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($3, NULL, (ast_node*)$5, false, false, (ast_node*)$4);
+            if ($$) $$->where = $6;
         }
-    | '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt ']' '-'
+    | '-' '[' variable_opt ':' IDENTIFIER varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
             free($5);
+            if ($$) $$->where = $8;
         }
-    | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt ']' '-'
+    | '-' '[' variable_opt ':' BQIDENT varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
             free($5);
+            if ($$) $$->where = $8;
         }
-    | '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt ']' '-'
+    | '-' '[' variable_opt ':' non_reserved_kw varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             /* T-0326: keyword-named rel types (CONTAINS/STARTS/ENDS/etc.). */
             $$ = make_rel_pattern_varlen($3, $5, (ast_node*)$7, false, false, (ast_node*)$6);
             free($5);
+            if ($$) $$->where = $8;
         }
-    | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt ']' '-'
+    | '-' '[' variable_opt ':' rel_type_list varlen_range_opt properties_opt elem_where_opt ']' '-'
         {
             cypher_rel_pattern *p = make_rel_pattern_multi_type($3, $5, (ast_node*)$7, false, false);
             if (p) p->varlen = (ast_node*)$6;
             $$ = p;
+            if ($$) $$->where = $8;
         }
     /* Bare relationship patterns (no brackets): --, -->, <--, <--> */
     | '-' '-' '>'
@@ -1503,7 +1598,10 @@ expr:
         }
     }
     | expr '+' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_ADD, $1, $3, @2.first_line); }
-    | expr '-' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_SUB, $1, $3, @2.first_line); }
+    /* %dprec: `(a)--(b)` and `(a)-[r]-(b)` in WHERE are patterns, not
+     * `a - (-b)` and `a - [r] - b`; without it GLR found two parses and
+     * gave "syntax is ambiguous" (GQLITE-T-0540). */
+    | expr '-' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_SUB, $1, $3, @2.first_line); } %dprec 1
     | expr '*' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MUL, $1, $3, @2.first_line); }
     | expr '/' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_DIV, $1, $3, @2.first_line); }
     | expr '%' expr     { $$ = (ast_node*)make_binary_op(BINARY_OP_MOD, $1, $3, @2.first_line); }
@@ -1544,7 +1642,9 @@ expr:
             /* Wrap in pattern list and create EXISTS expression */
             ast_list *pattern_list = ast_list_create();
             ast_list_append(pattern_list, (ast_node*)path);
-            $$ = (ast_node*)make_exists_pattern_expr(pattern_list, @1.first_line);
+            cypher_exists_expr *ee = make_exists_pattern_expr(pattern_list, @1.first_line);
+            if (ee) ee->where_clause = take_pattern_wheres(pattern_list, NULL);
+            $$ = (ast_node*)ee;
         } %dprec 2
     | node_pattern rel_pattern node_pattern rel_pattern node_pattern
         {
@@ -1558,7 +1658,9 @@ expr:
             cypher_path *path = make_path(elements);
             ast_list *pattern_list = ast_list_create();
             ast_list_append(pattern_list, (ast_node*)path);
-            $$ = (ast_node*)make_exists_pattern_expr(pattern_list, @1.first_line);
+            cypher_exists_expr *ee = make_exists_pattern_expr(pattern_list, @1.first_line);
+            if (ee) ee->where_clause = take_pattern_wheres(pattern_list, NULL);
+            $$ = (ast_node*)ee;
         } %dprec 2
     | expr '.' IDENTIFIER
         {
@@ -1773,7 +1875,9 @@ function_call:
     | EXISTS '(' pattern_list ')'
         {
             /* EXISTS((pattern)) - check for relationship/path existence */
-            $$ = (ast_node*)make_exists_pattern_expr($3, @1.first_line);
+            cypher_exists_expr *ee = make_exists_pattern_expr($3, @1.first_line);
+            if (ee) { ee->where_clause = take_pattern_wheres($3, NULL); ee->explicit_call = true; }
+            $$ = (ast_node*)ee;
         }
     | EXISTS '{' pattern_list '}'
         {
@@ -1782,10 +1886,10 @@ function_call:
              * transform; correlated outer variables resolve via the
              * EXISTS_TYPE_PATTERN emitter's outer-alias lookup. */
             cypher_exists_expr *ee = make_exists_pattern_expr($3, @1.first_line);
-            if (ee) ee->is_subquery = true;
+            if (ee) { ee->where_clause = take_pattern_wheres($3, NULL); ee->is_subquery = true; }
             $$ = (ast_node*)ee;
         }
-    | EXISTS '{' single_query '}'
+    | EXISTS '{' union_query '}'
         {
             /* GQLITE-T-0139: full existential subquery
              * EXISTS { MATCH (n)-->(m) [WITH ... WHERE ...] RETURN true }
@@ -1800,7 +1904,7 @@ function_call:
              * on where_clause and folded into the subquery by the transform,
              * which registers the inner pattern variables first. */
             cypher_exists_expr *ee = make_exists_pattern_expr($3, @1.first_line);
-            if (ee) { ee->where_clause = $5; ee->is_subquery = true; }
+            if (ee) { ee->where_clause = take_pattern_wheres($3, $5); ee->is_subquery = true; }
             $$ = (ast_node*)ee;
         }
     | IDENTIFIER '{' pattern_list '}'
@@ -1814,7 +1918,7 @@ function_call:
             $$ = make_count_subquery(context, $1, $3, $5, NULL, &@1);
             if (!$$) YYERROR;
         }
-    | IDENTIFIER '{' single_query '}'
+    | IDENTIFIER '{' union_query '}'
         {
             /* COUNT { MATCH ... [RETURN ...] }: the number of rows. */
             $$ = make_count_subquery(context, $1, NULL, NULL, $3, &@1);
@@ -1953,28 +2057,38 @@ list_comprehension:
  *   [(a:Person)-[:KNOWS]->(b) WHERE b.age > 21 | b.name]
  */
 pattern_comprehension:
-    '[' '(' variable_opt label_opt properties_opt ')' comp_steps '|' expr ']'
+    '[' '(' variable_opt label_opt properties_opt elem_where_opt ')' comp_steps '|' expr ']'
         {
-            $$ = (ast_node*)make_pattern_comprehension(
-                comp_pattern(make_node_pattern($3, $4, (ast_node*)$5), $7), NULL, $9, @1.first_line);
+            cypher_node_pattern *first = make_node_pattern($3, $4, (ast_node*)$5);
+            if (first) first->where = $6;
+            ast_list *pat = comp_pattern(first, $8);
+            $$ = (ast_node*)make_pattern_comprehension(pat, take_pattern_wheres(pat, NULL), $10, @1.first_line);
         }
-    | '[' '(' variable_opt label_opt properties_opt ')' comp_steps WHERE expr '|' expr ']'
+    | '[' '(' variable_opt label_opt properties_opt elem_where_opt ')' comp_steps WHERE expr '|' expr ']'
         {
-            $$ = (ast_node*)make_pattern_comprehension(
-                comp_pattern(make_node_pattern($3, $4, (ast_node*)$5), $7), $9, $11, @1.first_line);
+            cypher_node_pattern *first = make_node_pattern($3, $4, (ast_node*)$5);
+            if (first) first->where = $6;
+            ast_list *pat = comp_pattern(first, $8);
+            $$ = (ast_node*)make_pattern_comprehension(pat, take_pattern_wheres(pat, $10), $12, @1.first_line);
         }
     /* T-0332: path-assignment form `[p = (...)-->(...) | expr]` */
-    | '[' var_name '=' '(' variable_opt label_opt properties_opt ')' comp_steps '|' expr ']'
+    | '[' var_name '=' '(' variable_opt label_opt properties_opt elem_where_opt ')' comp_steps '|' expr ']'
         {
+            cypher_node_pattern *first = make_node_pattern($5, $6, (ast_node*)$7);
+            if (first) first->where = $8;
+            ast_list *pat = comp_pattern(first, $10);
             cypher_pattern_comprehension *pc = make_pattern_comprehension(
-                comp_pattern(make_node_pattern($5, $6, (ast_node*)$7), $9), NULL, $11, @1.first_line);
+                pat, take_pattern_wheres(pat, NULL), $12, @1.first_line);
             pc->path_var = strdup($2);
             $$ = (ast_node*)pc;
         }
-    | '[' var_name '=' '(' variable_opt label_opt properties_opt ')' comp_steps WHERE expr '|' expr ']'
+    | '[' var_name '=' '(' variable_opt label_opt properties_opt elem_where_opt ')' comp_steps WHERE expr '|' expr ']'
         {
+            cypher_node_pattern *first = make_node_pattern($5, $6, (ast_node*)$7);
+            if (first) first->where = $8;
+            ast_list *pat = comp_pattern(first, $10);
             cypher_pattern_comprehension *pc = make_pattern_comprehension(
-                comp_pattern(make_node_pattern($5, $6, (ast_node*)$7), $9), $11, $13, @1.first_line);
+                pat, take_pattern_wheres(pat, $12), $14, @1.first_line);
             pc->path_var = strdup($2);
             $$ = (ast_node*)pc;
         }

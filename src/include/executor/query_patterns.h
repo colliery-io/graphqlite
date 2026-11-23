@@ -121,6 +121,13 @@ clause_flags analyze_query_clauses(cypher_query *query);
 const query_pattern *find_matching_pattern(clause_flags present);
 
 /*
+ * The name of the route that dispatch takes for a query: "ROW_PIPELINE",
+ * "CALL procedure", "LOAD CSV", or the name of the pattern. For EXPLAIN and
+ * PROFILE.
+ */
+const char *dispatch_route_name(cypher_query *query);
+
+/*
  * Get the pattern registry (for testing/debugging).
  * Returns pointer to static pattern array, terminated by NULL handler.
  */

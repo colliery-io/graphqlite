@@ -20,8 +20,6 @@ IndexAcceptance                           Neo4j index syntax and procedures
 ConstraintAcceptance                      Neo4j constraint syntax
 ShortestPathAcceptance                    Neo4j shortestPath() semantics
 GraphPatternAcceptance                    GQL graph patterns
-NodePatternPredicatesAcceptance           Neo4j 5 inline WHERE in node patterns
-RelationshipPatternPredicatesAcceptance   Neo4j 5 inline WHERE in relationship patterns
 LabelExpressionAcceptance                 GQL label expressions (&, !, %)
 CollectExpressionAcceptance               COLLECT { } subquery expression
 SimilarityFunctionAcceptance              Neo4j vector similarity functions

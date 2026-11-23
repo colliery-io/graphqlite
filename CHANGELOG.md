@@ -6,6 +6,113 @@ All notable changes to GraphQLite are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`WHERE` inside a pattern:** `(n:Person WHERE n.age > 30)` and
+  `(a)-[r WHERE r.w > 1]->(b)`, in `MATCH`, `EXISTS { }`, `COUNT { }`,
+  pattern predicates and pattern comprehensions (GQLITE-T-0538).
+
+- **`UNION` inside `COUNT { }` and `EXISTS { }`** (GQLITE-T-0537).
+- **A relationship value as the relationship of a pattern:** `WITH
+  last(relationships(p)) AS e MATCH (a)-[e]->(b)`, `UNWIND rels AS e MATCH
+  (a)-[e]->(b)` bind the pattern to that relationship; they were a
+  `VariableTypeConflict` (GQLITE-T-0552).
+- **`datetime({epochMillis: …})` and `datetime({epochSeconds: … [,
+  nanosecond: …]})`.** The keys were ignored: the result was 1 January of
+  the current year (GQLITE-T-0552).
+
+### Changed
+
+Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
+
+- **`CALL { }` body:** a variable that the leading `WITH` did not import is
+  `UndefinedVariable` when the query is checked (it failed only when the
+  body ran). A map projection `n {.a}` in its `RETURN` has the name `n`.
+  `RETURN` items need no alias, as before.
+- **`trim()`, `ltrim()`, `rtrim()`, `btrim()` of a number** are a
+  `TypeError` (the number was trimmed as its text). Use `toString()` first.
+- **`isEmpty()` of a node, a relationship or a path** is an error (it gave
+  `false`).
+- **`SKIP` / `LIMIT` that read the graph** (`LIMIT size(()-->())`, a
+  `reduce()` over a variable) are `NonConstantExpression`.
+- **A property value used as a node:** `WITH a.prop AS p MATCH (b)<--(p)` is
+  `VariableTypeConflict` (it matched any node).
+- **A pattern expression with a new variable** in `RETURN` is
+  `UndefinedVariable` (it was `UnexpectedSyntax`).
+
+### Fixed
+
+- **`OPTIONAL MATCH` gave extra null rows for a partial match:** a
+  variable-length pattern with a label, a `WHERE` or a property on its end
+  node (`OPTIONAL MATCH (a)-[:R*1..2]->(b:L)`) gave a null row for each
+  walk that ended elsewhere, next to the real matches, and the labels of a
+  new start node were not applied. Two hops with a label on the end and an
+  anonymous middle node gave one null row for each first hop
+  (GQLITE-T-0555).
+- **A query that starts with `OPTIONAL MATCH` and an incoming
+  relationship** (`OPTIONAL MATCH (a)<-[:R]-(b) …`) failed with "no such
+  column" (GQLITE-T-0555).
+- **Inline properties in `OPTIONAL MATCH` were not applied:** `MATCH (a)
+  OPTIONAL MATCH (a)-[:R]->(b {name: 'x'})` gave every neighbour of `a`,
+  whatever its name. The same for a property map on the relationship
+  (GQLITE-T-0554).
+- **Two variable-length patterns in one query:** `MATCH (a)-[:R*]->(b)
+  MATCH (a)-[:S*]->(c)` failed with "duplicate WITH table name:
+  _varlen_path_1" (GQLITE-T-0554).
+- **`WITH DISTINCT k, collect(x)` after a `CALL { }` or a write** was
+  refused (GQLITE-T-0554).
+- **`OPTIONAL MATCH` with a relationship bound by an earlier `MATCH`:**
+  `MATCH (a)-[e]->(b) OPTIONAL MATCH (x)-[e]->(y)` gave every node as `x`;
+  `OPTIONAL MATCH (b)-[e]->(z)` gave `z = b`. The new nodes are now the
+  ends of the relationship, or null. An optional pattern whose variables
+  are all bound keeps the row when it does not match (GQLITE-T-0552).
+- **A pattern on the variable of a list comprehension, `reduce()` or a
+  list predicate** (a node held as a value): a pattern predicate was always
+  false (`[x IN nodes(p) WHERE (x)-->(:L)]` kept nothing, `any(x IN ns
+  WHERE (x)-->())` was false); a pattern comprehension with a path
+  variable and `COUNT { }` / `EXISTS { }` failed. A path variable inside a
+  pattern comprehension with the name of an outer path replaced the outer
+  path (GQLITE-T-0553).
+- **`coalesce(x, false) = false` was false:** a boolean literal in
+  `coalesce()` was the integer 0 or 1, which is not equal to a boolean. So
+  `WHERE coalesce(n.deleted, false) = false` matched nothing
+  (GQLITE-T-0540).
+- **`MATCH (n:Label)` of a node that came out of a list or a map** had no
+  rows: `UNWIND nodes AS n MATCH (n:Label)`, `WITH m.node AS n MATCH
+  (n:Label)-->(x)` (GQLITE-T-0540).
+- **Undirected pattern predicates:** `WHERE (a)--(b)` and `WHERE
+  (a)-[r]-(b)` failed with "syntax is ambiguous". A pattern predicate with
+  two relationships let one relationship match twice: `(a)--(b)--()` was
+  true for a `b` with one relationship (GQLITE-T-0540).
+- **`OPTIONAL MATCH` of variables that are all bound, with a `WHERE`**
+  (`MATCH (a) OPTIONAL MATCH (a) WHERE …`): an SQL error after a `WITH`,
+  and without one the `WHERE` filtered the rows of the clause before. It
+  now changes nothing, as in Cypher (GQLITE-T-0540).
+- **`COUNT { MATCH (p) RETURN * }`** with only outer variables did not
+  come back; **`COUNT { (n) }` of a null `n`** was 1 (GQLITE-T-0540).
+- **A `reduce()` or `any()` / `all()` / `none()` / `single()` variable with
+  the name of an outer variable** broke that variable after the expression
+  ("no such column") (GQLITE-T-0540).
+- **`… UNION … RETURN *`:** the columns of `RETURN *` are matched by name
+  (GQLITE-T-0540).
+- **`exists(pattern)` as a value:** `RETURN n, exists((n)--()) AS b` was
+  refused ("a path pattern is not a valid expression in RETURN")
+  (GQLITE-T-0540).
+- **`CALL { … UNION … }`:** a branch did not see the imported variables
+  ("no such table: _gql_pipe_0", "no such column: p"), a write in a branch
+  did not run for each row, and `ORDER BY … LIMIT` in a branch was an SQL
+  error. Each branch runs as its own subquery (GQLITE-T-0537).
+- **`UNION` matches columns by name:** `RETURN 1 AS x, 2 AS y UNION RETURN
+  3 AS y, 2 AS x` gives x = 2, y = 3 for the second row (it was refused),
+  and `RETURN 5 UNION ALL RETURN 5` is accepted (GQLITE-T-0537).
+- **`EXPLAIN` of a query with `MERGE`** failed with "Unsupported clause
+  type"; it gives the lookup SQL and what the `MERGE` does. `EXPLAIN` and
+  `PROFILE` name the row pipeline (`ROW_PIPELINE`) when it runs the query
+  (GQLITE-T-0541).
+- **`FOREACH` next to `MERGE`:** `MATCH … FOREACH … WITH … MERGE` skipped
+  the `FOREACH`; `MERGE … WITH … FOREACH` and a leading `FOREACH` before
+  `MERGE … WITH` failed (GQLITE-T-0541).
+
 ## [1.0.0] — 2026-11-09
 
 The first stable release. No new Cypher clauses since 0.12.0: this release
