@@ -33,6 +33,11 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
   `TypeError` (the number was trimmed as its text). Use `toString()` first.
 - **`isEmpty()` of a node, a relationship or a path** is an error (it gave
   `false`).
+- **List operations over null are null** (GQLITE-T-0557): `[x IN null |
+  x]` gave `[]`, and `any()` / `all()` / `none()` / `single()` over null
+  gave the answer for an empty list. So `WHERE none(x IN n.missing WHERE
+  …)` no longer keeps the row; use `coalesce(…, true)` for the old
+  result.
 - **`SKIP` / `LIMIT` that read the graph** (`LIMIT size(()-->())`, a
   `reduce()` over a variable) are `NonConstantExpression`.
 - **A property value used as a node:** `WITH a.prop AS p MATCH (b)<--(p)` is
@@ -42,6 +47,12 @@ Queries that Cypher refuses and GraphQLite ran now fail (GQLITE-T-0539):
 
 ### Fixed
 
+- **Variable-length walks from a few start nodes were slow** (GQLITE-T-0558):
+  `MATCH (a:P) WHERE a.i <= 50 MATCH (a)-[:NEXT*1..3]->(b)` on 3,000 nodes
+  took 5.3 s and now takes 21 ms. Each step of the walk now looks up the
+  next relationships by node (it read every relationship of the type per
+  step), and the walk starts only at nodes that have the labels of its start
+  node.
 - **`OPTIONAL MATCH` gave extra null rows for a partial match:** a
   variable-length pattern with a label, a `WHERE` or a property on its end
   node (`OPTIONAL MATCH (a)-[:R*1..2]->(b:L)`) gave a null row for each

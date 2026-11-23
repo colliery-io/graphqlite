@@ -1477,7 +1477,8 @@ static char *pc_varlen_table(cypher_transform_context *ctx, cypher_rel_pattern *
     dbuf_appendf(&b, " UNION ALL SELECT c.start_id, %s, c.depth + 1, c.visited || e.id || ',', "
                      "json_insert(c.node_ids, '$[#]', %s), json_insert(c.edge_ids, '$[#]', e.id), "
                      "c.elem_ids || ',' || e.id || ',' || %s "
-                     "FROM %s c JOIN edges e ON %s WHERE instr(c.visited, ',' || e.id || ',') = 0%s",
+                     /* CROSS JOIN: the walk is the outer loop (GQLITE-T-0558) */
+                     "FROM %s c CROSS JOIN edges e ON %s WHERE instr(c.visited, ',' || e.id || ',') = 0%s",
                  next, next, next, cte, join, tc);
     if (max_hops >= 0) dbuf_appendf(&b, " AND c.depth < %d", max_hops);
     dbuf_appendf(&b, ") SELECT start_id, end_id, node_ids, edge_ids, elem_ids FROM %s WHERE depth >= %d",
@@ -2397,7 +2398,9 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
 
                 /* Build the subquery; json() outside it keeps the list
                  * subtype (SQLite 3.54.1, GQLITE-A-0007). */
-                append_sql(ctx, "json((SELECT json_group_array(");
+                /* A list comprehension over null is null, not []
+                 * (GQLITE-T-0557): json(NULL) is NULL. */
+                append_sql(ctx, "json(CASE WHEN (%s) IS NULL THEN NULL ELSE (SELECT json_group_array(", list_sql);
 
                 int comp_rc = 0;
                 /* The result expression - either the transform or the element itself */
@@ -2436,7 +2439,7 @@ static int transform_expression_inner(cypher_transform_context *ctx, ast_node *e
                     if (transform_condition(ctx, comp->where_expr) < 0) comp_rc = -1;
                 }
 
-                append_sql(ctx, "))");
+                append_sql(ctx, ") END)");
 
                 transform_var_restore(ctx->var_ctx, comp_var, saved_var);
                 if (comp_rc < 0) return -1;

@@ -1596,7 +1596,8 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             "cte.visited || e.id || ',', "
             "cte.elem_ids || ',' || e.id || ',' || %s "
             "FROM %s cte "
-            "JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
+            /* CROSS JOIN: see the directed step below */
+            "CROSS JOIN edges e ON (e.source_id = cte.end_id OR e.target_id = cte.end_id) "
             "WHERE cte.depth >= 1 AND cte.depth < %d",
             other, other, other,
             cte_name,
@@ -1611,7 +1612,12 @@ int generate_varlen_cte(cypher_transform_context *ctx, cypher_rel_pattern *rel,
             "cte.visited || e.id || ',', "
             "cte.elem_ids || ',' || e.id || ',' || e.%s "
             "FROM %s cte "
-            "JOIN edges e ON e.%s = cte.end_id "
+            /* CROSS JOIN keeps the walk as the outer loop, so each walk
+             * row looks up its next edges by node (GQLITE-T-0558). With a
+             * relationship type, SQLite put the edges outside (every edge
+             * of the type, by the type index) and scanned the walk rows
+             * for each: walks x edges. 5.4 s for `*1..3` on 3,000 nodes. */
+            "CROSS JOIN edges e ON e.%s = cte.end_id "
             "WHERE cte.depth >= 1 AND cte.depth < %d",
             tgt_col, tgt_col, tgt_col,
             cte_name,
